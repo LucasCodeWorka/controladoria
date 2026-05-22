@@ -1,0 +1,98 @@
+{
+  "builds": [
+    {
+      "src": "package.json",
+      "use": "@vercel/next"
+    },
+    {
+      "src": "api-serverless/dfc.py",
+      "use": "@vercel/python"
+    },
+    {
+      "src": "api-serverless/dfc_inicializar.py",
+      "use": "@vercel/python"
+    },
+    {
+      "src": "api-serverless/dfc_tipos_baixa.py",
+      "use": "@vercel/python"
+    },
+    {
+      "src": "api-serverless/health.py",
+      "use": "@vercel/python"
+    },
+    {
+      "src": "api-serverless/indicadores_vcenter.py",
+      "use": "@vercel/python"
+    },
+    {
+      "src": "api-serverless/detalhes_pmr_vcenter.py",
+      "use": "@vercel/python"
+    },
+    {
+      "src": "api-serverless/detalhes_pmp_vcenter.py",
+      "use": "@vercel/python"
+    },
+    {
+      "src": "api-serverless/duplicatas_periodo.py",
+      "use": "@vercel/python"
+    },
+    {
+      "src": "api-serverless/classificacao_despesas.py",
+      "use": "@vercel/python"
+    },
+    {
+      "src": "api-serverless/recebimentos_futuros.py",
+      "use": "@vercel/python"
+    },
+    {
+      "src": "api-serverless/tipos_baixa_detalhe.py",
+      "use": "@vercel/python"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/dfc/inicializar",
+      "dest": "/api-serverless/dfc_inicializar.py"
+    },
+    {
+      "src": "/api/dfc/tipos-baixa-realizado",
+      "dest": "/api-serverless/dfc_tipos_baixa.py"
+    },
+    {
+      "src": "/api/dfc",
+      "dest": "/api-serverless/dfc.py"
+    },
+    {
+      "src": "/api/health",
+      "dest": "/api-serverless/health.py"
+    },
+    {
+      "src": "/api/indicadores/ciclo-financeiro",
+      "dest": "/api-serverless/indicadores_vcenter.py"
+    },
+    {
+      "src": "/api/indicadores/detalhes-pmr",
+      "dest": "/api-serverless/detalhes_pmr_vcenter.py"
+    },
+    {
+      "src": "/api/indicadores/detalhes-pmp",
+      "dest": "/api-serverless/detalhes_pmp_vcenter.py"
+    },
+    {
+      "src": "/api/dfc/duplicatas-periodo",
+      "dest": "/api-serverless/duplicatas_periodo.py"
+    },
+    {
+      "src": "/api/classificacao-despesas",
+      "dest": "/api-serverless/classificacao_despesas.py"
+    },
+    {
+      "src": "/api/recebimentos-futuros",
+      "dest": "/api-serverless/recebimentos_futuros.py"
+    },
+    {
+      "src": "/api/analise/tipos-baixa/detalhe",
+      "dest": "/api-serverless/tipos_baixa_detalhe.py"
+    }
+  ]
+}

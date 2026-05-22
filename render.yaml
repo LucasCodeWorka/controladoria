@@ -1,0 +1,31 @@
+services:
+  # Backend FastAPI
+  - type: web
+    name: liebe-dre-backend
+    runtime: python
+    rootDir: python-backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: DB_HOST
+        sync: false
+      - key: DB_PORT
+        sync: false
+      - key: DB_NAME
+        sync: false
+      - key: DB_USER
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+
+  # Frontend Next.js
+  - type: web
+    name: liebe-dre-frontend
+    runtime: node
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: PYTHON_API_URL
+        sync: false
+      - key: NODE_ENV
+        value: production
