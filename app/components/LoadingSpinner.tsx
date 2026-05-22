@@ -7,7 +7,7 @@ export const LoadingSpinner: React.FC = () => {
     <div className="flex items-center justify-center min-h-screen">
       <div className="text-center">
         <div className="inline-block animate-spin rounded-full h-16 w-16 border-b-4 border-brand-primary"></div>
-        <p className="mt-4 text-brand-dark font-medium">Carregando dados do DFC...</p>
+        <p className="mt-4 text-brand-dark font-medium">Carregando dados...</p>
       </div>
     </div>
   );
