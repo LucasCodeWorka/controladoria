@@ -1,788 +1,496 @@
-from fastapi import APIRouter, HTTPException, Query
-from database import execute_query
-from routers.dre import MAPEAMENTO_DESPESA_DRE
-import indicadores
+from fastapi import APIRouter, BackgroundTasks
+from database import execute_query, execute_insert, execute_neon_query
+from datetime import date, datetime
+import json
+import time
 
 router = APIRouter()
 
+EMPRESAS_LOJAS = [2, 3, 4, 5, 6, 7, 8, 10, 14, 15, 17, 19, 20, 21, 22, 120]
 
-@router.get("/api/indicadores/pmr")
-def get_pmr(
-    dataInicio: str = Query("2026-01-01", description="Data inicial (YYYY-MM-DD)"),
-    dataFim: str = Query("2026-12-31", description="Data final (YYYY-MM-DD)")
-):
-    try:
-        print(f"[INFO] Calculando PMR: {dataInicio} até {dataFim}")
-        resultado = indicadores.calcular_prazo_medio_recebimento(dataInicio, dataFim)
-        print(f"[OK] PMR calculado: {resultado['pmr_dias_ponderado']} dias")
-        return resultado
-    except Exception as e:
-        print(f"[ERROR] Erro ao calcular PMR: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Erro ao calcular PMR: {str(e)}"
+# Operações excluídas do faturamento fábrica
+OPERACOES_EXCLUIDAS = (24, 25, 26, 27, 273, 44, 58, 76, 85, 109, 118, 140, 173, 175, 221, 240, 241, 242, 243, 244, 245, 239, 238, 237, 236, 440)
+REPRESENTANTES_EXCLUIDOS = (43923, 30193, 4135)
+
+# Operações excluídas do faturamento lojas
+OPERACOES_EXCLUIDAS_LOJAS = (140, 76, 25, 26, 27, 273, 44, 240, 241, 242, 243, 244, 245, 239, 238, 237, 236)
+
+# Operações inclusas no faturamento e-commerce
+OPERACOES_ECOMMERCE = (24, 25, 26, 27, 240, 241, 242, 243, 244, 239, 238, 237, 236)
+
+_sync_status: dict = {
+    "rodando": False,
+    "progresso": 0,
+    "total": 0,
+    "iniciado_em": None,
+    "finalizado_em": None,
+    "duracao_segundos": None,
+}
+
+
+def _meses_2026_ate_hoje():
+    hoje = date.today()
+    return [
+        date(2026, m, 1)
+        for m in range(1, 13)
+        if date(2026, m, 1) <= hoje.replace(day=1)
+    ]
+
+
+# ─── Giro Lojas ───────────────────────────────────────────────────────────────
+
+def _calcular_giro_lojas(ref_month: date) -> dict:
+    empresas = ", ".join(str(e) for e in EMPRESAS_LOJAS)
+    ref = ref_month.isoformat()
+    query = f"""
+        WITH estoque AS (
+            SELECT sum(s.qt_saldo) AS estoque_total
+            FROM (
+                SELECT DISTINCT ON (s1.cd_empresa, s1.cd_produto)
+                    s1.cd_empresa, s1.cd_produto, s1.qt_saldo
+                FROM prd_prdsaldo s1
+                WHERE s1.cd_empresa = ANY (ARRAY[{empresas}])
+                  AND s1.cd_saldo = 1
+                  AND s1.dt_saldo < '{ref}'::date
+                  AND EXISTS (
+                      SELECT 1 FROM prd_produtoclas pc
+                      WHERE pc.cd_produto = s1.cd_produto AND pc.cd_tipoclas = '20'
+                  )
+                ORDER BY s1.cd_empresa, s1.cd_produto, s1.dt_saldo DESC
+            ) s
+        ),
+        media AS (
+            SELECT sum(t.qt_solicitada) / 12.0 AS media_mensal
+            FROM vr_tra_transitem t
+            WHERE t.cd_empresa = ANY (ARRAY[{empresas}])
+              AND t.tp_situacao = '4'
+              AND t.tp_modalidade::text = '4'
+              AND t.tp_operacao::text = 'S'
+              AND t.dt_transacao >= '{ref}'::date - INTERVAL '11 months'
+              AND t.dt_transacao < '{ref}'::date + INTERVAL '1 month'
         )
+        SELECT
+            ('{ref}'::date + INTERVAL '1 month' - INTERVAL '1 day')::date AS dt_referencia,
+            COALESCE(estoque.estoque_total, 0) AS estoque_total,
+            COALESCE(media.media_mensal, 0) AS media_mensal,
+            CASE
+                WHEN COALESCE(estoque.estoque_total, 0) > 0
+                THEN ROUND((media.media_mensal / estoque.estoque_total)::numeric, 2)
+                ELSE 0
+            END AS giro
+        FROM estoque, media
+    """
+    rows = execute_query(query)
+    if not rows:
+        return {"giro": 0, "estoque_total": 0, "media_mensal": 0, "dt_referencia": None}
+    row = rows[0]
+    return {
+        "dt_referencia": row["dt_referencia"].isoformat(),
+        "estoque_total": float(row["estoque_total"]),
+        "media_mensal": float(row["media_mensal"]),
+        "giro": float(row["giro"]),
+    }
 
 
-@router.get("/api/indicadores/pmp")
-def get_pmp(
-    dataInicio: str = Query("2026-01-01", description="Data inicial (YYYY-MM-DD)"),
-    dataFim: str = Query("2026-12-31", description="Data final (YYYY-MM-DD)")
-):
-    try:
-        print(f"[INFO] Calculando PMP: {dataInicio} até {dataFim}")
-        resultado = indicadores.calcular_prazo_medio_pagamento(dataInicio, dataFim)
-        print(f"[OK] PMP calculado: {resultado['pmp_dias_ponderado']} dias")
-        return resultado
-    except Exception as e:
-        print(f"[ERROR] Erro ao calcular PMP: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Erro ao calcular PMP: {str(e)}"
+# ─── Giro MP ─────────────────────────────────────────────────────────────────
+
+def _calcular_giro_mp(ref_month: date) -> dict:
+    ref = ref_month.isoformat()
+    query = f"""
+        WITH consumo AS (
+            SELECT SUM(a.vl_totalliquido) AS consumo_valor
+            FROM vr_tra_transitem a
+            INNER JOIN vr_tra_transacao b
+                ON a.nr_transacao = b.nr_transacao AND a.cd_empresa = b.cd_empresa
+            WHERE a.tp_situacao = 4
+              AND b.cd_operacao IN (100, 150, 210, 219)
+              AND a.tp_operacao = 'S'
+              AND a.dt_transacao >= '{ref}'::date
+              AND a.dt_transacao < '{ref}'::date + INTERVAL '1 month'
+        ),
+        tipos_saldo AS (
+            SELECT ts.cd_saldof AS cd_saldo FROM prd_tiposaldof ts WHERE ts.cd_saldo = 1
+            UNION
+            SELECT 1 AS cd_saldo
+        ),
+        ultimas_datas AS (
+            SELECT ps.cd_empresa, ps.cd_produto, ps.cd_saldo, MAX(ps.dt_saldo) AS dt_saldo
+            FROM prd_prdsaldo ps
+            INNER JOIN tipos_saldo t ON t.cd_saldo = ps.cd_saldo
+            INNER JOIN prd_prdinfo pi ON pi.cd_produto = ps.cd_produto
+            WHERE ps.cd_empresa = 1
+              AND ps.dt_saldo < '{ref}'::date
+              AND pi.in_matprima = 'T'
+              AND ps.cd_produto > 1000000
+              AND ps.cd_produto < 5000000
+            GROUP BY ps.cd_empresa, ps.cd_produto, ps.cd_saldo
+        ),
+        saldo_produto AS (
+            SELECT ps.cd_empresa, ps.cd_produto, SUM(ps.qt_saldo) AS qt_saldo
+            FROM prd_prdsaldo ps
+            INNER JOIN ultimas_datas ud
+                ON ud.cd_empresa = ps.cd_empresa
+               AND ud.cd_produto = ps.cd_produto
+               AND ud.cd_saldo   = ps.cd_saldo
+               AND ud.dt_saldo   = ps.dt_saldo
+            GROUP BY ps.cd_empresa, ps.cd_produto
+        ),
+        estoque AS (
+            SELECT SUM(
+                COALESCE(sp.qt_saldo, 0) *
+                COALESCE(f_prd_valor_produto2(1, 1, 'C', 2, sp.cd_produto, NULL), 0)
+            ) AS valor_estoque_inicial
+            FROM saldo_produto sp
         )
-
-
-@router.get("/api/indicadores/ciclo-financeiro")
-def get_ciclo_financeiro(
-    dataInicio: str = Query("2026-01-01", description="Data inicial (YYYY-MM-DD)"),
-    dataFim: str = Query("2026-12-31", description="Data final (YYYY-MM-DD)")
-):
+        SELECT
+            ('{ref}'::date + INTERVAL '1 month' - INTERVAL '1 day')::date AS dt_referencia,
+            COALESCE(c.consumo_valor, 0) AS consumo_valor,
+            COALESCE(e.valor_estoque_inicial, 0) AS estoque_valor,
+            CASE
+                WHEN COALESCE(c.consumo_valor, 0) = 0 THEN NULL
+                ELSE ROUND((e.valor_estoque_inicial / c.consumo_valor)::numeric, 2)
+            END AS giro
+        FROM consumo c, estoque e
     """
-    Calcula PMR, PMP e Ciclo Financeiro como MÉDIA dos últimos 12 meses.
-    Usa a fórmula contábil para cada mês:
+    rows = execute_query(query)
+    if not rows:
+        return {"giro": None, "consumo_valor": 0, "estoque_valor": 0, "dt_referencia": None}
+    row = rows[0]
+    return {
+        "dt_referencia": row["dt_referencia"].isoformat(),
+        "consumo_valor": float(row["consumo_valor"]),
+        "estoque_valor": float(row["estoque_valor"]),
+        "giro": float(row["giro"]) if row["giro"] is not None else None,
+    }
 
-    PMR = (Contas a Receber ÷ Faturamento 12 meses) × 360
-    PMP = (Contas a Pagar ÷ Pagamentos 12 meses) × 360
-    Ciclo Financeiro = PMR + PME - PMP
 
-    Retorna a média de 12 meses para alinhar com os gráficos.
-    """
-    try:
-        from dateutil.relativedelta import relativedelta
-        from datetime import datetime
-        import calendar
+# ─── Giro Fábrica ─────────────────────────────────────────────────────────────
 
-        print(f"[INFO] Calculando Ciclo Financeiro (MÉDIA 12 meses): {dataInicio} até {dataFim}")
-
-        # Data de referência (fim do período)
-        data_fim_dt = datetime.strptime(dataFim, '%Y-%m-%d').date()
-
-        # Calcular valores para cada um dos últimos 12 meses
-        pmr_valores = []
-        pmp_valores = []
-        cf_valores = []
-        co_valores = []
-
-        for i in range(12):
-            # Mês de referência (indo de 11 meses atrás até o mês atual)
-            mes_ref = data_fim_dt - relativedelta(months=11-i)
-            ultimo_dia = calendar.monthrange(mes_ref.year, mes_ref.month)[1]
-            ultimo_dia_str = f"{mes_ref.year}-{mes_ref.month:02d}-{ultimo_dia:02d}"
-            data_12m_atras = (mes_ref - relativedelta(months=12)).strftime('%Y-%m-%d')
-
-            # ===== PMR =====
-            query_contas_receber = """
-                SELECT COALESCE(SUM(vl_fatura), 0) as contas_receber
-                FROM vr_fcr_faturai
-                WHERE tp_situacao = 1
-                  AND dt_emissao <= %s
-                  AND (dt_baixa IS NULL OR dt_baixa > %s)
-                  AND tp_baixa = 0
-                  AND vl_fatura > 0
-                  AND tp_documento NOT IN (7, 10, 11)
-            """
-            resultado_cr = execute_query(query_contas_receber, (ultimo_dia_str, ultimo_dia_str))
-            contas_receber = float(resultado_cr[0].get('contas_receber', 0)) if resultado_cr else 0
-
-            query_faturamento = """
-                SELECT COALESCE(SUM(vl_fatura), 0) as faturamento_12m
-                FROM vr_fcr_faturai
-                WHERE dt_emissao >= %s
-                  AND dt_emissao <= %s
-                  AND tp_situacao = 1
-                  AND vl_fatura > 0
-                  AND tp_documento NOT IN (7, 10, 11)
-            """
-            resultado_fat = execute_query(query_faturamento, (data_12m_atras, ultimo_dia_str))
-            faturamento_12m = float(resultado_fat[0].get('faturamento_12m', 0)) if resultado_fat else 0
-
-            pmr_dias = (contas_receber / faturamento_12m) * 360 if faturamento_12m > 0 else 0
-
-            # ===== PMP =====
-            query_contas_pagar = """
-                SELECT COALESCE(SUM(vl_rateio), 0) as contas_pagar
-                FROM vr_fcp_despduplicatai
-                WHERE tp_situacao = 'N'
-                  AND dt_emissao <= %s
-                  AND (dt_baixa IS NULL OR dt_baixa > %s)
-                  AND vl_rateio > 0
-            """
-            resultado_cp = execute_query(query_contas_pagar, (ultimo_dia_str, ultimo_dia_str))
-            contas_pagar = float(resultado_cp[0].get('contas_pagar', 0)) if resultado_cp else 0
-
-            query_pagamentos = """
-                SELECT COALESCE(SUM(vl_rateio), 0) as pagamentos_12m
-                FROM vr_fcp_despduplicatai
-                WHERE dt_baixa >= %s
-                  AND dt_baixa <= %s
-                  AND tp_situacao = 'N'
-                  AND vl_rateio > 0
-            """
-            resultado_pag = execute_query(query_pagamentos, (data_12m_atras, ultimo_dia_str))
-            pagamentos_12m = float(resultado_pag[0].get('pagamentos_12m', 0)) if resultado_pag else 0
-
-            pmp_dias = (contas_pagar / pagamentos_12m) * 360 if pagamentos_12m > 0 else 0
-
-            # ===== Ciclos =====
-            pme_dias = 31
-            ciclo_operacional = pmr_dias + pme_dias
-            ciclo_financeiro = ciclo_operacional - pmp_dias
-
-            pmr_valores.append(pmr_dias)
-            pmp_valores.append(pmp_dias)
-            co_valores.append(ciclo_operacional)
-            cf_valores.append(ciclo_financeiro)
-
-        # Calcular médias
-        pmr_media = sum(pmr_valores) / len(pmr_valores) if pmr_valores else 0
-        pmp_media = sum(pmp_valores) / len(pmp_valores) if pmp_valores else 0
-        co_media = sum(co_valores) / len(co_valores) if co_valores else 0
-        cf_media = sum(cf_valores) / len(cf_valores) if cf_valores else 0
-        pme_dias = 31
-
-        # Determinar status baseado na média
-        if cf_media < 0:
-            status = "POSITIVO"
-            cor = "green"
-            mensagem = f"Excelente! A empresa recebe dos fornecedores antes de pagar aos clientes ({abs(cf_media):.1f} dias de folga)."
-        elif cf_media < 30:
-            status = "BOM"
-            cor = "blue"
-            mensagem = f"Bom! A empresa tem um ciclo financeiro curto ({cf_media:.1f} dias em média)."
-        elif cf_media < 60:
-            status = "ATENCAO"
-            cor = "yellow"
-            mensagem = f"Atenção! O ciclo financeiro médio está em {cf_media:.1f} dias."
-        else:
-            status = "CRITICO"
-            cor = "red"
-            mensagem = f"Crítico! O ciclo financeiro médio está muito longo ({cf_media:.1f} dias)."
-
-        resultado = {
-            'pmr_dias': round(pmr_media, 1),
-            'pme_dias': pme_dias,
-            'pmp_dias': round(pmp_media, 1),
-            'ciclo_operacional_dias': round(co_media, 1),
-            'ciclo_financeiro_dias': round(cf_media, 1),
-            'interpretacao': {
-                'status': status,
-                'cor': cor,
-                'mensagem': mensagem
-            },
-            'periodo': {
-                'data_inicio': dataInicio,
-                'data_fim': dataFim,
-                'tipo_calculo': 'media_12_meses'
-            },
-            'detalhes': {
-                'pmr_min': round(min(pmr_valores), 1) if pmr_valores else 0,
-                'pmr_max': round(max(pmr_valores), 1) if pmr_valores else 0,
-                'pmp_min': round(min(pmp_valores), 1) if pmp_valores else 0,
-                'pmp_max': round(max(pmp_valores), 1) if pmp_valores else 0,
-                'cf_min': round(min(cf_valores), 1) if cf_valores else 0,
-                'cf_max': round(max(cf_valores), 1) if cf_valores else 0,
-            },
-            'formula': 'contabil_media_12m',
-            'fonte': 'vCenter'
-        }
-
-        print(f"[OK] Ciclo Financeiro (MÉDIA 12m): {cf_media:.1f} dias (PMR: {pmr_media:.1f}, PMP: {pmp_media:.1f}, CO: {co_media:.1f})")
-        return resultado
-
-    except Exception as e:
-        print(f"[ERROR] Erro ao calcular Ciclo Financeiro vCenter: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(
-            status_code=500,
-            detail=f"Erro ao calcular Ciclo Financeiro: {str(e)}"
+def _calcular_giro_fabrica(ref_month: date) -> dict:
+    ref = ref_month.isoformat()
+    query = f"""
+        WITH media AS (
+            SELECT SUM(t.qt_solicitada) / 12.0 AS media_mensal
+            FROM vr_tra_transitem t
+            WHERE t.cd_empresa = '1'
+              AND t.tp_situacao = '4'
+              AND t.cd_operacao IN (1, 52)
+              AND t.dt_transacao >= '{ref}'::date - INTERVAL '11 months'
+              AND t.dt_transacao <  '{ref}'::date + INTERVAL '1 month'
+        ),
+        estoque AS (
+            SELECT SUM(s.qt_saldo) AS estoque_total
+            FROM (
+                SELECT DISTINCT ON (s.cd_produto)
+                    s.cd_produto, s.qt_saldo
+                FROM prd_prdsaldo s
+                WHERE s.cd_empresa = 1
+                  AND s.cd_saldo   = 1
+                  AND s.cd_produto < 1000000
+                  AND s.cd_produto <> 37051
+                  AND s.dt_saldo < '{ref}'::date
+                  AND EXISTS (
+                      SELECT 1 FROM prd_produtoclas pc
+                      WHERE pc.cd_produto = s.cd_produto AND pc.cd_tipoclas = '20'
+                  )
+                ORDER BY s.cd_produto, s.dt_saldo DESC
+            ) s
         )
-
-
-@router.get("/api/indicadores/detalhes-pmr")
-def get_detalhes_pmr(
-    dataInicio: str = Query("2026-01-01", description="Data inicial (YYYY-MM-DD)"),
-    dataFim: str = Query("2026-12-31", description="Data final (YYYY-MM-DD)")
-):
+        SELECT
+            ('{ref}'::date + INTERVAL '1 month' - INTERVAL '1 day')::date AS dt_referencia,
+            COALESCE(e.estoque_total, 0) AS estoque_total,
+            COALESCE(m.media_mensal, 0) AS media_mensal,
+            CASE
+                WHEN COALESCE(m.media_mensal, 0) = 0 THEN NULL
+                ELSE ROUND((e.estoque_total / m.media_mensal)::numeric, 1)
+            END AS giro
+        FROM estoque e, media m
     """
-    Retorna os detalhes de recebimentos para o PMR (PostgreSQL vCenter)
-    """
-    try:
-        print(f"[INFO] Buscando detalhes PMR vCenter: {dataInicio} até {dataFim}")
-
-        query = """
-            SELECT
-                i.cd_empresa,
-                i.cd_cliente,
-                i.nr_fat,
-                i.nr_parcela,
-                i.dt_emissao,
-                i.dt_vencimento,
-                i.dt_baixa,
-                i.vl_fatura,
-                i.tp_documento,
-                COALESCE(p.nm_pessoa, 'N/A') as nm_cliente,
-                EXTRACT(DAY FROM (i.dt_baixa - i.dt_emissao)) as dias_para_receber
-            FROM
-                vr_fcr_faturai i
-                LEFT JOIN vr_pes_pessoa p ON p.cd_pessoa = i.cd_cliente
-            WHERE
-                i.tp_situacao = 1
-                AND i.dt_baixa >= %s
-                AND i.dt_baixa <= %s
-                AND i.dt_baixa IS NOT NULL
-                AND i.vl_fatura > 0
-                AND i.tp_baixa NOT IN (6, 8, 11, 12)
-                AND i.tp_documento NOT IN (7, 10, 11)
-            ORDER BY i.dt_baixa DESC
-        """
-
-        faturas = execute_query(query, (dataInicio, dataFim))
-
-        valor_total = sum(float(f['vl_fatura'] or 0) for f in faturas)
-
-        print(f"[OK] {len(faturas)} faturas encontradas vCenter. Total: R$ {valor_total:,.2f}")
-
-        return {
-            "faturas": faturas,
-            "total_faturas": len(faturas),
-            "valor_total": valor_total,
-            "periodo": {
-                "data_inicio": dataInicio,
-                "data_fim": dataFim
-            },
-            "fonte": "vCenter"
-        }
-    except Exception as e:
-        print(f"[ERROR] Erro ao buscar detalhes PMR vCenter: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(
-            status_code=500,
-            detail=f"Erro ao buscar detalhes PMR: {str(e)}"
-        )
+    rows = execute_query(query)
+    if not rows:
+        return {"giro": None, "estoque_total": 0, "media_mensal": 0, "dt_referencia": None}
+    row = rows[0]
+    return {
+        "dt_referencia": row["dt_referencia"].isoformat(),
+        "estoque_total": float(row["estoque_total"]),
+        "media_mensal": float(row["media_mensal"]),
+        "giro": float(row["giro"]) if row["giro"] is not None else None,
+    }
 
 
-@router.get("/api/indicadores/detalhes-pmp")
-def get_detalhes_pmp(
-    dataInicio: str = Query("2026-01-01", description="Data inicial (YYYY-MM-DD)"),
-    dataFim: str = Query("2026-12-31", description="Data final (YYYY-MM-DD)")
-):
-    """
-    Retorna os detalhes de pagamentos para o PMP (PostgreSQL vCenter)
-    """
-    try:
-        print(f"[INFO] Buscando detalhes PMP vCenter: {dataInicio} até {dataFim}")
+# ─── Faturamento Fábrica + Lojas ─────────────────────────────────────────────
 
-        query = """
-            SELECT
-                d.cd_empresa,
-                d.cd_fornecedor,
-                d.nr_duplicata,
-                d.dt_emissao,
-                d.dt_vencimento,
-                d.dt_baixa,
-                d.vl_rateio,
-                d.cd_despesaitem,
-                di.ds_despesaitem,
-                COALESCE(p.nm_pessoa, 'N/A') as nm_fornecedor,
-                EXTRACT(DAY FROM (d.dt_baixa - d.dt_emissao)) as dias_para_pagar
-            FROM
-                vr_fcp_despduplicatai d
-                LEFT JOIN vr_pes_pessoa p ON p.cd_pessoa = d.cd_fornecedor
-                LEFT JOIN vr_fcp_despesaitem di ON di.cd_despesaitem = d.cd_despesaitem
-            WHERE
-                d.tp_situacao = 'N'
-                AND d.dt_baixa >= %s
-                AND d.dt_baixa <= %s
-                AND d.dt_baixa IS NOT NULL
-                AND d.vl_rateio > 0
-            ORDER BY d.dt_baixa DESC
-        """
+def _calcular_faturamento_fabrica(ref_month: date) -> dict:
+    """Fábrica (empresa 1) + Lojas (exceto 1 e 120) combinados."""
+    ops_fab   = ", ".join(str(o) for o in OPERACOES_EXCLUIDAS)
+    reps_excl = ", ".join(str(r) for r in REPRESENTANTES_EXCLUIDOS)
+    ops_lojas = ", ".join(str(o) for o in OPERACOES_EXCLUIDAS_LOJAS)
+    ref = ref_month.isoformat()
+    ano_atual_ini = f"{ref_month.year}-01-01"
+    ano_ant_ini   = f"{ref_month.year - 1}-01-01"
 
-        duplicatas = execute_query(query, (dataInicio, dataFim))
-
-        valor_total = sum(float(d['vl_rateio'] or 0) for d in duplicatas)
-
-        print(f"[OK] {len(duplicatas)} duplicatas encontradas vCenter. Total: R$ {valor_total:,.2f}")
-
-        return {
-            "duplicatas": duplicatas,
-            "total_duplicatas": len(duplicatas),
-            "valor_total": valor_total,
-            "periodo": {
-                "data_inicio": dataInicio,
-                "data_fim": dataFim
-            },
-            "fonte": "vCenter"
-        }
-    except Exception as e:
-        print(f"[ERROR] Erro ao buscar detalhes PMP vCenter: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(
-            status_code=500,
-            detail=f"Erro ao buscar detalhes PMP: {str(e)}"
-        )
-
-
-@router.get("/api/indicadores/ecommerce")
-def get_ecommerce(
-    mesReferencia: str = Query("2026-01", description="Mês de referência (YYYY-MM)")
-):
-    """
-    Retorna receita líquida do e-commerce (empresa 120) para o mês e o mesmo mês do ano anterior.
-    """
-    try:
-        import calendar
-
-        ano, mes = mesReferencia.split('-')
-        primeiro_dia = f"{ano}-{mes}-01"
-        ultimo_dia_num = calendar.monthrange(int(ano), int(mes))[1]
-        ultimo_dia = f"{ano}-{mes}-{ultimo_dia_num:02d}"
-
-        ano_ant = str(int(ano) - 1)
-        primeiro_dia_ant = f"{ano_ant}-{mes}-01"
-        ultimo_dia_ant_num = calendar.monthrange(int(ano_ant), int(mes))[1]
-        ultimo_dia_ant = f"{ano_ant}-{mes}-{ultimo_dia_ant_num:02d}"
-
-        print(f"[INFO] E-commerce: atual={primeiro_dia}~{ultimo_dia}, ant={primeiro_dia_ant}~{ultimo_dia_ant}")
-
-        def buscar_liq(data_ini, data_fim):
-            r_v = execute_query("""
-                SELECT COALESCE(SUM(t.vl_transacao), 0) AS total
+    def sub(de: str, ate: str) -> str:
+        return f"""
+            SELECT SUM(liquido) AS liquido FROM (
+                SELECT COALESCE(SUM(
+                    CASE WHEN t.tp_operacao = 'S' THEN i.vl_totalliquido ELSE -i.vl_totalliquido END
+                ), 0) AS liquido
                 FROM vr_tra_transacao t
-                WHERE t.dt_transacao >= %s AND t.dt_transacao <= %s
-                  AND t.tp_situacao = 4 AND t.tp_modalidade IN ('4')
-                  AND t.tp_operacao = 'S' AND t.cd_empresa = 120
-            """, (data_ini, data_fim))
-            r_d = execute_query("""
-                SELECT COALESCE(SUM(t.vl_transacao), 0) AS total
-                FROM vr_tra_transacao t
-                WHERE t.dt_transacao >= %s AND t.dt_transacao <= %s
-                  AND t.tp_situacao = 4 AND t.tp_modalidade IN ('3')
-                  AND t.tp_operacao = 'E' AND t.cd_empresa = 120
-            """, (data_ini, data_fim))
-            return float(r_v[0]['total']) - float(r_d[0]['total'])
-
-        liq_atual = buscar_liq(primeiro_dia, ultimo_dia)
-        liq_ant = buscar_liq(primeiro_dia_ant, ultimo_dia_ant)
-        variacao = ((liq_atual - liq_ant) / liq_ant * 100) if liq_ant else 0
-
-        print(f"[OK] E-commerce atual={liq_atual:.2f}, ant={liq_ant:.2f}, var={variacao:.2f}%")
-
-        return {
-            "mes_referencia": mesReferencia,
-            "ecommerce_atual": liq_atual,
-            "ecommerce_ano_anterior": liq_ant,
-            "variacao_yoy": round(variacao, 2),
-            "fonte": "vCenter"
-        }
-    except Exception as e:
-        print(f"[ERROR] Erro ao buscar e-commerce: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Erro ao buscar e-commerce: {str(e)}")
-
-
-@router.get("/api/indicadores/cresc-faturamento")
-def get_cresc_faturamento(
-    mesReferencia: str = Query("2026-01", description="Mês de referência (YYYY-MM)")
-):
-    """
-    Retorna crescimento do faturamento acumulado da empresa 1.
-    """
-    try:
-        import calendar
-
-        ano, mes = mesReferencia.split('-')
-        ultimo_dia = calendar.monthrange(int(ano), int(mes))[1]
-
-        data_inicio_atual = f"{ano}-01-01"
-        data_fim_atual    = f"{ano}-{mes}-{ultimo_dia:02d}"
-
-        ano_ant = str(int(ano) - 1)
-        data_inicio_ant = f"{ano_ant}-01-01"
-        data_fim_ant    = f"{ano_ant}-{mes}-{ultimo_dia:02d}"
-
-        print(f"[INFO] Cresc. Fat.: atual={data_inicio_atual}~{data_fim_atual}, ant={data_inicio_ant}~{data_fim_ant}")
-
-        def buscar_liquido(data_ini, data_fim):
-            r_v = execute_query("""
-                SELECT COALESCE(SUM(t.vl_transacao), 0) AS total
-                FROM vr_tra_transacao t
-                WHERE t.dt_transacao >= %s AND t.dt_transacao <= %s
+                LEFT JOIN vr_tra_transitem i
+                    ON i.cd_empresa = t.cd_empresa AND i.dt_transacao = t.dt_transacao AND i.nr_transacao = t.nr_transacao
+                WHERE t.cd_empresa = 1
                   AND t.tp_situacao = 4
-                  AND t.tp_modalidade IN ('4')
-                  AND t.tp_operacao = 'S'
-                  AND t.cd_empresa = 1
-            """, (data_ini, data_fim))
-            r_d = execute_query("""
-                SELECT COALESCE(SUM(t.vl_transacao), 0) AS total
+                  AND t.cd_representant IS NOT NULL
+                  AND t.cd_representant <> ALL (ARRAY[{reps_excl}])
+                  AND t.cd_operacao NOT IN ({ops_fab})
+                  AND t.dt_transacao >= '{de}'
+                  AND t.dt_transacao <  {ate}
+                  AND ((t.tp_modalidade IN ('4', '8') AND t.tp_operacao = 'S')
+                       OR (t.tp_modalidade IN ('3') AND t.tp_operacao = 'E'))
+
+                UNION ALL
+
+                SELECT COALESCE(SUM(
+                    CASE WHEN t.tp_operacao = 'S' THEN i.vl_totalliquido ELSE -i.vl_totalliquido END
+                ), 0) AS liquido
                 FROM vr_tra_transacao t
-                WHERE t.dt_transacao >= %s AND t.dt_transacao <= %s
-                  AND t.tp_situacao = 4
-                  AND t.tp_modalidade IN ('3')
-                  AND t.tp_operacao = 'E'
-                  AND t.cd_empresa = 1
-            """, (data_ini, data_fim))
-            return float(r_v[0]['total']) - float(r_d[0]['total'])
-
-        fat_atual = buscar_liquido(data_inicio_atual, data_fim_atual)
-        fat_ant   = buscar_liquido(data_inicio_ant,   data_fim_ant)
-        variacao  = ((fat_atual - fat_ant) / fat_ant * 100) if fat_ant else 0
-
-        print(f"[OK] Cresc. Fat.: atual={fat_atual:,.2f}, ant={fat_ant:,.2f}, var={variacao:.2f}%")
-
-        return {
-            "mes_referencia": mesReferencia,
-            "fat_atual": fat_atual,
-            "fat_anterior": fat_ant,
-            "variacao_percentual": round(variacao, 2),
-            "periodo_atual": {"data_inicio": data_inicio_atual, "data_fim": data_fim_atual},
-            "periodo_anterior": {"data_inicio": data_inicio_ant, "data_fim": data_fim_ant},
-            "fonte": "vCenter"
-        }
-    except Exception as e:
-        print(f"[ERROR] Erro ao buscar cresc. faturamento: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Erro ao buscar cresc. faturamento: {str(e)}")
-
-
-@router.get("/api/indicadores/lucro-liquido")
-def get_lucro_liquido(
-    mesReferencia: str = Query("2026-01", description="Mês de referência (YYYY-MM)")
-):
-    """
-    Retorna o percentual de empresas com lucro líquido positivo no mês.
-    """
-    try:
-        import calendar
-
-        ano, mes = mesReferencia.split('-')
-        primeiro_dia = f"{ano}-{mes}-01"
-        ultimo_dia_num = calendar.monthrange(int(ano), int(mes))[1]
-        ultimo_dia = f"{ano}-{mes}-{ultimo_dia_num:02d}"
-
-        # Só os cd_despesaitem que entram no lucro líquido (exclui 17.01 e 18)
-        CONTAS_EXCLUIDAS = {'17.01', '18'}
-        cds_incluidos = [
-            cd for cd, conta in MAPEAMENTO_DESPESA_DRE.items()
-            if not any(conta == ex or conta.startswith(ex + '.') for ex in CONTAS_EXCLUIDAS)
-        ]
-        placeholders_inc = ','.join(['%s'] * len(cds_incluidos))
-
-        params_desp = [primeiro_dia, ultimo_dia] + cds_incluidos
-        query_despesas = f"""
-            SELECT
-                d.cd_ccusto AS cd_empresa,
-                ABS(SUM(d.vl_rateio)) AS total_despesa
-            FROM vr_fcp_despduplicatai d
-            WHERE d.dt_emissao >= %s
-              AND d.dt_emissao <= %s
-              AND d.tp_situacao = 'N'
-              AND d.cd_despesaitem IN ({placeholders_inc})
-            GROUP BY d.cd_ccusto
+                LEFT JOIN vr_tra_transitem i
+                    ON i.cd_empresa = t.cd_empresa AND i.dt_transacao = t.dt_transacao AND i.nr_transacao = t.nr_transacao
+                WHERE t.cd_empresa <> ALL (ARRAY[1, 120])
+                  AND t.cd_operacao <> ALL (ARRAY[{ops_lojas}])
+                  AND i.cd_compvend <> 1
+                  AND t.tp_situacao <> 6
+                  AND t.tp_modalidade IN ('2', '3', '4', '8')
+                  AND t.dt_transacao >= '{de}'
+                  AND t.dt_transacao <  {ate}
+            ) combined
         """
-        despesas_raw = execute_query(query_despesas, tuple(params_desp))
 
-        CCUSTOS_FABRICA = set(range(500, 516))
-        despesas_por_empresa: dict = {}
-        for r in despesas_raw:
-            cd = r['cd_empresa']
-            val = float(r['total_despesa'] or 0)
-            cd_real = 1 if cd in CCUSTOS_FABRICA else cd
-            despesas_por_empresa[cd_real] = despesas_por_empresa.get(cd_real, 0) + val
+    query = f"""
+        WITH
+        acum_ano AS ({sub(ano_atual_ini, f"'{ref}'::date + INTERVAL '1 month'")}),
+        acum_ant AS ({sub(ano_ant_ini,   f"'{ref}'::date + INTERVAL '1 month' - INTERVAL '1 year'")})
+        SELECT
+            ('{ref}'::date + INTERVAL '1 month' - INTERVAL '1 day')::date AS dt_referencia,
+            a26.liquido AS acum_2026,
+            a25.liquido AS acum_2025,
+            CASE
+                WHEN a25.liquido = 0 THEN NULL
+                ELSE ROUND(((a26.liquido - a25.liquido) / a25.liquido * 100)::numeric, 1)
+            END AS crescimento_pct
+        FROM acum_ano a26, acum_ant a25
+    """
+    rows = execute_query(query)
+    if not rows:
+        return {"dt_referencia": None, "acum_2026": 0, "acum_2025": 0, "crescimento_pct": None}
+    row = rows[0]
+    return {
+        "dt_referencia": row["dt_referencia"].isoformat(),
+        "acum_2026": float(row["acum_2026"]),
+        "acum_2025": float(row["acum_2025"]),
+        "crescimento_pct": float(row["crescimento_pct"]) if row["crescimento_pct"] is not None else None,
+    }
 
-        cmv_lojas_raw = execute_query("""
-            SELECT idcentrodecusto AS cd_empresa, ABS(SUM(valor)) AS cmv
-            FROM mv_cmv_loja
-            WHERE data >= %s AND data <= %s
-            GROUP BY idcentrodecusto
-        """, (primeiro_dia, ultimo_dia))
-        cmv_por_empresa = {r['cd_empresa']: float(r['cmv'] or 0) for r in cmv_lojas_raw}
 
-        cmv_fab_raw = execute_query("""
-            SELECT ABS(COALESCE(SUM(valor), 0)) AS cmv FROM mv_cmv_fab
-            WHERE data >= %s AND data <= %s
-        """, (primeiro_dia, ultimo_dia))
-        if cmv_fab_raw:
-            cmv_fab = float(cmv_fab_raw[0]['cmv'] or 0)
-            cmv_por_empresa[1] = cmv_por_empresa.get(1, 0) + cmv_fab
+# ─── Faturamento E-commerce ───────────────────────────────────────────────────
 
-        fat_por_empresa = execute_query("""
-            SELECT
-                t.cd_empresa,
-                COALESCE(p.nm_fantasia, p.nm_pessoa, 'Empresa ' || t.cd_empresa::text) AS nome,
-                SUM(CASE WHEN t.tp_modalidade = '4' AND t.tp_operacao = 'S' THEN t.vl_transacao ELSE 0 END)
-                - SUM(CASE WHEN t.tp_modalidade = '3' AND t.tp_operacao = 'E' THEN t.vl_transacao ELSE 0 END)
-                AS faturamento_liquido
+def _calcular_faturamento_ecommerce(ref_month: date) -> dict:
+    """E-commerce (empresa 120) — operações inclusas."""
+    ops_ecom = ", ".join(str(o) for o in OPERACOES_ECOMMERCE)
+    ref = ref_month.isoformat()
+    ano_atual_ini = f"{ref_month.year}-01-01"
+    ano_ant_ini   = f"{ref_month.year - 1}-01-01"
+
+    def sub(de: str, ate: str) -> str:
+        return f"""
+            SELECT COALESCE(SUM(
+                CASE WHEN t.tp_operacao = 'S' THEN i.vl_totalliquido ELSE -i.vl_totalliquido END
+            ), 0) AS liquido
             FROM vr_tra_transacao t
-            LEFT JOIN vr_ger_empresa e ON e.cd_empresa = t.cd_empresa
-            LEFT JOIN vr_pes_pessoa p ON p.cd_pessoa = e.cd_pessoa
-            WHERE t.dt_transacao >= %s
-              AND t.dt_transacao <= %s
+            LEFT JOIN vr_tra_transitem i
+                ON i.cd_empresa = t.cd_empresa AND i.dt_transacao = t.dt_transacao AND i.nr_transacao = t.nr_transacao
+            WHERE t.cd_empresa = 120
               AND t.tp_situacao = 4
-            GROUP BY t.cd_empresa, p.nm_fantasia, p.nm_pessoa
-        """, (primeiro_dia, ultimo_dia))
+              AND t.cd_operacao IN ({ops_ecom})
+              AND t.dt_transacao >= '{de}'
+              AND t.dt_transacao <  {ate}
+              AND ((t.tp_modalidade IN ('4', '8') AND t.tp_operacao = 'S')
+                   OR (t.tp_modalidade IN ('3') AND t.tp_operacao = 'E'))
+        """
 
-        fat_map   = {r['cd_empresa']: float(r['faturamento_liquido'] or 0) for r in fat_por_empresa}
-        nomes_map = {r['cd_empresa']: r['nome'] for r in fat_por_empresa}
-
-        todas_empresas = {cd for cd, fat in fat_map.items() if fat > 0}
-        empresas_detalhes = []
-        for cd_emp in todas_empresas:
-            fat = fat_map.get(cd_emp, 0)
-            desp = despesas_por_empresa.get(cd_emp, 0)
-            cmv = cmv_por_empresa.get(cd_emp, 0)
-            lucro = fat - desp - cmv
-            empresas_detalhes.append({
-                "cd_empresa": cd_emp,
-                "nome": nomes_map.get(cd_emp, f"Empresa {cd_emp}"),
-                "faturamento_liquido": round(fat, 2),
-                "total_despesas": round(desp, 2),
-                "cmv": round(cmv, 2),
-                "lucro_liquido": round(lucro, 2),
-                "margem": round((lucro / fat * 100), 2) if fat > 0 else None,
-                "positivo": lucro > 0,
-            })
-
-        empresas_detalhes.sort(key=lambda x: x['lucro_liquido'], reverse=True)
-
-        total_empresas = len(empresas_detalhes)
-        positivas = sum(1 for e in empresas_detalhes if e['positivo'])
-        negativas = total_empresas - positivas
-        percentual_positivas = round(positivas / total_empresas * 100, 1) if total_empresas > 0 else 0
-
-        return {
-            "mes_referencia": mesReferencia,
-            "percentual_positivas": percentual_positivas,
-            "total_empresas": total_empresas,
-            "positivas": positivas,
-            "negativas": negativas,
-            "empresas": empresas_detalhes,
-        }
-
-    except Exception as e:
-        print(f"[ERROR] /api/indicadores/lucro-liquido: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Erro ao calcular lucro líquido: {str(e)}")
-
-
-@router.get("/api/indicadores/lucro-liquido-12m")
-def get_lucro_liquido_12m(
-    mesReferencia: str = Query("2026-01", description="Mês de referência (YYYY-MM) — calcula os 12 meses anteriores")
-):
+    query = f"""
+        WITH
+        acum_ano AS ({sub(ano_atual_ini, f"'{ref}'::date + INTERVAL '1 month'")}),
+        acum_ant AS ({sub(ano_ant_ini,   f"'{ref}'::date + INTERVAL '1 month' - INTERVAL '1 year'")})
+        SELECT
+            ('{ref}'::date + INTERVAL '1 month' - INTERVAL '1 day')::date AS dt_referencia,
+            a26.liquido AS acum_2026,
+            a25.liquido AS acum_2025,
+            CASE
+                WHEN a25.liquido = 0 THEN NULL
+                ELSE ROUND(((a26.liquido - a25.liquido) / a25.liquido * 100)::numeric, 1)
+            END AS crescimento_pct
+        FROM acum_ano a26, acum_ant a25
     """
-    Média mensal de % de empresas lucrativas nos últimos 12 meses.
-    """
-    try:
-        import calendar, datetime
-
-        ano, mes = int(mesReferencia.split('-')[0]), int(mesReferencia.split('-')[1])
-
-        meses = []
-        for i in range(11, -1, -1):
-            m = mes - i
-            a = ano
-            while m <= 0:
-                m += 12
-                a -= 1
-            meses.append((a, m))
-
-        inicio = datetime.date(meses[0][0], meses[0][1], 1)
-        primeiro_dia = inicio.isoformat()
-        ultimo_dia_num = calendar.monthrange(ano, mes)[1]
-        ultimo_dia = f"{ano}-{mes:02d}-{ultimo_dia_num:02d}"
-
-        MESES_PT = ['JAN','FEV','MAR','ABR','MAI','JUN','JUL','AGO','SET','OUT','NOV','DEZ']
-        periodo = f"{MESES_PT[meses[0][1]-1]}/{meses[0][0]} – {MESES_PT[mes-1]}/{ano}"
-
-        CONTAS_EXCLUIDAS = {'17.01', '18'}
-        cds_incluidos = [
-            cd for cd, conta in MAPEAMENTO_DESPESA_DRE.items()
-            if not any(conta == ex or conta.startswith(ex + '.') for ex in CONTAS_EXCLUIDAS)
-        ]
-        placeholders_inc = ','.join(['%s'] * len(cds_incluidos))
-        CCUSTOS_FABRICA = set(range(500, 516))
-
-        def mes_key(dt):
-            return str(dt)[:7]
-
-        fat_raw = execute_query("""
-            SELECT t.cd_empresa,
-                   DATE_TRUNC('month', t.dt_transacao) AS mes,
-                   COALESCE(p.nm_fantasia, p.nm_pessoa, 'Empresa ' || t.cd_empresa::text) AS nome,
-                   SUM(CASE WHEN t.tp_modalidade = '4' AND t.tp_operacao = 'S' THEN t.vl_transacao ELSE 0 END)
-                   - SUM(CASE WHEN t.tp_modalidade = '3' AND t.tp_operacao = 'E' THEN t.vl_transacao ELSE 0 END)
-                   AS faturamento_liquido
-            FROM vr_tra_transacao t
-            LEFT JOIN vr_ger_empresa e ON e.cd_empresa = t.cd_empresa
-            LEFT JOIN vr_pes_pessoa p ON p.cd_pessoa = e.cd_pessoa
-            WHERE t.dt_transacao >= %s AND t.dt_transacao <= %s AND t.tp_situacao = 4
-            GROUP BY t.cd_empresa, DATE_TRUNC('month', t.dt_transacao), p.nm_fantasia, p.nm_pessoa
-        """, (primeiro_dia, ultimo_dia))
-
-        fat_map: dict = {}
-        nomes_map: dict = {}
-        for r in fat_raw:
-            mk = mes_key(r['mes'])
-            cd = r['cd_empresa']
-            fat_map.setdefault(mk, {})[cd] = float(r['faturamento_liquido'] or 0)
-            nomes_map[cd] = r['nome']
-
-        params_desp = [primeiro_dia, ultimo_dia] + cds_incluidos
-        desp_raw = execute_query(f"""
-            SELECT d.cd_ccusto AS cd_ccusto,
-                   DATE_TRUNC('month', d.dt_emissao) AS mes,
-                   ABS(SUM(d.vl_rateio)) AS total_despesa
-            FROM vr_fcp_despduplicatai d
-            WHERE d.dt_emissao >= %s AND d.dt_emissao <= %s
-              AND d.tp_situacao = 'N'
-              AND d.cd_despesaitem IN ({placeholders_inc})
-            GROUP BY d.cd_ccusto, DATE_TRUNC('month', d.dt_emissao)
-        """, tuple(params_desp))
-
-        desp_map: dict = {}
-        for r in desp_raw:
-            mk = mes_key(r['mes'])
-            cd = r['cd_ccusto']
-            cd_real = 1 if cd in CCUSTOS_FABRICA else cd
-            val = float(r['total_despesa'] or 0)
-            desp_map.setdefault(mk, {})
-            desp_map[mk][cd_real] = desp_map[mk].get(cd_real, 0) + val
-
-        cmv_loja_raw = execute_query("""
-            SELECT idcentrodecusto AS cd_empresa,
-                   DATE_TRUNC('month', data) AS mes,
-                   ABS(SUM(valor)) AS cmv
-            FROM mv_cmv_loja WHERE data >= %s AND data <= %s
-            GROUP BY idcentrodecusto, DATE_TRUNC('month', data)
-        """, (primeiro_dia, ultimo_dia))
-
-        cmv_loja_map: dict = {}
-        for r in cmv_loja_raw:
-            mk = mes_key(r['mes'])
-            cmv_loja_map.setdefault(mk, {})[r['cd_empresa']] = float(r['cmv'] or 0)
-
-        cmv_fab_raw = execute_query("""
-            SELECT DATE_TRUNC('month', data) AS mes, ABS(COALESCE(SUM(valor), 0)) AS cmv
-            FROM mv_cmv_fab WHERE data >= %s AND data <= %s
-            GROUP BY DATE_TRUNC('month', data)
-        """, (primeiro_dia, ultimo_dia))
-
-        cmv_fab_map: dict = {mes_key(r['mes']): float(r['cmv'] or 0) for r in cmv_fab_raw}
-
-        lucro_por_mes: dict = {}
-
-        for a, m in meses:
-            mk = f"{a}-{m:02d}"
-            fat_mes      = fat_map.get(mk, {})
-            desp_mes     = desp_map.get(mk, {})
-            cmv_loja_mes = cmv_loja_map.get(mk, {})
-            cmv_fab_mes  = cmv_fab_map.get(mk, 0)
-
-            for cd, fat in fat_mes.items():
-                if fat <= 0:
-                    continue
-                desp = desp_mes.get(cd, 0)
-                cmv  = cmv_loja_mes.get(cd, 0) + (cmv_fab_mes if cd == 1 else 0)
-                lucro_por_mes.setdefault(cd, {})[mk] = fat - desp - cmv
-
-        todas_empresas = set(lucro_por_mes.keys())
-        empresas_detalhes = []
-        for cd_emp in todas_empresas:
-            lucros_mensais = list(lucro_por_mes[cd_emp].values())
-            n_meses = len(lucros_mensais)
-            lucro_medio = sum(lucros_mensais) / n_meses
-
-            fat_total  = sum(fat_map.get(f"{a}-{m:02d}", {}).get(cd_emp, 0) for a, m in meses)
-            desp_total = sum(desp_map.get(f"{a}-{m:02d}", {}).get(cd_emp, 0) for a, m in meses)
-            cmv_total  = sum(
-                cmv_loja_map.get(f"{a}-{m:02d}", {}).get(cd_emp, 0)
-                + (cmv_fab_map.get(f"{a}-{m:02d}", 0) if cd_emp == 1 else 0)
-                for a, m in meses
-            )
-            fat_medio  = fat_total  / n_meses
-            desp_medio = desp_total / n_meses
-            cmv_medio  = cmv_total  / n_meses
-
-            empresas_detalhes.append({
-                "cd_empresa": cd_emp,
-                "nome": nomes_map.get(cd_emp, f"Empresa {cd_emp}"),
-                "faturamento_liquido": round(fat_medio, 2),
-                "total_despesas": round(desp_medio, 2),
-                "cmv": round(cmv_medio, 2),
-                "lucro_liquido": round(lucro_medio, 2),
-                "margem": round((lucro_medio / fat_medio * 100), 2) if fat_medio > 0 else None,
-                "positivo": lucro_medio > 0,
-            })
-
-        empresas_detalhes.sort(key=lambda x: x['lucro_liquido'], reverse=True)
-        total_empresas = len(empresas_detalhes)
-        positivas = sum(1 for e in empresas_detalhes if e['positivo'])
-        percentual_positivas = round(positivas / total_empresas * 100, 1) if total_empresas > 0 else 0
-
-        return {
-            "periodo": periodo,
-            "mes_referencia": mesReferencia,
-            "percentual_positivas": percentual_positivas,
-            "total_empresas": total_empresas,
-            "positivas": positivas,
-            "negativas": total_empresas - positivas,
-            "empresas": empresas_detalhes,
-        }
-
-    except Exception as e:
-        print(f"[ERROR] /api/indicadores/lucro-liquido-12m: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Erro ao calcular lucro líquido 12M: {str(e)}")
+    rows = execute_query(query)
+    if not rows:
+        return {"dt_referencia": None, "acum_2026": 0, "acum_2025": 0, "crescimento_pct": None}
+    row = rows[0]
+    return {
+        "dt_referencia": row["dt_referencia"].isoformat(),
+        "acum_2026": float(row["acum_2026"]),
+        "acum_2025": float(row["acum_2025"]),
+        "crescimento_pct": float(row["crescimento_pct"]) if row["crescimento_pct"] is not None else None,
+    }
 
 
-@router.get("/api/indicadores/quebra")
-def get_quebra(
-    mesReferencia: str = Query("2026-01", description="Mês de referência (YYYY-MM)")
-):
-    """
-    Retorna a quebra de pedidos (cd_motivocanc=6) para o mês de referência.
-    """
-    try:
-        import calendar
+def _criar_tabela_historico():
+    execute_insert("""
+        CREATE TABLE IF NOT EXISTS indicadores_historico (
+            mes DATE NOT NULL,
+            indicador TEXT NOT NULL,
+            dados JSONB NOT NULL,
+            atualizado_em TIMESTAMP DEFAULT NOW(),
+            PRIMARY KEY (mes, indicador)
+        )
+    """)
 
-        ano, mes = mesReferencia.split('-')
-        primeiro_dia = f"{ano}-{mes}-01"
-        ultimo_dia_num = calendar.monthrange(int(ano), int(mes))[1]
-        ultimo_dia = f"{ano}-{mes}-{ultimo_dia_num:02d}"
 
-        print(f"[INFO] Quebra: {primeiro_dia} ~ {ultimo_dia}")
+# ─── E-commerce Ads (ROAS + Taxa de Conversão) ───────────────────────────────
 
-        result = execute_query("""
-            WITH ult AS (
-                SELECT
-                    a.*,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY a.cd_empresa, a.cd_pedido, a.cd_produto
-                        ORDER BY a.dt_cadastro DESC
-                    ) AS rn
-                FROM vr_ped_pedidoicanc2 a
-                WHERE a.dt_cadastro >= %s AND a.dt_cadastro <= %s
-            )
+def _calcular_ecommerce_ads(ref_month: date) -> dict:
+    ref = ref_month.isoformat()
+    import calendar
+    last_day = calendar.monthrange(ref_month.year, ref_month.month)[1]
+    dt_ref = date(ref_month.year, ref_month.month, last_day).isoformat()
+
+    # ROAS — ga4_aquisicao_conversao (CPC)
+    rows_ads = execute_neon_query("""
+        SELECT
+            COALESCE(SUM(custo), 0)   AS custo,
+            COALESCE(SUM(receita), 0) AS receita,
+            COALESCE(SUM(cliques), 0) AS cliques
+        FROM public.ga4_aquisicao_conversao
+        WHERE meio = 'cpc'
+          AND data >= %s::date
+          AND data <  %s::date + INTERVAL '1 month'
+    """, (ref, ref))
+
+    # Taxa de conversão — ga4_tecnologia_geolocalizacao (Brasil)
+    rows_geo = execute_neon_query("""
+        SELECT
+            COALESCE(SUM(sessoes_engajadas), 0) AS sessoes_engajadas,
+            COALESCE(SUM(transacoes), 0)        AS transacoes
+        FROM public.ga4_tecnologia_geolocalizacao
+        WHERE pais = 'Brazil'
+          AND data >= %s::date
+          AND data <  %s::date + INTERVAL '1 month'
+    """, (ref, ref))
+
+    ads = rows_ads[0] if rows_ads else {}
+    geo = rows_geo[0] if rows_geo else {}
+
+    custo             = float(ads.get("custo", 0))
+    receita           = float(ads.get("receita", 0))
+    cliques           = int(ads.get("cliques", 0))
+    sessoes_engajadas = int(geo.get("sessoes_engajadas", 0))
+    transacoes        = int(geo.get("transacoes", 0))
+
+    roas      = round(receita / custo, 2) if custo > 0 else None
+    taxa_conv = round(transacoes / sessoes_engajadas * 100, 2) if sessoes_engajadas > 0 else None
+
+    return {
+        "dt_referencia":     dt_ref,
+        "custo":             custo,
+        "receita":           receita,
+        "cliques":           cliques,
+        "sessoes_engajadas": sessoes_engajadas,
+        "transacoes":        transacoes,
+        "roas":              roas,
+        "taxa_conv_pct":     taxa_conv,
+    }
+
+
+# ─── Vendas Volume x Varejo ──────────────────────────────────────────────────
+
+def _calcular_vendas_volume_varejo(ref_month: date) -> dict:
+    ref = ref_month.isoformat()
+    query = f"""
+        WITH vendas AS (
             SELECT
-                COALESCE(SUM(b.vl_unitario * b.qt_cancelada), 0) AS quebra_valor,
-                COUNT(*) AS quebra_count
+                t.ds_sigla AS tipo_tabela,
+                COALESCE(SUM(i.vl_solicitado), 0) AS valor_total
+            FROM vr_ped_pedidoc2 c
+            LEFT JOIN vr_ped_pedidoi i
+                ON c.cd_empresa = i.cd_empresa AND i.cd_pedido = c.cd_pedido
+            LEFT JOIN vr_ped_tabprecoc t
+                ON i.cd_tabpreco = t.cd_tabpreco
+            WHERE c.dt_pedido >= '{ref}'::date
+              AND c.dt_pedido <  '{ref}'::date + INTERVAL '1 month'
+              AND c.cd_cliente <> 110000001
+              AND c.cd_representant <> 32098
+              AND c.tp_situacao <> 6
+              AND c.cd_empresa = 1
+              AND c.cd_operacao IN (1, 18, 52, 166, 148, 98, 55, 97, 30, 79, 93,
+                                    137, 141, 142, 156, 159, 310, 598, 180, 58,
+                                    69, 85, 124, 182)
+              AND t.ds_sigla IN ('VAREJO', 'VOLUME')
+            GROUP BY t.ds_sigla
+        ),
+        total AS (SELECT SUM(valor_total) AS total_valor FROM vendas)
+        SELECT
+            v.tipo_tabela,
+            v.valor_total,
+            ROUND((v.valor_total / NULLIF(t.total_valor, 0) * 100)::numeric, 2) AS percentual
+        FROM vendas v, total t
+        ORDER BY v.tipo_tabela
+    """
+    rows = execute_query(query)
+    import calendar
+    last_day = calendar.monthrange(ref_month.year, ref_month.month)[1]
+    result = {
+        "dt_referencia": date(ref_month.year, ref_month.month, last_day).isoformat(),
+        "volume_valor": 0.0,
+        "varejo_valor": 0.0,
+        "total_valor": 0.0,
+        "volume_pct": None,
+        "varejo_pct": None,
+    }
+
+    total_val = 0.0
+    for row in rows:
+        val = float(row["valor_total"])
+        pct = float(row["percentual"]) if row["percentual"] is not None else None
+        total_val += val
+        if row["tipo_tabela"] == "VOLUME":
+            result["volume_valor"] = val
+            result["volume_pct"] = pct
+        elif row["tipo_tabela"] == "VAREJO":
+            result["varejo_valor"] = val
+            result["varejo_pct"] = pct
+    result["total_valor"] = total_val
+    return result
+
+
+# ─── Quebra de Pedidos ───────────────────────────────────────────────────────
+
+def _calcular_quebra_pedidos(ref_month: date) -> dict:
+    ops_fab   = ", ".join(str(o) for o in OPERACOES_EXCLUIDAS)
+    reps_excl = ", ".join(str(r) for r in REPRESENTANTES_EXCLUIDOS)
+    ref = ref_month.isoformat()
+
+    query = f"""
+        WITH ult AS (
+            SELECT a.*, ROW_NUMBER() OVER (
+                PARTITION BY a.cd_empresa, a.cd_pedido, a.cd_produto
+                ORDER BY a.dt_cadastro DESC
+            ) AS rn
+            FROM vr_ped_pedidoicanc2 a
+            WHERE a.dt_cadastro >= '{ref}'::date
+              AND a.dt_cadastro <  '{ref}'::date + INTERVAL '1 month'
+        ),
+        quebra AS (
+            SELECT COALESCE(SUM(b.vl_unitario * b.qt_cancelada), 0) AS quebra_valor
             FROM ult u
             JOIN vr_ped_pedidoi b
                 ON u.cd_pedido = b.cd_pedido
@@ -791,671 +499,175 @@ def get_quebra(
             WHERE u.rn = 1
               AND u.cd_motivocanc = 6
               AND b.cd_operacao IN (52, 1)
-              AND b.cd_representant <> 110000001
-        """, (primeiro_dia, ultimo_dia))
-
-        quebra_valor = float(result[0]['quebra_valor'])
-        quebra_count = int(result[0]['quebra_count'])
-
-        fat_result = execute_query("""
-            SELECT COALESCE(SUM(t.vl_transacao), 0) AS total
+        ),
+        fat_mes AS (
+            SELECT COALESCE(SUM(
+                CASE WHEN t.tp_operacao = 'S' THEN i.vl_totalliquido ELSE -i.vl_totalliquido END
+            ), 0) AS faturamento_mes
             FROM vr_tra_transacao t
-            WHERE t.dt_transacao >= %s AND t.dt_transacao <= %s
+            LEFT JOIN vr_tra_transitem i
+                ON i.cd_empresa = t.cd_empresa
+               AND i.dt_transacao = t.dt_transacao
+               AND i.nr_transacao = t.nr_transacao
+            WHERE t.cd_empresa = 1
               AND t.tp_situacao = 4
-              AND t.tp_modalidade IN ('4')
-              AND t.tp_operacao = 'S'
-              AND t.cd_empresa = 1
-        """, (primeiro_dia, ultimo_dia))
+              AND t.cd_representant IS NOT NULL
+              AND t.cd_representant <> ALL (ARRAY[{reps_excl}])
+              AND t.cd_operacao NOT IN ({ops_fab})
+              AND t.dt_transacao >= '{ref}'::date
+              AND t.dt_transacao <  '{ref}'::date + INTERVAL '1 month'
+              AND ((t.tp_modalidade IN ('4', '8') AND t.tp_operacao = 'S')
+                   OR (t.tp_modalidade IN ('3') AND t.tp_operacao = 'E'))
+        )
+        SELECT
+            ('{ref}'::date + INTERVAL '1 month' - INTERVAL '1 day')::date AS dt_referencia,
+            q.quebra_valor,
+            f.faturamento_mes,
+            CASE
+                WHEN f.faturamento_mes = 0 THEN NULL
+                ELSE ROUND((q.quebra_valor / f.faturamento_mes * 100)::numeric, 2)
+            END AS quebra_pct
+        FROM quebra q, fat_mes f
+    """
+    rows = execute_query(query)
+    if not rows:
+        return {"dt_referencia": None, "quebra_valor": 0, "faturamento_mes": 0, "quebra_pct": None}
+    row = rows[0]
+    return {
+        "dt_referencia": row["dt_referencia"].isoformat(),
+        "quebra_valor": float(row["quebra_valor"]),
+        "faturamento_mes": float(row["faturamento_mes"]),
+        "quebra_pct": float(row["quebra_pct"]) if row["quebra_pct"] is not None else None,
+    }
 
-        faturamento_empresa1 = float(fat_result[0]['total'])
-        quebra_percentual = (quebra_valor / faturamento_empresa1 * 100) if faturamento_empresa1 > 0 else 0
 
-        print(f"[OK] Quebra: R$ {quebra_valor:,.2f}, {quebra_count} itens, {quebra_percentual:.2f}%")
-
-        return {
-            "mes_referencia": mesReferencia,
-            "quebra_valor": quebra_valor,
-            "quebra_count": quebra_count,
-            "quebra_percentual": round(quebra_percentual, 2),
-            "faturamento_empresa1": faturamento_empresa1,
-            "periodo": {
-                "data_inicio": primeiro_dia,
-                "data_fim": ultimo_dia
-            },
-            "fonte": "vCenter"
-        }
-    except Exception as e:
-        print(f"[ERROR] Erro ao buscar quebra: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Erro ao buscar quebra: {str(e)}")
-
+# ─── Endpoints tempo real ─────────────────────────────────────────────────────
 
 @router.get("/api/indicadores/giro-lojas")
-def get_giro_lojas(
-    mesReferencia: str = Query("2026-01", description="Mês de referência (YYYY-MM)")
-):
-    """
-    Retorna o Giro PA Lojas do mês de referência.
-    """
-    try:
-        import calendar
+def get_giro_estoque_lojas():
+    return _calcular_giro_lojas(date.today().replace(day=1))
 
-        ano, mes = mesReferencia.split('-')
-        primeiro_dia = f"{ano}-{mes}-01"
-        ultimo_dia_num = calendar.monthrange(int(ano), int(mes))[1]
-        ultimo_dia = f"{ano}-{mes}-{ultimo_dia_num:02d}"
-        doze_meses_atras = f"{int(ano) - 1}-{mes}-01"
 
-        try:
-            cached = execute_query(
-                "SELECT giro, estoque_total, venda_liquida_media FROM mv_giro_lojas_mensal WHERE mes_referencia = %s",
-                (primeiro_dia,)
-            )
-            if cached:
-                row = cached[0]
-                giro = float(row.get('giro') or 0)
-                print(f"[OK] Giro Lojas (cache): giro={giro:.4f}")
-                return {
-                    "mes_referencia": mesReferencia,
-                    "giro": round(giro, 4),
-                    "estoque_total": float(row.get('estoque_total') or 0),
-                    "venda_liquida_media_mensal": float(row.get('venda_liquida_media') or 0),
-                    "fonte": "cache"
-                }
-        except Exception:
-            pass
-
-        print(f"[INFO] Giro Lojas (query pesada): lojas={primeiro_dia}~{ultimo_dia}, vendas={doze_meses_atras}~{primeiro_dia}, estoque={primeiro_dia}")
-
-        result = execute_query("""
-            WITH lojas AS (
-                SELECT DISTINCT t.cd_empresa::text AS cd_empresa_txt
-                FROM vr_tra_transacao t
-                JOIN vr_tra_transitem i
-                    ON i.cd_empresa = t.cd_empresa
-                   AND i.dt_transacao = t.dt_transacao
-                   AND i.nr_transacao = t.nr_transacao
-                WHERE t.dt_transacao >= %s
-                  AND t.dt_transacao <= %s
-                  AND t.cd_empresa <> ALL (ARRAY[1::bigint, 120::bigint])
-                  AND t.cd_operacao <> ALL (ARRAY[140, 76, 25, 26, 27, 273, 44, 240, 241, 242, 243, 244, 245, 239, 238, 237, 236])
-                  AND i.cd_compvend <> 1
-                  AND t.tp_situacao <> 6
-                  AND (t.tp_modalidade)::text = ANY (ARRAY['2','3','4','8'])
-            ),
-            vendas AS (
-                SELECT
-                    (
-                        SUM(CASE WHEN (t.tp_modalidade IN ('4','8') AND t.tp_operacao = 'S') THEN i.qt_solicitada ELSE 0 END)
-                        -
-                        SUM(CASE WHEN (t.tp_modalidade IN ('3')     AND t.tp_operacao = 'E') THEN i.qt_solicitada ELSE 0 END)
-                    )::numeric / 12 AS liquido
-                FROM vr_tra_transacao t
-                JOIN vr_tra_transitem i
-                    ON i.cd_empresa = t.cd_empresa
-                   AND i.dt_transacao = t.dt_transacao
-                   AND i.nr_transacao = t.nr_transacao
-                WHERE t.dt_transacao >= %s
-                  AND t.dt_transacao <= %s
-                  AND t.cd_empresa <> ALL (ARRAY[1::bigint, 120::bigint])
-                  AND t.cd_operacao <> ALL (ARRAY[140, 76, 25, 26, 27, 273, 44, 240, 241, 242, 243, 244, 245, 239, 238, 237, 236])
-                  AND i.cd_compvend <> 1
-                  AND t.tp_situacao <> 6
-                  AND (t.tp_modalidade)::text = ANY (ARRAY['2','3','4','8'])
-            ),
-            estoques AS (
-                SELECT SUM(s.estoque)::numeric AS estoque_total
-                FROM lojas l
-                CROSS JOIN LATERAL (
-                    SELECT SUM(
-                        f_dic_sld_prd_produto(
-                            l.cd_empresa_txt,
-                            '1'::text,
-                            pg.cd_produto,
-                            %s::timestamp
-                        )
-                    ) AS estoque
-                    FROM vr_prd_prdgrade pg
-                    WHERE pg.cd_produto < 1000000
-                ) s
-            )
-            SELECT
-                NULLIF(e.estoque_total, 0) / NULLIF(v.liquido, 0) AS giro,
-                e.estoque_total,
-                v.liquido
-            FROM vendas v
-            CROSS JOIN estoques e
-        """, (
-            primeiro_dia, ultimo_dia,
-            doze_meses_atras, primeiro_dia,
-            primeiro_dia,
-        ))
-
-        row = result[0] if result else {}
-        giro = float(row.get('giro') or 0)
-        estoque_total = float(row.get('estoque_total') or 0)
-        liquido = float(row.get('liquido') or 0)
-
-        print(f"[OK] Giro Lojas: giro={giro:.4f}, estoque={estoque_total:,.0f}, liquido_medio={liquido:,.0f}")
-
-        return {
-            "mes_referencia": mesReferencia,
-            "giro": round(giro, 4),
-            "estoque_total": estoque_total,
-            "venda_liquida_media_mensal": liquido,
-            "fonte": "vCenter"
-        }
-    except Exception as e:
-        print(f"[ERROR] Erro ao buscar giro lojas: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Erro ao buscar giro lojas: {str(e)}")
+@router.get("/api/indicadores/giro-mp")
+def get_giro_mp():
+    return _calcular_giro_mp(date.today().replace(day=1))
 
 
 @router.get("/api/indicadores/giro-fabrica")
-def get_giro_fabrica(
-    mesReferencia: str = Query("2026-01", description="Mês de referência (YYYY-MM)")
-):
-    """
-    Retorna o Giro PA Fábrica (cd_empresa=1) do mês de referência.
-    """
-    try:
-        import calendar
-
-        ano, mes = mesReferencia.split('-')
-        primeiro_dia = f"{ano}-{mes}-01"
-        ultimo_dia_num = calendar.monthrange(int(ano), int(mes))[1]
-        ultimo_dia = f"{ano}-{mes}-{ultimo_dia_num:02d}"
-        doze_meses_atras = f"{int(ano) - 1}-{mes}-01"
-
-        try:
-            cached = execute_query(
-                "SELECT giro, estoque_total, venda_liquida_media FROM mv_giro_fabrica_mensal WHERE mes_referencia = %s",
-                (primeiro_dia,)
-            )
-            if cached:
-                row = cached[0]
-                giro = float(row.get('giro') or 0)
-                print(f"[OK] Giro Fábrica (cache): giro={giro:.4f}")
-                return {
-                    "mes_referencia": mesReferencia,
-                    "giro": round(giro, 4),
-                    "estoque_total": float(row.get('estoque_total') or 0),
-                    "venda_liquida_media_mensal": float(row.get('venda_liquida_media') or 0),
-                    "fonte": "cache"
-                }
-        except Exception:
-            pass
-
-        print(f"[INFO] Giro Fábrica (query pesada): vendas={doze_meses_atras}~{primeiro_dia}, estoque={primeiro_dia}")
-
-        result = execute_query("""
-            WITH vendas AS (
-                SELECT (
-                    SUM(CASE WHEN t.tp_modalidade IN ('4','8') AND t.tp_operacao = 'S' THEN i.qt_solicitada ELSE 0 END)
-                    - SUM(CASE WHEN t.tp_modalidade IN ('3') AND t.tp_operacao = 'E' THEN i.qt_solicitada ELSE 0 END)
-                )::numeric / 12 AS liquido
-                FROM vr_tra_transacao t
-                JOIN vr_tra_transitem i
-                    ON i.cd_empresa = t.cd_empresa
-                   AND i.dt_transacao = t.dt_transacao
-                   AND i.nr_transacao = t.nr_transacao
-                WHERE t.dt_transacao >= %s
-                  AND t.dt_transacao <= %s
-                  AND t.cd_empresa = 1
-                  AND t.cd_operacao <> ALL (ARRAY[140,76,25,26,27,273,44,240,241,242,243,244,245,239,238,237,236])
-                  AND i.cd_compvend <> 1
-                  AND t.tp_situacao <> 6
-                  AND t.tp_modalidade::text = ANY (ARRAY['2','3','4','8'])
-            ),
-            estoques AS (
-                SELECT SUM(f_dic_sld_prd_produto(
-                    '1'::text, '1'::text, pg.cd_produto, %s::timestamp
-                )) AS estoque_total
-                FROM vr_prd_prdgrade pg
-                WHERE pg.cd_produto < 1000000
-            )
-            SELECT
-                NULLIF(e.estoque_total, 0) / NULLIF(v.liquido, 0) AS giro,
-                e.estoque_total,
-                v.liquido
-            FROM vendas v CROSS JOIN estoques e
-        """, (doze_meses_atras, primeiro_dia, primeiro_dia))
-
-        row = result[0] if result else {}
-        giro = float(row.get('giro') or 0)
-        estoque_total = float(row.get('estoque_total') or 0)
-        liquido = float(row.get('liquido') or 0)
-
-        print(f"[OK] Giro Fábrica: giro={giro:.4f}, estoque={estoque_total:,.0f}, liquido_medio={liquido:,.0f}")
-
-        return {
-            "mes_referencia": mesReferencia,
-            "giro": round(giro, 4),
-            "estoque_total": estoque_total,
-            "venda_liquida_media_mensal": liquido,
-            "fonte": "vCenter"
-        }
-    except Exception as e:
-        print(f"[ERROR] Erro ao buscar giro fábrica: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Erro ao buscar giro fábrica: {str(e)}")
-
-
-@router.get("/api/indicadores/inadimplencia")
-def get_inadimplencia(
-    mesReferencia: str = Query("2026-01", description="Mês de referência (YYYY-MM)")
-):
-    """
-    Retorna inadimplência em 3 faixas de aging.
-    """
-    try:
-        from datetime import date, timedelta
-
-        ano, mes = mesReferencia.split('-')
-        data_base = date(int(ano), int(mes), 1)
-
-        inad30_ini  = data_base - timedelta(days=30)
-        inad30_fim  = data_base - timedelta(days=1)
-        inad90_ini  = data_base - timedelta(days=90)
-        inad90_fim  = data_base - timedelta(days=31)
-        inad180_ini = data_base - timedelta(days=180)
-        inad180_fim = data_base - timedelta(days=91)
-
-        print(f"[INFO] Inadimplência data_base={data_base}")
-
-        result = execute_query("""
-            SELECT
-                COALESCE(SUM(CASE WHEN dt_vencimento >= %s AND dt_vencimento <= %s THEN vl_fatura ELSE 0 END), 0) AS inad30_total,
-                COALESCE(SUM(CASE WHEN dt_vencimento >= %s AND dt_vencimento <= %s AND tp_baixa = 0 THEN vl_fatura ELSE 0 END), 0) AS inad30_aberto,
-                COALESCE(SUM(CASE WHEN dt_vencimento >= %s AND dt_vencimento <= %s THEN vl_fatura ELSE 0 END), 0) AS inad90_total,
-                COALESCE(SUM(CASE WHEN dt_vencimento >= %s AND dt_vencimento <= %s AND tp_baixa = 0 THEN vl_fatura ELSE 0 END), 0) AS inad90_aberto,
-                COALESCE(SUM(CASE WHEN dt_vencimento >= %s AND dt_vencimento <= %s THEN vl_fatura ELSE 0 END), 0) AS inad180_total,
-                COALESCE(SUM(CASE WHEN dt_vencimento >= %s AND dt_vencimento <= %s AND tp_baixa = 0 THEN vl_fatura ELSE 0 END), 0) AS inad180_aberto
-            FROM vr_fcr_faturai
-            WHERE tp_situacao = 1
-              AND tp_documento NOT IN (7, 10, 11)
-              AND vl_fatura > 0
-              AND dt_vencimento >= %s
-              AND dt_vencimento <= %s
-        """, (
-            inad30_ini,  inad30_fim,
-            inad30_ini,  inad30_fim,
-            inad90_ini,  inad90_fim,
-            inad90_ini,  inad90_fim,
-            inad180_ini, inad180_fim,
-            inad180_ini, inad180_fim,
-            inad180_ini, inad30_fim,
-        ))
-
-        row = result[0] if result else {}
-
-        def perc(aberto, total):
-            a = float(aberto or 0)
-            t = float(total or 0)
-            return round(a / t * 100, 2) if t > 0 else 0.0
-
-        inad30_total  = float(row.get('inad30_total', 0))
-        inad30_aberto = float(row.get('inad30_aberto', 0))
-        inad90_total  = float(row.get('inad90_total', 0))
-        inad90_aberto = float(row.get('inad90_aberto', 0))
-        inad180_total  = float(row.get('inad180_total', 0))
-        inad180_aberto = float(row.get('inad180_aberto', 0))
-
-        return {
-            "mes_referencia": mesReferencia,
-            "data_base": str(data_base),
-            "inad_30": {
-                "total_vencido": inad30_total,
-                "total_aberto": inad30_aberto,
-                "percentual": perc(inad30_aberto, inad30_total),
-            },
-            "inad_90": {
-                "total_vencido": inad90_total,
-                "total_aberto": inad90_aberto,
-                "percentual": perc(inad90_aberto, inad90_total),
-            },
-            "inad_180": {
-                "total_vencido": inad180_total,
-                "total_aberto": inad180_aberto,
-                "percentual": perc(inad180_aberto, inad180_total),
-            },
-            "fonte": "vCenter"
-        }
-    except Exception as e:
-        print(f"[ERROR] Erro ao buscar inadimplência: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Erro ao buscar inadimplência: {str(e)}")
-
-
-@router.get("/api/indicadores/cmv")
-def get_cmv(
-    mesReferencia: str = Query("2026-01", description="Mês de referência (YYYY-MM)")
-):
-    """
-    Retorna o CMV (Custo de Mercadorias Vendidas) do mês de referência.
-    """
-    try:
-        import calendar
-
-        ano, mes = mesReferencia.split('-')
-        primeiro_dia = f"{ano}-{mes}-01"
-        ultimo_dia_num = calendar.monthrange(int(ano), int(mes))[1]
-        ultimo_dia = f"{ano}-{mes}-{ultimo_dia_num:02d}"
-
-        print(f"[INFO] Calculando CMV: mês={mesReferencia}")
-
-        result_lojas = execute_query(
-            "SELECT COALESCE(SUM(valor), 0) AS total FROM mv_cmv_loja WHERE data >= %s AND data <= %s",
-            (primeiro_dia, ultimo_dia)
-        )
-        cmv_lojas = float(result_lojas[0]['total']) if result_lojas else 0.0
-
-        result_fab = execute_query(
-            "SELECT COALESCE(SUM(valor), 0) AS total FROM mv_cmv_fab WHERE data >= %s AND data <= %s",
-            (primeiro_dia, ultimo_dia)
-        )
-        cmv_fab = float(result_fab[0]['total']) if result_fab else 0.0
-
-        cmv_total = abs(cmv_lojas + cmv_fab)
-
-        print(f"[OK] CMV lojas={cmv_lojas:.2f}, fab={cmv_fab:.2f}, total={cmv_total:.2f}")
-
-        return {
-            "mes_referencia": mesReferencia,
-            "cmv_lojas": abs(cmv_lojas),
-            "cmv_fab": abs(cmv_fab),
-            "cmv_total": cmv_total,
-            "periodo_fab": {
-                "data_inicio": primeiro_dia,
-                "data_fim": ultimo_dia
-            },
-            "fonte": "vCenter"
-        }
-    except Exception as e:
-        print(f"[ERROR] Erro ao buscar CMV: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(
-            status_code=500,
-            detail=f"Erro ao buscar CMV: {str(e)}"
-        )
-
-
-@router.get("/api/indicadores/cmv/detalhe")
-def get_cmv_detalhe(
-    mesReferencia: str = Query("2026-01", description="Mês de referência (YYYY-MM)")
-):
-    """
-    Retorna o CMV detalhado por loja e fábrica para o mês de referência.
-    """
-    try:
-        import calendar
-
-        ano, mes = mesReferencia.split('-')
-        primeiro_dia = f"{ano}-{mes}-01"
-        ultimo_dia_num = calendar.monthrange(int(ano), int(mes))[1]
-        ultimo_dia = f"{ano}-{mes}-{ultimo_dia_num:02d}"
-
-        lojas = execute_query("""
-            SELECT
-                l.idcentrodecusto AS cd_empresa,
-                p.nm_fantasia AS nome,
-                ABS(SUM(l.valor)) AS cmv
-            FROM mv_cmv_loja l
-            JOIN vr_ger_empresa e ON e.cd_empresa = l.idcentrodecusto
-            JOIN vr_pes_pessoa p ON p.cd_pessoa = e.cd_pessoa
-            WHERE l.data >= %s AND l.data <= %s
-            GROUP BY l.idcentrodecusto, p.nm_fantasia
-            ORDER BY cmv DESC
-        """, (primeiro_dia, ultimo_dia))
-
-        fat_por_empresa = execute_query("""
-            SELECT
-                t.cd_empresa,
-                SUM(CASE WHEN t.tp_modalidade = '4' AND t.tp_operacao = 'S' THEN t.vl_transacao ELSE 0 END)
-                - SUM(CASE WHEN t.tp_modalidade = '3' AND t.tp_operacao = 'E' THEN t.vl_transacao ELSE 0 END)
-                AS receita_liquida
-            FROM vr_tra_transacao t
-            WHERE t.dt_transacao >= %s
-              AND t.dt_transacao <= %s
-              AND t.tp_situacao = 4
-              AND t.cd_empresa <> 1
-            GROUP BY t.cd_empresa
-        """, (primeiro_dia, ultimo_dia))
-
-        fat_map = {r['cd_empresa']: float(r['receita_liquida'] or 0) for r in fat_por_empresa}
-
-        fab = execute_query(
-            "SELECT ABS(COALESCE(SUM(valor), 0)) AS cmv FROM mv_cmv_fab WHERE data >= %s AND data <= %s",
-            (primeiro_dia, ultimo_dia)
-        )
-        cmv_fab = float(fab[0]['cmv']) if fab else 0.0
-
-        fat_fab = execute_query("""
-            SELECT
-                SUM(CASE WHEN t.tp_modalidade = '4' AND t.tp_operacao = 'S' THEN t.vl_transacao ELSE 0 END)
-                - SUM(CASE WHEN t.tp_modalidade = '3' AND t.tp_operacao = 'E' THEN t.vl_transacao ELSE 0 END)
-                AS receita_liquida
-            FROM vr_tra_transacao t
-            WHERE t.dt_transacao >= %s
-              AND t.dt_transacao <= %s
-              AND t.tp_situacao = 4
-              AND t.cd_empresa = 1
-        """, (primeiro_dia, ultimo_dia))
-        receita_fab = float(fat_fab[0]['receita_liquida'] or 0) if fat_fab else 0.0
-
-        def perc_cmv(cmv, receita):
-            return round(cmv / receita * 100, 2) if receita > 0 else None
-
-        lojas_list = [
-            {
-                "cd_empresa": r['cd_empresa'],
-                "nome": r['nome'],
-                "cmv": float(r['cmv']),
-                "receita_liquida": fat_map.get(r['cd_empresa'], 0),
-                "perc_cmv": perc_cmv(float(r['cmv']), fat_map.get(r['cd_empresa'], 0)),
-            }
-            for r in lojas
-        ]
-        cmv_lojas_total = sum(l['cmv'] for l in lojas_list)
-        cmv_total = cmv_lojas_total + cmv_fab
-        receita_total = sum(l['receita_liquida'] for l in lojas_list) + receita_fab
-
-        return {
-            "mes_referencia": mesReferencia,
-            "cmv_total": cmv_total,
-            "cmv_fab": cmv_fab,
-            "receita_fab": receita_fab,
-            "perc_cmv_fab": perc_cmv(cmv_fab, receita_fab),
-            "receita_total": receita_total,
-            "perc_cmv_total": perc_cmv(cmv_total, receita_total),
-            "lojas": lojas_list,
-        }
-    except Exception as e:
-        print(f"[ERROR] Erro ao buscar detalhe CMV: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Erro ao buscar detalhe CMV: {str(e)}")
-
-
-@router.get("/api/indicadores/ciclo-financeiro/historico")
-def get_ciclo_financeiro_historico(
-    meses: int = Query(12, description="Quantidade de meses para o histórico (padrão: 12)")
-):
-    """
-    Retorna o histórico mensal do PMR, PMP e Ciclo Financeiro.
-
-    Fórmula utilizada:
-    - PMR = (Contas a Receber / Faturamento 12 meses) × 360
-    - PMP = (Contas a Pagar / Pagamentos 12 meses) × 360
-    - Ciclo Operacional = PMR + PME (estoque fixo 31 dias)
-    - Ciclo Financeiro = Ciclo Operacional - PMP
-
-    Retorna dados mês a mês para gráficos de linha.
-    """
-    try:
-        import calendar
-        from datetime import date, timedelta
-        from dateutil.relativedelta import relativedelta
-
-        print(f"[INFO] Calculando histórico de {meses} meses para Ciclo Financeiro")
-
-        # Calcular período
-        hoje = date.today()
-        mes_atual = date(hoje.year, hoje.month, 1)
-
-        historico = []
-
-        for i in range(meses - 1, -1, -1):
-            # Mês de referência (do mais antigo para o mais recente)
-            mes_ref = mes_atual - relativedelta(months=i)
-            primeiro_dia = mes_ref.strftime('%Y-%m-%d')
-            ultimo_dia_num = calendar.monthrange(mes_ref.year, mes_ref.month)[1]
-            ultimo_dia = f"{mes_ref.year}-{mes_ref.month:02d}-{ultimo_dia_num:02d}"
-
-            # Nome do mês para exibição
-            MESES_PT = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
-            nome_mes = f"{MESES_PT[mes_ref.month - 1]}/{mes_ref.year}"
-
-            # ===== PMR - Prazo Médio de Recebimento =====
-            # Fórmula: (Contas a Receber no final do mês / Faturamento 12 meses) × 360
-
-            # Contas a receber em aberto no final do mês
-            query_contas_receber = """
-                SELECT COALESCE(SUM(vl_fatura), 0) as contas_receber
-                FROM vr_fcr_faturai
-                WHERE tp_situacao = 1
-                  AND dt_emissao <= %s
-                  AND (dt_baixa IS NULL OR dt_baixa > %s)
-                  AND tp_baixa = 0
-                  AND vl_fatura > 0
-                  AND tp_documento NOT IN (7, 10, 11)
-            """
-            resultado_cr = execute_query(query_contas_receber, (ultimo_dia, ultimo_dia))
-            contas_receber = float(resultado_cr[0].get('contas_receber', 0)) if resultado_cr else 0
-
-            # Faturamento dos últimos 12 meses até o mês de referência
-            data_12m_atras = (mes_ref - relativedelta(months=12)).strftime('%Y-%m-%d')
-            query_faturamento = """
-                SELECT COALESCE(SUM(vl_fatura), 0) as faturamento_12m
-                FROM vr_fcr_faturai
-                WHERE dt_emissao >= %s
-                  AND dt_emissao <= %s
-                  AND tp_situacao = 1
-                  AND vl_fatura > 0
-                  AND tp_documento NOT IN (7, 10, 11)
-            """
-            resultado_fat = execute_query(query_faturamento, (data_12m_atras, ultimo_dia))
-            faturamento_12m = float(resultado_fat[0].get('faturamento_12m', 0)) if resultado_fat else 0
-
-            # Calcular PMR
-            if faturamento_12m > 0:
-                pmr_dias = (contas_receber / faturamento_12m) * 360
-            else:
-                pmr_dias = 0
-
-            # ===== PMP - Prazo Médio de Pagamento =====
-            # Fórmula: (Contas a Pagar no final do mês / Pagamentos 12 meses) × 360
-
-            # Contas a pagar em aberto no final do mês
-            query_contas_pagar = """
-                SELECT COALESCE(SUM(vl_rateio), 0) as contas_pagar
-                FROM vr_fcp_despduplicatai
-                WHERE tp_situacao = 'N'
-                  AND dt_emissao <= %s
-                  AND (dt_baixa IS NULL OR dt_baixa > %s)
-                  AND vl_rateio > 0
-            """
-            resultado_cp = execute_query(query_contas_pagar, (ultimo_dia, ultimo_dia))
-            contas_pagar = float(resultado_cp[0].get('contas_pagar', 0)) if resultado_cp else 0
-
-            # Pagamentos dos últimos 12 meses até o mês de referência
-            query_pagamentos = """
-                SELECT COALESCE(SUM(vl_rateio), 0) as pagamentos_12m
-                FROM vr_fcp_despduplicatai
-                WHERE dt_baixa >= %s
-                  AND dt_baixa <= %s
-                  AND tp_situacao = 'N'
-                  AND vl_rateio > 0
-            """
-            resultado_pag = execute_query(query_pagamentos, (data_12m_atras, ultimo_dia))
-            pagamentos_12m = float(resultado_pag[0].get('pagamentos_12m', 0)) if resultado_pag else 0
-
-            # Calcular PMP
-            if pagamentos_12m > 0:
-                pmp_dias = (contas_pagar / pagamentos_12m) * 360
-            else:
-                pmp_dias = 0
-
-            # ===== PME - Prazo Médio de Estocagem (fixo) =====
-            pme_dias = 31
-
-            # ===== Ciclos =====
-            ciclo_operacional = pmr_dias + pme_dias
-            ciclo_financeiro = ciclo_operacional - pmp_dias
-
-            historico.append({
-                "mes": nome_mes,
-                "mes_ref": mes_ref.strftime('%Y-%m'),
-                "pmr_dias": round(pmr_dias, 1),
-                "pmp_dias": round(pmp_dias, 1),
-                "pme_dias": pme_dias,
-                "ciclo_operacional": round(ciclo_operacional, 1),
-                "ciclo_financeiro": round(ciclo_financeiro, 1),
-                # Dados de base para tooltip/detalhes
-                "contas_receber": round(contas_receber, 2),
-                "faturamento_12m": round(faturamento_12m, 2),
-                "contas_pagar": round(contas_pagar, 2),
-                "pagamentos_12m": round(pagamentos_12m, 2),
-            })
-
-            print(f"  [{nome_mes}] PMR={pmr_dias:.1f}, PMP={pmp_dias:.1f}, CF={ciclo_financeiro:.1f}")
-
-        # Calcular médias e tendências
-        pmr_valores = [h['pmr_dias'] for h in historico]
-        pmp_valores = [h['pmp_dias'] for h in historico]
-        cf_valores = [h['ciclo_financeiro'] for h in historico]
-
-        resumo = {
-            "pmr_media": round(sum(pmr_valores) / len(pmr_valores), 1) if pmr_valores else 0,
-            "pmp_media": round(sum(pmp_valores) / len(pmp_valores), 1) if pmp_valores else 0,
-            "ciclo_financeiro_media": round(sum(cf_valores) / len(cf_valores), 1) if cf_valores else 0,
-            "pmr_min": round(min(pmr_valores), 1) if pmr_valores else 0,
-            "pmr_max": round(max(pmr_valores), 1) if pmr_valores else 0,
-            "pmp_min": round(min(pmp_valores), 1) if pmp_valores else 0,
-            "pmp_max": round(max(pmp_valores), 1) if pmp_valores else 0,
-            "ciclo_financeiro_min": round(min(cf_valores), 1) if cf_valores else 0,
-            "ciclo_financeiro_max": round(max(cf_valores), 1) if cf_valores else 0,
-        }
-
-        # Tendência: comparar média dos últimos 3 meses com os 3 anteriores
-        if len(cf_valores) >= 6:
-            media_recente = sum(cf_valores[-3:]) / 3
-            media_anterior = sum(cf_valores[-6:-3]) / 3
-            if media_recente < media_anterior:
-                resumo['tendencia'] = 'melhorando'
-            elif media_recente > media_anterior:
-                resumo['tendencia'] = 'piorando'
-            else:
-                resumo['tendencia'] = 'estável'
-        else:
-            resumo['tendencia'] = 'dados insuficientes'
-
-        print(f"[OK] Histórico calculado: {len(historico)} meses, tendência={resumo['tendencia']}")
-
-        return {
-            "historico": historico,
-            "resumo": resumo,
-            "meses_solicitados": meses,
-            "fonte": "vCenter"
-        }
-
-    except Exception as e:
-        print(f"[ERROR] Erro ao calcular histórico ciclo financeiro: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Erro ao calcular histórico: {str(e)}")
+def get_giro_fabrica():
+    return _calcular_giro_fabrica(date.today().replace(day=1))
+
+
+@router.get("/api/indicadores/faturamento-fabrica")
+def get_faturamento_fabrica():
+    return _calcular_faturamento_fabrica(date.today().replace(day=1))
+
+
+@router.get("/api/indicadores/faturamento-ecommerce")
+def get_faturamento_ecommerce():
+    return _calcular_faturamento_ecommerce(date.today().replace(day=1))
+
+
+@router.get("/api/indicadores/quebra-pedidos")
+def get_quebra_pedidos():
+    return _calcular_quebra_pedidos(date.today().replace(day=1))
+
+
+@router.get("/api/indicadores/vendas-volume-varejo")
+def get_vendas_volume_varejo():
+    return _calcular_vendas_volume_varejo(date.today().replace(day=1))
+
+
+@router.get("/api/indicadores/ecommerce-ads")
+def get_ecommerce_ads():
+    return _calcular_ecommerce_ads(date.today().replace(day=1))
+
+
+# ─── Cache histórico ──────────────────────────────────────────────────────────
+
+_INDICADORES_FNS = [
+    ("giro_lojas",            lambda m: _calcular_giro_lojas(m)),
+    ("giro_mp",               lambda m: _calcular_giro_mp(m)),
+    ("giro_fabrica",          lambda m: _calcular_giro_fabrica(m)),
+    ("faturamento_fabrica",   lambda m: _calcular_faturamento_fabrica(m)),
+    ("faturamento_ecommerce", lambda m: _calcular_faturamento_ecommerce(m)),
+    ("quebra_pedidos",        lambda m: _calcular_quebra_pedidos(m)),
+    ("vendas_volume_varejo",  lambda m: _calcular_vendas_volume_varejo(m)),
+    ("ecommerce_ads",         lambda m: _calcular_ecommerce_ads(m)),
+]
+
+
+def _executar_sincronizacao():
+    global _sync_status
+    meses = _meses_2026_ate_hoje()
+    total = len(meses) * len(_INDICADORES_FNS)
+    inicio = time.time()
+
+    _sync_status = {
+        "rodando": True,
+        "progresso": 0,
+        "total": total,
+        "iniciado_em": datetime.now().isoformat(),
+        "finalizado_em": None,
+        "duracao_segundos": None,
+    }
+
+    _criar_tabela_historico()
+
+    for ref_month in meses:
+        mes_str = ref_month.isoformat()
+        for indicador, fn in _INDICADORES_FNS:
+            try:
+                dados = fn(ref_month)
+                execute_insert("""
+                    INSERT INTO indicadores_historico (mes, indicador, dados, atualizado_em)
+                    VALUES (%s, %s, %s::jsonb, NOW())
+                    ON CONFLICT (mes, indicador) DO UPDATE
+                    SET dados = EXCLUDED.dados, atualizado_em = NOW()
+                """, (mes_str, indicador, json.dumps(dados)))
+                print(f"[SYNC] {mes_str}/{indicador} OK")
+            except Exception as e:
+                print(f"[SYNC] ERRO {mes_str}/{indicador}: {e}")
+            finally:
+                _sync_status["progresso"] += 1
+
+    duracao = round(time.time() - inicio)
+    _sync_status.update({
+        "rodando": False,
+        "finalizado_em": datetime.now().isoformat(),
+        "duracao_segundos": duracao,
+    })
+    print(f"[SYNC] Concluido em {duracao}s")
+
+
+@router.post("/api/indicadores/cache/sincronizar")
+def sincronizar_cache(background_tasks: BackgroundTasks):
+    if _sync_status.get("rodando"):
+        return {"status": "ja_rodando", "mensagem": "Sincronizacao ja em andamento"}
+    background_tasks.add_task(_executar_sincronizacao)
+    return {"status": "iniciado"}
+
+
+@router.get("/api/indicadores/cache/status")
+def get_sync_status():
+    return _sync_status
+
+
+@router.get("/api/indicadores/historico")
+def get_historico():
+    _criar_tabela_historico()
+    rows = execute_query("""
+        SELECT mes, indicador, dados, atualizado_em
+        FROM indicadores_historico
+        WHERE mes >= '2026-01-01'
+        ORDER BY mes, indicador
+    """)
+
+    por_mes: dict = {}
+    for row in rows:
+        mes = row["mes"].isoformat()
+        if mes not in por_mes:
+            por_mes[mes] = {"mes": mes, "atualizado_em": row["atualizado_em"].isoformat()}
+        por_mes[mes][row["indicador"]] = row["dados"]
+
+    return {"meses": list(por_mes.values())}

@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import { ChevronDown, ChevronRight, RefreshCw, Calendar } from 'lucide-react';
 import { PLANO_CONTAS_DRE } from '../../configuracoes/plano-contas-dre/planoContasDRE';
+import { formatarValor } from '../../utils/formatters';
 
 interface EmpresaInfo {
   cd_empresa: number;
@@ -23,6 +24,7 @@ interface DREPorEmpresaResponse {
     dataInicio: string;
     dataFim: string;
   };
+  error?: string;
 }
 
 interface ContaDRE {
@@ -39,16 +41,6 @@ const CORES_NIVEL: Record<number, string> = {
   3: 'bg-white',
   4: 'bg-white pl-8',
 };
-
-function formatarValor(valor: number): string {
-  if (valor === 0) return '-';
-  return valor.toLocaleString('pt-BR', {
-    style: 'currency',
-    currency: 'BRL',
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
-  });
-}
 
 export default function DREPorEmpresa() {
   const [loading, setLoading] = useState(false);

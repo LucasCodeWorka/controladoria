@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database import close_all_connections
 
-from routers import health, indicadores, dre
+from routers import health, indicadores, dre, classificacao
 
 app = FastAPI(
     title="Liebe DRE API",
@@ -21,6 +21,7 @@ app.add_middleware(
 app.include_router(health.router)
 app.include_router(dre.router)
 app.include_router(indicadores.router)
+app.include_router(classificacao.router)
 
 
 @app.on_event("shutdown")

@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "concurrently \"npm run backend\" \"npm run frontend\"",
-    "backend": "cd python-backend && python main.py",
+    "backend": "cd python-backend && python3 main.py",
     "frontend": "next dev",
     "build": "next build",
     "start": "next start",

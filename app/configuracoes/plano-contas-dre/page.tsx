@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useMemo, useCallback, memo } from 'react';
-import { ChevronRight, ChevronDown, Save, RotateCcw, Settings, Zap, Plus, X, Tag, Search, Check } from 'lucide-react';
+import { ChevronRight, ChevronDown, Save, RotateCcw, Settings, Zap, Plus, X, Tag, Search, Check, Download, FileSpreadsheet, Table2 } from 'lucide-react';
 import { PLANO_CONTAS_DRE, type ContaDRE } from './planoContasDRE';
 
 interface Despesa {
@@ -1540,8 +1540,229 @@ export default function PlanoContasDREPage() {
           </div>
         </div>
       </div>
+
+      {/* SECAO: Tabelas de Referencia */}
+      <div className="max-w-7xl mx-auto mt-8 space-y-6">
+        {/* Plano de Contas Completo */}
+        <div className="bg-white rounded-xl shadow-lg border border-gray-200">
+          <div className="px-6 py-4 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <Table2 className="w-5 h-5 text-blue-600" />
+              <h2 className="text-lg font-semibold text-gray-800">Plano de Contas DRE - Visao Completa</h2>
+            </div>
+            <button
+              onClick={() => exportarPlanoContas()}
+              className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition text-sm"
+            >
+              <Download className="w-4 h-4" />
+              Exportar CSV
+            </button>
+          </div>
+          <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
+            <table className="w-full border-collapse text-sm">
+              <thead className="sticky top-0 bg-gray-100 z-10">
+                <tr>
+                  <th className="px-4 py-3 text-left font-semibold text-gray-700 border-b">Codigo</th>
+                  <th className="px-4 py-3 text-left font-semibold text-gray-700 border-b">Nome da Conta</th>
+                  <th className="px-4 py-3 text-center font-semibold text-gray-700 border-b">Nivel</th>
+                  <th className="px-4 py-3 text-center font-semibold text-gray-700 border-b">Tipo</th>
+                  <th className="px-4 py-3 text-center font-semibold text-gray-700 border-b">Despesas Vinculadas</th>
+                </tr>
+              </thead>
+              <tbody>
+                {renderizarLinhasPlanoCompleto(PLANO_CONTAS_DRE, despesas)}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Relacionamento Despesas x Contas */}
+        <div className="bg-white rounded-xl shadow-lg border border-gray-200">
+          <div className="px-6 py-4 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <FileSpreadsheet className="w-5 h-5 text-green-600" />
+              <h2 className="text-lg font-semibold text-gray-800">Relacionamento Despesas x Contas DRE</h2>
+              <span className="bg-green-100 text-green-700 px-2 py-1 rounded text-xs font-medium">
+                {despesas.filter(d => d.conta_dre && d.conta_dre !== 'NAO_CLASSIFICADO').length} classificadas
+              </span>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => exportarRelacionamento('csv')}
+                className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition text-sm"
+              >
+                <Download className="w-4 h-4" />
+                CSV
+              </button>
+              <button
+                onClick={() => exportarRelacionamento('excel')}
+                className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition text-sm"
+              >
+                <FileSpreadsheet className="w-4 h-4" />
+                Excel
+              </button>
+            </div>
+          </div>
+          <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
+            <table className="w-full border-collapse text-sm">
+              <thead className="sticky top-0 bg-gray-100 z-10">
+                <tr>
+                  <th className="px-4 py-3 text-left font-semibold text-gray-700 border-b">Cod. Despesa</th>
+                  <th className="px-4 py-3 text-left font-semibold text-gray-700 border-b">Nome Despesa</th>
+                  <th className="px-4 py-3 text-left font-semibold text-gray-700 border-b">Categoria DFC</th>
+                  <th className="px-4 py-3 text-left font-semibold text-gray-700 border-b">Cod. Conta DRE</th>
+                  <th className="px-4 py-3 text-left font-semibold text-gray-700 border-b">Nome Conta DRE</th>
+                  <th className="px-4 py-3 text-center font-semibold text-gray-700 border-b">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {despesas
+                  .sort((a, b) => a.ds_despesaitem.localeCompare(b.ds_despesaitem))
+                  .map(d => {
+                    const contaDRE = contasMap.get(d.conta_dre);
+                    const isClassificada = d.conta_dre && d.conta_dre !== 'NAO_CLASSIFICADO';
+                    return (
+                      <tr key={d.cd_despesaitem} className="hover:bg-gray-50 border-b border-gray-100">
+                        <td className="px-4 py-2 font-mono text-xs">{d.cd_despesaitem}</td>
+                        <td className="px-4 py-2">{d.ds_despesaitem}</td>
+                        <td className="px-4 py-2">
+                          <span className="px-2 py-1 rounded bg-slate-100 text-slate-700 text-xs">
+                            {normalizarCategoriaDFC(d.categoria_dfc)}
+                          </span>
+                        </td>
+                        <td className="px-4 py-2 font-mono text-xs font-semibold">
+                          {isClassificada ? d.conta_dre : '-'}
+                        </td>
+                        <td className="px-4 py-2 text-gray-600">
+                          {contaDRE ? contaDRE.nome : '-'}
+                        </td>
+                        <td className="px-4 py-2 text-center">
+                          {isClassificada ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-1 rounded bg-green-100 text-green-700 text-xs font-medium">
+                              <Check className="w-3 h-3" />
+                              OK
+                            </span>
+                          ) : (
+                            <span className="px-2 py-1 rounded bg-amber-100 text-amber-700 text-xs font-medium">
+                              Pendente
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
     </div>
   );
+
+  // Funcao para renderizar linhas do plano de contas completo
+  function renderizarLinhasPlanoCompleto(contas: ContaDRE[], despesasLista: Despesa[]): React.ReactNode[] {
+    const linhas: React.ReactNode[] = [];
+
+    function processarConta(conta: ContaDRE, indent: number = 0) {
+      const despesasVinculadas = despesasLista.filter(d => d.conta_dre === conta.codigo).length;
+      const corNivel = {
+        1: 'bg-blue-50 font-bold',
+        2: 'bg-green-50 font-semibold',
+        3: 'bg-white',
+        4: 'bg-gray-50 text-gray-600',
+      }[conta.nivel] || 'bg-white';
+
+      linhas.push(
+        <tr key={conta.codigo} className={`${corNivel} hover:bg-gray-100 transition-colors border-b border-gray-100`}>
+          <td className="px-4 py-2 font-mono" style={{ paddingLeft: `${16 + indent * 20}px` }}>
+            {conta.codigo}
+          </td>
+          <td className="px-4 py-2">{conta.nome}</td>
+          <td className="px-4 py-2 text-center">
+            <span className={`px-2 py-1 rounded text-xs ${
+              conta.nivel === 1 ? 'bg-blue-200 text-blue-800' :
+              conta.nivel === 2 ? 'bg-green-200 text-green-800' :
+              conta.nivel === 3 ? 'bg-yellow-200 text-yellow-800' :
+              'bg-purple-200 text-purple-800'
+            }`}>
+              {conta.nivel}
+            </span>
+          </td>
+          <td className="px-4 py-2 text-center">
+            <span className={`px-2 py-1 rounded text-xs ${
+              conta.tipo === 'grupo' ? 'bg-gray-200 text-gray-700' : 'bg-emerald-200 text-emerald-800'
+            }`}>
+              {conta.tipo === 'grupo' ? 'Grupo' : 'Conta'}
+            </span>
+          </td>
+          <td className="px-4 py-2 text-center">
+            {conta.tipo === 'conta' && (
+              <span className={`px-2 py-1 rounded text-xs font-medium ${
+                despesasVinculadas > 0 ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'
+              }`}>
+                {despesasVinculadas}
+              </span>
+            )}
+          </td>
+        </tr>
+      );
+
+      if (conta.filhos) {
+        conta.filhos.forEach(filho => processarConta(filho, indent + 1));
+      }
+    }
+
+    contas.forEach(conta => processarConta(conta, 0));
+    return linhas;
+  }
+
+  // Funcao para exportar plano de contas
+  function exportarPlanoContas() {
+    const linhas: string[] = ['Codigo;Nome;Nivel;Tipo;Despesas Vinculadas'];
+
+    function processar(conta: ContaDRE) {
+      const despesasVinculadas = despesas.filter(d => d.conta_dre === conta.codigo).length;
+      linhas.push(`${conta.codigo};${conta.nome};${conta.nivel};${conta.tipo};${conta.tipo === 'conta' ? despesasVinculadas : ''}`);
+      if (conta.filhos) conta.filhos.forEach(processar);
+    }
+
+    PLANO_CONTAS_DRE.forEach(processar);
+
+    const blob = new Blob(['\ufeff' + linhas.join('\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `plano_contas_dre_${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // Funcao para exportar relacionamento
+  function exportarRelacionamento(formato: 'csv' | 'excel') {
+    const linhas: string[] = ['Cod Despesa;Nome Despesa;Categoria DFC;Cod Conta DRE;Nome Conta DRE;Status'];
+
+    despesas
+      .sort((a, b) => a.ds_despesaitem.localeCompare(b.ds_despesaitem))
+      .forEach(d => {
+        const contaDRE = contasMap.get(d.conta_dre);
+        const isClassificada = d.conta_dre && d.conta_dre !== 'NAO_CLASSIFICADO';
+        linhas.push(
+          `${d.cd_despesaitem};${d.ds_despesaitem};${normalizarCategoriaDFC(d.categoria_dfc)};${isClassificada ? d.conta_dre : ''};${contaDRE ? contaDRE.nome : ''};${isClassificada ? 'Classificada' : 'Pendente'}`
+        );
+      });
+
+    const conteudo = '\ufeff' + linhas.join('\n');
+    const tipo = formato === 'excel' ? 'application/vnd.ms-excel' : 'text/csv;charset=utf-8';
+    const extensao = formato === 'excel' ? 'xls' : 'csv';
+
+    const blob = new Blob([conteudo], { type: tipo });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `relacionamento_despesas_dre_${new Date().toISOString().split('T')[0]}.${extensao}`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
 }
 
 // export { PLANO_CONTAS_DRE }; // Commented out - não pode exportar em Next.js pages

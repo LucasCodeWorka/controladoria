@@ -1,472 +1,510 @@
 'use client';
 
-import React, { useState, useMemo, useEffect } from 'react';
-import {
-  TrendingUp,
-  TrendingDown,
-  Package,
-  ShoppingCart,
-  DollarSign,
-  AlertTriangle,
-  Target,
-  BarChart3,
-  ArrowUpRight,
-  ArrowDownRight,
-  Minus,
-  CheckCircle2,
-  XCircle,
-  AlertCircle,
-  Loader2
-} from 'lucide-react';
-import { useMultipleGiroEstoque } from '../hooks/useIndicadores';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { Loader2 } from 'lucide-react';
 
-interface CmvData {
-  mes_referencia: string;
-  cmv_lojas: number;
-  cmv_fab: number;
-  cmv_total: number;
-  fonte: string;
+interface GiroLojas {
+  giro: number;
+  estoque_total: number;
+  media_mensal: number;
+  dt_referencia: string | null;
 }
 
-// ============================================================================
-// DADOS REAIS - Baseados na planilha de Indicadores de Controladoria (DEZ/2025)
-// ============================================================================
-const MOCK_DATA = {
-  // Operações & Projetos
-  projetosNoPrazo: { valor: 93.58, meta: 90.00, unidade: '%' },
-  satisfacaoCliente: { valor: 88.50, meta: 85.00, unidade: '%' },
-  retrabalho: { valor: 3.20, meta: 5.00, unidade: '%', inverso: true },
-
-  // Estoque & Giro - DADOS REAIS (DEZ/2025)
-  giroEstoqueMP: { valor: 3.00, meta: 3.20, unidade: 'x' },         // Giro Estoque MP (R$)
-  giroPALojas: { valor: 3.51, meta: 3.00, unidade: 'x' },           // Giro PA Lojas (QTD)
-  giroPAFabrica: { valor: 2.21, meta: 3.00, unidade: 'x' },         // Giro PA Fábrica (QTD)
-
-  // Faturamento & Crescimento - DADOS REAIS (DEZ/2025)
-  crescimentoFaturamento: { valor: 9.20, meta: 10.31, unidade: '%' },  // Crescimento Acum. Faturamento
-  crescimentoEcommerce: { valor: -17.64, meta: 10.00, unidade: '%' },   // % Crescimento Ecommerce
-  vendasVolumeVarejo: { valor: 12.22, meta: 13.50, unidade: '%' },      // Vendas Volume x Varejo
-
-  // Rentabilidade - DADOS REAIS (DEZ/2025)
-  lucroLiquido12M: { valor: 48.05, meta: 100.00, unidade: '%' },       // Lucro Líquido 12M
-  cmv: { valor: 38.39, meta: 38.00, unidade: '%', inverso: true },     // % CMV
-  dreEcommerce: { valor: 5.79, meta: 5.00, unidade: '%' },             // DRE Ecommerce
-
-  // Ecommerce Performance - DADOS REAIS (DEZ/2025)
-  roasGoogleMeta: { valor: 7.76, meta: 6.00, unidade: 'x' },           // ROAS Margem Meta - Média
-  taxaConversao: { valor: 0.94, meta: 1.00, unidade: '%' },            // Taxa Conversão Ecommerce
-  quebraPedidos: { valor: 3.34, meta: 1.50, unidade: '%', inverso: true }, // % Quebra de Pedidos
-
-  // Inadimplência - DADOS REAIS (DEZ/2025)
-  inadimplencia30: { valor: 0.80, meta: 1.50, unidade: '%', inverso: true },   // Inadimplência Até 30 Dias
-  inadimplencia90: { valor: 0.59, meta: 1.00, unidade: '%', inverso: true },   // Inadimplência 31 a 90 Dias
-  inadimplencia180: { valor: 0.86, meta: 1.00, unidade: '%', inverso: true },  // Inadimplência 91 a 180 Dias
-
-  // Cobrança - DADOS REAIS (DEZ/2025)
-  campanhasCobranca: { valor: 0.67, meta: 0.50, unidade: '%' },                 // Campanhas Cobrança
-  cobrancaExterna: { valor: 3.39, meta: 3.00, unidade: '%' },                   // % Recebimento Cobrança Externa
-};
-
-// ============================================================================
-// COMPONENTES
-// ============================================================================
-
-type StatusType = 'success' | 'warning' | 'danger';
-
-function getStatus(valor: number, meta: number, inverso: boolean = false): StatusType {
-  if (inverso) {
-    if (valor <= meta * 0.9) return 'success';
-    if (valor <= meta) return 'warning';
-    return 'danger';
-  }
-  if (valor >= meta) return 'success';
-  if (valor >= meta * 0.85) return 'warning';
-  return 'danger';
+interface GiroMP {
+  giro: number | null;
+  consumo_valor: number;
+  estoque_valor: number;
+  dt_referencia: string | null;
 }
 
-function StatusIcon({ status }: { status: StatusType }) {
-  if (status === 'success') return <CheckCircle2 className="w-4 h-4 text-green-500" />;
-  if (status === 'warning') return <AlertCircle className="w-4 h-4 text-amber-500" />;
-  return <XCircle className="w-4 h-4 text-red-500" />;
+interface GiroFabrica {
+  giro: number | null;
+  estoque_total: number;
+  media_mensal: number;
+  dt_referencia: string | null;
 }
 
-// Card compacto de indicador
-interface MiniCardProps {
-  titulo: string;
-  valor: number;
-  meta: number;
-  unidade: string;
-  inverso?: boolean;
+interface FaturamentoFabrica {
+  dt_referencia: string | null;
+  acum_2026: number;
+  acum_2025: number;
+  crescimento_pct: number | null;
 }
 
-function MiniCard({ titulo, valor, meta, unidade, inverso = false }: MiniCardProps) {
-  // Validação: garantir que valor e meta sejam números
-  const valorNum = typeof valor === 'number' && !isNaN(valor) ? valor : 0;
-  const metaNum = typeof meta === 'number' && !isNaN(meta) ? meta : 0;
-
-  const status = getStatus(valorNum, metaNum, inverso);
-  const variacao = metaNum !== 0 ? ((valorNum - metaNum) / Math.abs(metaNum) * 100) : 0;
-
-  return (
-    <div className={`p-3 rounded-lg border ${
-      status === 'success' ? 'bg-green-50 border-green-200' :
-      status === 'warning' ? 'bg-amber-50 border-amber-200' :
-      'bg-red-50 border-red-200'
-    }`}>
-      <div className="flex items-center justify-between mb-1">
-        <span className="text-xs text-gray-600 truncate pr-2">{titulo}</span>
-        <StatusIcon status={status} />
-      </div>
-      <div className="flex items-baseline gap-1">
-        <span className={`text-xl font-bold ${
-          status === 'success' ? 'text-green-700' :
-          status === 'warning' ? 'text-amber-700' :
-          'text-red-700'
-        }`}>
-          {valorNum.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-        </span>
-        <span className="text-sm text-gray-500">{unidade}</span>
-      </div>
-      <div className="flex items-center justify-between mt-1">
-        <span className="text-xs text-gray-400">Meta: {metaNum}{unidade}</span>
-        <span className={`text-xs font-medium ${
-          (inverso ? variacao <= 0 : variacao >= 0) ? 'text-green-600' : 'text-red-600'
-        }`}>
-          {variacao >= 0 ? '+' : ''}{variacao.toFixed(1)}%
-        </span>
-      </div>
-    </div>
-  );
+interface QuebradePedidos {
+  dt_referencia: string | null;
+  quebra_valor: number;
+  faturamento_mes: number;
+  quebra_pct: number | null;
 }
 
-// Linha de indicador ultra compacta
-interface LinhaIndicadorProps {
-  titulo: string;
-  valor: number;
-  meta: number;
-  unidade: string;
-  inverso?: boolean;
+interface EcommerceAds {
+  dt_referencia: string | null;
+  custo: number;
+  receita: number;
+  cliques: number;
+  sessoes_engajadas: number;
+  transacoes: number;
+  roas: number | null;
+  taxa_conv_pct: number | null;
 }
 
-function LinhaIndicador({ titulo, valor, meta, unidade, inverso = false }: LinhaIndicadorProps) {
-  // Validação: garantir que valor e meta sejam números
-  const valorNum = typeof valor === 'number' && !isNaN(valor) ? valor : 0;
-  const metaNum = typeof meta === 'number' && !isNaN(meta) ? meta : 0;
-
-  const status = getStatus(valorNum, metaNum, inverso);
-  const porcentagem = inverso
-    ? Math.max(0, Math.min(100, metaNum !== 0 ? (1 - valorNum / metaNum) * 100 + 50 : 0))
-    : Math.min(100, metaNum !== 0 ? (valorNum / metaNum) * 100 : 0);
-
-  return (
-    <div className="flex items-center gap-3 py-2 border-b border-gray-100 last:border-0">
-      <StatusIcon status={status} />
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center justify-between mb-1">
-          <span className="text-sm text-gray-700 truncate">{titulo}</span>
-          <span className={`text-sm font-bold ${
-            status === 'success' ? 'text-green-600' :
-            status === 'warning' ? 'text-amber-600' :
-            'text-red-600'
-          }`}>
-            {valorNum.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}{unidade}
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="flex-1 h-1.5 bg-gray-200 rounded-full overflow-hidden">
-            <div
-              className={`h-full rounded-full ${
-                status === 'success' ? 'bg-green-500' :
-                status === 'warning' ? 'bg-amber-500' :
-                'bg-red-500'
-              }`}
-              style={{ width: `${porcentagem}%` }}
-            />
-          </div>
-          <span className="text-xs text-gray-400 w-16 text-right">Meta: {metaNum}{unidade}</span>
-        </div>
-      </div>
-    </div>
-  );
+interface VendasVolumeVarejo {
+  dt_referencia: string | null;
+  volume_valor: number;
+  varejo_valor: number;
+  total_valor: number;
+  volume_pct: number | null;
+  varejo_pct: number | null;
 }
 
-// Seção agrupadora
-interface SecaoProps {
-  titulo: string;
-  icone: React.ReactNode;
-  children: React.ReactNode;
-  cor?: string;
+interface MesHistorico {
+  mes: string;
+  atualizado_em: string;
+  giro_lojas?: GiroLojas;
+  giro_mp?: GiroMP;
+  giro_fabrica?: GiroFabrica;
+  faturamento_fabrica?: FaturamentoFabrica;
+  faturamento_ecommerce?: FaturamentoFabrica;
+  quebra_pedidos?: QuebradePedidos;
+  vendas_volume_varejo?: VendasVolumeVarejo;
+  ecommerce_ads?: EcommerceAds;
 }
 
-function Secao({ titulo, icone, children, cor = 'brand-primary' }: SecaoProps) {
-  return (
-    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-      <div className={`px-4 py-2 bg-gray-50 border-b border-gray-200 flex items-center gap-2`}>
-        {icone}
-        <h3 className="font-semibold text-gray-800">{titulo}</h3>
-      </div>
-      <div className="p-4">
-        {children}
-      </div>
-    </div>
-  );
+const NOMES_MES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+
+function fmtMesLabel(isoDate: string) {
+  const m = parseInt(isoDate.split('-')[1]) - 1;
+  return `${NOMES_MES[m]}/26`;
 }
 
-// Card de resumo executivo
-function ResumoExecutivo({ mesFormatado }: { mesFormatado: string }) {
-  const indicadores = [
-    { ...MOCK_DATA.projetosNoPrazo, nome: 'Projetos' },
-    { ...MOCK_DATA.giroEstoqueMP, nome: 'Giro MP' },
-    { ...MOCK_DATA.crescimentoFaturamento, nome: 'Faturamento' },
-    { ...MOCK_DATA.lucroLiquido12M, nome: 'Lucro' },
-    { ...MOCK_DATA.cmv, nome: 'CMV', inverso: true },
-    { ...MOCK_DATA.inadimplencia30, nome: 'Inadimpl.', inverso: true },
-  ];
-
-  const total = indicadores.length;
-  const noAlvo = indicadores.filter(i => getStatus(i.valor, i.meta, (i as any).inverso ?? false) === 'success').length;
-  const atencao = indicadores.filter(i => getStatus(i.valor, i.meta, (i as any).inverso ?? false) === 'warning').length;
-  const critico = indicadores.filter(i => getStatus(i.valor, i.meta, (i as any).inverso ?? false) === 'danger').length;
-
-  return (
-    <div className="bg-gradient-to-r from-brand-dark to-brand-primary rounded-xl p-4 text-white mb-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-lg font-bold">Resumo Executivo</h2>
-          <p className="text-sm text-white/70">{mesFormatado}</p>
-        </div>
-        <div className="flex gap-6">
-          <div className="text-center">
-            <div className="text-2xl font-bold text-green-300">{noAlvo}</div>
-            <div className="text-xs text-white/70">No Alvo</div>
-          </div>
-          <div className="text-center">
-            <div className="text-2xl font-bold text-amber-300">{atencao}</div>
-            <div className="text-xs text-white/70">Atenção</div>
-          </div>
-          <div className="text-center">
-            <div className="text-2xl font-bold text-red-300">{critico}</div>
-            <div className="text-xs text-white/70">Crítico</div>
-          </div>
-          <div className="text-center border-l border-white/20 pl-6">
-            <div className="text-2xl font-bold">{Math.round(noAlvo/total*100)}%</div>
-            <div className="text-xs text-white/70">Performance</div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
+function fmt(n: number, decimais = 2) {
+  return n.toLocaleString('pt-BR', {
+    minimumFractionDigits: decimais,
+    maximumFractionDigits: decimais,
+  });
 }
 
-// ============================================================================
-// PÁGINA PRINCIPAL
-// ============================================================================
+function fmtMoeda(n: number) {
+  return n.toLocaleString('pt-BR', {
+    style: 'currency', currency: 'BRL',
+    minimumFractionDigits: 0, maximumFractionDigits: 0,
+  });
+}
 
-export default function IndicadoresControladoriaPage() {
-  // Estado para mês de referência (formato YYYY-MM)
-  const [mesReferencia, setMesReferencia] = useState('2026-01');
-
-  // Buscar dados de giro de estoque da API (COMENTADO - usando apenas dados mockados)
-  // const { fabrica, lojas, ecommerce, loading, error } = useMultipleGiroEstoque(mesReferencia);
-  const loading = false;
-  const error = null;
-
-  // CMV - dados reais do banco
-  const [cmvData, setCmvData] = useState<CmvData | null>(null);
-  const [cmvLoading, setCmvLoading] = useState(false);
+function Sparkline({
+  valores,
+  meses,
+  indiceSelecionado,
+}: {
+  valores: number[];
+  meses: string[];
+  indiceSelecionado: number;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [W, setW] = useState(300);
 
   useEffect(() => {
-    const fetchCmv = async () => {
-      setCmvLoading(true);
-      try {
-        const response = await fetch(`/api/indicadores/cmv?mesReferencia=${mesReferencia}`);
-        if (response.ok) {
-          const data = await response.json();
-          setCmvData(data);
-        } else {
-          console.error('[CMV] Erro ao buscar CMV:', response.status);
-          setCmvData(null);
-        }
-      } catch (err) {
-        console.error('[CMV] Erro:', err);
-        setCmvData(null);
-      } finally {
-        setCmvLoading(false);
-      }
-    };
-    fetchCmv();
-  }, [mesReferencia]);
-
-  // Usar dados mockados diretamente (sem API)
-  const dadosCompletos = useMemo(() => {
-    return { ...MOCK_DATA };
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => setW(entry.contentRect.width));
+    ro.observe(el);
+    return () => ro.disconnect();
   }, []);
 
-  // Formatar mês para display
-  const mesFormatado = useMemo(() => {
-    try {
-      const [ano, mes] = mesReferencia.split('-');
-      const meses = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
-                     'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
-      return `${meses[parseInt(mes) - 1]} ${ano}`;
-    } catch {
-      return 'Dezembro 2024';
-    }
-  }, [mesReferencia]);
+  if (valores.length < 2) return <div ref={containerRef} className="w-full" />;
+
+  const CHART_H = 60;
+  const LABEL_H = 18;
+  const H = CHART_H + LABEL_H;
+  const PAD_X = 16;
+  const PAD_Y = 6;
+
+  const min = Math.min(...valores);
+  const max = Math.max(...valores);
+  const range = max - min || 1;
+
+  const pts = valores.map((v, i) => ({
+    x: PAD_X + (i / (valores.length - 1)) * (W - 2 * PAD_X),
+    y: PAD_Y + (1 - (v - min) / range) * (CHART_H - 2 * PAD_Y),
+  }));
+
+  const linePath = `M ${pts.map((p) => `${p.x},${p.y}`).join(' L ')}`;
+  const areaPath = `M ${pts[0].x},${CHART_H} L ${pts.map((p) => `${p.x},${p.y}`).join(' L ')} L ${pts[pts.length - 1].x},${CHART_H} Z`;
 
   return (
-    <div className="max-w-[98%] mx-auto py-4 px-4">
-      {/* Header compacto */}
-      <div className="flex items-center justify-between mb-4">
-        <div>
-          <h1 className="text-2xl font-bold text-brand-dark">INDICADORES DE CONTROLADORIA</h1>
-          <p className="text-sm text-gray-500">Dashboard Executivo - Reunião Geral</p>
+    <div ref={containerRef} className="w-full">
+      <svg width={W} height={H} style={{ display: 'block' }}>
+        <path d={areaPath} fill="white" fillOpacity={0.12} />
+        <path d={linePath} fill="none" stroke="white" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+
+        {pts.map((p, i) => {
+          const isSel = i === indiceSelecionado;
+          return (
+            <circle
+              key={i}
+              cx={p.x}
+              cy={p.y}
+              r={isSel ? 4.5 : 2.5}
+              fill="white"
+              fillOpacity={isSel ? 1 : 0.5}
+              stroke={isSel ? 'rgba(255,255,255,0.4)' : 'none'}
+              strokeWidth={isSel ? 3 : 0}
+            />
+          );
+        })}
+
+        {meses.map((m, i) => {
+          const isSel = i === indiceSelecionado;
+          return (
+            <text
+              key={i}
+              x={pts[i].x}
+              y={H - 2}
+              textAnchor="middle"
+              fontSize={9}
+              fill="white"
+              fillOpacity={isSel ? 1 : 0.45}
+              fontWeight={isSel ? 700 : 400}
+            >
+              {m}
+            </text>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+function CardIndicador({
+  titulo,
+  valor,
+  unidade,
+  linhas,
+  carregando,
+  cor,
+  sparkline,
+  indiceSelecionado,
+}: {
+  titulo: string;
+  valor: string;
+  unidade: string;
+  linhas: { label: string; valor: string }[];
+  carregando: boolean;
+  cor: string;
+  sparkline?: { valores: number[]; meses: string[] };
+  indiceSelecionado: number;
+}) {
+  return (
+    <div className="rounded-xl p-6 flex flex-col gap-3" style={{ backgroundColor: cor }}>
+      <p className="text-sm font-medium text-white/70">{titulo}</p>
+
+      {carregando ? (
+        <div className="flex items-center gap-2 py-4">
+          <Loader2 className="w-5 h-5 animate-spin text-white/60" />
+          <span className="text-sm text-white/60">Carregando...</span>
         </div>
-        <div className="flex items-center gap-2">
-          <select
-            value={mesReferencia}
-            onChange={(e) => setMesReferencia(e.target.value)}
-            className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-primary"
-          >
-            <option value="2026-01">Janeiro 2026</option>
-            <option value="2025-12">Dezembro 2025</option>
-            <option value="2025-11">Novembro 2025</option>
-            <option value="2025-10">Outubro 2025</option>
-          </select>
-          {loading && <Loader2 className="w-4 h-4 animate-spin text-brand-primary" />}
+      ) : (
+        <>
+          <p className="text-4xl font-bold text-white leading-none">
+            {valor}
+            <span className="text-base font-normal text-white/60 ml-2">{unidade}</span>
+          </p>
+
+          <div className="space-y-1.5">
+            {linhas.map((l) => (
+              <div key={l.label} className="flex justify-between text-sm">
+                <span className="text-white/60">{l.label}</span>
+                <span className="font-medium text-white/90">{l.valor}</span>
+              </div>
+            ))}
+          </div>
+
+          {sparkline && sparkline.valores.length >= 2 && (
+            <div className="mt-1 border-t border-white/10 pt-3">
+              <Sparkline
+                valores={sparkline.valores}
+                meses={sparkline.meses}
+                indiceSelecionado={indiceSelecionado}
+              />
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+const CORES = {
+  lojas:     '#B3838C',
+  mp:        '#8B7AAA',
+  fabrica:   '#5E8FA0',
+  fat:       '#7BAA8B',
+  ecommerce: '#C4895A',
+  quebra:    '#8B6E5A',
+  volume:    '#A07840',
+};
+
+export default function IndicadoresControladoriaPage() {
+  const [historico, setHistorico] = useState<MesHistorico[]>([]);
+  const [mesSelecionado, setMesSelecionado] = useState<string | null>(null);
+  const [carregando, setCarregando] = useState(true);
+  const [sincAuto, setSincAuto] = useState(false);
+
+  const mesAtualISO = (() => {
+    const h = new Date();
+    return `${h.getFullYear()}-${String(h.getMonth() + 1).padStart(2, '0')}-01`;
+  })();
+
+  const carregarHistorico = useCallback(async (): Promise<MesHistorico[]> => {
+    setCarregando(true);
+    try {
+      const r = await fetch('/api/indicadores/historico');
+      const d = await r.json();
+      if (Array.isArray(d.meses) && d.meses.length > 0) {
+        setHistorico(d.meses);
+        setMesSelecionado((prev) => prev ?? d.meses[d.meses.length - 1].mes);
+        return d.meses;
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setCarregando(false);
+    }
+    return [];
+  }, []);
+
+  useEffect(() => {
+    carregarHistorico().then((meses) => {
+      const temMesAtual = meses.some((m) => m.mes === mesAtualISO);
+      if (!temMesAtual) {
+        // Novo mês detectado sem cache — sincroniza automaticamente
+        setSincAuto(true);
+        fetch('/api/indicadores/cache/sincronizar', { method: 'POST' })
+          .then(() => carregarHistorico())
+          .catch(console.error)
+          .finally(() => setSincAuto(false));
+      }
+    });
+
+    const handler = () => {
+      setMesSelecionado(null);
+      carregarHistorico();
+    };
+    window.addEventListener('cache-synced', handler);
+    return () => window.removeEventListener('cache-synced', handler);
+  }, [carregarHistorico, mesAtualISO]);
+
+  const indiceSelecionado = mesSelecionado
+    ? historico.findIndex((h) => h.mes === mesSelecionado)
+    : historico.length - 1;
+
+  const dadosMes = historico[indiceSelecionado];
+  const gl  = dadosMes?.giro_lojas ?? null;
+  const gm  = dadosMes?.giro_mp ?? null;
+  const gf  = dadosMes?.giro_fabrica ?? null;
+  const ff  = dadosMes?.faturamento_fabrica ?? null;
+  const fe  = dadosMes?.faturamento_ecommerce ?? null;
+  const qp  = dadosMes?.quebra_pedidos ?? null;
+  const vv  = dadosMes?.vendas_volume_varejo ?? null;
+  const ea  = dadosMes?.ecommerce_ads ?? null;
+
+  const LIMITE_VOLUME = 13.5;
+
+  const mesesLabel   = historico.map((h) => fmtMesLabel(h.mes));
+  const serieLojas   = historico.map((h) => h.giro_lojas?.giro ?? 0);
+  const serieMP      = historico.map((h) => h.giro_mp?.giro ?? 0);
+  const serieFabrica = historico.map((h) => h.giro_fabrica?.giro ?? 0);
+  const serieFat     = historico.map((h) => h.faturamento_fabrica?.crescimento_pct ?? 0);
+  const serieEcom    = historico.map((h) => h.faturamento_ecommerce?.crescimento_pct ?? 0);
+  const serieQuebra  = historico.map((h) => h.quebra_pedidos?.quebra_pct ?? 0);
+  const serieVolume  = historico.map((h) => h.vendas_volume_varejo?.volume_pct ?? 0);
+  const serieRoas    = historico.map((h) => h.ecommerce_ads?.roas ?? 0);
+  const serieConv    = historico.map((h) => h.ecommerce_ads?.taxa_conv_pct ?? 0);
+
+  // Meses de 2026 até hoje
+  const mesesComCache = new Set(historico.map((h) => h.mes));
+  const meses2026: string[] = [];
+  for (let m = 1; m <= 12; m++) {
+    const iso = `2026-${String(m).padStart(2, '0')}-01`;
+    if (iso <= mesAtualISO) meses2026.push(iso);
+  }
+
+  return (
+    <div className="max-w-[98%] mx-auto py-6 px-4 space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <h1 className="text-3xl font-bold text-brand-dark">INDICADORES DE CONTROLADORIA</h1>
+
+        <div className="flex flex-wrap gap-2 items-center">
+          {meses2026.map((iso) => {
+            const temCache = mesesComCache.has(iso);
+            const selecionado = mesSelecionado === iso;
+            return (
+              <button
+                key={iso}
+                onClick={() => temCache && setMesSelecionado(iso)}
+                disabled={!temCache}
+                title={!temCache ? 'Sem dados — clique em Atualizar Dados para gerar' : undefined}
+                className={`px-4 py-1.5 rounded-full text-sm font-medium transition border ${
+                  selecionado
+                    ? 'bg-brand-primary text-white border-brand-primary'
+                    : temCache
+                    ? 'bg-white text-gray-600 border-gray-200 hover:border-brand-primary hover:text-brand-primary'
+                    : 'bg-gray-50 text-gray-300 border-gray-100 cursor-not-allowed'
+                }`}
+              >
+                {fmtMesLabel(iso)}
+              </button>
+            );
+          })}
         </div>
       </div>
 
-      {/* Erro ao carregar dados */}
-      {/* {error && (
-        <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm flex items-center gap-2">
-          <AlertCircle className="w-4 h-4" />
-          Erro ao carregar dados de giro de estoque. Mostrando dados de demonstração.
+      {sincAuto && (
+        <div className="flex items-center gap-2 text-sm text-brand-primary">
+          <Loader2 className="w-4 h-4 animate-spin" />
+          Novo mês detectado — sincronizando dados automaticamente...
         </div>
-      )} */}
+      )}
 
-      {/* Resumo Executivo */}
-      <ResumoExecutivo mesFormatado={mesFormatado} />
+      {/* Fileira 1 — Giro de Estoque */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <CardIndicador
+          titulo="Giro de Estoque — Lojas"
+          valor={gl ? fmt(gl.giro) : '—'}
+          unidade="x / mes"
+          carregando={carregando}
+          cor={CORES.lojas}
+          indiceSelecionado={indiceSelecionado}
+          sparkline={serieLojas.length >= 2 ? { valores: serieLojas, meses: mesesLabel } : undefined}
+          linhas={gl ? [
+            { label: 'Estoque (unid.)', valor: fmt(gl.estoque_total, 0) },
+            { label: 'Media mensal (unid.)', valor: fmt(gl.media_mensal, 0) },
+          ] : []}
+        />
 
-      {/* Grid de seções 2x2 */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
+        <CardIndicador
+          titulo="Giro de Materia Prima"
+          valor={gm?.giro != null ? fmt(gm.giro) : '—'}
+          unidade="meses cobertura"
+          carregando={carregando}
+          cor={CORES.mp}
+          indiceSelecionado={indiceSelecionado}
+          sparkline={serieMP.length >= 2 ? { valores: serieMP, meses: mesesLabel } : undefined}
+          linhas={gm ? [
+            { label: 'Estoque MP (R$)', valor: fmtMoeda(gm.estoque_valor) },
+            { label: 'Consumo mes (R$)', valor: fmtMoeda(gm.consumo_valor) },
+          ] : []}
+        />
 
-        {/* Operações & Projetos */}
-        <Secao titulo="Operações & Projetos" icone={<Target className="w-4 h-4 text-blue-600" />}>
-          <div className="space-y-0">
-            <LinhaIndicador titulo="Projetos no Prazo" {...dadosCompletos.projetosNoPrazo} />
-            <LinhaIndicador titulo="Satisfação Cliente" {...dadosCompletos.satisfacaoCliente} />
-            <LinhaIndicador titulo="Retrabalho" {...dadosCompletos.retrabalho} inverso />
-          </div>
-        </Secao>
-
-        {/* Estoque & Giro */}
-        <Secao titulo="Estoque & Giro" icone={<Package className="w-4 h-4 text-purple-600" />}>
-          <div className="grid grid-cols-3 gap-2">
-            <MiniCard titulo="Giro MP (R$)" {...dadosCompletos.giroEstoqueMP} />
-            <MiniCard titulo="Giro PA Lojas" {...dadosCompletos.giroPALojas} />
-            <MiniCard titulo="Giro PA Fábrica" {...dadosCompletos.giroPAFabrica} />
-          </div>
-        </Secao>
-
-        {/* Faturamento & Crescimento */}
-        <Secao titulo="Faturamento & Crescimento" icone={<TrendingUp className="w-4 h-4 text-green-600" />}>
-          <div className="space-y-0">
-            <LinhaIndicador titulo="Faturamento Acumulado" {...dadosCompletos.crescimentoFaturamento} />
-            <LinhaIndicador titulo="Crescimento Ecommerce" {...dadosCompletos.crescimentoEcommerce} />
-            <LinhaIndicador titulo="Vendas Volume x Varejo" {...dadosCompletos.vendasVolumeVarejo} />
-          </div>
-        </Secao>
-
-        {/* Rentabilidade */}
-        <Secao titulo="Rentabilidade" icone={<DollarSign className="w-4 h-4 text-emerald-600" />}>
-          <div className="grid grid-cols-3 gap-2">
-            <MiniCard titulo="Lucro Líq. 12M" {...dadosCompletos.lucroLiquido12M} />
-            {/* CMV - dados reais do banco */}
-            <div className={`p-3 rounded-lg border ${cmvLoading ? 'bg-gray-50 border-gray-200' : 'bg-blue-50 border-blue-200'}`}>
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-xs text-gray-600 truncate pr-2">CMV</span>
-                {cmvLoading
-                  ? <Loader2 className="w-4 h-4 animate-spin text-gray-400" />
-                  : <AlertCircle className="w-4 h-4 text-amber-500" />
-                }
-              </div>
-              {cmvLoading ? (
-                <div className="text-sm text-gray-400">Carregando...</div>
-              ) : cmvData ? (
-                <>
-                  <div className="flex items-baseline gap-1">
-                    <span className="text-xl font-bold text-blue-700">
-                      {(cmvData.cmv_total / 1000).toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}
-                    </span>
-                    <span className="text-sm text-gray-500">K R$</span>
-                  </div>
-                  <div className="mt-1 text-xs text-gray-400">
-                    Lojas: {(cmvData.cmv_lojas / 1000).toFixed(1)}K · Fab: {(cmvData.cmv_fab / 1000).toFixed(1)}K
-                  </div>
-                </>
-              ) : (
-                <div className="text-sm text-gray-400">—</div>
-              )}
-            </div>
-            <MiniCard titulo="DRE Ecommerce" {...dadosCompletos.dreEcommerce} />
-          </div>
-        </Secao>
-
-        {/* Ecommerce Performance */}
-        <Secao titulo="Ecommerce Performance" icone={<ShoppingCart className="w-4 h-4 text-pink-600" />}>
-          <div className="space-y-0">
-            <LinhaIndicador titulo="ROAS Google/Meta" {...dadosCompletos.roasGoogleMeta} />
-            <LinhaIndicador titulo="Taxa Conversão" {...dadosCompletos.taxaConversao} />
-            <LinhaIndicador titulo="Quebra Pedidos" {...dadosCompletos.quebraPedidos} inverso />
-          </div>
-        </Secao>
-
-        {/* Inadimplência & Cobrança */}
-        <Secao titulo="Inadimplência & Cobrança" icone={<AlertTriangle className="w-4 h-4 text-amber-600" />}>
-          <div className="grid grid-cols-2 gap-2 mb-3">
-            <div className="col-span-2">
-              <div className="flex items-center gap-2 text-xs text-gray-500 mb-2">
-                <span>Aging:</span>
-                <div className="flex-1 flex items-center gap-1">
-                  <div className="flex-1 h-2 bg-amber-200 rounded-l" title="Até 30 dias" />
-                  <div className="flex-1 h-2 bg-orange-300" title="31-90 dias" />
-                  <div className="flex-1 h-2 bg-red-400 rounded-r" title="91-180 dias" />
-                </div>
-              </div>
-            </div>
-            <MiniCard titulo="Até 30 dias" {...dadosCompletos.inadimplencia30} inverso />
-            <MiniCard titulo="31-90 dias" {...dadosCompletos.inadimplencia90} inverso />
-            <MiniCard titulo="91-180 dias" {...dadosCompletos.inadimplencia180} inverso />
-            <div className="p-3 rounded-lg border bg-blue-50 border-blue-200">
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-xs text-gray-600">Cobrança</span>
-                <CheckCircle2 className="w-4 h-4 text-green-500" />
-              </div>
-              <div className="text-xl font-bold text-blue-700">
-                {(dadosCompletos.campanhasCobranca.valor + dadosCompletos.cobrancaExterna.valor).toFixed(2)}%
-              </div>
-              <span className="text-xs text-gray-400">Recuperação total</span>
-            </div>
-          </div>
-        </Secao>
-
+        <CardIndicador
+          titulo="Giro de Estoque — Fabrica"
+          valor={gf?.giro != null ? fmt(gf.giro, 1) : '—'}
+          unidade="meses cobertura"
+          carregando={carregando}
+          cor={CORES.fabrica}
+          indiceSelecionado={indiceSelecionado}
+          sparkline={serieFabrica.length >= 2 ? { valores: serieFabrica, meses: mesesLabel } : undefined}
+          linhas={gf ? [
+            { label: 'Estoque (unid.)', valor: fmt(gf.estoque_total, 0) },
+            { label: 'Media mensal (unid.)', valor: fmt(gf.media_mensal, 0) },
+          ] : []}
+        />
       </div>
 
-      {/* Legenda compacta */}
-      <div className="mt-4 flex items-center justify-center gap-6 text-xs text-gray-500">
-        <div className="flex items-center gap-1">
-          <CheckCircle2 className="w-3 h-3 text-green-500" />
-          <span>No alvo (≥ meta)</span>
-        </div>
-        <div className="flex items-center gap-1">
-          <AlertCircle className="w-3 h-3 text-amber-500" />
-          <span>Atenção (85-99%)</span>
-        </div>
-        <div className="flex items-center gap-1">
-          <XCircle className="w-3 h-3 text-red-500" />
-          <span>Crítico (&lt; 85%)</span>
-        </div>
+      {/* Fileira 2 — Operacional */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <CardIndicador
+          titulo="Faturamento Lojas + Fabrica"
+          valor={ff?.crescimento_pct != null
+            ? `${ff.crescimento_pct >= 0 ? '+' : ''}${fmt(ff.crescimento_pct, 1)}`
+            : '—'}
+          unidade="% vs ano ant."
+          carregando={carregando}
+          cor={CORES.fat}
+          indiceSelecionado={indiceSelecionado}
+          sparkline={serieFat.length >= 2 ? { valores: serieFat, meses: mesesLabel } : undefined}
+          linhas={ff ? [
+            { label: 'Acum. ano atual', valor: fmtMoeda(ff.acum_2026) },
+            { label: 'Acum. ano ant.', valor: fmtMoeda(ff.acum_2025) },
+          ] : []}
+        />
+
+        <CardIndicador
+          titulo="Quebra de Pedidos"
+          valor={qp?.quebra_pct != null ? fmt(qp.quebra_pct, 2) : '—'}
+          unidade="% fat. fábrica"
+          carregando={carregando}
+          cor={CORES.quebra}
+          indiceSelecionado={indiceSelecionado}
+          sparkline={serieQuebra.length >= 2 ? { valores: serieQuebra, meses: mesesLabel } : undefined}
+          linhas={qp ? [
+            { label: 'Quebra (R$)', valor: fmtMoeda(qp.quebra_valor) },
+            { label: 'Fat. fábrica mês', valor: fmtMoeda(qp.faturamento_mes) },
+          ] : []}
+        />
+
+        <CardIndicador
+          titulo="Volume x Varejo"
+          valor={vv?.volume_pct != null ? fmt(vv.volume_pct, 2) : '—'}
+          unidade={`% volume${vv?.volume_pct != null && vv.volume_pct > LIMITE_VOLUME ? ' ⚠' : ''}`}
+          carregando={carregando}
+          cor={vv?.volume_pct != null && vv.volume_pct > LIMITE_VOLUME ? '#B05030' : CORES.volume}
+          indiceSelecionado={indiceSelecionado}
+          sparkline={serieVolume.length >= 2 ? { valores: serieVolume, meses: mesesLabel } : undefined}
+          linhas={vv ? [
+            { label: 'Volume (R$)', valor: fmtMoeda(vv.volume_valor) },
+            { label: 'Varejo (R$)', valor: fmtMoeda(vv.varejo_valor) },
+            { label: 'Limite ideal', valor: `${fmt(LIMITE_VOLUME, 1)}%` },
+          ] : []}
+        />
+      </div>
+
+      {/* Fileira 3 — E-commerce */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <CardIndicador
+          titulo="Faturamento E-commerce"
+          valor={fe?.crescimento_pct != null
+            ? `${fe.crescimento_pct >= 0 ? '+' : ''}${fmt(fe.crescimento_pct, 1)}`
+            : '—'}
+          unidade="% vs ano ant."
+          carregando={carregando}
+          cor={CORES.ecommerce}
+          indiceSelecionado={indiceSelecionado}
+          sparkline={serieEcom.length >= 2 ? { valores: serieEcom, meses: mesesLabel } : undefined}
+          linhas={fe ? [
+            { label: 'Acum. ano atual', valor: fmtMoeda(fe.acum_2026) },
+            { label: 'Acum. ano ant.', valor: fmtMoeda(fe.acum_2025) },
+          ] : []}
+        />
+
+        <CardIndicador
+          titulo="ROAS — Google Ads (CPC)"
+          valor={ea?.roas != null ? fmt(ea.roas, 2) : '—'}
+          unidade="x retorno"
+          carregando={carregando}
+          cor="#4A7FA5"
+          indiceSelecionado={indiceSelecionado}
+          sparkline={serieRoas.length >= 2 ? { valores: serieRoas, meses: mesesLabel } : undefined}
+          linhas={ea ? [
+            { label: 'Investido (R$)', valor: fmtMoeda(ea.custo) },
+            { label: 'Receita (R$)',   valor: fmtMoeda(ea.receita) },
+          ] : []}
+        />
+
+        <CardIndicador
+          titulo="Taxa de Conversão — CPC"
+          valor={ea?.taxa_conv_pct != null ? fmt(ea.taxa_conv_pct, 2) : '—'}
+          unidade="% sessões → compra"
+          carregando={carregando}
+          cor="#5A8A6A"
+          indiceSelecionado={indiceSelecionado}
+          sparkline={serieConv.length >= 2 ? { valores: serieConv, meses: mesesLabel } : undefined}
+          linhas={ea ? [
+            { label: 'Sessões engajadas', valor: ea.sessoes_engajadas.toLocaleString('pt-BR') },
+            { label: 'Transações',        valor: ea.transacoes.toLocaleString('pt-BR') },
+          ] : []}
+        />
       </div>
     </div>
   );

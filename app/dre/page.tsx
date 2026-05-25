@@ -18,9 +18,10 @@ type VisaoDRE = 'vertical' | 'empresa' | 'sintetico';
 import { PLANO_CONTAS_DRE } from '../configuracoes/plano-contas-dre/planoContasDRE';
 import DetalhamentoDuplicatasDREModal from '../components/DetalhamentoDuplicatasDREModal';
 import { generateCacheKey, useCache } from '../contexts/CacheContext';
+import { formatarValor } from '../utils/formatters';
 import { DRE_OFICIAL_MAR_2026, DRE_OFICIAL_MAR_2026_PERIODO } from './oficialMar2026';
 import DREPorEmpresa from './components/DREPorEmpresa';
-import DRESintetico from './components/DRESintetico';
+import DRESintetico, { type ContaDRE as ContaDREsintetico } from './components/DRESintetico';
 
 interface PeriodoDRE {
   key: string;
@@ -88,16 +89,6 @@ const CORES_NIVEL: Record<number, string> = {
   3: 'bg-white',
   4: 'bg-white pl-8',
 };
-
-function formatarValor(valor: number): string {
-  if (valor === 0) return '-';
-  return valor.toLocaleString('pt-BR', {
-    style: 'currency',
-    currency: 'BRL',
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
-  });
-}
 
 function indexarContas(contas: ContaDREValores[], mapa = new Map<string, ContaDREValores>()) {
   for (const conta of contas) {
@@ -290,30 +281,22 @@ function calcularLinhasOrdenadas(base: ContaDREValores[], periodos: PeriodoDRE[]
   ].filter(Boolean) as ContaDREValores[];
 }
 
-function criarFallbackMar2026(): { periodos: PeriodoDRE[]; dados: ContaDREValores[] } {
-  const periodos = [{ key: DRE_OFICIAL_MAR_2026_PERIODO, label: 'MAR/26' }];
-  const base = JSON.parse(JSON.stringify(ESTRUTURA_DRE)) as ContaDREValores[];
-  const indexado = indexarContas(base);
 
-  for (const [codigo, valor] of Object.entries(DRE_OFICIAL_MAR_2026)) {
-    const conta = indexado.get(codigo);
-    if (!conta) continue;
-    conta.valores = { [DRE_OFICIAL_MAR_2026_PERIODO]: valor };
-    conta.total = valor;
-  }
-
-  somarFilhos(base, periodos);
-  return { periodos, dados: calcularLinhasOrdenadas(base, periodos) };
-}
 
 export default function DREPage() {
   const [visaoAtiva, setVisaoAtiva] = useState<VisaoDRE>('vertical');
-  const [loading, setLoading] = useState(false);
-  const [dataInicio, setDataInicio] = useState(() => '2026-03-01');
-  const [dataFim, setDataFim] = useState(() => '2026-03-31');
-  const fallbackInicial = useMemo(() => criarFallbackMar2026(), []);
-  const [periodos, setPeriodos] = useState<PeriodoDRE[]>(fallbackInicial.periodos);
-  const [dadosDRE, setDadosDRE] = useState<ContaDREValores[]>(fallbackInicial.dados);
+  const [loading, setLoading] = useState(true);
+  const [dataInicio, setDataInicio] = useState(() => {
+    const hoje = new Date();
+    return `${hoje.getFullYear()}-01-01`;
+  });
+  const [dataFim, setDataFim] = useState(() => {
+    const hoje = new Date();
+    const ultimoDia = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0).getDate();
+    return `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}-${ultimoDia}`;
+  });
+  const [periodos, setPeriodos] = useState<PeriodoDRE[]>([]);
+  const [dadosDRE, setDadosDRE] = useState<ContaDREValores[]>([]);
   const [contasExpandidas, setContasExpandidas] = useState<Set<string>>(
     new Set(['01', '02', '04', '06', '08', '08.10', '10', '13', '17', '18'])
   );
@@ -345,6 +328,11 @@ export default function DREPage() {
 
     setPeriodos(novosPeriodos);
   }, [dataInicio, dataFim]);
+
+  useEffect(() => {
+    buscarDados(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function toggleExpansao(codigo: string) {
     setContasExpandidas((prev) => {
@@ -484,10 +472,9 @@ export default function DREPage() {
       const data = await response.json();
 
       if (data.error) {
-        const fallback = criarFallbackMar2026();
-        setPeriodos(fallback.periodos);
-        setDadosDRE(fallback.dados);
-        setStatusCarregamento('Backend indisponivel. Mostrando snapshot oficial de MAR/2026.');
+        setStatusCarregamento(`Erro do backend: ${data.error}`);
+        setPeriodos([]);
+        setDadosDRE([]);
         return;
       }
 
@@ -558,10 +545,9 @@ export default function DREPage() {
       });
     } catch (error) {
       console.error('Erro ao buscar dados DRE:', error);
-      const fallback = criarFallbackMar2026();
-      setPeriodos(fallback.periodos);
-      setDadosDRE(fallback.dados);
-      setStatusCarregamento('Falha no backend. Mostrando snapshot oficial de MAR/2026.');
+      setStatusCarregamento('Falha ao conectar com o backend. Verifique se o servidor está rodando.');
+      setPeriodos([]);
+      setDadosDRE([]);
     } finally {
       setLoading(false);
     }
@@ -778,7 +764,7 @@ export default function DREPage() {
           </button>
         </div>
         {statusCarregamento && (
-          <div className="mt-3 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+          <div className="mt-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2">
             {statusCarregamento}
           </div>
         )}
@@ -859,7 +845,12 @@ export default function DREPage() {
       {visaoAtiva === 'empresa' && <DREPorEmpresa />}
 
       {/* Visao Sintetica */}
-      {visaoAtiva === 'sintetico' && <DRESintetico />}
+      {visaoAtiva === 'sintetico' && (
+        <DRESintetico
+          dreContas={dadosDRE as unknown as ContaDREsintetico[]}
+          drePeriodos={periodos}
+        />
+      )}
 
       {modalAberto && (
         <DetalhamentoDuplicatasDREModal

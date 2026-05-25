@@ -11,33 +11,10 @@ router = APIRouter()
 def _normalizar_texto(value: Optional[str]) -> str:
     if not value:
         return ""
-    substitutions = {
-        'Á': 'A', 'À': 'A', 'Ã': 'A', 'Â': 'A',
-        'É': 'E', 'Ê': 'E',
-        'Í': 'I',
-        'Ó': 'O', 'Õ': 'O', 'Ô': 'O',
-        'Ú': 'U',
-        'Ç': 'C',
-        'á': 'A', 'à': 'A', 'ã': 'A', 'â': 'A',
-        'é': 'E', 'ê': 'E',
-        'í': 'I',
-        'ó': 'O', 'õ': 'O', 'ô': 'O',
-        'ú': 'U',
-        'ç': 'C',
-    }
-    text = "".join(substitutions.get(ch, ch) for ch in str(value))
-    return " ".join(text.upper().strip().split())
-
-def _normalizar_texto_v2(value: Optional[str]) -> str:
-    if not value:
-        return ""
     text = str(value).strip().upper()
     text = unicodedata.normalize("NFKD", text)
     text = "".join(ch for ch in text if not unicodedata.combining(ch))
     return " ".join(text.split())
-
-
-_normalizar_texto = _normalizar_texto_v2
 
 
 REGRAS_DESCRICAO_DRE = [
@@ -1318,19 +1295,50 @@ def get_dre_sintetico(
         """, (dataInicio, dataFim))
         cmv_por_empresa = {r['cd_empresa']: float(r['cmv'] or 0) for r in cmv_loja_raw}
 
-        # Buscar despesas por empresa
+        # Buscar despesas por empresa — com cd_despesaitem para classificar
         query_despesas = """
             SELECT
                 d.cd_empresa,
-                SUM(ABS(d.vl_rateio)) as total_despesas
+                d.cd_despesaitem,
+                i.ds_despesaitem as descricao_despesa,
+                ABS(d.vl_rateio) as valor
             FROM vr_fcp_despduplicatai d
+            JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
             WHERE d.dt_emissao >= %s
               AND d.dt_emissao <= %s
               AND d.tp_situacao = 'N'
-            GROUP BY d.cd_empresa
         """
-        despesas = execute_query(query_despesas, (dataInicio, dataFim))
-        despesas_por_empresa = {r['cd_empresa']: float(r['total_despesas'] or 0) for r in despesas}
+        despesas_raw = execute_query(query_despesas, (dataInicio, dataFim))
+
+        # Carregar classificações do banco (mesma lógica da DRE analítica)
+        classificacoes_db = {}
+        classificacoes_desc_db = {}
+        try:
+            rows_cls = execute_query("SELECT cd_despesaitem, ds_despesaitem, conta_dre FROM classificacao_despesas_dre", ())
+            for row in rows_cls or []:
+                cd = row.get('cd_despesaitem')
+                ds = row.get('ds_despesaitem')
+                conta_dre = row.get('conta_dre', '')
+                if cd and conta_dre:
+                    codigo = conta_dre.split(' ')[0] if ' ' in conta_dre else conta_dre
+                    classificacoes_db[cd] = codigo
+                    if ds:
+                        classificacoes_desc_db[_normalizar_texto(ds)] = codigo
+        except Exception:
+            pass
+
+        # Somar apenas despesas operacionais (08.xx) por empresa
+        despesas_por_empresa = {}
+        for d in despesas_raw:
+            conta = _classificar_conta_dre(
+                d['cd_despesaitem'], d.get('descricao_despesa'),
+                classificacoes_db, classificacoes_desc_db
+            )
+            # Só contar como despesa operacional contas 08.xx
+            if not conta.startswith('08.'):
+                continue
+            cd_emp = d['cd_empresa']
+            despesas_por_empresa[cd_emp] = despesas_por_empresa.get(cd_emp, 0) + float(d['valor'] or 0)
 
         # Consolidar empresas
         todas_empresas = set(receita_por_empresa.keys()) | set(cmv_por_empresa.keys()) | set(despesas_por_empresa.keys())

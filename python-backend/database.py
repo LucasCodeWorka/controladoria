@@ -122,3 +122,37 @@ def close_all_connections():
     if connection_pool:
         connection_pool.closeall()
         print("[INFO] All PostgreSQL connections closed")
+
+
+# ─── Pool Neon (GA4 / e-commerce) ────────────────────────────────────────────
+
+_neon_pool = None
+
+def _get_neon_pool():
+    global _neon_pool
+    if _neon_pool is None:
+        url = os.getenv('NEON_DATABASE_URL')
+        if not url:
+            raise RuntimeError("NEON_DATABASE_URL não configurada")
+        _neon_pool = psycopg2.pool.SimpleConnectionPool(1, 5, dsn=url)
+        print("[OK] Neon connection pool created")
+    return _neon_pool
+
+
+def execute_neon_query(query: str, params: tuple = None) -> List[Dict[str, Any]]:
+    pool = _get_neon_pool()
+    conn = None
+    try:
+        conn = pool.getconn()
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        columns = [desc[0] for desc in cursor.description] if cursor.description else []
+        results = [dict(zip(columns, row)) for row in cursor.fetchall()]
+        cursor.close()
+        return results
+    except Exception as e:
+        print(f"[ERROR] Neon query failed: {e}")
+        raise
+    finally:
+        if conn:
+            pool.putconn(conn)
