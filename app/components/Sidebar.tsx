@@ -13,6 +13,7 @@ import {
   FileSpreadsheet,
   ClipboardList,
   BarChart3,
+  Factory,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -27,8 +28,8 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
   const menuItems = [
     {
       name: 'DRE',
-      href: '/dre',
-      icon: FileSpreadsheet,
+      href: '/dre-fabrica',
+      icon: Factory,
     },
     {
       name: 'Indicadores',

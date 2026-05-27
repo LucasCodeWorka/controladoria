@@ -310,6 +310,8 @@ export default function DREPage() {
   const [mostrarLinhasExtras, setMostrarLinhasExtras] = useState(false);
   const [compararOficialMar, setCompararOficialMar] = useState(false);
   const [statusCarregamento, setStatusCarregamento] = useState<string | null>(null);
+  const [empresaSelecionada, setEmpresaSelecionada] = useState<string>('');
+  const [listaEmpresas, setListaEmpresas] = useState<{ cd_empresa: number; nome: string }[]>([]);
 
   const { getDRECache, setDRECache } = useCache();
 
@@ -332,6 +334,21 @@ export default function DREPage() {
   useEffect(() => {
     buscarDados(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    async function carregarEmpresas() {
+      try {
+        const response = await fetch('/api/dre/por-empresa?dataInicio=2026-01-01&dataFim=2026-12-31');
+        const data = await response.json();
+        if (data.empresas) {
+          setListaEmpresas(data.empresas);
+        }
+      } catch (error) {
+        console.error('Erro ao carregar lista de empresas:', error);
+      }
+    }
+    carregarEmpresas();
   }, []);
 
   function toggleExpansao(codigo: string) {
@@ -445,7 +462,7 @@ export default function DREPage() {
   }
 
   async function buscarDados(forceRefresh = false) {
-    const cacheKey = generateCacheKey({ dataInicio, dataFim, grupoPlanejado, layout: 'dre-v2' });
+    const cacheKey = generateCacheKey({ dataInicio, dataFim, grupoPlanejado, empresaSelecionada, layout: 'dre-v2' });
 
     if (!forceRefresh) {
       const cachedData = getDRECache(cacheKey);
@@ -465,7 +482,8 @@ export default function DREPage() {
     try {
       const controller = new AbortController();
       const timeout = window.setTimeout(() => controller.abort(), 20000);
-      const response = await fetch(`/api/dre?dataInicio=${dataInicio}&dataFim=${dataFim}`, {
+      const empresaParam = empresaSelecionada ? `&empresas=${empresaSelecionada}` : '';
+      const response = await fetch(`/api/dre?dataInicio=${dataInicio}&dataFim=${dataFim}${empresaParam}`, {
         signal: controller.signal,
       });
       window.clearTimeout(timeout);
@@ -591,6 +609,14 @@ export default function DREPage() {
       <div className="mb-4">
         <h1 className="text-3xl font-bold text-brand-dark">DEMONSTRACAO DO RESULTADO DO EXERCICIO</h1>
         <p className="text-gray-600 mt-1">Analise de receitas, custos e despesas por periodo</p>
+        {/* AVISO: Empresas excluidas do DRE */}
+        <div className="mt-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-md text-sm text-amber-800">
+          <strong>Filtro ativo:</strong>{' '}
+          {empresaSelecionada ? (
+            <>Empresa: {listaEmpresas.find(e => e.cd_empresa.toString() === empresaSelecionada)?.nome || empresaSelecionada} | </>
+          ) : null}
+          Empresas excluidas: CORPO SEXY (50), CAIRO BENEVIDES (100), CB EMPREENDIMENTOS (110)
+        </div>
       </div>
 
       {/* Botoes de navegacao entre visoes */}
@@ -720,6 +746,21 @@ export default function DREPage() {
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
           {fromCache && <span className="text-xs text-green-600 bg-green-50 px-2 py-1 rounded">Cache</span>}
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-gray-500">Empresa</span>
+            <select
+              value={empresaSelecionada}
+              onChange={(e) => setEmpresaSelecionada(e.target.value)}
+              className="px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-primary min-w-[180px]"
+            >
+              <option value="">Todas as Empresas</option>
+              {listaEmpresas.map((emp) => (
+                <option key={emp.cd_empresa} value={emp.cd_empresa.toString()}>
+                  {emp.nome}
+                </option>
+              ))}
+            </select>
+          </div>
           <div className="flex items-center gap-2">
             <span className="text-sm text-gray-500">Planejado</span>
             <select

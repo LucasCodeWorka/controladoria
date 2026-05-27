@@ -52,10 +52,11 @@ def execute_query(query: str, params: tuple = None) -> List[Dict[str, Any]]:
         cursor = conn.cursor()
 
         print(f"[QUERY] Executing: {query[:100]}...")
-        if params:
+        if params and len(params) > 0:
             print(f"[PARAMS] {params}")
-
-        cursor.execute(query, params)
+            cursor.execute(query, params)
+        else:
+            cursor.execute(query)
 
         # Pegar nomes das colunas
         columns = [desc[0] for desc in cursor.description] if cursor.description else []
@@ -87,10 +88,12 @@ def execute_insert(query: str, params: tuple = None) -> List[Dict[str, Any]]:
         cursor = conn.cursor()
 
         print(f"[INSERT] Executing: {query[:100]}...")
-        if params:
+        if params and len(params) > 0:
             print(f"[PARAMS] {params}")
+            cursor.execute(query, params)
+        else:
+            cursor.execute(query)
 
-        cursor.execute(query, params)
         conn.commit()  # Fazer commit
 
         # Pegar nomes das colunas se houver resultado (ex: RETURNING)
@@ -145,7 +148,10 @@ def execute_neon_query(query: str, params: tuple = None) -> List[Dict[str, Any]]
     try:
         conn = pool.getconn()
         cursor = conn.cursor()
-        cursor.execute(query, params)
+        if params and len(params) > 0:
+            cursor.execute(query, params)
+        else:
+            cursor.execute(query)
         columns = [desc[0] for desc in cursor.description] if cursor.description else []
         results = [dict(zip(columns, row)) for row in cursor.fetchall()]
         cursor.close()
