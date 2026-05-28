@@ -721,17 +721,17 @@ def _calcular_lucro_liq_pct(ref_month: date) -> dict:
     for d in despesas:
         despesas_por_ccusto[d['cd_ccusto']] = float(d['total_despesas'])
 
-    # Buscar CMV por empresa (lojas)
+    # Buscar CMV por centro de custo (lojas)
     cmv_lojas = execute_query("""
-        SELECT cd_empresa, ABS(COALESCE(SUM(valor), 0)) AS cmv
+        SELECT idcentrodecusto AS cd_ccusto, ABS(COALESCE(SUM(valor), 0)) AS cmv
         FROM mv_cmv_loja
         WHERE data >= %s AND data <= %s
-        GROUP BY cd_empresa
+        GROUP BY idcentrodecusto
     """, (data_inicio, data_fim))
 
     cmv_por_empresa = {}
     for c in cmv_lojas:
-        cmv_por_empresa[c['cd_empresa']] = float(c['cmv'])
+        cmv_por_empresa[c['cd_ccusto']] = float(c['cmv'])
 
     # CMV fabrica (total)
     cmv_fab = execute_query("""
