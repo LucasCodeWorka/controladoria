@@ -3598,22 +3598,9 @@ def get_duplicatas_por_empresa(
         except Exception as e:
             print(f"[DUPLICATAS] Aviso: nao foi possivel carregar classificacoes: {e}")
 
-        # Buscar centro de custo da empresa
-        # Para lojas, cd_empresa = cd_ccusto (exceto fabrica)
-        ccusto_filter = ""
-        ccusto_params = []
-
-        if cdEmpresa == 1:
-            # Fabrica: usar todos os ccustos da fabrica
-            ccusto_filter = "AND d.cd_ccusto IN (" + ",".join(["%s"] * len(CCUSTOS_FABRICA)) + ")"
-            ccusto_params = list(CCUSTOS_FABRICA)
-        else:
-            # Lojas: cd_empresa = cd_ccusto
-            ccusto_filter = "AND d.cd_ccusto = %s"
-            ccusto_params = [cdEmpresa]
-
+        # Filtrar por cd_empresa (igual ao endpoint /api/dre/por-empresa)
         # Buscar despesas que se encaixam na conta solicitada
-        query = f"""
+        query = """
             SELECT
                 d.cd_despesaduplicata as id,
                 d.cd_despesaitem,
@@ -3622,6 +3609,7 @@ def get_duplicatas_por_empresa(
                 d.dt_vencimento,
                 ABS(d.vl_rateio) as valor,
                 d.cd_ccusto,
+                d.cd_empresa,
                 COALESCE(c.ds_ccusto, '') as nome_ccusto
             FROM vr_fcp_despduplicatai d
             JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
@@ -3629,12 +3617,12 @@ def get_duplicatas_por_empresa(
             WHERE d.dt_emissao >= %s
               AND d.dt_emissao <= %s
               AND d.tp_situacao = 'N'
-              {ccusto_filter}
+              AND d.cd_empresa = %s
             ORDER BY d.dt_emissao
         """
 
-        params = [dataInicio, dataFim] + ccusto_params
-        despesas = execute_query(query, tuple(params))
+        despesas = execute_query(query, (dataInicio, dataFim, cdEmpresa))
+        print(f"[DUPLICATAS] Total despesas encontradas para empresa {cdEmpresa}: {len(despesas)}")
 
         # Filtrar apenas despesas que correspondem a conta solicitada
         duplicatas = []
