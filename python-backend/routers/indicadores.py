@@ -680,20 +680,16 @@ CCUSTOS_LOJAS = {
 
 def _calcular_lucro_liq_pct(ref_month: date) -> dict:
     """
-    Calcula o percentual de empresas com Lucro Liquido > 0 nos ultimos 12 meses.
+    Calcula o percentual de empresas com Lucro Liquido > 0 no mes de referencia.
     Considera todas as empresas (Fabrica + Lojas).
     """
     import calendar
-    from dateutil.relativedelta import relativedelta
 
-    # Calcular periodo dos ultimos 12 meses
-    mes_fim = ref_month
-    mes_inicio = ref_month - relativedelta(months=11)
-
-    data_inicio = mes_inicio.isoformat()
-    data_fim = (mes_fim + relativedelta(months=1) - relativedelta(days=1)).isoformat()
+    # Calcular periodo apenas do mes de referencia
     last_day = calendar.monthrange(ref_month.year, ref_month.month)[1]
-    dt_ref = date(ref_month.year, ref_month.month, last_day).isoformat()
+    data_inicio = ref_month.isoformat()
+    data_fim = date(ref_month.year, ref_month.month, last_day).isoformat()
+    dt_ref = data_fim
 
     # Lista de todos os centros de custo para analise
     todos_ccustos = CCUSTOS_FABRICA + list(CCUSTOS_LOJAS.keys())
@@ -813,7 +809,7 @@ def _calcular_lucro_liq_pct(ref_month: date) -> dict:
 
     return {
         "dt_referencia": dt_ref,
-        "periodo_meses": 12,
+        "periodo_meses": 1,
         "data_inicio": data_inicio,
         "data_fim": data_fim,
         "total_empresas": total_empresas,
