@@ -3748,8 +3748,8 @@ def get_duplicatas_por_empresa(
                     "nrDuplicata": d['nr_duplicata'],
                     "cdDespesaItem": cd_despesaitem,
                     "descricao": descricao,
-                    "dtEmissao": d['dt_emissao'].isoformat() if d['dt_emissao'] else None,
-                    "dtVencimento": d['dt_vencimento'].isoformat() if d.get('dt_vencimento') else None,
+                    "dtEmissao": d['dt_emissao'].strftime('%Y-%m-%d') if d['dt_emissao'] else None,
+                    "dtVencimento": d['dt_vencimento'].strftime('%Y-%m-%d') if d.get('dt_vencimento') else None,
                     "valor": -valor,  # Negativo pois é despesa
                     "cdCCusto": d['cd_ccusto'],
                     "nomeCCusto": d['nome_ccusto'],
