@@ -3624,6 +3624,20 @@ def get_duplicatas_por_empresa(
         despesas = execute_query(query, (dataInicio, dataFim, cdEmpresa))
         print(f"[DUPLICATAS] Total despesas encontradas para empresa {cdEmpresa}: {len(despesas)}")
 
+        # Se nao encontrou despesas, tentar sem filtro de empresa para debug
+        if len(despesas) == 0:
+            print(f"[DUPLICATAS] DEBUG: Nenhuma despesa encontrada. Verificando se existem despesas no periodo...")
+            query_debug = """
+                SELECT DISTINCT d.cd_empresa, COUNT(*) as qtd
+                FROM vr_fcp_despduplicatai d
+                WHERE d.dt_emissao >= %s AND d.dt_emissao <= %s AND d.tp_situacao = 'N'
+                GROUP BY d.cd_empresa
+                ORDER BY d.cd_empresa
+                LIMIT 30
+            """
+            debug_result = execute_query(query_debug, (dataInicio, dataFim))
+            print(f"[DUPLICATAS] DEBUG: Empresas com despesas no periodo: {[(r['cd_empresa'], r['qtd']) for r in debug_result]}")
+
         # Filtrar apenas despesas que correspondem a conta solicitada
         duplicatas = []
         total = 0
