@@ -3577,9 +3577,10 @@ def get_duplicatas_por_empresa(
 ):
     """
     Retorna duplicatas de uma conta DRE especifica para uma empresa.
+    Usa a mesma logica do endpoint /api/dre/por-empresa.
     """
     try:
-        print(f"[DUPLICATAS] Buscando conta={conta}, empresa={cdEmpresa}, periodo={dataInicio} a {dataFim}")
+        print(f"[DUPLICATAS-EMP] Buscando conta={conta}, empresa={cdEmpresa}, periodo={dataInicio} a {dataFim}")
 
         # Carregar classificacoes do banco
         classificacoes_db = {}
@@ -3596,84 +3597,136 @@ def get_duplicatas_por_empresa(
                     if ds:
                         classificacoes_desc_db[_normalizar_texto(ds)] = codigo
         except Exception as e:
-            print(f"[DUPLICATAS] Aviso: nao foi possivel carregar classificacoes: {e}")
+            print(f"[DUPLICATAS-EMP] Aviso: nao foi possivel carregar classificacoes: {e}")
 
-        # Filtrar por cd_empresa (igual ao endpoint /api/dre/por-empresa)
-        # Buscar despesas que se encaixam na conta solicitada
-        query = """
-            SELECT
-                d.cd_despesaduplicata as id,
-                d.cd_despesaitem,
-                i.ds_despesaitem as descricao,
-                d.dt_emissao,
-                d.dt_vencimento,
-                ABS(d.vl_rateio) as valor,
-                d.cd_ccusto,
-                d.cd_empresa,
-                COALESCE(c.ds_ccusto, '') as nome_ccusto
-            FROM vr_fcp_despduplicatai d
-            JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
-            LEFT JOIN vr_gec_ccusto c ON c.cd_ccusto = d.cd_ccusto
-            WHERE d.dt_emissao >= %s
-              AND d.dt_emissao <= %s
-              AND d.tp_situacao = 'N'
-              AND d.cd_empresa = %s
-            ORDER BY d.dt_emissao
-        """
+        # Primeiro, identificar quais cd_despesaitem correspondem a conta solicitada
+        # Isso e necessario para fazer a query SQL de forma eficiente
+        conta_prefixo = f"{conta}."
 
-        despesas = execute_query(query, (dataInicio, dataFim, cdEmpresa))
-        print(f"[DUPLICATAS] Total despesas encontradas para empresa {cdEmpresa}: {len(despesas)}")
+        # Buscar do banco de dados (prioridade)
+        itens_db = [
+            cd for cd, c in classificacoes_db.items()
+            if c == conta or c.startswith(conta_prefixo)
+        ]
 
-        # Se nao encontrou despesas, tentar sem filtro de empresa para debug
-        if len(despesas) == 0:
-            print(f"[DUPLICATAS] DEBUG: Nenhuma despesa encontrada. Verificando se existem despesas no periodo...")
-            query_debug = """
-                SELECT DISTINCT d.cd_empresa, COUNT(*) as qtd
+        # Fallback para mapeamento fixo se nao tem no banco
+        if not itens_db:
+            itens_mapa = [
+                cd for cd, c in MAPEAMENTO_DESPESA_DRE.items()
+                if c == conta or c.startswith(conta_prefixo)
+            ]
+            itens = itens_mapa
+        else:
+            itens = itens_db
+
+        # Se ainda nao tem itens, tentar por regras de descricao (busca mais ampla)
+        if not itens:
+            # Buscar todas as despesas e filtrar depois
+            query = """
+                SELECT
+                    d.nr_duplicata as nr_duplicata,
+                    d.cd_despesaitem,
+                    i.ds_despesaitem as ds_despesaitem,
+                    d.dt_emissao,
+                    d.dt_vencimento,
+                    ABS(d.vl_rateio) as vl_rateio,
+                    d.cd_ccusto,
+                    d.cd_empresa,
+                    d.cd_fornecedor,
+                    COALESCE(c.ds_ccusto, '') as nome_ccusto,
+                    COALESCE(p.nm_fantasia, p.nm_pessoa, 'N/A') as nm_fantasia
                 FROM vr_fcp_despduplicatai d
-                WHERE d.dt_emissao >= %s AND d.dt_emissao <= %s AND d.tp_situacao = 'N'
-                GROUP BY d.cd_empresa
-                ORDER BY d.cd_empresa
-                LIMIT 30
+                JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
+                LEFT JOIN vr_gec_ccusto c ON c.cd_ccusto = d.cd_ccusto
+                LEFT JOIN vr_pes_pessoa p ON p.cd_pessoa = d.cd_fornecedor
+                WHERE d.dt_emissao >= %s
+                  AND d.dt_emissao <= %s
+                  AND d.tp_situacao = 'N'
+                  AND d.cd_empresa = %s
+                ORDER BY d.dt_emissao
             """
-            debug_result = execute_query(query_debug, (dataInicio, dataFim))
-            print(f"[DUPLICATAS] DEBUG: Empresas com despesas no periodo: {[(r['cd_empresa'], r['qtd']) for r in debug_result]}")
+            despesas = execute_query(query, (dataInicio, dataFim, cdEmpresa))
+        else:
+            # Buscar apenas os itens identificados
+            placeholders_itens = ','.join(['%s'] * len(itens))
+            query = f"""
+                SELECT
+                    d.nr_duplicata as nr_duplicata,
+                    d.cd_despesaitem,
+                    i.ds_despesaitem as ds_despesaitem,
+                    d.dt_emissao,
+                    d.dt_vencimento,
+                    ABS(d.vl_rateio) as vl_rateio,
+                    d.cd_ccusto,
+                    d.cd_empresa,
+                    d.cd_fornecedor,
+                    COALESCE(c.ds_ccusto, '') as nome_ccusto,
+                    COALESCE(p.nm_fantasia, p.nm_pessoa, 'N/A') as nm_fantasia
+                FROM vr_fcp_despduplicatai d
+                JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
+                LEFT JOIN vr_gec_ccusto c ON c.cd_ccusto = d.cd_ccusto
+                LEFT JOIN vr_pes_pessoa p ON p.cd_pessoa = d.cd_fornecedor
+                WHERE d.dt_emissao >= %s
+                  AND d.dt_emissao <= %s
+                  AND d.tp_situacao = 'N'
+                  AND d.cd_empresa = %s
+                  AND d.cd_despesaitem IN ({placeholders_itens})
+                ORDER BY d.dt_emissao
+            """
+            despesas = execute_query(query, (dataInicio, dataFim, cdEmpresa, *itens))
 
-        # Filtrar apenas despesas que correspondem a conta solicitada
+        print(f"[DUPLICATAS-EMP] Total despesas encontradas para empresa {cdEmpresa}: {len(despesas)}")
+        print(f"[DUPLICATAS-EMP] Itens mapeados para conta {conta}: {itens[:10]}...")
+
+        # Se nao encontrou despesas, mostrar debug
+        if len(despesas) == 0:
+            print(f"[DUPLICATAS-EMP] DEBUG: Nenhuma despesa encontrada.")
+            # Verificar se existem despesas para esta empresa no periodo
+            query_debug = """
+                SELECT COUNT(*) as qtd
+                FROM vr_fcp_despduplicatai d
+                WHERE d.dt_emissao >= %s AND d.dt_emissao <= %s
+                  AND d.tp_situacao = 'N' AND d.cd_empresa = %s
+            """
+            debug_result = execute_query(query_debug, (dataInicio, dataFim, cdEmpresa))
+            if debug_result:
+                print(f"[DUPLICATAS-EMP] DEBUG: Total despesas da empresa {cdEmpresa} no periodo: {debug_result[0]['qtd']}")
+
+        # Filtrar e processar duplicatas
         duplicatas = []
         total = 0
         contas_encontradas = set()
 
         for d in despesas:
             cd_despesaitem = d['cd_despesaitem']
-            descricao = d.get('descricao')
+            descricao = d.get('ds_despesaitem')
             conta_classificada = _classificar_conta_dre(cd_despesaitem, descricao, classificacoes_db, classificacoes_desc_db)
-            contas_encontradas.add(conta_classificada)
+            contas_encontradas.add(f"{conta_classificada}:{descricao}")
 
             # Verificar se a conta classificada corresponde a conta solicitada
-            # Aceitar conta exata OU conta que comeca com o codigo solicitado
             if conta_classificada == conta or conta_classificada.startswith(conta + '.') or conta.startswith(conta_classificada + '.'):
-                valor = float(d['valor'] or 0)
+                valor = float(d['vl_rateio'] or 0)
                 total += valor
+                # Formato compativel com interface Duplicata do frontend
                 duplicatas.append({
-                    "id": d['id'],
+                    "id": d['nr_duplicata'],
                     "cdDespesaItem": cd_despesaitem,
                     "descricao": descricao,
                     "dtEmissao": d['dt_emissao'].isoformat() if d['dt_emissao'] else None,
                     "dtVencimento": d['dt_vencimento'].isoformat() if d.get('dt_vencimento') else None,
-                    "valor": -valor,
+                    "valor": -valor,  # Negativo pois é despesa
                     "cdCCusto": d['cd_ccusto'],
-                    "nomeCCusto": d['nome_ccusto']
+                    "nomeCCusto": d['nome_ccusto'],
+                    "nmFornecedor": d.get('nm_fantasia', 'N/A')
                 })
 
-        # Log para debug - mostrar contas encontradas que contem o prefixo buscado
-        contas_relevantes = [c for c in contas_encontradas if c.startswith(conta[:5]) or conta.startswith(c[:5])]
-        print(f"[DUPLICATAS] Conta buscada: {conta}")
-        print(f"[DUPLICATAS] Contas relevantes encontradas: {sorted(contas_relevantes)[:20]}")
-        print(f"[DUPLICATAS] Encontradas {len(duplicatas)} duplicatas, total: {total:.2f}")
+        print(f"[DUPLICATAS-EMP] Conta buscada: {conta}")
+        print(f"[DUPLICATAS-EMP] Todas contas encontradas: {sorted(contas_encontradas)[:15]}")
+        print(f"[DUPLICATAS-EMP] Encontradas {len(duplicatas)} duplicatas, total: R$ {total:.2f}")
 
         return {
             "duplicatas": duplicatas,
-            "total": -total,
+            "total": -total,  # Negativo pois é despesa
             "conta": conta,
             "cdEmpresa": cdEmpresa
         }
