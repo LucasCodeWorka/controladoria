@@ -52,6 +52,7 @@ interface ContaDREValores {
 
 interface Duplicata {
   id: number;
+  nrDuplicata?: string;
   cdDespesaItem: number;
   descricao: string;
   dtEmissao: string;
@@ -1342,6 +1343,7 @@ export default function DREPage() {
                 <table className="w-full border-collapse text-sm">
                   <thead>
                     <tr className="bg-gray-100">
+                      <th className="px-3 py-2 text-left border-b font-semibold">Nr Duplicata</th>
                       <th className="px-3 py-2 text-left border-b font-semibold">Data Emissao</th>
                       <th className="px-3 py-2 text-center border-b font-semibold">CCusto</th>
                       <th className="px-3 py-2 text-left border-b font-semibold">Nome CCusto</th>
@@ -1352,6 +1354,7 @@ export default function DREPage() {
                   <tbody>
                     {modalDuplicatas.duplicatas.map((dup, idx) => (
                       <tr key={idx} className="hover:bg-gray-50 border-b border-gray-100">
+                        <td className="px-3 py-2 font-mono text-xs">{dup.nrDuplicata || dup.id || '-'}</td>
                         <td className="px-3 py-2">{formatarData(dup.dtEmissao)}</td>
                         <td className="px-3 py-2 text-center font-mono text-xs text-gray-600">{dup.cdCCusto || '-'}</td>
                         <td className="px-3 py-2">

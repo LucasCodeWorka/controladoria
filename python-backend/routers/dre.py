@@ -3131,6 +3131,9 @@ def get_dre_unificada_duplicatas(
         items_or_desc = " OR ".join(where_conditions) if len(where_conditions) > 1 else where_conditions[0]
 
         params.extend(ccustos)
+        params.extend(CCUSTOS_EXCLUIDOS_FABRICA)
+
+        ccusto_excluidos_placeholders = ",".join(["%s"] * len(CCUSTOS_EXCLUIDOS_FABRICA))
 
         query = f"""
             SELECT
@@ -3150,6 +3153,7 @@ def get_dre_unificada_duplicatas(
               AND d.dt_emissao <= %s
               AND ({items_or_desc})
               AND d.cd_ccusto IN ({ccusto_placeholders})
+              AND d.cd_ccusto NOT IN ({ccusto_excluidos_placeholders})
               AND d.tp_situacao = 'N'
             ORDER BY d.dt_emissao DESC
         """
@@ -3178,6 +3182,7 @@ def get_dre_unificada_duplicatas(
             total += valor
             duplicatas.append({
                 "id": row['nr_duplicata'],
+                "nrDuplicata": row['nr_duplicata'],
                 "cdDespesaItem": row['cd_despesaitem'],
                 "descricao": descricao,
                 "dtEmissao": row['dt_emissao'].strftime('%Y-%m-%d') if row['dt_emissao'] else None,
@@ -3740,6 +3745,7 @@ def get_duplicatas_por_empresa(
                 # Formato compativel com interface Duplicata do frontend
                 duplicatas.append({
                     "id": d['nr_duplicata'],
+                    "nrDuplicata": d['nr_duplicata'],
                     "cdDespesaItem": cd_despesaitem,
                     "descricao": descricao,
                     "dtEmissao": d['dt_emissao'].isoformat() if d['dt_emissao'] else None,
