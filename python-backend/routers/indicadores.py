@@ -74,8 +74,8 @@ def _calcular_giro_lojas(ref_month: date) -> dict:
             COALESCE(estoque.estoque_total, 0) AS estoque_total,
             COALESCE(media.media_mensal, 0) AS media_mensal,
             CASE
-                WHEN COALESCE(estoque.estoque_total, 0) > 0
-                THEN ROUND((media.media_mensal / estoque.estoque_total)::numeric, 2)
+                WHEN COALESCE(media.media_mensal, 0) > 0
+                THEN ROUND((estoque.estoque_total / media.media_mensal)::numeric, 1)
                 ELSE 0
             END AS giro
         FROM estoque, media
