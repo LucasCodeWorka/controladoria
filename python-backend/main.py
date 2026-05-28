@@ -10,12 +10,31 @@ app = FastAPI(
     version="1.0.0"
 )
 
+import os
+
+# Configurar CORS - aceitar localhost e domínios do Render
+cors_origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:3001",
+    "http://127.0.0.1:3001",
+]
+
+# Adicionar domínio do frontend no Render (variável de ambiente)
+frontend_url = os.getenv("FRONTEND_URL")
+if frontend_url:
+    cors_origins.append(frontend_url)
+
+# Adicionar qualquer domínio .onrender.com
+cors_origins.append("https://*.onrender.com")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:3001", "http://127.0.0.1:3001"],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_origin_regex=r"https://.*\.onrender\.com",
 )
 
 app.include_router(health.router)
