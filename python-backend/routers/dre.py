@@ -3159,9 +3159,11 @@ def get_dre_unificada_duplicatas(
         """
 
         rows = execute_query(query, params)
+        print(f"[DRE-UNIF-DUP] Query retornou {len(rows or [])} registros")
 
         duplicatas = []
         total = 0
+        ignorados = 0
         for row in (rows or []):
             valor = float(row['valor'] or 0)
             descricao = row['descricao'] or ''
@@ -3177,8 +3179,11 @@ def get_dre_unificada_duplicatas(
             # Verificar se este registro realmente pertence a conta solicitada
             if conta_classificada != conta and not conta_classificada.startswith(conta + '.'):
                 # Este registro foi reclassificado para outra conta, ignorar
+                print(f"[DRE-UNIF-DUP] IGNORANDO: nr={row['nr_duplicata']}, cd_item={row['cd_despesaitem']}, desc={descricao}, classificado={conta_classificada}, esperado={conta}")
+                ignorados += 1
                 continue
 
+            print(f"[DRE-UNIF-DUP] INCLUINDO: nr={row['nr_duplicata']}, cd_item={row['cd_despesaitem']}, desc={descricao}, valor={valor}")
             total += valor
             duplicatas.append({
                 "id": row['nr_duplicata'],
@@ -3193,12 +3198,19 @@ def get_dre_unificada_duplicatas(
                 "cdFornecedor": row['cd_fornecedor']
             })
 
+        print(f"[DRE-UNIF-DUP] RESULTADO: {len(duplicatas)} duplicatas, total={total}, ignorados={ignorados}")
+
         return {
             "duplicatas": duplicatas,
             "total": total,
             "conta": conta,
             "periodo": periodo,
-            "filtro": filtro
+            "filtro": filtro,
+            "debug": {
+                "query_rows": len(rows or []),
+                "incluidos": len(duplicatas),
+                "ignorados": ignorados
+            }
         }
 
     except HTTPException:
