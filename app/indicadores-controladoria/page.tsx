@@ -250,6 +250,7 @@ export default function IndicadoresControladoriaPage() {
   const [mesSelecionado, setMesSelecionado] = useState<string | null>(null);
   const [carregando, setCarregando] = useState(true);
   const [sincAuto, setSincAuto] = useState(false);
+  const [ultimaAtualizacao, setUltimaAtualizacao] = useState<string | null>(null);
 
   const mesAtualISO = (() => {
     const h = new Date();
@@ -264,6 +265,7 @@ export default function IndicadoresControladoriaPage() {
       if (Array.isArray(d.meses) && d.meses.length > 0) {
         setHistorico(d.meses);
         setMesSelecionado((prev) => prev ?? d.meses[d.meses.length - 1].mes);
+        setUltimaAtualizacao(new Date().toLocaleString('pt-BR'));
         return d.meses;
       }
     } catch (e) {
@@ -333,7 +335,12 @@ export default function IndicadoresControladoriaPage() {
   return (
     <div className="max-w-[98%] mx-auto py-6 px-4 space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
-        <h1 className="text-3xl font-bold text-brand-dark">INDICADORES DE CONTROLADORIA</h1>
+        <div>
+          <h1 className="text-3xl font-bold text-brand-dark">INDICADORES DE CONTROLADORIA</h1>
+          {ultimaAtualizacao && (
+            <p className="text-xs text-gray-400 mt-1">Atualizado em: {ultimaAtualizacao}</p>
+          )}
+        </div>
 
         <div className="flex flex-wrap gap-2 items-center">
           {meses2026.map((iso) => {

@@ -321,6 +321,7 @@ export default function DREPage() {
     total: 0,
     loading: false,
   });
+  const [ultimaAtualizacao, setUltimaAtualizacao] = useState<string | null>(null);
 
   // Carregar opcoes de filtro
   useEffect(() => {
@@ -625,6 +626,7 @@ export default function DREPage() {
         somarFilhos(dadosProcessados, periodosAtuais);
         const dadosOrdenados = calcularLinhasOrdenadas(dadosProcessados, periodosAtuais);
         setDadosDRE(dadosOrdenados);
+        setUltimaAtualizacao(new Date().toLocaleString('pt-BR'));
 
       } else if (tipoVisao === 'sintetica') {
         const response = await fetch(`/api/dre/unificada/sintetico?dataInicio=${dataInicio}&dataFim=${dataFim}`);
@@ -637,6 +639,7 @@ export default function DREPage() {
 
         setDadosSinteticos(data.resumo || []);
         setTotaisSinteticos(data.totais || {});
+        setUltimaAtualizacao(new Date().toLocaleString('pt-BR'));
       } else if (tipoVisao === 'por-empresa') {
         const response = await fetch(`/api/dre/por-empresa?dataInicio=${dataInicio}&dataFim=${dataFim}`);
         const data = await response.json();
@@ -652,6 +655,7 @@ export default function DREPage() {
         const dadosEstrutura = JSON.parse(JSON.stringify(ESTRUTURA_DRE)) as ContaDREValores[];
         const dadosOrdenados = calcularLinhasOrdenadas(dadosEstrutura, []);
         setDadosDRE(dadosOrdenados);
+        setUltimaAtualizacao(new Date().toLocaleString('pt-BR'));
       }
 
     } catch (error) {
@@ -698,6 +702,9 @@ export default function DREPage() {
                 DRE - {filtroLabel}
               </h1>
               <p className="text-gray-600">Demonstracao do Resultado do Exercicio</p>
+              {ultimaAtualizacao && (
+                <p className="text-xs text-gray-400 mt-1">Atualizado em: {ultimaAtualizacao}</p>
+              )}
             </div>
           </div>
 
