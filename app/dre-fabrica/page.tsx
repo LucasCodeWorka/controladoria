@@ -341,16 +341,25 @@ export default function DREPage() {
   }, []);
 
   useEffect(() => {
-    const inicio = new Date(dataInicio);
-    const fim = new Date(dataFim);
+    // Extrair ano/mes diretamente da string para evitar problemas de timezone
+    const [anoInicio, mesInicio] = dataInicio.split('-').map(Number);
+    const [anoFim, mesFim] = dataFim.split('-').map(Number);
     const novosPeriodos: PeriodoDRE[] = [];
-    const atual = new Date(inicio.getFullYear(), inicio.getMonth(), 1);
 
-    while (atual <= fim) {
-      const key = `${atual.getFullYear()}-${String(atual.getMonth() + 1).padStart(2, '0')}`;
-      const label = atual.toLocaleDateString('pt-BR', { month: 'short', year: '2-digit' }).toUpperCase();
+    let anoAtual = anoInicio;
+    let mesAtual = mesInicio;
+
+    while (anoAtual < anoFim || (anoAtual === anoFim && mesAtual <= mesFim)) {
+      const key = `${anoAtual}-${String(mesAtual).padStart(2, '0')}`;
+      const dataTemp = new Date(anoAtual, mesAtual - 1, 1);
+      const label = dataTemp.toLocaleDateString('pt-BR', { month: 'short', year: '2-digit' }).toUpperCase();
       novosPeriodos.push({ key, label });
-      atual.setMonth(atual.getMonth() + 1);
+
+      mesAtual++;
+      if (mesAtual > 12) {
+        mesAtual = 1;
+        anoAtual++;
+      }
     }
 
     setPeriodos(novosPeriodos);
@@ -446,7 +455,7 @@ export default function DREPage() {
       conta,
       nomeConta: `${nomeConta} - ${nomeEmpresa}`,
       periodo: 'total',
-      labelPeriodo: `${new Date(dataInicio).toLocaleDateString('pt-BR')} a ${new Date(dataFim).toLocaleDateString('pt-BR')}`,
+      labelPeriodo: `${formatarData(dataInicio)} a ${formatarData(dataFim)}`,
       duplicatas: [],
       total: 0,
       loading: true,
@@ -475,9 +484,15 @@ export default function DREPage() {
     setModalDuplicatas((prev) => ({ ...prev, aberto: false }));
   }
 
+  // Funcao para criar Date local a partir de string YYYY-MM-DD (evita problema de timezone)
+  function parseDataLocal(dataStr: string): Date {
+    const [ano, mes, dia] = dataStr.split('T')[0].split('-').map(Number);
+    return new Date(ano, mes - 1, dia);
+  }
+
+  // Funcao para formatar data sem conversao de timezone
   function formatarData(dataStr: string | null | undefined): string {
     if (!dataStr) return '-';
-    // Usar a string diretamente (YYYY-MM-DD) para evitar problemas de timezone
     const [ano, mes, dia] = dataStr.split('T')[0].split('-');
     return `${dia}/${mes}/${ano}`;
   }
@@ -903,7 +918,7 @@ export default function DREPage() {
                   Demonstrativo de Resultado - {filtroLabel}
                 </h2>
                 <p className="text-sm text-gray-600 mt-1">
-                  Periodo: {new Date(dataInicio).toLocaleDateString('pt-BR')} a {new Date(dataFim).toLocaleDateString('pt-BR')}
+                  Periodo: {formatarData(dataInicio)} a {formatarData(dataFim)}
                 </p>
               </div>
               <div className={`px-4 py-2 rounded-lg text-sm font-semibold ${
@@ -989,7 +1004,7 @@ export default function DREPage() {
               Visao Sintetica - Comparativo por Centro de Custo
             </h2>
             <p className="text-sm text-gray-600">
-              Periodo: {new Date(dataInicio).toLocaleDateString('pt-BR')} a {new Date(dataFim).toLocaleDateString('pt-BR')}
+              Periodo: {formatarData(dataInicio)} a {formatarData(dataFim)}
             </p>
           </div>
 
@@ -1087,7 +1102,7 @@ export default function DREPage() {
               DRE Por Empresa - Comparativo
             </h2>
             <p className="text-sm text-gray-600">
-              Periodo: {new Date(dataInicio).toLocaleDateString('pt-BR')} a {new Date(dataFim).toLocaleDateString('pt-BR')}
+              Periodo: {formatarData(dataInicio)} a {formatarData(dataFim)}
               {' | '}{dadosPorEmpresa.empresas.length} empresas
             </p>
           </div>
