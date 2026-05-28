@@ -1035,3 +1035,36 @@ def get_historico():
         por_mes[mes][row["indicador"]] = row["dados"]
 
     return {"meses": list(por_mes.values())}
+
+
+@router.post("/api/indicadores/cache/forcar/{indicador}")
+def forcar_indicador(indicador: str):
+    """Forca atualizacao de um indicador especifico para o mes atual"""
+    _criar_tabela_historico()
+
+    # Encontrar a funcao do indicador
+    fn = None
+    for nome, func in _INDICADORES_FNS:
+        if nome == indicador:
+            fn = func
+            break
+
+    if fn is None:
+        return {"erro": f"Indicador '{indicador}' nao encontrado", "disponiveis": [n for n, _ in _INDICADORES_FNS]}
+
+    ref_month = date.today().replace(day=1)
+    mes_str = ref_month.isoformat()
+
+    try:
+        dados = fn(ref_month)
+        execute_insert("""
+            INSERT INTO indicadores_historico (mes, indicador, dados, atualizado_em)
+            VALUES (%s, %s, %s::jsonb, NOW())
+            ON CONFLICT (mes, indicador) DO UPDATE
+            SET dados = EXCLUDED.dados, atualizado_em = NOW()
+        """, (mes_str, indicador, json.dumps(dados)))
+
+        return {"status": "ok", "indicador": indicador, "mes": mes_str, "dados": dados}
+    except Exception as e:
+        import traceback
+        return {"status": "erro", "erro": str(e), "traceback": traceback.format_exc()}
