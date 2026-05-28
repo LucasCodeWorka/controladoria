@@ -27,14 +27,14 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
 
   const menuItems = [
     {
-      name: 'DRE',
-      href: '/dre-fabrica',
-      icon: Factory,
-    },
-    {
       name: 'Indicadores',
       href: '/indicadores-controladoria',
       icon: BarChart3,
+    },
+    {
+      name: 'DRE',
+      href: '/dre-fabrica',
+      icon: Factory,
     },
   ];
 

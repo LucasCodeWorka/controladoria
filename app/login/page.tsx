@@ -16,7 +16,7 @@ export default function LoginPage() {
     setError('');
 
     if (login(username, password)) {
-      router.push('/');
+      router.push('/indicadores-controladoria');
     } else {
       setError('Usuário ou senha inválidos');
     }
