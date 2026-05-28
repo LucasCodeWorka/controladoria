@@ -846,7 +846,9 @@ def _calcular_sobra_mp(ref_month: date) -> dict:
             FROM vr_pcp_fcconsumo f
             LEFT JOIN prd_produtoclas cc ON cc.cd_produto = f.cd_produtopa
             WHERE cc.cd_tipoclas = 802
-            GROUP BY f.cd_produtomp HAVING COUNT(DISTINCT TRIM(cc.cd_classificacao)) = 1 AND MAX(TRIM(cc.cd_classificacao)) = '2'
+            GROUP BY f.cd_produtomp
+            HAVING COUNT(DISTINCT TRIM(cc.cd_classificacao)) = 1
+               AND MAX(TRIM(cc.cd_classificacao)) = '2'
         ),
         consumo_mp AS (
             SELECT
@@ -862,9 +864,10 @@ def _calcular_sobra_mp(ref_month: date) -> dict:
             LEFT JOIN vr_pcp_lotepl2 a ON a.cd_produto = f.cd_produtopa
             LEFT JOIN pcp_lotepv p ON a.nr_lote = p.nr_lote
             LEFT JOIN prd_produtoclas cc ON cc.cd_produto = a.cd_produto
-            WHERE p.tp_situacao = 1
-                AND cc.cd_classificacao = '0044      '
-                AND cd_auxiliar IS NOT NULL AND f.cd_produtomp IN (SELECT cd_produtomp FROM produtos_classe_2)),
+            WHERE cc.cd_classificacao = '0044      '
+                AND cd_auxiliar IS NOT NULL
+                AND f.cd_produtomp IN (SELECT cd_produtomp FROM produtos_classe_2)
+        ),
         dados AS (
             SELECT
                 m.cd_produtomp,
