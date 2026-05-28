@@ -703,7 +703,7 @@ export default function DREPage() {
               </h1>
               <p className="text-gray-600">Demonstracao do Resultado do Exercicio</p>
               {ultimaAtualizacao && (
-                <p className="text-xs text-gray-400 mt-1">Atualizado em: {ultimaAtualizacao}</p>
+                <p className="text-xs text-gray-400 mt-1">Carregado em: {ultimaAtualizacao}</p>
               )}
             </div>
           </div>

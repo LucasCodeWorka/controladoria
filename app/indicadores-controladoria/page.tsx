@@ -250,7 +250,6 @@ export default function IndicadoresControladoriaPage() {
   const [mesSelecionado, setMesSelecionado] = useState<string | null>(null);
   const [carregando, setCarregando] = useState(true);
   const [sincAuto, setSincAuto] = useState(false);
-  const [ultimaAtualizacao, setUltimaAtualizacao] = useState<string | null>(null);
 
   const mesAtualISO = (() => {
     const h = new Date();
@@ -265,7 +264,6 @@ export default function IndicadoresControladoriaPage() {
       if (Array.isArray(d.meses) && d.meses.length > 0) {
         setHistorico(d.meses);
         setMesSelecionado((prev) => prev ?? d.meses[d.meses.length - 1].mes);
-        setUltimaAtualizacao(new Date().toLocaleString('pt-BR'));
         return d.meses;
       }
     } catch (e) {
@@ -337,8 +335,10 @@ export default function IndicadoresControladoriaPage() {
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold text-brand-dark">INDICADORES DE CONTROLADORIA</h1>
-          {ultimaAtualizacao && (
-            <p className="text-xs text-gray-400 mt-1">Atualizado em: {ultimaAtualizacao}</p>
+          {dadosMes?.atualizado_em && (
+            <p className="text-xs text-gray-400 mt-1">
+              Dados atualizados em: {new Date(dadosMes.atualizado_em).toLocaleString('pt-BR')}
+            </p>
           )}
         </div>
 
