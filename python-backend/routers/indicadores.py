@@ -60,12 +60,13 @@ def _calcular_giro_lojas(ref_month: date) -> dict:
             ) s
         ),
         media AS (
-            SELECT sum(t.qt_solicitada) / 12.0 AS media_mensal
+            SELECT (
+                COALESCE(SUM(CASE WHEN t.tp_modalidade::text = '4' AND t.tp_operacao::text = 'S' THEN t.qt_solicitada ELSE 0 END), 0)
+                - COALESCE(SUM(CASE WHEN t.tp_modalidade::text = '3' AND t.tp_operacao::text = 'E' THEN t.qt_solicitada ELSE 0 END), 0)
+            ) / 12.0 AS media_mensal
             FROM vr_tra_transitem t
             WHERE t.cd_empresa = ANY (ARRAY[{empresas}])
               AND t.tp_situacao = '4'
-              AND t.tp_modalidade::text = '4'
-              AND t.tp_operacao::text = 'S'
               AND t.dt_transacao >= '{ref}'::date - INTERVAL '11 months'
               AND t.dt_transacao < '{ref}'::date + INTERVAL '1 month'
         )
