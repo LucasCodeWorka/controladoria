@@ -3627,14 +3627,17 @@ def get_duplicatas_por_empresa(
         # Filtrar apenas despesas que correspondem a conta solicitada
         duplicatas = []
         total = 0
+        contas_encontradas = set()
 
         for d in despesas:
             cd_despesaitem = d['cd_despesaitem']
             descricao = d.get('descricao')
             conta_classificada = _classificar_conta_dre(cd_despesaitem, descricao, classificacoes_db, classificacoes_desc_db)
+            contas_encontradas.add(conta_classificada)
 
             # Verificar se a conta classificada corresponde a conta solicitada
-            if conta_classificada == conta or conta_classificada.startswith(conta + '.'):
+            # Aceitar conta exata OU conta que comeca com o codigo solicitado
+            if conta_classificada == conta or conta_classificada.startswith(conta + '.') or conta.startswith(conta_classificada + '.'):
                 valor = float(d['valor'] or 0)
                 total += valor
                 duplicatas.append({
@@ -3648,6 +3651,10 @@ def get_duplicatas_por_empresa(
                     "nomeCCusto": d['nome_ccusto']
                 })
 
+        # Log para debug - mostrar contas encontradas que contem o prefixo buscado
+        contas_relevantes = [c for c in contas_encontradas if c.startswith(conta[:5]) or conta.startswith(c[:5])]
+        print(f"[DUPLICATAS] Conta buscada: {conta}")
+        print(f"[DUPLICATAS] Contas relevantes encontradas: {sorted(contas_relevantes)[:20]}")
         print(f"[DUPLICATAS] Encontradas {len(duplicatas)} duplicatas, total: {total:.2f}")
 
         return {
