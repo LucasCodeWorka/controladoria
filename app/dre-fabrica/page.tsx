@@ -477,8 +477,9 @@ export default function DREPage() {
 
   function formatarData(dataStr: string | null | undefined): string {
     if (!dataStr) return '-';
-    const data = new Date(dataStr);
-    return data.toLocaleDateString('pt-BR');
+    // Usar a string diretamente (YYYY-MM-DD) para evitar problemas de timezone
+    const [ano, mes, dia] = dataStr.split('T')[0].split('-');
+    return `${dia}/${mes}/${ano}`;
   }
 
   function renderizarLinhaConta(conta: ContaDREValores, nivel = 0): React.ReactNode[] {
