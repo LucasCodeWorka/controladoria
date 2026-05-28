@@ -3563,3 +3563,114 @@ def get_dre_unificada_por_loja(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# DUPLICATAS POR EMPRESA
+# ============================================================================
+@router.get("/api/dre/por-empresa/duplicatas")
+def get_duplicatas_por_empresa(
+    conta: str = Query(..., description="Codigo da conta DRE (ex: 08.01.01)"),
+    dataInicio: str = Query("2026-01-01", description="Data inicial"),
+    dataFim: str = Query("2026-12-31", description="Data final"),
+    cdEmpresa: int = Query(..., description="Codigo da empresa")
+):
+    """
+    Retorna duplicatas de uma conta DRE especifica para uma empresa.
+    """
+    try:
+        print(f"[DUPLICATAS] Buscando conta={conta}, empresa={cdEmpresa}, periodo={dataInicio} a {dataFim}")
+
+        # Carregar classificacoes do banco
+        classificacoes_db = {}
+        classificacoes_desc_db = {}
+        try:
+            rows = execute_query("SELECT cd_despesaitem, ds_despesaitem, conta_dre FROM classificacao_despesas_dre", ())
+            for row in rows or []:
+                cd = row.get('cd_despesaitem')
+                ds = row.get('ds_despesaitem')
+                conta_dre = row.get('conta_dre', '')
+                if cd and conta_dre:
+                    codigo = conta_dre.split(' ')[0] if ' ' in conta_dre else conta_dre
+                    classificacoes_db[cd] = codigo
+                    if ds:
+                        classificacoes_desc_db[_normalizar_texto(ds)] = codigo
+        except Exception as e:
+            print(f"[DUPLICATAS] Aviso: nao foi possivel carregar classificacoes: {e}")
+
+        # Buscar centro de custo da empresa
+        # Para lojas, cd_empresa = cd_ccusto (exceto fabrica)
+        ccusto_filter = ""
+        ccusto_params = []
+
+        if cdEmpresa == 1:
+            # Fabrica: usar todos os ccustos da fabrica
+            ccusto_filter = "AND d.cd_ccusto IN (" + ",".join(["%s"] * len(CCUSTOS_FABRICA)) + ")"
+            ccusto_params = list(CCUSTOS_FABRICA)
+        else:
+            # Lojas: cd_empresa = cd_ccusto
+            ccusto_filter = "AND d.cd_ccusto = %s"
+            ccusto_params = [cdEmpresa]
+
+        # Buscar despesas que se encaixam na conta solicitada
+        query = f"""
+            SELECT
+                d.cd_despesaduplicata as id,
+                d.cd_despesaitem,
+                i.ds_despesaitem as descricao,
+                d.dt_emissao,
+                d.dt_vencimento,
+                ABS(d.vl_rateio) as valor,
+                d.cd_ccusto,
+                COALESCE(c.ds_ccusto, '') as nome_ccusto
+            FROM vr_fcp_despduplicatai d
+            JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
+            LEFT JOIN vr_gec_ccusto c ON c.cd_ccusto = d.cd_ccusto
+            WHERE d.dt_emissao >= %s
+              AND d.dt_emissao <= %s
+              AND d.tp_situacao = 'N'
+              {ccusto_filter}
+            ORDER BY d.dt_emissao
+        """
+
+        params = [dataInicio, dataFim] + ccusto_params
+        despesas = execute_query(query, tuple(params))
+
+        # Filtrar apenas despesas que correspondem a conta solicitada
+        duplicatas = []
+        total = 0
+
+        for d in despesas:
+            cd_despesaitem = d['cd_despesaitem']
+            descricao = d.get('descricao')
+            conta_classificada = _classificar_conta_dre(cd_despesaitem, descricao, classificacoes_db, classificacoes_desc_db)
+
+            # Verificar se a conta classificada corresponde a conta solicitada
+            if conta_classificada == conta or conta_classificada.startswith(conta + '.'):
+                valor = float(d['valor'] or 0)
+                total += valor
+                duplicatas.append({
+                    "id": d['id'],
+                    "cdDespesaItem": cd_despesaitem,
+                    "descricao": descricao,
+                    "dtEmissao": d['dt_emissao'].isoformat() if d['dt_emissao'] else None,
+                    "dtVencimento": d['dt_vencimento'].isoformat() if d.get('dt_vencimento') else None,
+                    "valor": -valor,
+                    "cdCCusto": d['cd_ccusto'],
+                    "nomeCCusto": d['nome_ccusto']
+                })
+
+        print(f"[DUPLICATAS] Encontradas {len(duplicatas)} duplicatas, total: {total:.2f}")
+
+        return {
+            "duplicatas": duplicatas,
+            "total": -total,
+            "conta": conta,
+            "cdEmpresa": cdEmpresa
+        }
+
+    except Exception as e:
+        print(f"[ERROR] Erro ao buscar duplicatas por empresa: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))

@@ -438,6 +438,37 @@ export default function DREPage() {
     }
   }
 
+  async function abrirDuplicatasPorEmpresa(conta: string, nomeConta: string, cdEmpresa: number, nomeEmpresa: string) {
+    setModalDuplicatas({
+      aberto: true,
+      conta,
+      nomeConta: `${nomeConta} - ${nomeEmpresa}`,
+      periodo: 'total',
+      labelPeriodo: `${new Date(dataInicio).toLocaleDateString('pt-BR')} a ${new Date(dataFim).toLocaleDateString('pt-BR')}`,
+      duplicatas: [],
+      total: 0,
+      loading: true,
+    });
+
+    try {
+      const response = await fetch(`/api/dre/por-empresa/duplicatas?conta=${conta}&dataInicio=${dataInicio}&dataFim=${dataFim}&cdEmpresa=${cdEmpresa}`);
+      const data = await response.json();
+
+      setModalDuplicatas((prev) => ({
+        ...prev,
+        duplicatas: data.duplicatas || [],
+        total: data.total || 0,
+        loading: false,
+      }));
+    } catch (error) {
+      console.error('Erro ao buscar duplicatas por empresa:', error);
+      setModalDuplicatas((prev) => ({
+        ...prev,
+        loading: false,
+      }));
+    }
+  }
+
   function fecharModal() {
     setModalDuplicatas((prev) => ({ ...prev, aberto: false }));
   }
@@ -1194,6 +1225,7 @@ export default function DREPage() {
                           const valor = isCalculada
                             ? calcularValorEmpresa(conta.codigo, emp.cd_empresa)
                             : getValorEmpresa(conta.codigo, emp.cd_empresa);
+                          const podeClicar = !temFilhos && !isCalculada && valor !== 0 && isDespesa;
                           return (
                             <td
                               key={emp.cd_empresa}
@@ -1201,7 +1233,17 @@ export default function DREPage() {
                                 valor < 0 ? 'text-red-600' : ''
                               } ${fontClass}`}
                             >
-                              {valor !== 0 ? formatarValor(valor) : '-'}
+                              {podeClicar ? (
+                                <button
+                                  onClick={() => abrirDuplicatasPorEmpresa(conta.codigo, conta.nome, emp.cd_empresa, emp.nome)}
+                                  className="hover:underline hover:text-blue-600 cursor-pointer"
+                                  title={`Clique para ver duplicatas - ${emp.nome}`}
+                                >
+                                  {formatarValor(valor)}
+                                </button>
+                              ) : (
+                                valor !== 0 ? formatarValor(valor) : '-'
+                              )}
                             </td>
                           );
                         })}
