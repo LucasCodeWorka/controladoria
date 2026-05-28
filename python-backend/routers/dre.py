@@ -204,12 +204,26 @@ REGRAS_DESCRICAO_DRE = [
 ]
 
 
+# Descricoes que devem ser EXCLUIDAS da DRE (nao classificar)
+EXCLUSOES_DESCRICAO_DRE = [
+    'MERC P/ REVENDA',
+    'MERC P/REVENDA',
+    'MERCADORIA P/ REVENDA',
+    'MERCADORIA REVENDA',
+]
+
+
 def _classificar_conta_dre(cd_despesaitem, descricao_despesa, classificacoes_db, classificacoes_desc_db):
+    descricao_normalizada = _normalizar_texto(descricao_despesa)
+
+    # Verificar se a descricao deve ser excluida
+    for exclusao in EXCLUSOES_DESCRICAO_DRE:
+        if exclusao in descricao_normalizada:
+            return 'EXCLUIDO'
+
     conta = classificacoes_db.get(cd_despesaitem)
     if conta:
         return conta
-
-    descricao_normalizada = _normalizar_texto(descricao_despesa)
 
     conta = classificacoes_desc_db.get(descricao_normalizada)
     if conta:
@@ -445,7 +459,7 @@ def _somar_hierarquia(valores_por_conta, periodos):
     pais = {}
 
     for codigo, valores in valores_por_conta.items():
-        if codigo == 'NAO_CLASSIFICADO':
+        if codigo in ('NAO_CLASSIFICADO', 'EXCLUIDO'):
             continue
 
         partes = codigo.split('.')
@@ -565,6 +579,10 @@ def get_dre(
 
             if conta == 'NAO_CLASSIFICADO':
                 nao_classificados += 1
+
+            # Pular despesas excluidas (ex: MERC P/ REVENDA)
+            if conta == 'EXCLUIDO':
+                continue
 
             # Determinar período (YYYY-MM)
             if dt_emissao:
@@ -870,6 +888,10 @@ def get_dre_fabrica(
             if conta == 'NAO_CLASSIFICADO':
                 nao_classificados += 1
 
+            # Pular despesas excluidas (ex: MERC P/ REVENDA)
+            if conta == 'EXCLUIDO':
+                continue
+
             if dt_emissao:
                 periodo = dt_emissao.strftime('%Y-%m')
             else:
@@ -1113,6 +1135,10 @@ def get_dre_lojas(
 
             if conta == 'NAO_CLASSIFICADO':
                 nao_classificados += 1
+
+            # Pular despesas excluidas (ex: MERC P/ REVENDA)
+            if conta == 'EXCLUIDO':
+                continue
 
             if dt_emissao:
                 periodo = dt_emissao.strftime('%Y-%m')
@@ -1756,7 +1782,7 @@ def get_dre_fabrica_por_ccusto(
             valor = -abs(float(d['valor'] or 0))
             cd_ccusto = d['cd_ccusto']
 
-            if conta == 'NAO_CLASSIFICADO':
+            if conta in ('NAO_CLASSIFICADO', 'EXCLUIDO'):
                 continue
 
             ccustos_encontrados.add(cd_ccusto)
@@ -1817,7 +1843,7 @@ def get_dre_fabrica_por_ccusto(
         # Somar hierarquia para cada centro de custo
         ccustos_list = sorted(ccustos_encontrados)
         for codigo, valores in list(valores_por_conta.items()):
-            if codigo == 'NAO_CLASSIFICADO':
+            if codigo in ('NAO_CLASSIFICADO', 'EXCLUIDO'):
                 continue
             partes = codigo.split('.')
             if len(partes) <= 1:
@@ -2278,7 +2304,7 @@ def get_dre_por_empresa(
             valor = -abs(float(d['valor'] or 0))
             cd_empresa = d['cd_empresa']
 
-            if conta == 'NAO_CLASSIFICADO':
+            if conta in ('NAO_CLASSIFICADO', 'EXCLUIDO'):
                 continue
 
             empresas_encontradas.add(cd_empresa)
@@ -2373,7 +2399,7 @@ def get_dre_por_empresa(
         # Somar hierarquia para cada empresa
         empresas_list = sorted(empresas_encontradas)
         for codigo, valores in list(valores_por_conta.items()):
-            if codigo == 'NAO_CLASSIFICADO':
+            if codigo in ('NAO_CLASSIFICADO', 'EXCLUIDO'):
                 continue
             partes = codigo.split('.')
             if len(partes) <= 1:
@@ -2778,6 +2804,10 @@ def get_dre_unificada(
 
             if conta == 'NAO_CLASSIFICADO':
                 nao_classificados += 1
+
+            # Pular despesas excluidas (ex: MERC P/ REVENDA)
+            if conta == 'EXCLUIDO':
+                continue
 
             if dt_emissao:
                 periodo = dt_emissao.strftime('%Y-%m')

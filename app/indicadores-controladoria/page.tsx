@@ -58,6 +58,31 @@ interface VendasVolumeVarejo {
   varejo_pct: number | null;
 }
 
+interface CmvPct {
+  dt_referencia: string | null;
+  cmv_valor: number;
+  receita_liquida: number;
+  cmv_pct: number | null;
+}
+
+interface LucroLiqPct {
+  dt_referencia: string | null;
+  periodo_meses: number;
+  data_inicio: string;
+  data_fim: string;
+  total_empresas: number;
+  empresas_positivas: number;
+  empresas_negativas: number;
+  pct_positivas: number | null;
+}
+
+interface SobraMp {
+  dt_referencia: string | null;
+  sobra_mp_pct: number | null;
+  total_sobra: number;
+  total_solicitada: number;
+}
+
 interface MesHistorico {
   mes: string;
   atualizado_em: string;
@@ -69,6 +94,9 @@ interface MesHistorico {
   quebra_pedidos?: QuebradePedidos;
   vendas_volume_varejo?: VendasVolumeVarejo;
   ecommerce_ads?: EcommerceAds;
+  cmv_pct?: CmvPct;
+  lucro_liq_pct?: LucroLiqPct;
+  sobra_mp?: SobraMp;
 }
 
 const NOMES_MES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
@@ -243,6 +271,9 @@ const CORES = {
   ecommerce: '#C4895A',
   quebra:    '#8B6E5A',
   volume:    '#A07840',
+  cmv:       '#9B5A5A',
+  lucro:     '#4A8B7A',
+  sobraMp:   '#6A8B9B',
 };
 
 export default function IndicadoresControladoriaPage() {
@@ -308,6 +339,9 @@ export default function IndicadoresControladoriaPage() {
   const qp  = dadosMes?.quebra_pedidos ?? null;
   const vv  = dadosMes?.vendas_volume_varejo ?? null;
   const ea  = dadosMes?.ecommerce_ads ?? null;
+  const cp  = dadosMes?.cmv_pct ?? null;
+  const ll  = dadosMes?.lucro_liq_pct ?? null;
+  const sm  = dadosMes?.sobra_mp ?? null;
 
   const LIMITE_VOLUME = 13.5;
 
@@ -321,6 +355,9 @@ export default function IndicadoresControladoriaPage() {
   const serieVolume  = historico.map((h) => h.vendas_volume_varejo?.volume_pct ?? 0);
   const serieRoas    = historico.map((h) => h.ecommerce_ads?.roas ?? 0);
   const serieConv    = historico.map((h) => h.ecommerce_ads?.taxa_conv_pct ?? 0);
+  const serieCmv     = historico.map((h) => h.cmv_pct?.cmv_pct ?? 0);
+  const serieLucro   = historico.map((h) => h.lucro_liq_pct?.pct_positivas ?? 0);
+  const serieSobraMp = historico.map((h) => h.sobra_mp?.sobra_mp_pct ?? 0);
 
   // Meses de 2026 até hoje
   const mesesComCache = new Set(historico.map((h) => h.mes));
@@ -510,6 +547,51 @@ export default function IndicadoresControladoriaPage() {
           linhas={ea ? [
             { label: 'Sessões engajadas', valor: ea.sessoes_engajadas.toLocaleString('pt-BR') },
             { label: 'Transações',        valor: ea.transacoes.toLocaleString('pt-BR') },
+          ] : []}
+        />
+      </div>
+
+      {/* Fileira 4 — DRE e Producao */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <CardIndicador
+          titulo="CMV % (Custo Mercadoria)"
+          valor={cp?.cmv_pct != null ? fmt(cp.cmv_pct, 1) : '—'}
+          unidade="% da receita liq."
+          carregando={carregando}
+          cor={CORES.cmv}
+          indiceSelecionado={indiceSelecionado}
+          sparkline={serieCmv.length >= 2 ? { valores: serieCmv, meses: mesesLabel } : undefined}
+          linhas={cp ? [
+            { label: 'CMV (R$)', valor: fmtMoeda(cp.cmv_valor) },
+            { label: 'Receita Liq. (R$)', valor: fmtMoeda(cp.receita_liquida) },
+          ] : []}
+        />
+
+        <CardIndicador
+          titulo="Lucro Liquido — Empresas"
+          valor={ll?.pct_positivas != null ? fmt(ll.pct_positivas, 1) : '—'}
+          unidade="% com lucro > 0"
+          carregando={carregando}
+          cor={CORES.lucro}
+          indiceSelecionado={indiceSelecionado}
+          sparkline={serieLucro.length >= 2 ? { valores: serieLucro, meses: mesesLabel } : undefined}
+          linhas={ll ? [
+            { label: 'Empresas c/ lucro', valor: `${ll.empresas_positivas}/${ll.total_empresas}` },
+            { label: 'Periodo', valor: `Ult. ${ll.periodo_meses} meses` },
+          ] : []}
+        />
+
+        <CardIndicador
+          titulo="Sobra de MP"
+          valor={sm?.sobra_mp_pct != null ? fmt(sm.sobra_mp_pct, 2) : '—'}
+          unidade="% sobra/solicitada"
+          carregando={carregando}
+          cor={CORES.sobraMp}
+          indiceSelecionado={indiceSelecionado}
+          sparkline={serieSobraMp.length >= 2 ? { valores: serieSobraMp, meses: mesesLabel } : undefined}
+          linhas={sm ? [
+            { label: 'Sobra (unid.)', valor: fmt(sm.total_sobra, 0) },
+            { label: 'Solicitada (unid.)', valor: fmt(sm.total_solicitada, 0) },
           ] : []}
         />
       </div>

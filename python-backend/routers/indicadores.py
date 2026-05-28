@@ -583,6 +583,349 @@ def get_ecommerce_ads():
     return _calcular_ecommerce_ads(date.today().replace(day=1))
 
 
+# ─── CMV % (Custo Mercadoria Vendida / Receita Liquida) ───────────────────────
+
+def _calcular_cmv_pct(ref_month: date) -> dict:
+    """
+    Calcula o percentual de CMV sobre Receita Liquida para o mes.
+    CMV % = CMV / Receita Liquida * 100
+    Considera todas as empresas (consolidado).
+    """
+    import calendar
+    ref = ref_month.isoformat()
+    last_day = calendar.monthrange(ref_month.year, ref_month.month)[1]
+    dt_ref = date(ref_month.year, ref_month.month, last_day).isoformat()
+
+    # Buscar CMV da fabrica (mv_cmv_fab)
+    cmv_fab = execute_query("""
+        SELECT ABS(COALESCE(SUM(valor), 0)) AS cmv
+        FROM mv_cmv_fab
+        WHERE data >= %s AND data < %s::date + INTERVAL '1 month'
+    """, (ref, ref))
+
+    # Buscar CMV das lojas (mv_cmv_loja)
+    cmv_loja = execute_query("""
+        SELECT ABS(COALESCE(SUM(valor), 0)) AS cmv
+        FROM mv_cmv_loja
+        WHERE data >= %s AND data < %s::date + INTERVAL '1 month'
+    """, (ref, ref))
+
+    cmv_total = float(cmv_fab[0]['cmv'] if cmv_fab else 0) + float(cmv_loja[0]['cmv'] if cmv_loja else 0)
+
+    # Buscar Receita Bruta (vendas)
+    vendas = execute_query("""
+        SELECT COALESCE(SUM(t.vl_transacao), 0) AS valor
+        FROM vr_tra_transacao t
+        WHERE t.dt_transacao >= %s
+          AND t.dt_transacao < %s::date + INTERVAL '1 month'
+          AND t.tp_situacao = 4
+          AND t.tp_modalidade IN ('4')
+          AND t.tp_operacao = 'S'
+          AND t.cd_empresa NOT IN (50, 100, 110, 9, 11, 12, 13, 16, 18)
+    """, (ref, ref))
+
+    # Buscar Devolucoes
+    devolucoes = execute_query("""
+        SELECT COALESCE(SUM(t.vl_transacao), 0) AS valor
+        FROM vr_tra_transacao t
+        WHERE t.dt_transacao >= %s
+          AND t.dt_transacao < %s::date + INTERVAL '1 month'
+          AND t.tp_situacao = 4
+          AND t.tp_modalidade IN ('3')
+          AND t.tp_operacao = 'E'
+          AND t.cd_empresa NOT IN (50, 100, 110, 9, 11, 12, 13, 16, 18)
+    """, (ref, ref))
+
+    receita_bruta = float(vendas[0]['valor'] if vendas else 0)
+    devolucoes_valor = float(devolucoes[0]['valor'] if devolucoes else 0)
+    receita_liquida = receita_bruta - devolucoes_valor
+
+    cmv_pct = round((cmv_total / receita_liquida * 100), 2) if receita_liquida > 0 else None
+
+    return {
+        "dt_referencia": dt_ref,
+        "cmv_valor": cmv_total,
+        "receita_liquida": receita_liquida,
+        "cmv_pct": cmv_pct,
+    }
+
+
+@router.get("/api/indicadores/cmv-pct")
+def get_cmv_pct():
+    return _calcular_cmv_pct(date.today().replace(day=1))
+
+
+# ─── Lucro Liquido % (12 meses) ───────────────────────────────────────────────
+
+# Centros de custo para análise (Fábrica + Lojas)
+CCUSTOS_FABRICA = [1, 500, 501, 502, 503, 504, 505, 506, 507, 508, 509, 510, 511, 512, 513, 514]
+CCUSTOS_LOJAS = {
+    2: 'LIEBE MARAPONGA',
+    3: 'LIEBE IGUATEMI',
+    4: 'LIEBE TABOSA',
+    5: 'LIEBE NORTH',
+    6: 'LIEBE DOM LUIS',
+    7: 'LIEBE PARANGABA',
+    8: 'LIEBE RIO MAR',
+    10: 'LIEBE SALVADOR SHOPPING',
+    14: 'LIEBE MORUMBI',
+    15: 'LIEBE RIO MAR RECIFE',
+    17: 'LIEBE NORTH JOQUEI',
+    19: 'LIEBE PORTO ALEGRE',
+    20: 'LIEBE RIOMAR KENNEDY',
+    21: 'INTIMATES',
+    22: 'ECOMMERCE',
+    120: 'ECOMMERCE ANGELICA',
+}
+
+def _calcular_lucro_liq_pct(ref_month: date) -> dict:
+    """
+    Calcula o percentual de empresas com Lucro Liquido > 0 nos ultimos 12 meses.
+    Considera todas as empresas (Fabrica + Lojas).
+    """
+    import calendar
+    from dateutil.relativedelta import relativedelta
+
+    # Calcular periodo dos ultimos 12 meses
+    mes_fim = ref_month
+    mes_inicio = ref_month - relativedelta(months=11)
+
+    data_inicio = mes_inicio.isoformat()
+    data_fim = (mes_fim + relativedelta(months=1) - relativedelta(days=1)).isoformat()
+    last_day = calendar.monthrange(ref_month.year, ref_month.month)[1]
+    dt_ref = date(ref_month.year, ref_month.month, last_day).isoformat()
+
+    # Lista de todos os centros de custo para analise
+    todos_ccustos = CCUSTOS_FABRICA + list(CCUSTOS_LOJAS.keys())
+    ccusto_placeholders = ",".join(["%s"] * len(todos_ccustos))
+
+    # Buscar despesas por centro de custo
+    query_despesas = f"""
+        SELECT
+            d.cd_ccusto,
+            SUM(ABS(d.vl_rateio)) as total_despesas
+        FROM vr_fcp_despduplicatai d
+        WHERE d.dt_emissao >= %s
+          AND d.dt_emissao <= %s
+          AND d.tp_situacao = 'N'
+          AND d.cd_empresa NOT IN (50, 100, 110, 9, 11, 12, 13, 16, 18)
+          AND d.cd_ccusto IN ({ccusto_placeholders})
+          AND d.cd_ccusto NOT IN (50, 100, 110)
+        GROUP BY d.cd_ccusto
+    """
+
+    despesas = execute_query(query_despesas, (data_inicio, data_fim, *todos_ccustos))
+
+    # Montar mapa de despesas por ccusto
+    despesas_por_ccusto = {}
+    for d in despesas:
+        despesas_por_ccusto[d['cd_ccusto']] = float(d['total_despesas'])
+
+    # Buscar CMV por empresa (lojas)
+    cmv_lojas = execute_query("""
+        SELECT cd_empresa, ABS(COALESCE(SUM(valor), 0)) AS cmv
+        FROM mv_cmv_loja
+        WHERE data >= %s AND data <= %s
+        GROUP BY cd_empresa
+    """, (data_inicio, data_fim))
+
+    cmv_por_empresa = {}
+    for c in cmv_lojas:
+        cmv_por_empresa[c['cd_empresa']] = float(c['cmv'])
+
+    # CMV fabrica (total)
+    cmv_fab = execute_query("""
+        SELECT ABS(COALESCE(SUM(valor), 0)) AS cmv
+        FROM mv_cmv_fab
+        WHERE data >= %s AND data <= %s
+    """, (data_inicio, data_fim))
+
+    cmv_fabrica_total = float(cmv_fab[0]['cmv'] if cmv_fab else 0)
+
+    # Buscar receita por empresa
+    receita_por_empresa = execute_query("""
+        SELECT
+            cd_empresa,
+            COALESCE(SUM(CASE WHEN tp_modalidade = '4' AND tp_operacao = 'S' THEN vl_transacao ELSE 0 END), 0) AS vendas,
+            COALESCE(SUM(CASE WHEN tp_modalidade = '3' AND tp_operacao = 'E' THEN vl_transacao ELSE 0 END), 0) AS devolucoes
+        FROM vr_tra_transacao
+        WHERE dt_transacao >= %s
+          AND dt_transacao <= %s
+          AND tp_situacao = 4
+          AND cd_empresa NOT IN (50, 100, 110, 9, 11, 12, 13, 16, 18)
+        GROUP BY cd_empresa
+    """, (data_inicio, data_fim))
+
+    receita_map = {}
+    for r in receita_por_empresa:
+        receita_map[r['cd_empresa']] = float(r['vendas']) - float(r['devolucoes'])
+
+    # Calcular lucro por centro de custo
+    # Para a fabrica: usar ccustos da fabrica como um grupo
+    # Para lojas: cada empresa/ccusto individual
+
+    empresas_positivas = 0
+    total_empresas = 0
+    detalhes = []
+
+    # Fabrica (consolidado como uma entidade)
+    despesas_fabrica = sum(despesas_por_ccusto.get(cc, 0) for cc in CCUSTOS_FABRICA)
+    receita_fabrica = receita_map.get(1, 0)
+    lucro_fabrica = receita_fabrica - cmv_fabrica_total - despesas_fabrica
+
+    total_empresas += 1
+    if lucro_fabrica > 0:
+        empresas_positivas += 1
+    detalhes.append({
+        "nome": "FABRICA",
+        "receita": receita_fabrica,
+        "cmv": cmv_fabrica_total,
+        "despesas": despesas_fabrica,
+        "lucro": lucro_fabrica,
+        "positivo": lucro_fabrica > 0
+    })
+
+    # Lojas (cada uma individual)
+    for cd_empresa, nome in CCUSTOS_LOJAS.items():
+        despesas_loja = despesas_por_ccusto.get(cd_empresa, 0)
+        cmv_loja = cmv_por_empresa.get(cd_empresa, 0)
+        receita_loja = receita_map.get(cd_empresa, 0)
+
+        # Se não tiver receita, pular
+        if receita_loja == 0 and despesas_loja == 0:
+            continue
+
+        lucro_loja = receita_loja - cmv_loja - despesas_loja
+
+        total_empresas += 1
+        if lucro_loja > 0:
+            empresas_positivas += 1
+        detalhes.append({
+            "nome": nome,
+            "receita": receita_loja,
+            "cmv": cmv_loja,
+            "despesas": despesas_loja,
+            "lucro": lucro_loja,
+            "positivo": lucro_loja > 0
+        })
+
+    pct_positivas = round((empresas_positivas / total_empresas * 100), 1) if total_empresas > 0 else None
+
+    return {
+        "dt_referencia": dt_ref,
+        "periodo_meses": 12,
+        "data_inicio": data_inicio,
+        "data_fim": data_fim,
+        "total_empresas": total_empresas,
+        "empresas_positivas": empresas_positivas,
+        "empresas_negativas": total_empresas - empresas_positivas,
+        "pct_positivas": pct_positivas,
+        "detalhes": detalhes,
+    }
+
+
+@router.get("/api/indicadores/lucro-liq-pct")
+def get_lucro_liq_pct():
+    return _calcular_lucro_liq_pct(date.today().replace(day=1))
+
+
+# ─── Sobra de MP (Materia Prima) ──────────────────────────────────────────────
+
+def _calcular_sobra_mp(ref_month: date) -> dict:
+    """
+    Calcula a sobra de MP baseado no indicador_geral.
+    Formula: (sobra / solicitada) * 100
+    """
+    import calendar
+    last_day = calendar.monthrange(ref_month.year, ref_month.month)[1]
+    dt_ref = date(ref_month.year, ref_month.month, last_day).isoformat()
+
+    query = """
+        WITH produtos_classe_2 AS (
+            SELECT f.cd_produtomp
+            FROM vr_pcp_fcconsumo f
+            LEFT JOIN prd_produtoclas cc ON cc.cd_produto = f.cd_produtopa
+            WHERE cc.cd_tipoclas = 802
+            GROUP BY f.cd_produtomp HAVING COUNT(DISTINCT TRIM(cc.cd_classificacao)) = 1 AND MAX(TRIM(cc.cd_classificacao)) = '2'
+        ),
+        consumo_mp AS (
+            SELECT
+                f.cd_produtopa,
+                f.cd_produtomp,
+                f.qt_consumo * (a.qt_lote - COALESCE(a.qt_gerouop,0)) AS consumo_plano,
+                f.qt_consumo * COALESCE((SELECT SUM(COALESCE(aa.qt_real,0) - COALESCE(aa.qt_finalizada,0))
+                    FROM vr_pcp_opi aa
+                    JOIN vr_pcp_opc bb
+                    ON aa.cd_empresa = bb.cd_empresa AND aa.nr_ciclo = bb.nr_ciclo AND aa.nr_op = bb.nr_op
+                    WHERE aa.cd_empresa = 1 AND aa.cd_produto = f.cd_produtopa AND COALESCE(bb.cd_categoria,0) <> 15 AND aa.tp_situacao IN (5,10,15,20)),0) AS consumo_op
+            FROM vr_pcp_fcconsumo f
+            LEFT JOIN vr_pcp_lotepl2 a ON a.cd_produto = f.cd_produtopa
+            LEFT JOIN pcp_lotepv p ON a.nr_lote = p.nr_lote
+            LEFT JOIN prd_produtoclas cc ON cc.cd_produto = a.cd_produto
+            WHERE p.tp_situacao = 1
+                AND cc.cd_classificacao = '0044      '
+                AND cd_auxiliar IS NOT NULL AND f.cd_produtomp IN (SELECT cd_produtomp FROM produtos_classe_2)),
+        dados AS (
+            SELECT
+                m.cd_produtomp,
+                f_dic_sld_cmp_pedido('p','1',m.cd_produtomp,NULL) AS compra_pendente,
+                f_dic_sld_prd_produto('1','1',m.cd_produtomp,NULL::timestamp) AS estoque_fisico,
+                f_dic_sld_prd_produto('1','2',m.cd_produtomp,NULL::timestamp) AS estoque_inspecao,
+                f_dic_sld_prd_produto('1','15',m.cd_produtomp,NULL::timestamp) AS estoque_corte,
+                COALESCE(SUM(m.consumo_plano),0) AS consumomp_plano,
+                COALESCE(SUM(m.consumo_op),0) AS consumomp_op,
+                (COALESCE(f_dic_sld_prd_produto('1','1',m.cd_produtomp,NULL::timestamp),0) +
+                 COALESCE(f_dic_sld_prd_produto('1','2',m.cd_produtomp,NULL::timestamp),0) +
+                 COALESCE(f_dic_sld_prd_produto('1','15',m.cd_produtomp,NULL::timestamp),0))
+                    -
+                (COALESCE(SUM(m.consumo_plano),0) + COALESCE(SUM(m.consumo_op),0)) AS sobra,
+                COALESCE(f_dic_sld_cmp_pedido('S','1',m.cd_produtomp,NULL),0) AS solicitada
+            FROM consumo_mp m
+            GROUP BY m.cd_produtomp
+        )
+        SELECT
+            SUM(sobra) AS total_sobra,
+            SUM(solicitada) AS total_solicitada,
+            CASE
+                WHEN SUM(solicitada) > 0 THEN ROUND((SUM(sobra) / SUM(solicitada)) * 100, 2)
+                ELSE 0
+            END AS indicador_geral
+        FROM dados
+    """
+
+    try:
+        rows = execute_query(query)
+
+        if not rows or rows[0]['indicador_geral'] is None:
+            return {
+                "dt_referencia": dt_ref,
+                "sobra_mp_pct": None,
+                "total_sobra": 0,
+                "total_solicitada": 0,
+            }
+
+        row = rows[0]
+        return {
+            "dt_referencia": dt_ref,
+            "sobra_mp_pct": float(row['indicador_geral']) if row['indicador_geral'] is not None else None,
+            "total_sobra": float(row['total_sobra'] or 0),
+            "total_solicitada": float(row['total_solicitada'] or 0),
+        }
+    except Exception as e:
+        print(f"[SOBRA MP] Erro ao calcular: {e}")
+        return {
+            "dt_referencia": dt_ref,
+            "sobra_mp_pct": None,
+            "total_sobra": 0,
+            "total_solicitada": 0,
+        }
+
+
+@router.get("/api/indicadores/sobra-mp")
+def get_sobra_mp():
+    return _calcular_sobra_mp(date.today().replace(day=1))
+
+
 # ─── Cache histórico ──────────────────────────────────────────────────────────
 
 _INDICADORES_FNS = [
@@ -594,6 +937,9 @@ _INDICADORES_FNS = [
     ("quebra_pedidos",        lambda m: _calcular_quebra_pedidos(m)),
     ("vendas_volume_varejo",  lambda m: _calcular_vendas_volume_varejo(m)),
     ("ecommerce_ads",         lambda m: _calcular_ecommerce_ads(m)),
+    ("cmv_pct",               lambda m: _calcular_cmv_pct(m)),
+    ("lucro_liq_pct",         lambda m: _calcular_lucro_liq_pct(m)),
+    ("sobra_mp",              lambda m: _calcular_sobra_mp(m)),
 ]
 
 
