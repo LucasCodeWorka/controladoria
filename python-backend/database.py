@@ -33,7 +33,9 @@ def get_connection_pool():
                 port=int(os.getenv('DB_PORT', '20168')),
                 database=os.getenv('DB_NAME', 'liebe'),
                 user=os.getenv('DB_USER', 'liebe_ro'),
-                password=password
+                password=password,
+                connect_timeout=30,  # Timeout de conexão
+                options='-c statement_timeout=60000'  # Timeout de query: 60 segundos
             )
             print("[OK] PostgreSQL connection pool created successfully")
         except Exception as e:

@@ -894,9 +894,15 @@ def _calcular_sobra_mp(ref_month: date) -> dict:
     """
 
     try:
+        import time
+        inicio = time.time()
+        print(f"[SOBRA MP] Iniciando query...")
         rows = execute_query(query)
+        duracao = time.time() - inicio
+        print(f"[SOBRA MP] Query executada em {duracao:.2f}s. Rows: {len(rows) if rows else 0}")
 
-        if not rows or rows[0]['indicador_geral'] is None:
+        if not rows or len(rows) == 0:
+            print(f"[SOBRA MP] Nenhum resultado retornado")
             return {
                 "dt_referencia": dt_ref,
                 "sobra_mp_pct": None,
@@ -905,6 +911,16 @@ def _calcular_sobra_mp(ref_month: date) -> dict:
             }
 
         row = rows[0]
+        print(f"[SOBRA MP] Resultado: total_sobra={row.get('total_sobra')}, total_solicitada={row.get('total_solicitada')}, indicador_geral={row.get('indicador_geral')}")
+
+        if row['indicador_geral'] is None:
+            return {
+                "dt_referencia": dt_ref,
+                "sobra_mp_pct": None,
+                "total_sobra": 0,
+                "total_solicitada": 0,
+            }
+
         return {
             "dt_referencia": dt_ref,
             "sobra_mp_pct": float(row['indicador_geral']) if row['indicador_geral'] is not None else None,
@@ -912,7 +928,9 @@ def _calcular_sobra_mp(ref_month: date) -> dict:
             "total_solicitada": float(row['total_solicitada'] or 0),
         }
     except Exception as e:
+        import traceback
         print(f"[SOBRA MP] Erro ao calcular: {e}")
+        print(f"[SOBRA MP] Traceback: {traceback.format_exc()}")
         return {
             "dt_referencia": dt_ref,
             "sobra_mp_pct": None,
