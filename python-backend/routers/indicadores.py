@@ -40,7 +40,20 @@ def _meses_2026_ate_hoje():
 # ─── Giro Lojas ───────────────────────────────────────────────────────────────
 
 def _calcular_giro_lojas(ref_month: date) -> dict:
+    import calendar
     empresas = ", ".join(str(e) for e in EMPRESAS_LOJAS)
+
+    # Determinar a data de corte para o estoque
+    # Se é o mês atual, usa a data de hoje; senão usa o último dia do mês
+    hoje = date.today()
+    if ref_month.year == hoje.year and ref_month.month == hoje.month:
+        data_corte = hoje.isoformat()
+        dt_ref = hoje.isoformat()
+    else:
+        last_day = calendar.monthrange(ref_month.year, ref_month.month)[1]
+        data_corte = date(ref_month.year, ref_month.month, last_day).isoformat()
+        dt_ref = data_corte
+
     ref = ref_month.isoformat()
     query = f"""
         WITH estoque AS (
@@ -51,7 +64,7 @@ def _calcular_giro_lojas(ref_month: date) -> dict:
                 FROM prd_prdsaldo s1
                 WHERE s1.cd_empresa = ANY (ARRAY[{empresas}])
                   AND s1.cd_saldo = 1
-                  AND s1.dt_saldo < '{ref}'::date
+                  AND s1.dt_saldo <= '{data_corte}'::date
                   AND EXISTS (
                       SELECT 1 FROM prd_produtoclas pc
                       WHERE pc.cd_produto = s1.cd_produto AND pc.cd_tipoclas = '20'
@@ -68,10 +81,10 @@ def _calcular_giro_lojas(ref_month: date) -> dict:
             WHERE t.cd_empresa = ANY (ARRAY[{empresas}])
               AND t.tp_situacao = '4'
               AND t.dt_transacao >= '{ref}'::date - INTERVAL '11 months'
-              AND t.dt_transacao < '{ref}'::date + INTERVAL '1 month'
+              AND t.dt_transacao <= '{data_corte}'::date
         )
         SELECT
-            ('{ref}'::date + INTERVAL '1 month' - INTERVAL '1 day')::date AS dt_referencia,
+            '{dt_ref}'::date AS dt_referencia,
             COALESCE(estoque.estoque_total, 0) AS estoque_total,
             COALESCE(media.media_mensal, 0) AS media_mensal,
             CASE
