@@ -1111,12 +1111,10 @@ export default function DREPage() {
             <table className="w-full border-collapse text-sm">
               <thead>
                 <tr className="bg-gradient-to-r from-purple-600 to-purple-700">
-                  <th className="px-4 py-3 text-left font-bold text-white border-b border-purple-500 sticky left-0 bg-purple-600 z-20 min-w-[300px]">
+                  <th rowSpan={2} className="px-4 py-2 text-left font-bold text-white border-b border-purple-500 sticky left-0 bg-purple-600 z-20 min-w-[280px]">
                     CONTA
                   </th>
                   {dadosPorEmpresa.empresas.map((emp) => {
-                    // Mapeamento de siglas por cd_empresa (unico)
-                    // Lojas encerradas (9, 11, 12, 13, 16, 18) foram removidas
                     const SIGLAS_EMPRESA: Record<number, string> = {
                       1: 'FABRICA',
                       2: 'MARAP',
@@ -1140,15 +1138,34 @@ export default function DREPage() {
                     return (
                       <th
                         key={emp.cd_empresa}
-                        className="px-2 py-2 text-center font-bold text-white border-b border-purple-500 min-w-[70px] text-[10px] cursor-help"
+                        colSpan={2}
+                        className="px-1 py-1 text-center font-bold text-white border-b border-purple-500 min-w-[90px] text-[9px] cursor-help"
                         title={emp.nome}
                       >
                         {sigla}
                       </th>
                     );
                   })}
-                  <th className="px-3 py-3 text-right font-bold text-white border-b border-purple-500 bg-purple-800 min-w-[110px]">
+                  <th colSpan={2} className="px-2 py-1 text-center font-bold text-white border-b border-purple-500 bg-purple-800 min-w-[110px]">
                     TOTAL
+                  </th>
+                </tr>
+                <tr className="bg-purple-500">
+                  {dadosPorEmpresa.empresas.map((emp) => (
+                    <React.Fragment key={`hdr-${emp.cd_empresa}`}>
+                      <th className="px-1 py-0.5 text-right text-[8px] font-medium text-purple-100 border-b border-purple-400 min-w-[55px]">
+                        Valor
+                      </th>
+                      <th className="px-0.5 py-0.5 text-right text-[8px] font-medium text-purple-200 border-b border-purple-400 min-w-[35px] bg-purple-600/50">
+                        A/V%
+                      </th>
+                    </React.Fragment>
+                  ))}
+                  <th className="px-1 py-0.5 text-right text-[8px] font-medium text-purple-100 border-b border-purple-400 bg-purple-800 min-w-[65px]">
+                    Valor
+                  </th>
+                  <th className="px-0.5 py-0.5 text-right text-[8px] font-medium text-purple-200 border-b border-purple-400 bg-purple-900 min-w-[40px]">
+                    A/V%
                   </th>
                 </tr>
               </thead>
@@ -1163,11 +1180,35 @@ export default function DREPage() {
                     return dadosPorEmpresa.valores[codigo]?.total || 0;
                   };
 
+                  // Funcao para calcular A/V% (em relacao a Receita Liquida = conta 03)
+                  const calcularAVEmpresa = (codigo: string, cdEmpresa: number, isCalculada: boolean): number => {
+                    const valor = isCalculada
+                      ? calcularValorEmpresaLocal(codigo, cdEmpresa)
+                      : getValorEmpresa(codigo, cdEmpresa);
+                    const receitaLiquida = calcularValorEmpresaLocal('03', cdEmpresa);
+                    if (receitaLiquida === 0) return 0;
+                    return (valor / receitaLiquida) * 100;
+                  };
+
+                  const calcularAVTotal = (codigo: string, isCalculada: boolean): number => {
+                    const valor = isCalculada
+                      ? calcularValorTotalLocal(codigo)
+                      : getValorTotal(codigo);
+                    const receitaLiquida = calcularValorTotalLocal('03');
+                    if (receitaLiquida === 0) return 0;
+                    return (valor / receitaLiquida) * 100;
+                  };
+
+                  const formatarAV = (pct: number): string => {
+                    if (pct === 0) return '-';
+                    return `${pct.toFixed(1)}%`;
+                  };
+
                   // Contas calculadas (resultados)
                   const contasCalculadas = ['03', '05', '07', '09', '11', '14', '19'];
 
                   // Funcao para calcular valor de conta calculada
-                  const calcularValorEmpresa = (codigo: string, cdEmpresa: number): number => {
+                  const calcularValorEmpresaLocal = (codigo: string, cdEmpresa: number): number => {
                     const v = (c: string) => getValorEmpresa(c, cdEmpresa);
                     switch (codigo) {
                       case '03': return v('01') + v('02'); // Receita Liquida
@@ -1181,7 +1222,7 @@ export default function DREPage() {
                     }
                   };
 
-                  const calcularValorTotal = (codigo: string): number => {
+                  const calcularValorTotalLocal = (codigo: string): number => {
                     const v = (c: string) => getValorTotal(c);
                     switch (codigo) {
                       case '03': return v('01') + v('02');
@@ -1247,34 +1288,46 @@ export default function DREPage() {
                         </td>
                         {dadosPorEmpresa.empresas.map((emp) => {
                           const valor = isCalculada
-                            ? calcularValorEmpresa(conta.codigo, emp.cd_empresa)
+                            ? calcularValorEmpresaLocal(conta.codigo, emp.cd_empresa)
                             : getValorEmpresa(conta.codigo, emp.cd_empresa);
+                          const avPct = calcularAVEmpresa(conta.codigo, emp.cd_empresa, isCalculada);
                           const podeClicar = !temFilhos && !isCalculada && valor !== 0 && isDespesa;
                           return (
-                            <td
-                              key={emp.cd_empresa}
-                              className={`px-2 py-1.5 text-right border-b border-gray-200 text-xs ${
-                                valor < 0 ? 'text-red-600' : ''
-                              } ${fontClass}`}
-                            >
-                              {podeClicar ? (
-                                <button
-                                  onClick={() => abrirDuplicatasPorEmpresa(conta.codigo, conta.nome, emp.cd_empresa, emp.nome)}
-                                  className="hover:underline hover:text-blue-600 cursor-pointer"
-                                  title={`Clique para ver duplicatas - ${emp.nome}`}
-                                >
-                                  {formatarValor(valor)}
-                                </button>
-                              ) : (
-                                valor !== 0 ? formatarValor(valor) : '-'
-                              )}
-                            </td>
+                            <React.Fragment key={emp.cd_empresa}>
+                              <td
+                                className={`px-1 py-1.5 text-right border-b border-gray-200 text-xs ${
+                                  valor < 0 ? 'text-red-600' : ''
+                                } ${fontClass}`}
+                              >
+                                {podeClicar ? (
+                                  <button
+                                    onClick={() => abrirDuplicatasPorEmpresa(conta.codigo, conta.nome, emp.cd_empresa, emp.nome)}
+                                    className="hover:underline hover:text-blue-600 cursor-pointer"
+                                    title={`Clique para ver duplicatas - ${emp.nome}`}
+                                  >
+                                    {formatarValor(valor)}
+                                  </button>
+                                ) : (
+                                  valor !== 0 ? formatarValor(valor) : '-'
+                                )}
+                              </td>
+                              <td className={`px-0.5 py-1.5 text-right border-b border-gray-200 text-[9px] bg-gray-50/50 ${fontClass} ${
+                                valor < 0 ? 'text-red-500' : 'text-gray-500'
+                              }`}>
+                                {formatarAV(avPct)}
+                              </td>
+                            </React.Fragment>
                           );
                         })}
-                        <td className={`px-2 py-1.5 text-right border-b border-gray-200 text-xs bg-purple-100/50 ${fontClass} ${
-                          (isCalculada ? calcularValorTotal(conta.codigo) : getValorTotal(conta.codigo)) < 0 ? 'text-red-600' : ''
+                        <td className={`px-1 py-1.5 text-right border-b border-gray-200 text-xs bg-purple-100/50 ${fontClass} ${
+                          (isCalculada ? calcularValorTotalLocal(conta.codigo) : getValorTotal(conta.codigo)) < 0 ? 'text-red-600' : ''
                         }`}>
-                          {formatarValor(isCalculada ? calcularValorTotal(conta.codigo) : getValorTotal(conta.codigo))}
+                          {formatarValor(isCalculada ? calcularValorTotalLocal(conta.codigo) : getValorTotal(conta.codigo))}
+                        </td>
+                        <td className={`px-0.5 py-1.5 text-right border-b border-gray-200 text-[9px] bg-purple-200/50 ${fontClass} ${
+                          (isCalculada ? calcularValorTotalLocal(conta.codigo) : getValorTotal(conta.codigo)) < 0 ? 'text-red-500' : 'text-gray-500'
+                        }`}>
+                          {formatarAV(calcularAVTotal(conta.codigo, isCalculada))}
                         </td>
                       </tr>
                     );
@@ -1390,6 +1443,19 @@ export default function DREPage() {
                       </tr>
                     ))}
                   </tbody>
+                  <tfoot>
+                    <tr className="bg-blue-50 font-bold border-t-2 border-blue-200">
+                      <td colSpan={4} className="px-3 py-3 text-left">
+                        TOTAL ({modalDuplicatas.duplicatas.length} {modalDuplicatas.duplicatas.length === 1 ? 'registro' : 'registros'})
+                      </td>
+                      <td className="px-3 py-3 text-right text-gray-600">
+                        Soma:
+                      </td>
+                      <td className="px-3 py-3 text-right text-red-700">
+                        {formatarValor(modalDuplicatas.duplicatas.reduce((acc, dup) => acc + (dup.valor || 0), 0))}
+                      </td>
+                    </tr>
+                  </tfoot>
                 </table>
               )}
             </div>

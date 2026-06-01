@@ -92,6 +92,19 @@ export default function DREPorEmpresa() {
     return valores[codigo]?.[empresaKey] || 0;
   }
 
+  // Calcula o percentual A/V (Análise Vertical) em relação à Receita Líquida
+  function calcularAV(codigo: string, empresaKey: string): number {
+    const valor = getValorConta(codigo, empresaKey);
+    const receitaLiquida = getValorConta('03', empresaKey); // Conta 03 = Receita Líquida
+    if (receitaLiquida === 0) return 0;
+    return (valor / receitaLiquida) * 100;
+  }
+
+  function formatarAV(percentual: number): string {
+    if (percentual === 0) return '-';
+    return `${percentual.toFixed(1)}%`;
+  }
+
   function renderizarLinhaConta(conta: ContaDRE, nivel = 0): React.ReactNode[] {
     const linhas: React.ReactNode[] = [];
     const temFilhos = !!conta.filhos?.length;
@@ -116,24 +129,33 @@ export default function DREPorEmpresa() {
           </div>
         </td>
         {empresas.map((emp) => {
-          const valor = getValorConta(conta.codigo, String(emp.cd_empresa));
+          const empKey = String(emp.cd_empresa);
+          const valor = getValorConta(conta.codigo, empKey);
+          const av = calcularAV(conta.codigo, empKey);
           return (
-            <td
-              key={emp.cd_empresa}
-              className={`px-3 py-2 border-b border-gray-200 text-right text-sm min-w-[120px] ${
-                valor < 0 ? 'text-red-600' : ''
-              }`}
-            >
-              {formatarValor(valor)}
-            </td>
+            <React.Fragment key={emp.cd_empresa}>
+              <td
+                className={`px-2 py-2 border-b border-gray-200 text-right text-sm min-w-[100px] ${
+                  valor < 0 ? 'text-red-600' : ''
+                }`}
+              >
+                {formatarValor(valor)}
+              </td>
+              <td className="px-1 py-2 border-b border-gray-200 text-right text-xs text-gray-500 min-w-[50px] bg-gray-50">
+                {formatarAV(av)}
+              </td>
+            </React.Fragment>
           );
         })}
         <td
-          className={`px-3 py-2 border-b border-gray-200 text-right text-sm font-bold bg-blue-50 min-w-[130px] ${
+          className={`px-2 py-2 border-b border-gray-200 text-right text-sm font-bold bg-blue-50 min-w-[100px] ${
             getValorConta(conta.codigo, 'total') < 0 ? 'text-red-600' : ''
           }`}
         >
           {formatarValor(getValorConta(conta.codigo, 'total'))}
+        </td>
+        <td className="px-1 py-2 border-b border-gray-200 text-right text-xs font-medium text-gray-600 min-w-[50px] bg-blue-100">
+          {formatarAV(calcularAV(conta.codigo, 'total'))}
         </td>
       </tr>
     );
@@ -226,21 +248,42 @@ export default function DREPorEmpresa() {
           <div className="overflow-x-auto">
             <table className="w-full border-collapse">
               <thead>
+                {/* Linha com nomes das empresas */}
                 <tr className="bg-gray-100">
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 border-b border-gray-200 sticky left-0 bg-gray-100 z-20 min-w-[250px]">
+                  <th rowSpan={2} className="px-4 py-3 text-left text-sm font-semibold text-gray-700 border-b border-gray-200 sticky left-0 bg-gray-100 z-20 min-w-[250px]">
                     Conta
                   </th>
                   {empresas.map((emp) => (
                     <th
                       key={emp.cd_empresa}
-                      className="px-3 py-3 text-right text-sm font-semibold text-gray-700 border-b border-gray-200 min-w-[120px]"
+                      colSpan={2}
+                      className="px-2 py-2 text-center text-sm font-semibold text-gray-700 border-b border-gray-200 min-w-[150px]"
                       title={emp.nome}
                     >
-                      {emp.nome.length > 15 ? emp.nome.substring(0, 15) + '...' : emp.nome}
+                      {emp.nome.length > 12 ? emp.nome.substring(0, 12) + '...' : emp.nome}
                     </th>
                   ))}
-                  <th className="px-3 py-3 text-right text-sm font-semibold text-gray-700 border-b border-gray-200 min-w-[130px] bg-blue-50">
+                  <th colSpan={2} className="px-2 py-2 text-center text-sm font-semibold text-gray-700 border-b border-gray-200 min-w-[150px] bg-blue-50">
                     TOTAL
+                  </th>
+                </tr>
+                {/* Linha com Valor e A/V% */}
+                <tr className="bg-gray-50">
+                  {empresas.map((emp) => (
+                    <React.Fragment key={`header-${emp.cd_empresa}`}>
+                      <th className="px-2 py-1 text-right text-xs font-medium text-gray-600 border-b border-gray-200 min-w-[100px]">
+                        Valor
+                      </th>
+                      <th className="px-1 py-1 text-right text-xs font-medium text-gray-500 border-b border-gray-200 min-w-[50px] bg-gray-100">
+                        A/V%
+                      </th>
+                    </React.Fragment>
+                  ))}
+                  <th className="px-2 py-1 text-right text-xs font-medium text-gray-600 border-b border-gray-200 min-w-[100px] bg-blue-50">
+                    Valor
+                  </th>
+                  <th className="px-1 py-1 text-right text-xs font-medium text-gray-600 border-b border-gray-200 min-w-[50px] bg-blue-100">
+                    A/V%
                   </th>
                 </tr>
               </thead>

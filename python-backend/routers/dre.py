@@ -3608,14 +3608,23 @@ def get_duplicatas_por_empresa(
     conta: str = Query(..., description="Codigo da conta DRE (ex: 08.01.01)"),
     dataInicio: str = Query("2026-01-01", description="Data inicial"),
     dataFim: str = Query("2026-12-31", description="Data final"),
-    cdEmpresa: int = Query(..., description="Codigo da empresa")
+    cdEmpresa: int = Query(..., description="Codigo da empresa/centro de custo")
 ):
     """
-    Retorna duplicatas de uma conta DRE especifica para uma empresa.
-    Usa a mesma logica do endpoint /api/dre/por-empresa.
+    Retorna duplicatas de uma conta DRE especifica para uma empresa/centro de custo.
+    - Para fabrica (cd_empresa=1): filtra por cd_ccusto IN (1, 500-514)
+    - Para lojas: filtra por cd_ccusto = cdEmpresa (pois ccusto = empresa nas lojas)
     """
     try:
-        print(f"[DUPLICATAS-EMP] Buscando conta={conta}, empresa={cdEmpresa}, periodo={dataInicio} a {dataFim}")
+        # Determinar quais centros de custo filtrar baseado na empresa
+        if cdEmpresa == 1:
+            # Fabrica: usar todos os ccustos da fabrica
+            ccustos_filtro = CCUSTOS_FABRICA
+        else:
+            # Lojas: ccusto = cd_empresa
+            ccustos_filtro = [cdEmpresa]
+
+        print(f"[DUPLICATAS-EMP] Buscando conta={conta}, empresa={cdEmpresa}, ccustos={ccustos_filtro}, periodo={dataInicio} a {dataFim}")
 
         # Carregar classificacoes do banco
         classificacoes_db = {}
@@ -3654,10 +3663,13 @@ def get_duplicatas_por_empresa(
         else:
             itens = itens_db
 
+        # Criar placeholders para os centros de custo
+        placeholders_ccusto = ','.join(['%s'] * len(ccustos_filtro))
+
         # Se ainda nao tem itens, tentar por regras de descricao (busca mais ampla)
         if not itens:
             # Buscar todas as despesas e filtrar depois
-            query = """
+            query = f"""
                 SELECT
                     d.nr_duplicata as nr_duplicata,
                     d.cd_despesaitem,
@@ -3677,10 +3689,10 @@ def get_duplicatas_por_empresa(
                 WHERE d.dt_emissao >= %s
                   AND d.dt_emissao <= %s
                   AND d.tp_situacao = 'N'
-                  AND d.cd_empresa = %s
+                  AND d.cd_ccusto IN ({placeholders_ccusto})
                 ORDER BY d.dt_emissao
             """
-            despesas = execute_query(query, (dataInicio, dataFim, cdEmpresa))
+            despesas = execute_query(query, (dataInicio, dataFim, *ccustos_filtro))
         else:
             # Buscar apenas os itens identificados
             placeholders_itens = ','.join(['%s'] * len(itens))
@@ -3704,28 +3716,28 @@ def get_duplicatas_por_empresa(
                 WHERE d.dt_emissao >= %s
                   AND d.dt_emissao <= %s
                   AND d.tp_situacao = 'N'
-                  AND d.cd_empresa = %s
+                  AND d.cd_ccusto IN ({placeholders_ccusto})
                   AND d.cd_despesaitem IN ({placeholders_itens})
                 ORDER BY d.dt_emissao
             """
-            despesas = execute_query(query, (dataInicio, dataFim, cdEmpresa, *itens))
+            despesas = execute_query(query, (dataInicio, dataFim, *ccustos_filtro, *itens))
 
-        print(f"[DUPLICATAS-EMP] Total despesas encontradas para empresa {cdEmpresa}: {len(despesas)}")
+        print(f"[DUPLICATAS-EMP] Total despesas encontradas para ccustos {ccustos_filtro}: {len(despesas)}")
         print(f"[DUPLICATAS-EMP] Itens mapeados para conta {conta}: {itens[:10]}...")
 
         # Se nao encontrou despesas, mostrar debug
         if len(despesas) == 0:
             print(f"[DUPLICATAS-EMP] DEBUG: Nenhuma despesa encontrada.")
-            # Verificar se existem despesas para esta empresa no periodo
-            query_debug = """
+            # Verificar se existem despesas para estes ccustos no periodo
+            query_debug = f"""
                 SELECT COUNT(*) as qtd
                 FROM vr_fcp_despduplicatai d
                 WHERE d.dt_emissao >= %s AND d.dt_emissao <= %s
-                  AND d.tp_situacao = 'N' AND d.cd_empresa = %s
+                  AND d.tp_situacao = 'N' AND d.cd_ccusto IN ({placeholders_ccusto})
             """
-            debug_result = execute_query(query_debug, (dataInicio, dataFim, cdEmpresa))
+            debug_result = execute_query(query_debug, (dataInicio, dataFim, *ccustos_filtro))
             if debug_result:
-                print(f"[DUPLICATAS-EMP] DEBUG: Total despesas da empresa {cdEmpresa} no periodo: {debug_result[0]['qtd']}")
+                print(f"[DUPLICATAS-EMP] DEBUG: Total despesas dos ccustos {ccustos_filtro} no periodo: {debug_result[0]['qtd']}")
 
         # Filtrar e processar duplicatas
         duplicatas = []
