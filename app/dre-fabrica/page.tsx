@@ -323,6 +323,9 @@ export default function DREPage() {
     loading: false,
   });
   const [ultimaAtualizacao, setUltimaAtualizacao] = useState<string | null>(null);
+  const [larguraColunaContas, setLarguraColunaContas] = useState(350);
+  const [larguraColunaValor, setLarguraColunaValor] = useState(85);
+  const [larguraColunaAV, setLarguraColunaAV] = useState(55);
 
   // Carregar opcoes de filtro
   useEffect(() => {
@@ -453,7 +456,7 @@ export default function DREPage() {
     setModalDuplicatas({
       aberto: true,
       conta,
-      nomeConta: `${nomeConta} - ${nomeEmpresa}`,
+      nomeConta: `${nomeConta} - ${nomeEmpresa}${cdEmpresa ? ` (CC ${cdEmpresa})` : ''}`,
       periodo: 'total',
       labelPeriodo: `${formatarData(dataInicio)} a ${formatarData(dataFim)}`,
       duplicatas: [],
@@ -462,7 +465,16 @@ export default function DREPage() {
     });
 
     try {
-      const response = await fetch(`/api/dre/por-empresa/duplicatas?conta=${conta}&dataInicio=${dataInicio}&dataFim=${dataFim}&cdEmpresa=${cdEmpresa}`);
+      const params = new URLSearchParams({
+        conta,
+        dataInicio,
+        dataFim,
+        cdEmpresa: String(cdEmpresa),
+        t: String(Date.now()),
+      });
+      const response = await fetch(`/api/dre/por-empresa/duplicatas?${params.toString()}`, {
+        cache: 'no-store',
+      });
       const data = await response.json();
 
       setModalDuplicatas((prev) => ({
@@ -482,6 +494,27 @@ export default function DREPage() {
 
   function fecharModal() {
     setModalDuplicatas((prev) => ({ ...prev, aberto: false }));
+  }
+
+  // Funcoes para expandir/recolher niveis
+  const CONTAS_NIVEL_1 = ['01', '02', '04', '06', '08', '10', '13', '17', '18'];
+  const CONTAS_NIVEL_2 = ['02.01', '04.01', '04.02', '06.01', '08.01', '08.02', '08.03', '08.04', '08.05', '08.06', '08.07', '08.08', '08.09', '08.10', '08.11', '08.12', '10.01', '10.03', '13.01'];
+
+  function expandirTodos() {
+    const todasContas = new Set([...CONTAS_NIVEL_1, ...CONTAS_NIVEL_2]);
+    setContasExpandidas(todasContas);
+  }
+
+  function recolherTodos() {
+    setContasExpandidas(new Set());
+  }
+
+  function expandirNivel1() {
+    setContasExpandidas(new Set(CONTAS_NIVEL_1));
+  }
+
+  function expandirNivel2() {
+    setContasExpandidas(new Set([...CONTAS_NIVEL_1, ...CONTAS_NIVEL_2]));
   }
 
   // Funcao para criar Date local a partir de string YYYY-MM-DD (evita problema de timezone)
@@ -1098,20 +1131,93 @@ export default function DREPage() {
       {tipoVisao === 'por-empresa' && dadosPorEmpresa && (
         <div className="bg-white rounded-lg shadow-lg overflow-hidden">
           <div className="p-4 border-b border-gray-200 bg-purple-50">
-            <h2 className="text-lg font-semibold text-gray-800">
-              DRE Por Empresa - Comparativo
-            </h2>
-            <p className="text-sm text-gray-600">
-              Periodo: {formatarData(dataInicio)} a {formatarData(dataFim)}
-              {' | '}{dadosPorEmpresa.empresas.length} empresas
-            </p>
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-800">
+                  DRE Por Empresa - Comparativo
+                </h2>
+                <p className="text-sm text-gray-600">
+                  Periodo: {formatarData(dataInicio)} a {formatarData(dataFim)}
+                  {' | '}{dadosPorEmpresa.empresas.length} empresas
+                </p>
+              </div>
+              <div className="flex items-center gap-6">
+                <div className="flex items-center gap-2">
+                  <label className="text-xs text-gray-600">Contas:</label>
+                  <input
+                    type="range"
+                    min="250"
+                    max="500"
+                    value={larguraColunaContas}
+                    onChange={(e) => setLarguraColunaContas(Number(e.target.value))}
+                    className="w-20 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                  />
+                  <span className="text-xs text-gray-500 w-8">{larguraColunaContas}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <label className="text-xs text-gray-600">Valor:</label>
+                  <input
+                    type="range"
+                    min="60"
+                    max="150"
+                    value={larguraColunaValor}
+                    onChange={(e) => setLarguraColunaValor(Number(e.target.value))}
+                    className="w-20 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                  />
+                  <span className="text-xs text-gray-500 w-8">{larguraColunaValor}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <label className="text-xs text-gray-600">A/V%:</label>
+                  <input
+                    type="range"
+                    min="40"
+                    max="100"
+                    value={larguraColunaAV}
+                    onChange={(e) => setLarguraColunaAV(Number(e.target.value))}
+                    className="w-20 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                  />
+                  <span className="text-xs text-gray-500 w-8">{larguraColunaAV}</span>
+                </div>
+                <div className="flex items-center gap-1 border-l border-purple-200 pl-4">
+                  <span className="text-xs text-gray-600 mr-1">Niveis:</span>
+                  <button
+                    onClick={recolherTodos}
+                    className="px-2 py-1 text-xs bg-gray-200 hover:bg-gray-300 text-gray-700 rounded transition-colors"
+                    title="Recolher todos"
+                  >
+                    0
+                  </button>
+                  <button
+                    onClick={expandirNivel1}
+                    className="px-2 py-1 text-xs bg-purple-200 hover:bg-purple-300 text-purple-700 rounded transition-colors"
+                    title="Expandir nivel 1"
+                  >
+                    1
+                  </button>
+                  <button
+                    onClick={expandirNivel2}
+                    className="px-2 py-1 text-xs bg-purple-300 hover:bg-purple-400 text-purple-800 rounded transition-colors"
+                    title="Expandir nivel 2"
+                  >
+                    2
+                  </button>
+                  <button
+                    onClick={expandirTodos}
+                    className="px-2 py-1 text-xs bg-purple-500 hover:bg-purple-600 text-white rounded transition-colors"
+                    title="Expandir todos"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
 
           <div className="overflow-x-auto">
             <table className="w-full border-collapse text-sm">
               <thead>
                 <tr className="bg-gradient-to-r from-purple-600 to-purple-700">
-                  <th rowSpan={2} className="px-4 py-2 text-left font-bold text-white border-b border-purple-500 sticky left-0 bg-purple-600 z-20 min-w-[280px]">
+                  <th rowSpan={2} className="px-4 py-2 text-left font-bold text-white border-b border-purple-500 sticky left-0 bg-purple-600 z-20" style={{ minWidth: `${larguraColunaContas}px`, width: `${larguraColunaContas}px` }}>
                     CONTA
                   </th>
                   {dadosPorEmpresa.empresas.map((emp) => {
@@ -1139,32 +1245,33 @@ export default function DREPage() {
                       <th
                         key={emp.cd_empresa}
                         colSpan={2}
-                        className="px-1 py-1 text-center font-bold text-white border-b border-purple-500 min-w-[90px] text-[9px] cursor-help"
+                        className="px-2 py-2 text-center font-bold text-white border-b border-purple-500 text-xs cursor-help"
+                        style={{ minWidth: `${larguraColunaValor + larguraColunaAV}px` }}
                         title={emp.nome}
                       >
                         {sigla}
                       </th>
                     );
                   })}
-                  <th colSpan={2} className="px-2 py-1 text-center font-bold text-white border-b border-purple-500 bg-purple-800 min-w-[110px]">
+                  <th colSpan={2} className="px-2 py-2 text-center font-bold text-white border-b border-purple-500 bg-purple-800 text-xs" style={{ minWidth: `${larguraColunaValor + larguraColunaAV}px` }}>
                     TOTAL
                   </th>
                 </tr>
                 <tr className="bg-purple-500">
                   {dadosPorEmpresa.empresas.map((emp) => (
                     <React.Fragment key={`hdr-${emp.cd_empresa}`}>
-                      <th className="px-1 py-0.5 text-right text-[8px] font-medium text-purple-100 border-b border-purple-400 min-w-[55px]">
+                      <th className="px-2 py-1 text-right text-xs font-medium text-purple-100 border-b border-purple-400" style={{ minWidth: `${larguraColunaValor}px`, width: `${larguraColunaValor}px` }}>
                         Valor
                       </th>
-                      <th className="px-0.5 py-0.5 text-right text-[8px] font-medium text-purple-200 border-b border-purple-400 min-w-[35px] bg-purple-600/50">
+                      <th className="px-2 py-1 text-right text-xs font-medium text-purple-200 border-b border-purple-400 bg-purple-600/50" style={{ minWidth: `${larguraColunaAV}px`, width: `${larguraColunaAV}px` }}>
                         A/V%
                       </th>
                     </React.Fragment>
                   ))}
-                  <th className="px-1 py-0.5 text-right text-[8px] font-medium text-purple-100 border-b border-purple-400 bg-purple-800 min-w-[65px]">
+                  <th className="px-2 py-1 text-right text-xs font-medium text-purple-100 border-b border-purple-400 bg-purple-800" style={{ minWidth: `${larguraColunaValor}px`, width: `${larguraColunaValor}px` }}>
                     Valor
                   </th>
-                  <th className="px-0.5 py-0.5 text-right text-[8px] font-medium text-purple-200 border-b border-purple-400 bg-purple-900 min-w-[40px]">
+                  <th className="px-2 py-1 text-right text-xs font-medium text-purple-200 border-b border-purple-400 bg-purple-900" style={{ minWidth: `${larguraColunaAV}px`, width: `${larguraColunaAV}px` }}>
                     A/V%
                   </th>
                 </tr>
@@ -1271,9 +1378,9 @@ export default function DREPage() {
                       <tr key={conta.codigo} className={`${bgClass} hover:bg-purple-100/30`}>
                         <td
                           className={`px-2 py-1.5 border-b border-gray-200 sticky left-0 z-10 ${stickyBg} ${fontClass}`}
-                          style={{ paddingLeft: `${paddingLeft}px` }}
+                          style={{ paddingLeft: `${paddingLeft}px`, minWidth: `${larguraColunaContas}px`, width: `${larguraColunaContas}px` }}
                         >
-                          <div className="flex items-center gap-1">
+                          <div className="flex items-center gap-1 whitespace-nowrap">
                             {temFilhos && (
                               <button
                                 onClick={() => toggleExpansao(conta.codigo)}
@@ -1283,7 +1390,7 @@ export default function DREPage() {
                               </button>
                             )}
                             {!temFilhos && <span className="w-4" />}
-                            <span className="text-xs">{conta.codigo} {conta.nome}</span>
+                            <span className="text-sm">{conta.codigo} {conta.nome}</span>
                           </div>
                         </td>
                         {dadosPorEmpresa.empresas.map((emp) => {
@@ -1295,9 +1402,10 @@ export default function DREPage() {
                           return (
                             <React.Fragment key={emp.cd_empresa}>
                               <td
-                                className={`px-1 py-1.5 text-right border-b border-gray-200 text-xs ${
+                                className={`px-2 py-2 text-right border-b border-gray-200 text-sm ${
                                   valor < 0 ? 'text-red-600' : ''
                                 } ${fontClass}`}
+                                style={{ minWidth: `${larguraColunaValor}px`, width: `${larguraColunaValor}px` }}
                               >
                                 {podeClicar ? (
                                   <button
@@ -1311,22 +1419,36 @@ export default function DREPage() {
                                   valor !== 0 ? formatarValor(valor) : '-'
                                 )}
                               </td>
-                              <td className={`px-0.5 py-1.5 text-right border-b border-gray-200 text-[9px] bg-gray-50/50 ${fontClass} ${
-                                valor < 0 ? 'text-red-500' : 'text-gray-500'
-                              }`}>
+                              <td className={`px-2 py-2 text-right border-b border-gray-200 text-sm bg-gray-50/50 ${fontClass} ${
+                                valor < 0 ? 'text-red-600' : 'text-gray-600'
+                              }`} style={{ minWidth: `${larguraColunaAV}px`, width: `${larguraColunaAV}px` }}>
                                 {formatarAV(avPct)}
                               </td>
                             </React.Fragment>
                           );
                         })}
-                        <td className={`px-1 py-1.5 text-right border-b border-gray-200 text-xs bg-purple-100/50 ${fontClass} ${
+                        <td className={`px-2 py-2 text-right border-b border-gray-200 text-sm bg-purple-100/50 ${fontClass} ${
                           (isCalculada ? calcularValorTotalLocal(conta.codigo) : getValorTotal(conta.codigo)) < 0 ? 'text-red-600' : ''
-                        }`}>
-                          {formatarValor(isCalculada ? calcularValorTotalLocal(conta.codigo) : getValorTotal(conta.codigo))}
+                        }`} style={{ minWidth: `${larguraColunaValor}px`, width: `${larguraColunaValor}px` }}>
+                          {(() => {
+                            const valorTotal = isCalculada ? calcularValorTotalLocal(conta.codigo) : getValorTotal(conta.codigo);
+                            const podeClicarTotal = !temFilhos && !isCalculada && valorTotal !== 0 && isDespesa;
+                            return podeClicarTotal ? (
+                              <button
+                                onClick={() => abrirDuplicatasPorEmpresa(conta.codigo, conta.nome, 0, 'TOTAL')}
+                                className="hover:underline hover:text-blue-600 cursor-pointer"
+                                title="Clique para ver duplicatas - TOTAL"
+                              >
+                                {formatarValor(valorTotal)}
+                              </button>
+                            ) : (
+                              formatarValor(valorTotal)
+                            );
+                          })()}
                         </td>
-                        <td className={`px-0.5 py-1.5 text-right border-b border-gray-200 text-[9px] bg-purple-200/50 ${fontClass} ${
-                          (isCalculada ? calcularValorTotalLocal(conta.codigo) : getValorTotal(conta.codigo)) < 0 ? 'text-red-500' : 'text-gray-500'
-                        }`}>
+                        <td className={`px-2 py-2 text-right border-b border-gray-200 text-sm bg-purple-200/50 ${fontClass} ${
+                          (isCalculada ? calcularValorTotalLocal(conta.codigo) : getValorTotal(conta.codigo)) < 0 ? 'text-red-600' : 'text-gray-600'
+                        }`} style={{ minWidth: `${larguraColunaAV}px`, width: `${larguraColunaAV}px` }}>
                           {formatarAV(calcularAVTotal(conta.codigo, isCalculada))}
                         </td>
                       </tr>
@@ -1423,35 +1545,29 @@ export default function DREPage() {
                   <tbody>
                     {modalDuplicatas.duplicatas.map((dup, idx) => (
                       <tr key={idx} className="hover:bg-gray-50 border-b border-gray-100">
-                        <td className="px-3 py-2 font-mono text-xs">{dup.nrDuplicata || dup.id || '-'}</td>
+                        <td className="px-3 py-2">{dup.nrDuplicata || dup.id || '-'}</td>
                         <td className="px-3 py-2">{formatarData(dup.dtEmissao)}</td>
-                        <td className="px-3 py-2 text-center font-mono text-xs text-gray-600">{dup.cdCCusto || '-'}</td>
+                        <td className="px-3 py-2 text-center">{dup.cdCCusto || '-'}</td>
                         <td className="px-3 py-2">
-                          <div className="flex items-center gap-1">
-                            <Building2 className="w-3 h-3 text-gray-400" />
-                            <span className="truncate max-w-[200px]" title={dup.nomeCCusto}>
-                              {dup.nomeCCusto || '-'}
-                            </span>
-                          </div>
+                          <span className="truncate max-w-[200px]" title={dup.nomeCCusto}>
+                            {dup.nomeCCusto || '-'}
+                          </span>
                         </td>
                         <td className="px-3 py-2 truncate max-w-[250px]" title={dup.descricao}>
                           {dup.descricao || '-'}
                         </td>
-                        <td className="px-3 py-2 text-right font-medium text-red-600">
+                        <td className="px-3 py-2 text-right">
                           {formatarValor(dup.valor)}
                         </td>
                       </tr>
                     ))}
                   </tbody>
                   <tfoot>
-                    <tr className="bg-blue-50 font-bold border-t-2 border-blue-200">
-                      <td colSpan={4} className="px-3 py-3 text-left">
+                    <tr className="bg-gray-100 font-semibold border-t-2 border-gray-300">
+                      <td colSpan={5} className="px-3 py-2 text-left">
                         TOTAL ({modalDuplicatas.duplicatas.length} {modalDuplicatas.duplicatas.length === 1 ? 'registro' : 'registros'})
                       </td>
-                      <td className="px-3 py-3 text-right text-gray-600">
-                        Soma:
-                      </td>
-                      <td className="px-3 py-3 text-right text-red-700">
+                      <td className="px-3 py-2 text-right">
                         {formatarValor(modalDuplicatas.duplicatas.reduce((acc, dup) => acc + (dup.valor || 0), 0))}
                       </td>
                     </tr>

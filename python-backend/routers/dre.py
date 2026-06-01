@@ -778,8 +778,18 @@ def get_dre(
 # Removido 50 dos centros de custo (era duplicado com empresa)
 CCUSTOS_FABRICA = [1, 500, 501, 502, 503, 504, 505, 506, 507, 508, 509, 510, 511, 512, 513, 514]
 EMPRESAS_FABRICA = [1, 50]
+CCUSTOS_ECOMMERCE = [49, 120]
+CCUSTO_ECOMMERCE_AGRUPADO = 120
 # Centros de custo excluidos das despesas (lojas/outras empresas)
 CCUSTOS_EXCLUIDOS_FABRICA = [50, 100, 110]
+
+
+def _agrupar_ccusto_dre_por_empresa(cd_ccusto: int) -> int:
+    if cd_ccusto in CCUSTOS_ECOMMERCE:
+        return CCUSTO_ECOMMERCE_AGRUPADO
+    if cd_ccusto == 1 or cd_ccusto > 120:
+        return 1
+    return cd_ccusto
 
 
 def _buscar_ccustos_lojas():
@@ -2247,13 +2257,16 @@ def get_dre_por_empresa(
     try:
         print(f"[INFO] Buscando DRE por Empresa: {dataInicio} até {dataFim}")
 
-        # Buscar despesas agrupadas por empresa
+        # Buscar despesas agrupadas por centro de custo.
+        # Nesta visao, cada coluna representa um cd_ccusto.
+        # CMV fabrica, que vem agregado em mv_cmv_fab, fica na coluna 1.
         # EXCLUINDO empresas específicas (CORPO SEXY, CAIRO BENEVIDES, CB EMPREENDIMENTOS)
         exclusao_emp_placeholders = ",".join(["%s"] * len(EMPRESAS_EXCLUIDAS))
         query_despesas = f"""
             SELECT
                 d.cd_despesaitem,
                 i.ds_despesaitem as descricao_despesa,
+                d.cd_ccusto,
                 d.cd_empresa,
                 ABS(d.vl_rateio) as valor
             FROM vr_fcp_despduplicatai d
@@ -2262,9 +2275,10 @@ def get_dre_por_empresa(
               AND d.dt_emissao <= %s
               AND d.tp_situacao = 'N'
               AND d.cd_empresa NOT IN ({exclusao_emp_placeholders})
+              AND d.cd_ccusto NOT IN ({",".join(["%s"] * len(CCUSTOS_EXCLUIDOS_FABRICA))})
         """
 
-        despesas = execute_query(query_despesas, (dataInicio, dataFim, *EMPRESAS_EXCLUIDAS))
+        despesas = execute_query(query_despesas, (dataInicio, dataFim, *EMPRESAS_EXCLUIDAS, *CCUSTOS_EXCLUIDOS_FABRICA))
         print(f"[DRE-EMP] Total de despesas: {len(despesas)}")
 
         # Buscar classificações do banco
@@ -2292,8 +2306,14 @@ def get_dre_por_empresa(
         """
         empresas_raw = execute_query(query_empresas, ())
         nomes_empresas = {r['cd_empresa']: r['nome'] for r in empresas_raw}
+        query_ccustos = """
+            SELECT cd_ccusto, COALESCE(ds_ccusto, 'Centro de Custo ' || cd_ccusto::text) AS nome
+            FROM vr_gec_ccusto
+        """
+        ccustos_raw = execute_query(query_ccustos, ())
+        nomes_ccustos = {r['cd_ccusto']: r['nome'] for r in ccustos_raw}
 
-        # Agrupar despesas por conta_dre e empresa
+        # Agrupar despesas por conta_dre e centro de custo.
         valores_por_conta = {}
         empresas_encontradas = set()
 
@@ -2302,17 +2322,21 @@ def get_dre_por_empresa(
             descricao_despesa = d.get('descricao_despesa')
             conta = _classificar_conta_dre(cd_despesaitem, descricao_despesa, classificacoes_db, classificacoes_desc_db)
             valor = -abs(float(d['valor'] or 0))
-            cd_empresa = d['cd_empresa']
+            cd_ccusto = d['cd_ccusto']
+            if cd_ccusto is None:
+                continue
+            cd_ccusto = int(cd_ccusto)
+            cd_ccusto_agrupamento = _agrupar_ccusto_dre_por_empresa(cd_ccusto)
 
             if conta in ('NAO_CLASSIFICADO', 'EXCLUIDO'):
                 continue
 
-            empresas_encontradas.add(cd_empresa)
+            empresas_encontradas.add(cd_ccusto_agrupamento)
 
             if conta not in valores_por_conta:
                 valores_por_conta[conta] = {'total': 0}
 
-            emp_key = str(cd_empresa)
+            emp_key = str(cd_ccusto_agrupamento)
             if emp_key not in valores_por_conta[conta]:
                 valores_por_conta[conta][emp_key] = 0
 
@@ -2355,11 +2379,11 @@ def get_dre_por_empresa(
         # Adicionar vendas por empresa
         receita_bruta = {'total': 0}
         for v in vendas:
-            cd_emp = v['cd_empresa']
+            cd_emp = _agrupar_ccusto_dre_por_empresa(int(v['cd_empresa']))
             valor = float(v['valor'] or 0)
             empresas_encontradas.add(cd_emp)
             emp_key = str(cd_emp)
-            receita_bruta[emp_key] = valor
+            receita_bruta[emp_key] = receita_bruta.get(emp_key, 0) + valor
             receita_bruta['total'] += valor
 
         valores_por_conta['01.01.02'] = receita_bruta
@@ -2367,16 +2391,33 @@ def get_dre_por_empresa(
         # Adicionar devoluções por empresa
         devolucoes_brutas = {'total': 0}
         for d in devolucoes:
-            cd_emp = d['cd_empresa']
+            cd_emp = _agrupar_ccusto_dre_por_empresa(int(d['cd_empresa']))
             valor = -abs(float(d['valor'] or 0))
             emp_key = str(cd_emp)
-            devolucoes_brutas[emp_key] = valor
+            devolucoes_brutas[emp_key] = devolucoes_brutas.get(emp_key, 0) + valor
             devolucoes_brutas['total'] += valor
 
         valores_por_conta['02.01.03'] = devolucoes_brutas
 
         # CMV por empresa (lojas)
         # EXCLUINDO empresas específicas (CORPO SEXY, CAIRO BENEVIDES, CB EMPREENDIMENTOS)
+        cmv_valores = {'total': 0}
+
+        # CMV fabrica nao possui centro de custo detalhado na view. Mantem na coluna 1.
+        try:
+            cmv_fab_raw = execute_query("""
+                SELECT ABS(COALESCE(SUM(valor), 0)) AS cmv
+                FROM mv_cmv_fab
+                WHERE data >= %s AND data <= %s
+            """, (dataInicio, dataFim))
+            cmv_fabrica = float(cmv_fab_raw[0]['cmv'] if cmv_fab_raw else 0)
+            if cmv_fabrica:
+                empresas_encontradas.add(1)
+                cmv_valores['1'] = cmv_valores.get('1', 0) - abs(cmv_fabrica)
+                cmv_valores['total'] -= abs(cmv_fabrica)
+        except Exception as e:
+            print(f"[DRE-EMP] Erro ao buscar CMV fabrica: {e}")
+
         cmv_loja_raw = execute_query(f"""
             SELECT idcentrodecusto AS cd_empresa, ABS(SUM(valor)) AS cmv
             FROM mv_cmv_loja
@@ -2385,16 +2426,24 @@ def get_dre_por_empresa(
             GROUP BY idcentrodecusto
         """, (dataInicio, dataFim, *EMPRESAS_EXCLUIDAS))
 
-        cmv_valores = {'total': 0}
         for r in (cmv_loja_raw or []):
-            cd_emp = r['cd_empresa']
+            cd_emp = _agrupar_ccusto_dre_por_empresa(int(r['cd_empresa']))
             empresas_encontradas.add(cd_emp)
             v = -abs(float(r['cmv'] or 0))
             emp_key = str(cd_emp)
-            cmv_valores[emp_key] = v
+            cmv_valores[emp_key] = cmv_valores.get(emp_key, 0) + v
             cmv_valores['total'] += v
 
         valores_por_conta['04.02.02'] = cmv_valores
+
+        # Garantir uma unica coluna para e-commerce.
+        for valores in valores_por_conta.values():
+            valor_ecom_49 = valores.pop('49', 0)
+            if valor_ecom_49:
+                valores[str(CCUSTO_ECOMMERCE_AGRUPADO)] = valores.get(str(CCUSTO_ECOMMERCE_AGRUPADO), 0) + valor_ecom_49
+        empresas_encontradas.discard(49)
+        if any(str(CCUSTO_ECOMMERCE_AGRUPADO) in valores for valores in valores_por_conta.values()):
+            empresas_encontradas.add(CCUSTO_ECOMMERCE_AGRUPADO)
 
         # Somar hierarquia para cada empresa
         empresas_list = sorted(empresas_encontradas)
@@ -2420,7 +2469,7 @@ def get_dre_por_empresa(
         for cd_emp in empresas_list:
             empresas_info.append({
                 "cd_empresa": cd_emp,
-                "nome": nomes_empresas.get(cd_emp, f"Empresa {cd_emp}")
+                "nome": nomes_ccustos.get(cd_emp) or nomes_empresas.get(cd_emp, f"Centro de Custo {cd_emp}")
             })
 
         response = {
@@ -3611,18 +3660,11 @@ def get_duplicatas_por_empresa(
     cdEmpresa: int = Query(..., description="Codigo da empresa/centro de custo")
 ):
     """
-    Retorna duplicatas de uma conta DRE especifica para uma empresa/centro de custo.
-    - Para fabrica (cd_empresa=1): filtra por cd_ccusto IN (1, 500-514)
-    - Para lojas: filtra por cd_ccusto = cdEmpresa (pois ccusto = empresa nas lojas)
+    Retorna duplicatas de uma conta DRE especifica para um centro de custo.
+    Filtra por cd_ccusto, mesma logica da tabela principal DRE Por Empresa.
     """
     try:
-        # Determinar quais centros de custo filtrar baseado na empresa
-        if cdEmpresa == 1:
-            # Fabrica: usar todos os ccustos da fabrica
-            ccustos_filtro = CCUSTOS_FABRICA
-        else:
-            # Lojas: ccusto = cd_empresa
-            ccustos_filtro = [cdEmpresa]
+        ccustos_filtro = [cdEmpresa]
 
         print(f"[DUPLICATAS-EMP] Buscando conta={conta}, empresa={cdEmpresa}, ccustos={ccustos_filtro}, periodo={dataInicio} a {dataFim}")
 
@@ -3644,7 +3686,6 @@ def get_duplicatas_por_empresa(
             print(f"[DUPLICATAS-EMP] Aviso: nao foi possivel carregar classificacoes: {e}")
 
         # Primeiro, identificar quais cd_despesaitem correspondem a conta solicitada
-        # Isso e necessario para fazer a query SQL de forma eficiente
         conta_prefixo = f"{conta}."
 
         # Buscar do banco de dados (prioridade)
@@ -3663,12 +3704,24 @@ def get_duplicatas_por_empresa(
         else:
             itens = itens_db
 
-        # Criar placeholders para os centros de custo
-        placeholders_ccusto = ','.join(['%s'] * len(ccustos_filtro))
+        # Criar filtros. cdEmpresa=0 representa o total da linha, sem filtro de centro de custo.
+        # cdEmpresa=1 representa a fabrica agrupada: centro 1 + centros maiores que 120.
+        filtrar_ccusto = cdEmpresa > 0
+        if cdEmpresa == 1:
+            filtro_ccusto_sql = "AND (d.cd_ccusto = %s OR d.cd_ccusto > %s)"
+            params_ccusto = [1, 120]
+        elif cdEmpresa == CCUSTO_ECOMMERCE_AGRUPADO:
+            placeholders_ccusto = ','.join(['%s'] * len(CCUSTOS_ECOMMERCE))
+            filtro_ccusto_sql = f"AND d.cd_ccusto IN ({placeholders_ccusto})"
+            params_ccusto = CCUSTOS_ECOMMERCE
+        else:
+            placeholders_ccusto = ','.join(['%s'] * len(ccustos_filtro)) if filtrar_ccusto else ''
+            filtro_ccusto_sql = f"AND d.cd_ccusto IN ({placeholders_ccusto})" if filtrar_ccusto else ""
+            params_ccusto = ccustos_filtro if filtrar_ccusto else []
+        placeholders_emp_excluidas = ','.join(['%s'] * len(EMPRESAS_EXCLUIDAS))
 
-        # Se ainda nao tem itens, tentar por regras de descricao (busca mais ampla)
+        # Se ainda nao tem itens, buscar todas as despesas e filtrar depois
         if not itens:
-            # Buscar todas as despesas e filtrar depois
             query = f"""
                 SELECT
                     d.nr_duplicata as nr_duplicata,
@@ -3689,10 +3742,11 @@ def get_duplicatas_por_empresa(
                 WHERE d.dt_emissao >= %s
                   AND d.dt_emissao <= %s
                   AND d.tp_situacao = 'N'
-                  AND d.cd_ccusto IN ({placeholders_ccusto})
+                  {filtro_ccusto_sql}
+                  AND d.cd_empresa NOT IN ({placeholders_emp_excluidas})
                 ORDER BY d.dt_emissao
             """
-            despesas = execute_query(query, (dataInicio, dataFim, *ccustos_filtro))
+            despesas = execute_query(query, (dataInicio, dataFim, *params_ccusto, *EMPRESAS_EXCLUIDAS))
         else:
             # Buscar apenas os itens identificados
             placeholders_itens = ','.join(['%s'] * len(itens))
@@ -3716,14 +3770,15 @@ def get_duplicatas_por_empresa(
                 WHERE d.dt_emissao >= %s
                   AND d.dt_emissao <= %s
                   AND d.tp_situacao = 'N'
-                  AND d.cd_ccusto IN ({placeholders_ccusto})
+                  {filtro_ccusto_sql}
+                  AND d.cd_empresa NOT IN ({placeholders_emp_excluidas})
                   AND d.cd_despesaitem IN ({placeholders_itens})
                 ORDER BY d.dt_emissao
             """
-            despesas = execute_query(query, (dataInicio, dataFim, *ccustos_filtro, *itens))
+            despesas = execute_query(query, (dataInicio, dataFim, *params_ccusto, *EMPRESAS_EXCLUIDAS, *itens))
 
         print(f"[DUPLICATAS-EMP] Total despesas encontradas para ccustos {ccustos_filtro}: {len(despesas)}")
-        print(f"[DUPLICATAS-EMP] Itens mapeados para conta {conta}: {itens[:10]}...")
+        print(f"[DUPLICATAS-EMP] Itens mapeados para conta {conta}: {itens[:10] if itens else 'nenhum'}...")
 
         # Se nao encontrou despesas, mostrar debug
         if len(despesas) == 0:
@@ -3733,9 +3788,10 @@ def get_duplicatas_por_empresa(
                 SELECT COUNT(*) as qtd
                 FROM vr_fcp_despduplicatai d
                 WHERE d.dt_emissao >= %s AND d.dt_emissao <= %s
-                  AND d.tp_situacao = 'N' AND d.cd_ccusto IN ({placeholders_ccusto})
+                  AND d.tp_situacao = 'N'
+                  {filtro_ccusto_sql}
             """
-            debug_result = execute_query(query_debug, (dataInicio, dataFim, *ccustos_filtro))
+            debug_result = execute_query(query_debug, (dataInicio, dataFim, *params_ccusto))
             if debug_result:
                 print(f"[DUPLICATAS-EMP] DEBUG: Total despesas dos ccustos {ccustos_filtro} no periodo: {debug_result[0]['qtd']}")
 
