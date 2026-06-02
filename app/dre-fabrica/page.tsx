@@ -48,6 +48,7 @@ interface ContaDREValores {
   total: number;
   filhos?: ContaDREValores[];
   pendente?: boolean;
+  valoresApi?: boolean;
 }
 
 interface Duplicata {
@@ -184,6 +185,7 @@ function somarFilhos(contas: ContaDREValores[], periodos: PeriodoDRE[]): void {
   for (const conta of contas) {
     if (!conta.filhos?.length) continue;
     somarFilhos(conta.filhos, periodos);
+    if (conta.valoresApi) continue;
     conta.valores = {};
     for (const periodo of periodos) {
       conta.valores[periodo.key] = conta.filhos.reduce((sum, filho) => sum + (filho.valores[periodo.key] || 0), 0);
@@ -192,7 +194,7 @@ function somarFilhos(contas: ContaDREValores[], periodos: PeriodoDRE[]): void {
   }
 }
 
-function calcularLinhasOrdenadas(base: ContaDREValores[], periodos: PeriodoDRE[]) {
+function calcularLinhasOrdenadas(base: ContaDREValores[], periodos: PeriodoDRE[], contasTotalizadoras: Record<string, ContaDREValores> = {}) {
   const contasMap = indexarContas(base);
 
   const receitaBruta = contasMap.get('01');
@@ -207,7 +209,9 @@ function calcularLinhasOrdenadas(base: ContaDREValores[], periodos: PeriodoDRE[]
   const investimentosImobilizados = contasMap.get('17');
   const amortizacaoDividas = contasMap.get('18');
 
-  const receitaLiquida = criarContaCalculada(
+  // Usa valores da API se existirem, senão calcula
+  const receitaLiquidaApi = contasTotalizadoras['03'];
+  const receitaLiquida = receitaLiquidaApi ? { ...receitaLiquidaApi, nome: 'RECEITA LIQUIDA' } : criarContaCalculada(
     '03',
     'RECEITA LIQUIDA',
     periodos,
@@ -215,7 +219,8 @@ function calcularLinhasOrdenadas(base: ContaDREValores[], periodos: PeriodoDRE[]
     () => (receitaBruta?.total || 0) + (deducoes?.total || 0)
   );
 
-  const margemContribuicao = criarContaCalculada(
+  const margemContribuicaoApi = contasTotalizadoras['05'];
+  const margemContribuicao = margemContribuicaoApi ? { ...margemContribuicaoApi, nome: 'MARGEM CONTRIBUICAO' } : criarContaCalculada(
     '05',
     'MARGEM CONTRIBUICAO',
     periodos,
@@ -223,7 +228,8 @@ function calcularLinhasOrdenadas(base: ContaDREValores[], periodos: PeriodoDRE[]
     () => receitaLiquida.total + (custosVariaveis?.total || 0)
   );
 
-  const lucroOperacionalBruto = criarContaCalculada(
+  const lucroOperacionalBrutoApi = contasTotalizadoras['07'];
+  const lucroOperacionalBruto = lucroOperacionalBrutoApi ? { ...lucroOperacionalBrutoApi, nome: 'LUCRO OPERACIONAL BRUTO' } : criarContaCalculada(
     '07',
     'LUCRO OPERACIONAL BRUTO',
     periodos,
@@ -231,7 +237,8 @@ function calcularLinhasOrdenadas(base: ContaDREValores[], periodos: PeriodoDRE[]
     () => margemContribuicao.total + (custosFixos?.total || 0)
   );
 
-  const ebitda = criarContaCalculada(
+  const ebitdaApi = contasTotalizadoras['09'];
+  const ebitda = ebitdaApi ? { ...ebitdaApi, nome: 'LUCRO OPERACIONAL LIQUIDO (EBITDA)' } : criarContaCalculada(
     '09',
     'LUCRO OPERACIONAL LIQUIDO (EBITDA)',
     periodos,
@@ -239,7 +246,8 @@ function calcularLinhasOrdenadas(base: ContaDREValores[], periodos: PeriodoDRE[]
     () => lucroOperacionalBruto.total + (despesasOperacionais?.total || 0)
   );
 
-  const lucroBruto = criarContaCalculada(
+  const lucroBrutoApi = contasTotalizadoras['11'];
+  const lucroBruto = lucroBrutoApi ? { ...lucroBrutoApi, nome: 'LUCRO BRUTO' } : criarContaCalculada(
     '11',
     'LUCRO BRUTO',
     periodos,
@@ -247,7 +255,8 @@ function calcularLinhasOrdenadas(base: ContaDREValores[], periodos: PeriodoDRE[]
     () => ebitda.total + (resultadoNaoOp?.total || 0)
   );
 
-  const lucroLiquido = criarContaCalculada(
+  const lucroLiquidoApi = contasTotalizadoras['14'];
+  const lucroLiquido = lucroLiquidoApi ? { ...lucroLiquidoApi, nome: 'LUCRO LIQUIDO' } : criarContaCalculada(
     '14',
     'LUCRO LIQUIDO',
     periodos,
@@ -662,19 +671,41 @@ export default function DREPage() {
           return null;
         };
 
+        // Contas totalizadoras que vêm da API
+        const contasTotalizadoras: Record<string, ContaDREValores> = {};
+
         for (const codigoConta of Object.keys(valoresAPI)) {
           const conta = encontrarConta(dadosProcessados, codigoConta);
-          if (!conta) continue;
           const valoresConta = valoresAPI[codigoConta];
+
+          if (!conta) {
+            // Contas totalizadoras (03, 05, 07, 09, 11, 14) não existem na estrutura
+            if (['03', '05', '07', '09', '11', '14'].includes(codigoConta)) {
+              contasTotalizadoras[codigoConta] = {
+                codigo: codigoConta,
+                nome: '',
+                nivel: 1,
+                tipo: 'resultado',
+                valores: {},
+                total: valoresConta.total || 0,
+                valoresApi: true,
+              };
+              for (const periodo of periodosAtuais) {
+                contasTotalizadoras[codigoConta].valores[periodo.key] = valoresConta[periodo.key] || 0;
+              }
+            }
+            continue;
+          }
           conta.valores = {};
           for (const periodo of periodosAtuais) {
             conta.valores[periodo.key] = valoresConta[periodo.key] || 0;
           }
           conta.total = valoresConta.total || 0;
+          conta.valoresApi = true;
         }
 
         somarFilhos(dadosProcessados, periodosAtuais);
-        const dadosOrdenados = calcularLinhasOrdenadas(dadosProcessados, periodosAtuais);
+        const dadosOrdenados = calcularLinhasOrdenadas(dadosProcessados, periodosAtuais, contasTotalizadoras);
         setDadosDRE(dadosOrdenados);
         setUltimaAtualizacao(new Date().toLocaleString('pt-BR'));
 

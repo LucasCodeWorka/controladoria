@@ -481,6 +481,47 @@ def _somar_hierarquia(valores_por_conta, periodos):
     return valores_por_conta
 
 
+def _calcular_totalizadores(valores_por_conta, periodos):
+    """
+    Calcula as contas totalizadoras do DRE:
+    03 = 01 + 02 (Receita Líquida)
+    05 = 03 + 04 (Margem Contribuição)
+    07 = 05 + 06 (Lucro Operacional Bruto)
+    09 = 07 + 08 (EBITDA)
+    11 = 09 + 10 (Lucro Bruto)
+    14 = 11 + 13 (Lucro Líquido)
+    """
+    def get_valor(codigo, chave):
+        return valores_por_conta.get(codigo, {}).get(chave, 0)
+
+    def criar_conta(codigo, componentes):
+        valores = {'total': 0}
+        for p in periodos:
+            valores[p] = sum(get_valor(c, p) for c in componentes)
+        valores['total'] = sum(get_valor(c, 'total') for c in componentes)
+        return valores
+
+    # 03 = Receita Líquida = 01 + 02
+    valores_por_conta['03'] = criar_conta('03', ['01', '02'])
+
+    # 05 = Margem Contribuição = 03 + 04
+    valores_por_conta['05'] = criar_conta('05', ['03', '04'])
+
+    # 07 = Lucro Operacional Bruto = 05 + 06
+    valores_por_conta['07'] = criar_conta('07', ['05', '06'])
+
+    # 09 = EBITDA = 07 + 08
+    valores_por_conta['09'] = criar_conta('09', ['07', '08'])
+
+    # 11 = Lucro Bruto = 09 + 10
+    valores_por_conta['11'] = criar_conta('11', ['09', '10'])
+
+    # 14 = Lucro Líquido = 11 + 13
+    valores_por_conta['14'] = criar_conta('14', ['11', '13'])
+
+    return valores_por_conta
+
+
 @router.get("/api/dre")
 def get_dre(
     dataInicio: str = Query("2026-01-01", description="Data inicial (YYYY-MM-DD)"),
@@ -515,17 +556,16 @@ def get_dre(
                 raise HTTPException(status_code=400, detail="Parametro 'empresas' invalido. Informe pelo menos um ID.")
 
         # Buscar TODAS as despesas do período por DATA DE EMISSÃO
-        # Buscamos direto da tabela vr_fcp_despduplicatai pois a view vw_fluxo_pagamentos
-        # não tem a coluna dt_emissao e filtra apenas títulos não pagos
-        # EXCLUINDO empresas específicas (CORPO SEXY, CAIRO BENEVIDES, CB EMPREENDIMENTOS)
-        exclusao_placeholders = ",".join(["%s"] * len(EMPRESAS_EXCLUIDAS))
+        # Filtro por cd_ccusto (centros de custo válidos), excluindo 50, 100, 110
+        # Monta lista de ccustos válidos: fábrica + lojas + ecommerce + diretoria
+        ccustos_dre_analitico = CCUSTOS_FABRICA + list(CCUSTOS_LOJAS.keys()) + CCUSTOS_ECOMMERCE + [515]
 
-        # Filtro de empresa específica (se informado)
+        # Filtro de empresa específica (se informado) - filtra por cd_ccusto
         empresa_desp_filter = ""
         empresa_desp_params = []
         if empresas_ids:
             empresa_desp_placeholders = ",".join(["%s"] * len(empresas_ids))
-            empresa_desp_filter = f" AND d.cd_empresa IN ({empresa_desp_placeholders})"
+            empresa_desp_filter = f" AND d.cd_ccusto IN ({empresa_desp_placeholders})"
             empresa_desp_params = empresas_ids
 
         query_despesas = f"""
@@ -539,12 +579,13 @@ def get_dre(
             WHERE d.dt_emissao >= %s
               AND d.dt_emissao <= %s
               AND d.tp_situacao = 'N'
-              AND d.cd_empresa NOT IN ({exclusao_placeholders})
+              AND d.cd_ccusto IN ({",".join(["%s"] * len(ccustos_dre_analitico))})
+              AND d.cd_ccusto NOT IN ({",".join(["%s"] * len(CCUSTOS_EXCLUIDOS_FABRICA))})
               {empresa_desp_filter}
             ORDER BY d.dt_emissao
         """
 
-        despesas = execute_query(query_despesas, (dataInicio, dataFim, *EMPRESAS_EXCLUIDAS, *empresa_desp_params))
+        despesas = execute_query(query_despesas, (dataInicio, dataFim, *ccustos_dre_analitico, *CCUSTOS_EXCLUIDOS_FABRICA, *empresa_desp_params))
         print(f"[DRE] Total de despesas: {len(despesas)}")
 
         # Buscar classificações do banco de dados (prioridade) e depois usar mapeamento fixo como fallback
@@ -735,6 +776,7 @@ def get_dre(
 
         _merge_conta('04.02.02', cmv_valores)
         valores_por_conta = _somar_hierarquia(valores_por_conta, periodos)
+        valores_por_conta = _calcular_totalizadores(valores_por_conta, periodos)
         print(f"[DRE] CMV total: {cmv_valores['total']:.2f}")
 
         # Montar resposta
@@ -2251,34 +2293,74 @@ def get_dre_por_empresa(
     dataFim: str = Query("2026-12-31", description="Data final (YYYY-MM-DD)")
 ):
     """
-    Retorna dados da DRE agrupados por empresa (centro de custo).
-    Cada coluna representa uma empresa diferente.
+    Retorna dados da DRE agrupados por empresa.
+    Baseado na mesma lógica da DRE analítica, apenas trocando período por empresa.
     """
     try:
         print(f"[INFO] Buscando DRE por Empresa: {dataInicio} até {dataFim}")
 
-        # Buscar despesas agrupadas por centro de custo.
-        # Nesta visao, cada coluna representa um cd_ccusto.
-        # CMV fabrica, que vem agregado em mv_cmv_fab, fica na coluna 1.
-        # EXCLUINDO empresas específicas (CORPO SEXY, CAIRO BENEVIDES, CB EMPREENDIMENTOS)
-        exclusao_emp_placeholders = ",".join(["%s"] * len(EMPRESAS_EXCLUIDAS))
+        # Inclui: fábrica, lojas, ecommerce (49) e diretoria (515)
+        ccustos_dre = CCUSTOS_FABRICA + list(CCUSTOS_LOJAS.keys()) + CCUSTOS_ECOMMERCE + [515]
+        empresas_dre = sorted({e for e in ([1] + list(CCUSTOS_LOJAS.keys())) if e not in EMPRESAS_EXCLUIDAS})
+
+        def _init_valores_empresa():
+            valores = {'total': 0}
+            for emp in empresas_dre:
+                valores[str(emp)] = 0
+            return valores
+
+        def _somar_valor_empresa(codigo: str, cd_emp: int, valor: float):
+            if cd_emp not in empresas_dre:
+                return
+            if codigo not in valores_por_conta:
+                valores_por_conta[codigo] = _init_valores_empresa()
+            valores_por_conta[codigo][str(cd_emp)] += valor
+
+        def _merge_valores_empresa(codigo: str, valores: dict):
+            if codigo not in valores_por_conta:
+                valores_por_conta[codigo] = _init_valores_empresa()
+            for emp in empresas_dre:
+                emp_key = str(emp)
+                valores_por_conta[codigo][emp_key] += valores.get(emp_key, 0)
+
+        def _recalcular_totais():
+            for valores in valores_por_conta.values():
+                valores['total'] = sum(valores.get(str(emp), 0) for emp in empresas_dre)
+
+        # Buscar nomes das empresas e ccustos
+        query_empresas = """
+            SELECT e.cd_empresa, COALESCE(p.nm_fantasia, p.nm_pessoa, 'Empresa ' || e.cd_empresa::text) AS nome
+            FROM vr_ger_empresa e
+            LEFT JOIN vr_pes_pessoa p ON p.cd_pessoa = e.cd_pessoa
+        """
+        empresas_raw = execute_query(query_empresas, ())
+        nomes_empresas = {r['cd_empresa']: r['nome'] for r in empresas_raw}
+
+        query_ccustos = """
+            SELECT cd_ccusto, COALESCE(ds_ccusto, 'Centro de Custo ' || cd_ccusto::text) AS nome
+            FROM vr_gec_ccusto
+        """
+        ccustos_raw = execute_query(query_ccustos, ())
+        nomes_ccustos = {r['cd_ccusto']: r['nome'] for r in ccustos_raw}
+
+        # =====================================================================
+        # DESPESAS - filtro por cd_ccusto (centros de custo válidos)
+        # =====================================================================
         query_despesas = f"""
             SELECT
                 d.cd_despesaitem,
                 i.ds_despesaitem as descricao_despesa,
                 d.cd_ccusto,
-                d.cd_empresa,
                 ABS(d.vl_rateio) as valor
             FROM vr_fcp_despduplicatai d
             JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
             WHERE d.dt_emissao >= %s
               AND d.dt_emissao <= %s
               AND d.tp_situacao = 'N'
-              AND d.cd_empresa NOT IN ({exclusao_emp_placeholders})
+              AND d.cd_ccusto IN ({",".join(["%s"] * len(ccustos_dre))})
               AND d.cd_ccusto NOT IN ({",".join(["%s"] * len(CCUSTOS_EXCLUIDOS_FABRICA))})
         """
-
-        despesas = execute_query(query_despesas, (dataInicio, dataFim, *EMPRESAS_EXCLUIDAS, *CCUSTOS_EXCLUIDOS_FABRICA))
+        despesas = execute_query(query_despesas, (dataInicio, dataFim, *ccustos_dre, *CCUSTOS_EXCLUIDOS_FABRICA))
         print(f"[DRE-EMP] Total de despesas: {len(despesas)}")
 
         # Buscar classificações do banco
@@ -2298,53 +2380,30 @@ def get_dre_por_empresa(
         except Exception as e:
             print(f"[DRE-EMP] Aviso: não foi possível carregar classificações: {e}")
 
-        # Buscar nomes das empresas
-        query_empresas = """
-            SELECT e.cd_empresa, COALESCE(p.nm_fantasia, p.nm_pessoa, 'Empresa ' || e.cd_empresa::text) AS nome
-            FROM vr_ger_empresa e
-            LEFT JOIN vr_pes_pessoa p ON p.cd_pessoa = e.cd_pessoa
-        """
-        empresas_raw = execute_query(query_empresas, ())
-        nomes_empresas = {r['cd_empresa']: r['nome'] for r in empresas_raw}
-        query_ccustos = """
-            SELECT cd_ccusto, COALESCE(ds_ccusto, 'Centro de Custo ' || cd_ccusto::text) AS nome
-            FROM vr_gec_ccusto
-        """
-        ccustos_raw = execute_query(query_ccustos, ())
-        nomes_ccustos = {r['cd_ccusto']: r['nome'] for r in ccustos_raw}
-
-        # Agrupar despesas por conta_dre e centro de custo.
+        # Agrupar despesas por conta_dre e empresa
         valores_por_conta = {}
-        empresas_encontradas = set()
 
         for d in despesas:
             cd_despesaitem = d['cd_despesaitem']
             descricao_despesa = d.get('descricao_despesa')
             conta = _classificar_conta_dre(cd_despesaitem, descricao_despesa, classificacoes_db, classificacoes_desc_db)
             valor = -abs(float(d['valor'] or 0))
+
+            # Pular despesas excluidas (ex: MERC P/ REVENDA)
+            if conta == 'EXCLUIDO':
+                continue
+
             cd_ccusto = d['cd_ccusto']
             if cd_ccusto is None:
                 continue
-            cd_ccusto = int(cd_ccusto)
-            cd_ccusto_agrupamento = _agrupar_ccusto_dre_por_empresa(cd_ccusto)
+            cd_emp = _agrupar_ccusto_dre_por_empresa(int(cd_ccusto))
+            _somar_valor_empresa(conta, cd_emp, valor)
 
-            if conta in ('NAO_CLASSIFICADO', 'EXCLUIDO'):
-                continue
+        # =====================================================================
+        # VENDAS E DEVOLUÇÕES - Mesma query da analítica
+        # =====================================================================
+        exclusao_vendas_placeholders = ",".join(["%s"] * len(EMPRESAS_EXCLUIDAS))
 
-            empresas_encontradas.add(cd_ccusto_agrupamento)
-
-            if conta not in valores_por_conta:
-                valores_por_conta[conta] = {'total': 0}
-
-            emp_key = str(cd_ccusto_agrupamento)
-            if emp_key not in valores_por_conta[conta]:
-                valores_por_conta[conta][emp_key] = 0
-
-            valores_por_conta[conta][emp_key] += valor
-            valores_por_conta[conta]['total'] += valor
-
-        # Buscar vendas por empresa
-        # EXCLUINDO empresas específicas (CORPO SEXY, CAIRO BENEVIDES, CB EMPREENDIMENTOS)
         query_vendas = f"""
             SELECT
                 t.cd_empresa,
@@ -2355,7 +2414,7 @@ def get_dre_por_empresa(
               AND t.tp_situacao = 4
               AND t.tp_modalidade IN ('4')
               AND t.tp_operacao = 'S'
-              AND t.cd_empresa NOT IN ({exclusao_emp_placeholders})
+              AND t.cd_empresa NOT IN ({exclusao_vendas_placeholders})
             GROUP BY t.cd_empresa
         """
 
@@ -2369,41 +2428,60 @@ def get_dre_por_empresa(
               AND t.tp_situacao = 4
               AND t.tp_modalidade IN ('3')
               AND t.tp_operacao = 'E'
-              AND t.cd_empresa NOT IN ({exclusao_emp_placeholders})
+              AND t.cd_empresa NOT IN ({exclusao_vendas_placeholders})
             GROUP BY t.cd_empresa
         """
 
         vendas = execute_query(query_vendas, (dataInicio, dataFim, *EMPRESAS_EXCLUIDAS))
         devolucoes = execute_query(query_devolucoes, (dataInicio, dataFim, *EMPRESAS_EXCLUIDAS))
 
-        # Adicionar vendas por empresa
-        receita_bruta = {'total': 0}
+        # Receita bruta por empresa
+        receita_bruta = _init_valores_empresa()
         for v in vendas:
-            cd_emp = _agrupar_ccusto_dre_por_empresa(int(v['cd_empresa']))
+            cd_emp = int(v['cd_empresa'])
+            if cd_emp not in empresas_dre:
+                continue
             valor = float(v['valor'] or 0)
-            empresas_encontradas.add(cd_emp)
             emp_key = str(cd_emp)
             receita_bruta[emp_key] = receita_bruta.get(emp_key, 0) + valor
-            receita_bruta['total'] += valor
+        _merge_valores_empresa('01.01.02', receita_bruta)
 
-        valores_por_conta['01.01.02'] = receita_bruta
-
-        # Adicionar devoluções por empresa
-        devolucoes_brutas = {'total': 0}
+        # Devoluções por empresa
+        devolucoes_brutas = _init_valores_empresa()
         for d in devolucoes:
-            cd_emp = _agrupar_ccusto_dre_por_empresa(int(d['cd_empresa']))
+            cd_emp = int(d['cd_empresa'])
+            if cd_emp not in empresas_dre:
+                continue
             valor = -abs(float(d['valor'] or 0))
             emp_key = str(cd_emp)
             devolucoes_brutas[emp_key] = devolucoes_brutas.get(emp_key, 0) + valor
-            devolucoes_brutas['total'] += valor
+        _merge_valores_empresa('02.01.03', devolucoes_brutas)
 
-        valores_por_conta['02.01.03'] = devolucoes_brutas
+        # =====================================================================
+        # CMV - Mesma lógica da analítica
+        # =====================================================================
+        cmv_valores = _init_valores_empresa()
 
-        # CMV por empresa (lojas)
-        # EXCLUINDO empresas específicas (CORPO SEXY, CAIRO BENEVIDES, CB EMPREENDIMENTOS)
-        cmv_valores = {'total': 0}
+        # CMV loja por empresa
+        cmv_loja_raw = execute_query("""
+            SELECT
+                idcentrodecusto AS cd_empresa,
+                DATE_TRUNC('month', data) AS mes,
+                ABS(SUM(valor)) AS cmv
+            FROM mv_cmv_loja
+            WHERE data >= %s AND data <= %s
+            GROUP BY idcentrodecusto, DATE_TRUNC('month', data)
+        """, (dataInicio, dataFim))
 
-        # CMV fabrica nao possui centro de custo detalhado na view. Mantem na coluna 1.
+        for r in (cmv_loja_raw or []):
+            cd_emp = int(r['cd_empresa'])
+            if cd_emp not in empresas_dre:
+                continue
+            v = -abs(float(r['cmv'] or 0))
+            emp_key = str(cd_emp)
+            cmv_valores[emp_key] = cmv_valores.get(emp_key, 0) + v
+
+        # CMV fábrica vai para empresa 1
         try:
             cmv_fab_raw = execute_query("""
                 SELECT ABS(COALESCE(SUM(valor), 0)) AS cmv
@@ -2412,78 +2490,77 @@ def get_dre_por_empresa(
             """, (dataInicio, dataFim))
             cmv_fabrica = float(cmv_fab_raw[0]['cmv'] if cmv_fab_raw else 0)
             if cmv_fabrica:
-                empresas_encontradas.add(1)
                 cmv_valores['1'] = cmv_valores.get('1', 0) - abs(cmv_fabrica)
-                cmv_valores['total'] -= abs(cmv_fabrica)
         except Exception as e:
             print(f"[DRE-EMP] Erro ao buscar CMV fabrica: {e}")
 
-        cmv_loja_raw = execute_query(f"""
-            SELECT idcentrodecusto AS cd_empresa, ABS(SUM(valor)) AS cmv
-            FROM mv_cmv_loja
-            WHERE data >= %s AND data <= %s
-              AND idcentrodecusto NOT IN ({exclusao_emp_placeholders})
-            GROUP BY idcentrodecusto
-        """, (dataInicio, dataFim, *EMPRESAS_EXCLUIDAS))
+        _merge_valores_empresa('04.02.02', cmv_valores)
 
-        for r in (cmv_loja_raw or []):
-            cd_emp = _agrupar_ccusto_dre_por_empresa(int(r['cd_empresa']))
-            empresas_encontradas.add(cd_emp)
-            v = -abs(float(r['cmv'] or 0))
-            emp_key = str(cd_emp)
-            cmv_valores[emp_key] = cmv_valores.get(emp_key, 0) + v
-            cmv_valores['total'] += v
+        # =====================================================================
+        # SOMAR HIERARQUIA - Mesma lógica da _somar_hierarquia
+        # =====================================================================
+        pais = {}
 
-        valores_por_conta['04.02.02'] = cmv_valores
-
-        # Garantir uma unica coluna para e-commerce.
-        for valores in valores_por_conta.values():
-            valor_ecom_49 = valores.pop('49', 0)
-            if valor_ecom_49:
-                valores[str(CCUSTO_ECOMMERCE_AGRUPADO)] = valores.get(str(CCUSTO_ECOMMERCE_AGRUPADO), 0) + valor_ecom_49
-        empresas_encontradas.discard(49)
-        if any(str(CCUSTO_ECOMMERCE_AGRUPADO) in valores for valores in valores_por_conta.values()):
-            empresas_encontradas.add(CCUSTO_ECOMMERCE_AGRUPADO)
-
-        # Somar hierarquia para cada empresa
-        empresas_list = sorted(empresas_encontradas)
-        for codigo, valores in list(valores_por_conta.items()):
+        for codigo, valores in valores_por_conta.items():
             if codigo in ('NAO_CLASSIFICADO', 'EXCLUIDO'):
                 continue
+
             partes = codigo.split('.')
             if len(partes) <= 1:
                 continue
+
             for nivel in range(1, len(partes)):
                 codigo_pai = '.'.join(partes[:nivel])
-                if codigo_pai not in valores_por_conta:
-                    valores_por_conta[codigo_pai] = {'total': 0}
-                for emp in empresas_list:
+                if codigo_pai not in pais:
+                    pais[codigo_pai] = _init_valores_empresa()
+
+                # Somar para cada empresa
+                for emp in empresas_dre:
                     emp_key = str(emp)
-                    if emp_key not in valores_por_conta[codigo_pai]:
-                        valores_por_conta[codigo_pai][emp_key] = 0
-                    valores_por_conta[codigo_pai][emp_key] += valores.get(emp_key, 0)
-                valores_por_conta[codigo_pai]['total'] += valores.get('total', 0)
+                    pais[codigo_pai][emp_key] += valores.get(emp_key, 0)
+
+        # Adicionar pais ao valores_por_conta
+        for codigo_pai, valores_pai in pais.items():
+            valores_por_conta[codigo_pai] = valores_pai
+
+        _recalcular_totais()
+
+        # Calcular contas totalizadoras (03, 05, 07, 09, 11, 14)
+        def criar_conta_totalizada(componentes):
+            valores = _init_valores_empresa()
+            for emp in empresas_dre:
+                emp_key = str(emp)
+                valores[emp_key] = sum(valores_por_conta.get(c, {}).get(emp_key, 0) for c in componentes)
+            valores['total'] = sum(valores_por_conta.get(c, {}).get('total', 0) for c in componentes)
+            return valores
+
+        valores_por_conta['03'] = criar_conta_totalizada(['01', '02'])  # Receita Líquida
+        valores_por_conta['05'] = criar_conta_totalizada(['03', '04'])  # Margem Contribuição
+        valores_por_conta['07'] = criar_conta_totalizada(['05', '06'])  # Lucro Operacional Bruto
+        valores_por_conta['09'] = criar_conta_totalizada(['07', '08'])  # EBITDA
+        valores_por_conta['11'] = criar_conta_totalizada(['09', '10'])  # Lucro Bruto
+        valores_por_conta['14'] = criar_conta_totalizada(['11', '13'])  # Lucro Líquido
 
         # Montar lista de empresas com nomes
         empresas_info = []
-        for cd_emp in empresas_list:
+        for cd_emp in empresas_dre:
             empresas_info.append({
                 "cd_empresa": cd_emp,
-                "nome": nomes_ccustos.get(cd_emp) or nomes_empresas.get(cd_emp, f"Centro de Custo {cd_emp}")
+                "nome": nomes_ccustos.get(cd_emp) or nomes_empresas.get(cd_emp, f"Empresa {cd_emp}")
             })
 
         response = {
             "empresas": empresas_info,
             "valores": valores_por_conta,
             "metadata": {
-                "totalEmpresas": len(empresas_list),
+                "totalEmpresas": len(empresas_dre),
                 "dataInicio": dataInicio,
                 "dataFim": dataFim,
                 "dataConsulta": datetime.now().isoformat()
             }
         }
 
-        print(f"[OK] DRE por Empresa gerado com {len(empresas_list)} empresas.")
+        print(f"[OK] DRE por Empresa gerado com {len(empresas_dre)} empresas.")
         return response
 
     except Exception as e:
@@ -2762,8 +2839,8 @@ def get_dre_unificada(
 
         # Determinar quais centros de custo usar
         if filtro == "consolidado":
-            # Todos: fabrica + lojas
-            ccustos = CCUSTOS_FABRICA + list(CCUSTOS_LOJAS.keys())
+            # Todos: fabrica + lojas + ecommerce (49) + diretoria (515) - igual ao DRE Por Empresa
+            ccustos = list(set(CCUSTOS_FABRICA + list(CCUSTOS_LOJAS.keys()) + CCUSTOS_ECOMMERCE + [515]))
             nome_filtro = "CONSOLIDADO"
             tipo_filtro = "consolidado"
             usar_cmv_fab = True
@@ -3017,12 +3094,15 @@ def get_dre_unificada(
                 if ccustos_lojas_filtro:
                     ccusto_placeholders_loja = ",".join(["%s"] * len(ccustos_lojas_filtro))
                     query_cmv_loja = f"""
-                        SELECT DATE_TRUNC('month', data) AS mes, ABS(COALESCE(SUM(valor), 0)) AS cmv
+                        SELECT
+                            DATE_TRUNC('month', data) AS mes,
+                            idcentrodecusto,
+                            ABS(COALESCE(SUM(valor), 0)) AS cmv
                         FROM mv_cmv_loja
                         WHERE data >= %s
                           AND data <= %s
                           AND idcentrodecusto IN ({ccusto_placeholders_loja})
-                        GROUP BY DATE_TRUNC('month', data)
+                        GROUP BY DATE_TRUNC('month', data), idcentrodecusto
                     """
                     cmv_loja = execute_query(query_cmv_loja, (dataInicio, dataFim, *ccustos_lojas_filtro))
                     for c in cmv_loja:
@@ -3040,6 +3120,9 @@ def get_dre_unificada(
 
         # Somar hierarquia
         valores_por_conta = _somar_hierarquia(valores_por_conta, periodos)
+
+        # Calcular totalizadores (03, 05, 07, 09, 11, 14)
+        valores_por_conta = _calcular_totalizadores(valores_por_conta, periodos)
 
         # Preparar response
         periodos_response = [
@@ -3840,3 +3923,4 @@ def get_duplicatas_por_empresa(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
