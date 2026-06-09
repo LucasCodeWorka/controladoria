@@ -1586,3 +1586,136 @@ def sincronizar_classificacoes_com_oficial():
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/api/classificacao-despesas-dre/comparar-impacto")
+def comparar_impacto_mapeamentos():
+    """
+    Compara os mapeamentos fixos do código (MAPEAMENTO_OFICIAL_DRE) com as
+    classificações salvas no banco de dados (classificacao_despesas_dre).
+
+    Retorna:
+    - Despesas que estão no banco mas não no mapeamento fixo
+    - Despesas que estão no mapeamento fixo mas não no banco
+    - Despesas com classificação diferente entre banco e mapeamento fixo
+    - Total de despesas que seriam afetadas se remover o mapeamento fixo
+    """
+    try:
+        # Buscar classificações do banco
+        query_banco = """
+            SELECT cd_despesaitem, ds_despesaitem, conta_dre
+            FROM classificacao_despesas_dre
+        """
+        classificacoes_banco = execute_query(query_banco)
+
+        # Criar mapa do banco
+        mapa_banco = {}
+        for c in classificacoes_banco or []:
+            cd = c['cd_despesaitem']
+            conta = c['conta_dre']
+            # Extrair só o código (ex: "08.02.10" de "08.02.10 CAGECE")
+            if conta and ' ' in conta:
+                conta = conta.split(' ')[0]
+            mapa_banco[cd] = {
+                'conta': conta,
+                'nome': c['ds_despesaitem']
+            }
+
+        # Buscar todas as despesas do sistema
+        query_despesas = """
+            SELECT cd_despesaitem, ds_despesaitem
+            FROM vr_fcp_despesaitem
+        """
+        todas_despesas = execute_query(query_despesas)
+
+        # Criar mapa de nomes
+        mapa_nomes = {}
+        for d in todas_despesas or []:
+            mapa_nomes[d['cd_despesaitem']] = d['ds_despesaitem']
+
+        # Análise
+        so_no_banco = []  # Está no banco mas não no mapeamento fixo
+        so_no_fixo = []   # Está no mapeamento fixo mas não no banco
+        divergentes = []  # Está em ambos mas com classificação diferente
+        iguais = []       # Está em ambos com mesma classificação
+
+        # Verificar cada item do mapeamento fixo
+        for cd, conta_fixa in MAPEAMENTO_OFICIAL_DRE.items():
+            nome = mapa_nomes.get(cd, f'Código {cd}')
+            if cd in mapa_banco:
+                conta_banco = mapa_banco[cd]['conta']
+                if conta_banco == conta_fixa:
+                    iguais.append({
+                        'cd_despesaitem': cd,
+                        'nome': nome,
+                        'conta': conta_fixa
+                    })
+                else:
+                    divergentes.append({
+                        'cd_despesaitem': cd,
+                        'nome': nome,
+                        'conta_banco': conta_banco,
+                        'conta_fixo': conta_fixa
+                    })
+            else:
+                so_no_fixo.append({
+                    'cd_despesaitem': cd,
+                    'nome': nome,
+                    'conta_fixo': conta_fixa
+                })
+
+        # Verificar itens que estão só no banco
+        for cd, info in mapa_banco.items():
+            if cd not in MAPEAMENTO_OFICIAL_DRE:
+                so_no_banco.append({
+                    'cd_despesaitem': cd,
+                    'nome': info['nome'],
+                    'conta_banco': info['conta']
+                })
+
+        # Calcular impacto - despesas usadas nos últimos 12 meses que cairiam em NAO_CLASSIFICADO
+        query_despesas_usadas = """
+            SELECT DISTINCT d.cd_despesaitem, i.ds_despesaitem
+            FROM vr_fcp_despduplicatai d
+            JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
+            WHERE d.dt_emissao >= CURRENT_DATE - INTERVAL '12 months'
+        """
+        despesas_usadas = execute_query(query_despesas_usadas)
+
+        despesas_sem_classificacao = []
+        for d in despesas_usadas or []:
+            cd = d['cd_despesaitem']
+            if cd not in mapa_banco:
+                # Não está no banco - seria NAO_CLASSIFICADO
+                conta_fixo = MAPEAMENTO_OFICIAL_DRE.get(cd)
+                despesas_sem_classificacao.append({
+                    'cd_despesaitem': cd,
+                    'nome': d['ds_despesaitem'],
+                    'conta_fixo': conta_fixo,
+                    'impacto': 'Cairia em NAO_CLASSIFICADO se remover mapeamento fixo' if conta_fixo else 'Já é NAO_CLASSIFICADO'
+                })
+
+        return {
+            "resumo": {
+                "total_no_banco": len(mapa_banco),
+                "total_no_fixo": len(MAPEAMENTO_OFICIAL_DRE),
+                "iguais": len(iguais),
+                "divergentes": len(divergentes),
+                "so_no_banco": len(so_no_banco),
+                "so_no_fixo": len(so_no_fixo),
+                "despesas_usadas_sem_classificacao_banco": len(despesas_sem_classificacao)
+            },
+            "impacto": {
+                "mensagem": f"Se remover o mapeamento fixo, {len(despesas_sem_classificacao)} despesas usadas nos últimos 12 meses ficariam como NAO_CLASSIFICADO",
+                "despesas_afetadas": despesas_sem_classificacao[:50]  # Primeiras 50
+            },
+            "divergentes": divergentes,
+            "so_no_banco": so_no_banco[:30],
+            "so_no_fixo": so_no_fixo[:30]
+        }
+
+    except Exception as e:
+        print(f"[ERROR] Erro ao comparar impacto: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))

@@ -835,8 +835,6 @@ export default function PlanoContasDREPage() {
         conta_dre: a.despesa.conta_dre,
       }));
 
-      console.log(`[SALVAR] Enviando ${classificacoes.length} classificações alteradas:`, classificacoes);
-
       const response = await fetch('/api/classificacao-despesas-dre', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -847,7 +845,6 @@ export default function PlanoContasDREPage() {
       });
 
       const data = await response.json();
-      console.log('[SALVAR] Resposta do servidor:', data);
 
       if (response.ok && data.success) {
         alert(`${data.salvos} classificações salvas com sucesso!`);

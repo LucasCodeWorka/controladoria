@@ -412,18 +412,10 @@ export const PLANO_CONTAS_DRE_FABRICA: ContaDRE[] = [
     ],
   },
   {
-    codigo: '15',
-    nome: 'PONTO DE EQUILIBRIO FINANCEIRO',
-    nivel: 1,
-    tipo: 'conta',
-    pendente: true,
-  },
-  {
     codigo: '16',
     nome: 'PONTO DE EQUILIBRIO ECONOMICO',
     nivel: 1,
     tipo: 'conta',
-    pendente: true,
   },
   {
     codigo: '17',

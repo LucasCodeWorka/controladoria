@@ -22,8 +22,6 @@ export async function GET(request: NextRequest) {
 
     const url = `${PYTHON_API_URL}/api/dre/por-empresa/duplicatas?conta=${encodeURIComponent(conta)}&dataInicio=${dataInicio}&dataFim=${dataFim}&cdEmpresa=${cdEmpresa}`;
 
-    console.log('[API] Buscando duplicatas por empresa:', url);
-
     const response = await fetch(url, {
       method: 'GET',
       cache: 'no-store',

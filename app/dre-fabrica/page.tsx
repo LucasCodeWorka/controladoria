@@ -61,6 +61,7 @@ interface Duplicata {
   valor: number;
   cdCCusto: number;
   nomeCCusto: string;
+  nmFornecedor?: string;
 }
 
 interface ModalDuplicatasState {
@@ -204,8 +205,6 @@ function calcularLinhasOrdenadas(base: ContaDREValores[], periodos: PeriodoDRE[]
   const despesasOperacionais = contasMap.get('08');
   const resultadoNaoOp = contasMap.get('10');
   const despesasTributarias = contasMap.get('13');
-  const pontoEquilibrioFinanceiro = contasMap.get('15');
-  const pontoEquilibrioEconomico = contasMap.get('16');
   const investimentosImobilizados = contasMap.get('17');
   const amortizacaoDividas = contasMap.get('18');
 
@@ -273,6 +272,60 @@ function calcularLinhasOrdenadas(base: ContaDREValores[], periodos: PeriodoDRE[]
     () => lucroLiquido.total + (investimentosImobilizados?.total || 0) + (amortizacaoDividas?.total || 0)
   );
 
+  // Ponto de Equilíbrio Econômico = Receita necessária para Lucro Líquido = 0
+  // Fórmula: (CMV + Custos Fixos + Despesas Op + Resultado Não Op + Desp Tributárias + Deduções) / (1 - CMV%)
+  // Onde CMV% = CMV / Receita Bruta (proporção de custo variável)
+  const pontoEquilibrioEconomicoCalc = criarContaCalculada(
+    '16',
+    'PONTO DE EQUILIBRIO ECONOMICO',
+    periodos,
+    (periodo) => {
+      const receitaBrutaPeriodo = receitaBruta?.valores[periodo] || 0;
+      if (receitaBrutaPeriodo === 0) return 0;
+
+      // Custos variáveis (CMV) - proporcionais à receita
+      const cmvPeriodo = Math.abs(custosVariaveis?.valores[periodo] || 0);
+      const deducoesPeriodo = Math.abs(deducoes?.valores[periodo] || 0);
+
+      // Custos fixos (não variam com receita)
+      const custosFixosPeriodo = Math.abs(custosFixos?.valores[periodo] || 0);
+      const despesasOpPeriodo = Math.abs(despesasOperacionais?.valores[periodo] || 0);
+      const resultadoNaoOpPeriodo = Math.abs(resultadoNaoOp?.valores[periodo] || 0);
+      const despesasTribPeriodo = Math.abs(despesasTributarias?.valores[periodo] || 0);
+
+      // Percentual de custos variáveis sobre receita bruta
+      const cmvPct = (cmvPeriodo + deducoesPeriodo) / Math.abs(receitaBrutaPeriodo);
+
+      // Margem de contribuição % = 1 - CMV%
+      const margemPct = 1 - cmvPct;
+      if (margemPct <= 0) return 0;
+
+      // Custos fixos totais
+      const custosFixosTotais = custosFixosPeriodo + despesasOpPeriodo + resultadoNaoOpPeriodo + despesasTribPeriodo;
+
+      // PE = Custos Fixos / Margem %
+      return custosFixosTotais / margemPct;
+    },
+    () => {
+      const receitaBrutaTotal = receitaBruta?.total || 0;
+      if (receitaBrutaTotal === 0) return 0;
+
+      const cmvTotal = Math.abs(custosVariaveis?.total || 0);
+      const deducoesTotal = Math.abs(deducoes?.total || 0);
+      const custosFixosTotal = Math.abs(custosFixos?.total || 0);
+      const despesasOpTotal = Math.abs(despesasOperacionais?.total || 0);
+      const resultadoNaoOpTotal = Math.abs(resultadoNaoOp?.total || 0);
+      const despesasTribTotal = Math.abs(despesasTributarias?.total || 0);
+
+      const cmvPct = (cmvTotal + deducoesTotal) / Math.abs(receitaBrutaTotal);
+      const margemPct = 1 - cmvPct;
+      if (margemPct <= 0) return 0;
+
+      const custosFixosTotais = custosFixosTotal + despesasOpTotal + resultadoNaoOpTotal + despesasTribTotal;
+      return custosFixosTotais / margemPct;
+    }
+  );
+
   return [
     clonarConta(receitaBruta),
     clonarConta(deducoes),
@@ -287,8 +340,7 @@ function calcularLinhasOrdenadas(base: ContaDREValores[], periodos: PeriodoDRE[]
     lucroBruto,
     clonarConta(despesasTributarias),
     lucroLiquido,
-    clonarConta(pontoEquilibrioFinanceiro),
-    clonarConta(pontoEquilibrioEconomico),
+    pontoEquilibrioEconomicoCalc,
     clonarConta(investimentosImobilizados),
     clonarConta(amortizacaoDividas),
     lucroLiquidoMenosInvestimentos,
@@ -316,7 +368,7 @@ export default function DREPage() {
   const [totaisSinteticos, setTotaisSinteticos] = useState<Record<string, number>>({});
   const [dadosPorEmpresa, setDadosPorEmpresa] = useState<DadosPorEmpresa | null>(null);
   const [contasExpandidas, setContasExpandidas] = useState<Set<string>>(
-    new Set(['01', '02', '04', '06', '08', '10', '13', '15', '16', '17', '18', '19'])
+    new Set(['01', '02', '04', '06', '08', '10', '13', '16', '17', '18', '19'])
   );
   const [mostrarExtras, setMostrarExtras] = useState(false); // Controla visibilidade de 15, 16, 17, 18, 19
   const [statusCarregamento, setStatusCarregamento] = useState<string | null>(null);
@@ -403,7 +455,7 @@ export default function DREPage() {
   }, [dadosDRE]);
 
   // Filtrar contas extras (15, 16, 17, 18, 19) quando mostrarExtras for false
-  const CONTAS_EXTRAS = ['15', '16', '17', '18', '19'];
+  const CONTAS_EXTRAS = ['16', '17', '18', '19'];
   const dadosDREFiltrados = useMemo(() => {
     if (mostrarExtras) return dadosDRE;
     return dadosDRE.filter((conta) => !CONTAS_EXTRAS.includes(conta.codigo));
@@ -640,6 +692,7 @@ export default function DREPage() {
         const timeout = window.setTimeout(() => controller.abort(), 60000);
         const response = await fetch(`/api/dre/unificada?dataInicio=${dataInicio}&dataFim=${dataFim}&filtro=${filtro}`, {
           signal: controller.signal,
+          cache: 'no-store',
         });
         window.clearTimeout(timeout);
         const data = await response.json();
@@ -1343,7 +1396,7 @@ export default function DREPage() {
                   };
 
                   // Contas calculadas (resultados)
-                  const contasCalculadas = ['03', '05', '07', '09', '11', '14', '19'];
+                  const contasCalculadas = ['03', '05', '07', '09', '11', '14', '16', '19'];
 
                   // Funcao para calcular valor de conta calculada
                   const calcularValorEmpresaLocal = (codigo: string, cdEmpresa: number): number => {
@@ -1355,6 +1408,19 @@ export default function DREPage() {
                       case '09': return v('01') + v('02') + v('04') + v('06') + v('08'); // EBITDA
                       case '11': return v('01') + v('02') + v('04') + v('06') + v('08') + v('10'); // Lucro Bruto
                       case '14': return v('01') + v('02') + v('04') + v('06') + v('08') + v('10') + v('13'); // Lucro Liquido
+                      case '16': { // PE Economico = Receita para Lucro Liquido = 0
+                        const receitaBruta = v('01');
+                        if (receitaBruta === 0) return 0;
+                        // Custos variáveis (proporcionais à receita)
+                        const cmv = Math.abs(v('04'));
+                        const deducoes = Math.abs(v('02'));
+                        const cmvPct = (cmv + deducoes) / Math.abs(receitaBruta);
+                        const margemPct = 1 - cmvPct;
+                        if (margemPct <= 0) return 0;
+                        // Custos fixos totais
+                        const custosFixos = Math.abs(v('06')) + Math.abs(v('08')) + Math.abs(v('10')) + Math.abs(v('13'));
+                        return custosFixos / margemPct;
+                      }
                       case '19': return v('01') + v('02') + v('04') + v('06') + v('08') + v('10') + v('13') + v('17') + v('18'); // LL - Inv
                       default: return 0;
                     }
@@ -1369,6 +1435,17 @@ export default function DREPage() {
                       case '09': return v('01') + v('02') + v('04') + v('06') + v('08');
                       case '11': return v('01') + v('02') + v('04') + v('06') + v('08') + v('10');
                       case '14': return v('01') + v('02') + v('04') + v('06') + v('08') + v('10') + v('13');
+                      case '16': { // PE Economico = Receita para Lucro Liquido = 0
+                        const receitaBruta = v('01');
+                        if (receitaBruta === 0) return 0;
+                        const cmv = Math.abs(v('04'));
+                        const deducoes = Math.abs(v('02'));
+                        const cmvPct = (cmv + deducoes) / Math.abs(receitaBruta);
+                        const margemPct = 1 - cmvPct;
+                        if (margemPct <= 0) return 0;
+                        const custosFixos = Math.abs(v('06')) + Math.abs(v('08')) + Math.abs(v('10')) + Math.abs(v('13'));
+                        return custosFixos / margemPct;
+                      }
                       case '19': return v('01') + v('02') + v('04') + v('06') + v('08') + v('10') + v('13') + v('17') + v('18');
                       default: return 0;
                     }
@@ -1532,15 +1609,15 @@ export default function DREPage() {
       {/* Modal de Duplicatas */}
       {modalDuplicatas.aberto && (
         <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-lg shadow-xl max-w-5xl w-full max-h-[85vh] flex flex-col">
-            <div className="flex items-center justify-between p-4 border-b border-gray-200 bg-gray-50 rounded-t-lg">
+          <div className="bg-white rounded-lg shadow-xl w-[95vw] max-w-6xl max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 bg-gray-50 rounded-t-lg">
               <div>
                 <h3 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
                   <FileText className="w-5 h-5 text-blue-600" />
                   Duplicatas - {modalDuplicatas.conta} {modalDuplicatas.nomeConta}
                 </h3>
                 <p className="text-sm text-gray-600">
-                  Periodo: {modalDuplicatas.labelPeriodo} | Total: {formatarValor(modalDuplicatas.total)}
+                  Periodo: {modalDuplicatas.labelPeriodo} | Total: <span className="font-semibold text-red-600">{formatarValor(modalDuplicatas.total)}</span>
                 </p>
               </div>
               <button
@@ -1551,7 +1628,7 @@ export default function DREPage() {
               </button>
             </div>
 
-            <div className="flex-1 overflow-auto p-4">
+            <div className="flex-1 overflow-hidden flex flex-col">
               {modalDuplicatas.loading ? (
                 <div className="flex items-center justify-center py-12">
                   <RefreshCw className="w-8 h-8 animate-spin text-blue-600" />
@@ -1562,55 +1639,67 @@ export default function DREPage() {
                   Nenhuma duplicata encontrada para este periodo.
                 </div>
               ) : (
-                <table className="w-full border-collapse text-sm">
-                  <thead>
-                    <tr className="bg-gray-100">
-                      <th className="px-3 py-2 text-left border-b font-semibold">Nr Duplicata</th>
-                      <th className="px-3 py-2 text-left border-b font-semibold">Data Emissao</th>
-                      <th className="px-3 py-2 text-center border-b font-semibold">CCusto</th>
-                      <th className="px-3 py-2 text-left border-b font-semibold">Nome CCusto</th>
-                      <th className="px-3 py-2 text-left border-b font-semibold">Descricao</th>
-                      <th className="px-3 py-2 text-right border-b font-semibold">Valor</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {modalDuplicatas.duplicatas.map((dup, idx) => (
-                      <tr key={idx} className="hover:bg-gray-50 border-b border-gray-100">
-                        <td className="px-3 py-2">{dup.nrDuplicata || dup.id || '-'}</td>
-                        <td className="px-3 py-2">{formatarData(dup.dtEmissao)}</td>
-                        <td className="px-3 py-2 text-center">{dup.cdCCusto || '-'}</td>
-                        <td className="px-3 py-2">
-                          <span className="truncate max-w-[200px]" title={dup.nomeCCusto}>
-                            {dup.nomeCCusto || '-'}
-                          </span>
-                        </td>
-                        <td className="px-3 py-2 truncate max-w-[250px]" title={dup.descricao}>
-                          {dup.descricao || '-'}
-                        </td>
-                        <td className="px-3 py-2 text-right">
-                          {formatarValor(dup.valor)}
-                        </td>
+                <div className="flex-1 overflow-auto">
+                  <table className="w-full border-collapse text-sm">
+                    <thead className="sticky top-0 z-10">
+                      <tr className="bg-gray-100">
+                        <th className="px-4 py-3 text-left border-b-2 border-gray-300 font-semibold text-gray-700 w-28">Nr Duplicata</th>
+                        <th className="px-4 py-3 text-left border-b-2 border-gray-300 font-semibold text-gray-700 w-28">Data Emissao</th>
+                        <th className="px-4 py-3 text-left border-b-2 border-gray-300 font-semibold text-gray-700 w-36">Centro de Custo</th>
+                        <th className="px-4 py-3 text-left border-b-2 border-gray-300 font-semibold text-gray-700 w-44">Fornecedor</th>
+                        <th className="px-4 py-3 text-left border-b-2 border-gray-300 font-semibold text-gray-700">Descricao</th>
+                        <th className="px-4 py-3 text-right border-b-2 border-gray-300 font-semibold text-gray-700 w-28">Valor</th>
                       </tr>
-                    ))}
-                  </tbody>
-                  <tfoot>
-                    <tr className="bg-gray-100 font-semibold border-t-2 border-gray-300">
-                      <td colSpan={5} className="px-3 py-2 text-left">
-                        TOTAL ({modalDuplicatas.duplicatas.length} {modalDuplicatas.duplicatas.length === 1 ? 'registro' : 'registros'})
-                      </td>
-                      <td className="px-3 py-2 text-right">
-                        {formatarValor(modalDuplicatas.duplicatas.reduce((acc, dup) => acc + (dup.valor || 0), 0))}
-                      </td>
-                    </tr>
-                  </tfoot>
-                </table>
+                    </thead>
+                    <tbody>
+                      {modalDuplicatas.duplicatas.map((dup, idx) => (
+                        <tr key={idx} className="hover:bg-blue-50 border-b border-gray-100 transition-colors">
+                          <td className="px-4 py-2.5 text-gray-600 font-mono text-xs">{dup.nrDuplicata || dup.id || '-'}</td>
+                          <td className="px-4 py-2.5 text-gray-600">{formatarData(dup.dtEmissao)}</td>
+                          <td className="px-4 py-2.5">
+                            <span className="block truncate text-gray-700" title={dup.nomeCCusto}>
+                              {dup.nomeCCusto || '-'}
+                            </span>
+                          </td>
+                          <td className="px-4 py-2.5">
+                            <span className="block truncate text-gray-700" title={dup.nmFornecedor}>
+                              {dup.nmFornecedor || 'N/A'}
+                            </span>
+                          </td>
+                          <td className="px-4 py-2.5">
+                            <span className="block truncate text-gray-600" title={dup.descricao}>
+                              {dup.descricao || '-'}
+                            </span>
+                          </td>
+                          <td className="px-4 py-2.5 text-right font-medium text-red-600 whitespace-nowrap">
+                            {formatarValor(dup.valor)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               )}
             </div>
 
-            <div className="p-4 border-t border-gray-200 bg-gray-50 rounded-b-lg">
+            {/* Footer fixo com total */}
+            {!modalDuplicatas.loading && modalDuplicatas.duplicatas.length > 0 && (
+              <div className="border-t-2 border-gray-300 bg-gray-100 px-4 py-3">
+                <div className="flex justify-between items-center">
+                  <span className="text-sm font-semibold text-gray-700">
+                    TOTAL ({modalDuplicatas.duplicatas.length} {modalDuplicatas.duplicatas.length === 1 ? 'registro' : 'registros'})
+                  </span>
+                  <span className="text-base font-bold text-red-600">
+                    {formatarValor(modalDuplicatas.duplicatas.reduce((acc, dup) => acc + (dup.valor || 0), 0))}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            <div className="px-6 py-4 border-t border-gray-200 bg-gray-50 rounded-b-lg">
               <button
                 onClick={fecharModal}
-                className="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-md transition-colors"
+                className="px-5 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-md transition-colors font-medium"
               >
                 Fechar
               </button>

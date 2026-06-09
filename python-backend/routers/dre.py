@@ -37,173 +37,6 @@ def _normalizar_texto(value: Optional[str]) -> str:
     return " ".join(text.split())
 
 
-REGRAS_DESCRICAO_DRE = [
-    ('CONDOMINIO', '08.01.01'),
-    ('ALUGUEL MINIMO', '08.01.02'),
-    ('FUNDO DE PROMOCAO', '08.01.03'),
-    ('ENERGIA - CO', '08.01.04'),
-    ('ENERGIA', '08.01.04'),
-    ('AR CONDICIONADO', '08.01.05'),
-    ('IPTU - CO', '08.01.06'),
-    ('IPTU ADM', '08.01.06'),
-    ('TAXAS E EMOLUMENTO', '08.01.07'),
-    ('IRRF SOBRE ALUGUEL 3208 - CO', '08.01.08'),
-    ('IRRF SOBRE ALUGUEL', '08.01.08'),
-    ('DESCONTOS FINANCEIROS OBTIDOS - CO', '08.01.09'),
-    ('DESCONTOS FINANCEIROS OBTIDOS', '08.01.09'),
-    ('OUTRAS DESPESAS DE OCUPACAO', '08.01.10'),
-    ('AGUA E ESGOTO', '08.01.09'),
-    ('SEGUROS DE IMOVEIS', '08.01.10'),
-
-    ('ASSESSORIA JURIDICA', '08.02.01'),
-    ('ASSESSORIA CONTABIL', '08.02.02'),
-    ('MONIT/SEGURANCA', '08.02.03'),
-    ('SEGURANCA', '08.02.03'),
-    ('ASSOCIACAO', '08.02.04'),
-    ('MATERIAL DE LIMPEZA', '08.02.05'),
-    ('MAT DE CONSUMO', '08.02.06'),
-    ('AGUA MINERAL', '08.02.07'),
-    ('TELEFONIA FIXA', '08.02.09'),
-    ('CONSULTORIA', '08.02.10'),
-    ('ALUGUEL MAQUINETA', '08.02.11'),
-    ('ESTACIONAMENTO DE VEICULO', '08.02.12'),
-    ('SERV PRESTADO', '08.02.13'),
-    ('DESPESA DE CARTORIO', '08.02.14'),
-    ('SERV DEDETIZACAO', '08.02.15'),
-    ('TELEFONIA MOVEL', '08.02.16'),
-    ('SERV INTERNET', '08.02.17'),
-    ('CORREIOS E MALOTES', '08.02.18'),
-    ('MATERIAL DE ESCRITORIO', '08.02.19'),
-    ('MANUT DE SOFTWARE', '08.02.20'),
-    ('CONTRIB/ANUIDADES', '08.02.21'),
-    ('ENDOMARKETING', '08.02.23'),
-    ('ISS RET FONTE', '08.02.25'),
-    ('TAXAS DE ALVARAS', '08.02.28'),
-    ('CONFRATERNIZACOES', '08.02.29'),
-    ('MARCAS E PATENTES', '08.02.30'),
-    ('CUSTAS PROCESSUAIS', '08.02.31'),
-    ('ALUGUEL IMOVEIS ADM', '08.02.32'),
-    ('IRRF OUTROS SERVICOS 1708', '08.02.33'),
-    ('CONDUCOES ADMINISTRATIVA', '08.02.34'),
-    ('SERVICOS DE INVENTARIOS', '08.02.35'),
-    ('ALUGUEL MAQ E EQUIPAMENTOS', '08.02.36'),
-    ('ALUGUEL EQUIP INFORMATICA', '08.02.37'),
-    ('MULTAS E TAXAS ADMINISTRATIVAS', '08.02.38'),
-
-    ('MANUTENCAO INSTALACOES', '08.03.01'),
-    ('MANUTENCAO EDIFICACOES', '08.03.02'),
-    ('MANUTENCAO EQP INFORMATICA', '08.03.03'),
-    ('MANUTENCAO MAQ', '08.03.04'),
-    ('MANUTENCOES DE MAQUINAS INDUSTRIAIS', '08.03.04'),
-    ('MANUTENCAO AR CONDICIONADO', '08.03.05'),
-
-    ('ALIMENTACAO PROD', '08.04.02'),
-    ('ALIMENTACAO', '08.04.02'),
-    ('RESCISAO PROD', '08.04.03'),
-    ('RESCISAO', '08.04.03'),
-    ('INSS PROD', '08.04.04'),
-    ('INSS', '08.04.04'),
-    ('CONTRIBUICAO SINDICAL', '08.04.05'),
-    ('EXAMES MEDICOS', '08.04.06'),
-    ('VALE TRANSPORTE PROD', '08.04.07'),
-    ('VALE TRANSPORTE', '08.04.07'),
-    ('ESTAGIOS E TREINAMENTOS', '08.04.08'),
-    ('HORAS EXTRAS', '08.04.10'),
-    ('FARMACIA PROD', '08.04.11'),
-    ('FARDAMENTO', '08.04.12'),
-    ('PLANO ODONTOLOGICO', '08.04.14'),
-    ('IRRF SOBRE SALARIO', '08.04.16'),
-    ('MULTA RESCISORIA FGTS', '08.04.18'),
-    ('FGTS PROD', '08.04.21'),
-    ('FGTS', '08.04.21'),
-    # REMOVIDO: ('SALARIO', '08.04.22') - usar apenas mapeamento do banco (cd_despesaitem=144)
-    ('VALE ALIMENTACAO', '08.04.25'),
-    ('FERIAS', '08.04.26'),
-    ('VALE COMBUSTIVEL', '08.04.27'),
-    ('13 SALARIO', '08.04.28'),
-    ('ASSIST MEDICA EMP', '08.04.29'),
-    ('ASSIST MEDICA FUNC', '08.04.30'),
-    ('PLANO ODONTOLOGICO PROD', '08.04.31'),
-    ('FARDAMENTO PROD', '08.04.32'),
-    ('HORAS EXTRAS PROD', '08.04.34'),
-    ('EXAMES MEDICOS PROD', '08.04.38'),
-
-    ('MKT PROD GRAFICA', '08.05.05'),
-    ('MATERIAIS GRAFICOS', '08.05.05'),
-    ('MKT AGENCIA BV', '08.05.04'),
-    ('MKT AG CONTRATO', '08.05.04'),
-    ('MKT VEICUL/MIDIA', '08.05.01'),
-    ('PROPAGANDAS EM MIDIAS DIGITAIS', '08.05.02'),
-    ('MERCHANDISING EM PONTO DE VENDAS', '08.05.03'),
-    ('ACOES DE RELACIONAMENTO COM CLIENTES', '08.05.06'),
-    ('MKT EVENTOS', '08.05.07'),
-    ('WORKSHOPS E EVENTOS', '08.05.07'),
-    ('MKT PROD CATALOGO', '08.05.08'),
-    ('CAMPANHAS E CONTEUDOS', '08.05.08'),
-    ('CAMPANHAS COMERCIAIS', '08.06.01'),
-    ('BRINDES', '08.06.02'),
-
-    ('TARIFA DOC', '08.07.01'),
-    ('TARIFA TED', '08.07.01'),
-    ('TARIFA NEGATIVACAO', '08.07.03'),
-    ('TARIFA MANUT DE CONTA', '08.07.04'),
-    ('TARIFAS DE BAIXAS DE TITULOS', '08.07.06'),
-    ('TARIFAS BANCARIAS', '08.07.09'),
-
-    ('INSS SOBRE PROLABORE', '08.08.02'),
-    ('IRRF SOBRE PROLABORE', '08.08.03'),
-
-    ('FRETES VENDAS', '08.10.01'),
-    ('COMISSAO GERENTE', '08.10.02'),
-    ('COMISSAO REPRESENTANTE', '08.10.03'),
-    ('TAXAS CARTAO', '08.10.05'),
-    ('RESCISAO REPRESENTANTES', '08.10.06'),
-    ('COMISSAO VENDEDOR', '08.10.07'),
-    ('COMISSAO CORRETOR', '08.10.08'),
-    ('COMISSAO COORDENADOR', '08.10.09'),
-    ('PREMIACOES COMERCIAIS', '08.10.11'),
-    ('COMISSAO SUPERVISOR', '08.10.12'),
-
-    ('CONSULTA CADASTRAL', '08.11.01'),
-    ('COMBUSTIVEL/LUBRIFICANTE', '08.12.01'),
-    ('MANUTENCAO DE VEICULOS', '08.12.02'),
-    ('SEGURO VEICULOS', '08.12.03'),
-    ('TX DETRAN/IPVA', '08.12.05'),
-
-    ('MULTA/JUROS', '10.03.01'),
-    ('IOF', '10.03.02'),
-    ('JUROS S/EMPREST', '10.03.04'),
-    ('JUROS S/ ANTECIPACAO', '10.03.05'),
-    ('SEGURO SOBRE EMPRESTIMOS', '10.03.06'),
-    ('RECOMPRA DE TITULOS', '10.03.07'),
-
-    ('ICMS SOBRE VENDAS', '02.02.01'),
-    ('PIS SOBRE RECEITA', '02.02.02'),
-    ('COFINS SOBRE RECEITA', '02.02.03'),
-    ('DIFAL GNRE', '02.02.05'),
-    ('ICMS ANTECIPADO', '04.01.01'),
-    ('ICMS SUBSTITUICAO', '04.01.02'),
-    ('CSLL APURACAO', '13.01.01'),
-    ('CSLL PROVISAO', '13.01.01'),
-    ('IRPJ APURACAO', '13.01.02'),
-    ('IRPJ PROVISAO', '13.01.02'),
-
-    ('INV. COMPUTADORES E PERIFERICOS', '17.01.01'),
-    ('INV. MAQUINAS E EQUIPAMENTOS', '17.01.03'),
-    ('INV. MOVEIS E UTENSILIOS', '17.01.04'),
-    ('INV. REFORMAS E OBRAS', '17.01.06'),
-    ('INV. SOFTWARES', '17.01.07'),
-    ('INV. CDU - CESSAO DE DIREITOS', '17.01.08'),
-    ('RETIRADA - CAIRO', '17.01.17'),
-    ('RETIRADA-THAIS', '08.08.01'),
-    ('RETIRADA - GERLANO', '08.08.05'),
-    ('RETIRADA - SHENIA', '08.08.06'),
-    ('EMPRESTIMO PRINCIPAL', '18.02'),
-    ('EMPRESTIMO MUTUO', '18.04'),
-    ('MULTAS SEFAZ', '18.07'),
-]
-
-
 # Descricoes que devem ser EXCLUIDAS da DRE (nao classificar)
 EXCLUSOES_DESCRICAO_DRE = [
     'MERC P/ REVENDA',
@@ -213,224 +46,28 @@ EXCLUSOES_DESCRICAO_DRE = [
 ]
 
 
-def _classificar_conta_dre(cd_despesaitem, descricao_despesa, classificacoes_db, classificacoes_desc_db):
+def _classificar_conta_dre(cd_despesaitem, descricao_despesa, classificacoes_db):
+    """
+    Classifica uma despesa em uma conta DRE usando APENAS o banco de dados.
+
+    Args:
+        cd_despesaitem: Codigo do item de despesa
+        descricao_despesa: Descricao da despesa (usado apenas para exclusoes)
+        classificacoes_db: Dict com classificacoes por codigo do banco
+    """
     descricao_normalizada = _normalizar_texto(descricao_despesa)
 
-    # Verificar se a descricao deve ser excluida
+    # Verificar se a descricao deve ser excluida (ex: MERC P/REVENDA)
     for exclusao in EXCLUSOES_DESCRICAO_DRE:
         if exclusao in descricao_normalizada:
             return 'EXCLUIDO'
 
+    # Classificacao por codigo do banco
     conta = classificacoes_db.get(cd_despesaitem)
     if conta:
         return conta
 
-    conta = classificacoes_desc_db.get(descricao_normalizada)
-    if conta:
-        return conta
-
-    conta = MAPEAMENTO_DESPESA_DRE.get(cd_despesaitem)
-    if conta:
-        return conta
-
-    for palavra_chave, conta_dre in REGRAS_DESCRICAO_DRE:
-        if palavra_chave in descricao_normalizada:
-            return conta_dre
-
     return 'NAO_CLASSIFICADO'
-
-MAPEAMENTO_DESPESA_DRE = {
-    # 08.01 - DESPESAS COM OCUPAÇÃO
-    80: '08.01.07',   # TAXAS E EMOLUMENTO - CO
-    85: '08.01.02',   # ALUGUEL MINIMO - CO
-    110: '08.01.06',  # IPTU - CO
-    145: '08.01.03',  # FUNDO DE PROMOCAO - CO
-    40: '08.01.04',   # ENERGIA - CO
-    50: '08.01.01',   # CONDOMINIO - CO
-    146: '08.01.05',  # AR CONDICIONADO - CO
-    225: '08.01.04',  # ENERGIA (sem CO)
-    45: '08.01.09',   # AGUA E ESGOTO
-    56: '08.01.10',   # SEGUROS DE IMOVEIS
-    228: '08.01.07',  # TAXAS E EMOLUMENTO
-    227: '08.01.06',  # IPTU ADM
-
-    # 08.02 - DESPESAS ADMINISTRATIVAS
-    4: '08.02.01',    # ASSESSORIA JURIDICA
-    17: '08.02.02',   # ASSESSORIA CONTABIL
-    18: '08.02.03',   # MONIT/SEGURANCA
-    24: '08.02.04',   # ASSOCIACAO
-    31: '08.02.05',   # MATERIAL DE LIMPEZA
-    37: '08.02.06',   # MAT DE CONSUMO
-    39: '08.02.07',   # AGUA MINERAL
-    41: '08.02.09',   # TELEFONIA FIXA
-    60: '08.02.16',   # TELEFONIA MOVEL
-    63: '08.02.17',   # SERV INTERNET
-    70: '08.02.18',   # CORREIOS E MALOTES
-    74: '08.02.19',   # MATERIAL DE ESCRITORIO
-    76: '08.02.20',   # MANUT DE SOFTWARE
-    79: '08.02.21',   # CONTRIB/ANUIDADES
-    123: '08.02.25',  # ISS RET FONTE
-    159: '08.02.28',  # TAXAS DE ALVARAS
-    160: '08.02.29',  # CONFRATERNIZACOES
-    161: '08.02.30',  # MARCAS E PATENTES
-    167: '08.02.31',  # CUSTAS PROCESSUAIS
-    229: '08.02.32',  # ALUGUEL IMOVEIS ADM
-    230: '08.02.33',  # IRRF OUTROS SERVICOS 1708
-    252: '08.02.34',  # CONDUCOES ADMINISTRATIVA
-    259: '08.02.35',  # SERVICOS DE INVENTARIOS
-    263: '08.02.36',  # ALUGUEL MAQ E EQUIPAMENTOS
-    264: '08.02.37',  # ALUGUEL EQUIP INFORMATICA
-    271: '08.02.38',  # MULTAS E TAXAS ADMINISTRATIVAS
-    55: '08.02.10',   # CONSULTORIA
-    58: '08.02.11',   # ALUGUEL MAQUINETA
-    231: '08.02.12',  # ESTACIONAMENTO DE VEICULO
-    20: '08.02.13',   # SERV PRESTADO
-    53: '08.02.14',   # DESPESA DE CARTORIO
-    52: '08.02.15',   # SERV DEDETIZACAO
-
-    # 08.03 - DESPESAS COM MANUTENCAO
-    16: '08.03.01',   # MANUTENCAO INSTALACOES
-    38: '08.03.02',   # MANUTENCAO EDIFICACOES
-    51: '08.03.03',   # MANUTENCAO EQP INFORMATICA
-    82: '08.03.04',   # MANUTENCAO MAQ EQUIPAMENTO
-    226: '08.03.05',  # MANUTENCAO AR CONDICIONADO
-    222: '08.03.04',  # MANUTENCOES DE MAQUINAS INDUSTRIAIS
-
-    # 08.04 - DESPESAS COM PESSOAL ADM E LOJAS
-    12: '08.04.04',   # INSS
-    15: '08.04.07',   # VALE TRANSPORTE
-    71: '08.04.16',   # IRRF SOBRE SALARIO
-    134: '08.04.21',  # FGTS
-    # REMOVIDO: 144: '08.04.22' - usar mapeamento do banco
-    7: '08.04.02',    # ALIMENTACAO
-    9: '08.04.03',    # RESCISAO
-    77: '08.04.18',   # MULTA RESCISORIA FGTS
-    188: '08.04.25',  # VALE ALIMENTACAO
-    90: '08.04.26',   # FERIAS
-    6: '08.04.01',    # PREMIACOES FUNCIONARIOS
-    10: '08.04.28',   # 13 SALARIO ADM
-    86: '08.04.29',   # ASSIST MEDICA EMP ADM
-    254: '08.04.30',  # ASSIST MEDICA FUNC
-    132: '08.10.11',  # PREMIACOES COMERCIAIS
-    47: '08.04.14',   # V. FUNC. PLANO ODONTOLOGICO
-    44: '08.04.12',   # FARDAMENTO
-    13: '08.04.05',   # CONTRIBUICAO SINDICAL
-    42: '08.04.10',   # HORAS EXTRAS
-    246: '08.08.02',  # INSS SOBRE PROLABORE
-    247: '08.08.03',  # IRRF SOBRE PROLABORE
-    23: '08.04.08',   # ESTAGIOS E TREINAMENTOS
-    14: '08.04.06',   # EXAMES MEDICOS
-    268: '08.04.27',  # VALE COMBUSTIVEL
-    489: '08.10.06',  # RESCISAO REPRESENTANTES
-
-    # 08.04 - DESPESAS COM PESSOAL PRODUCAO (FABRICA)
-    # REMOVIDO: 5: '08.04.22' - SALARIO PROD nao deve ir para 08.04.22
-    196: '08.04.04',  # INSS PROD
-    # REMOVIDO: 192 - PREMIACOES FUNCIONARIOS PROD ja entra no custo do produto
-    214: '08.04.21',  # FGTS PROD
-    212: '08.04.26',  # FERIAS PROD
-    202: '08.04.34',  # HORAS EXTRAS PROD
-    199: '08.04.07',  # VALE TRANSPORTE PROD
-    267: '08.04.27',  # VALE COMBUSTIVEL PROD
-    211: '08.04.29',  # ASSIST MEDICA EMP PROD
-    253: '08.04.30',  # ASSIST MEDICA FUNC PROD
-    208: '08.04.16',  # IRRF SOBRE SALARIO PROD
-    210: '08.04.18',  # MULTA RESCISORIA FGTS PROD
-    216: '08.04.25',  # VALE ALIMENTACAO PROD
-    193: '08.04.02',  # ALIMENTACAO PROD
-    194: '08.04.03',  # RESCISAO PROD
-    195: '08.04.28',  # 13 SALARIO PROD
-    198: '08.04.38',  # EXAMES MEDICOS PROD
-    204: '08.04.32',  # FARDAMENTO PROD
-    203: '08.04.11',  # FARMACIA PROD
-    206: '08.04.31',  # V. FUNC. PLANO ODONTOLOGICO PROD
-
-    # 08.05 - DESPESAS COM MARKETING
-    94: '08.05.05',   # MKT PROD GRAFICA
-    95: '08.05.04',   # MKT AGENCIA BV
-    96: '08.05.04',   # MKT AG CONTRATO
-    98: '08.05.01',   # MKT VEICUL/MIDIA
-    102: '08.05.08',  # MKT PROD CATALOGO
-    103: '08.05.07',  # MKT EVENTOS
-    104: '08.05.07',  # MKT BUFFET/COQUETEL
-    105: '08.05.03',  # MKT AMBIENTACAO LOJAS
-    234: '08.05.02',  # PROPAGANDAS EM MIDIAS DIGITAIS
-    237: '08.05.05',  # MATERIAIS GRAFICOS PROMOCIONAIS
-    544: '08.05.05',  # MATERIAIS GRAFICOS
-    240: '08.05.08',  # CAMPANHAS E CONTEUDOS
-    235: '08.05.03',  # MERCHANDISING EM PONTO DE VENDAS
-    238: '08.05.06',  # ACOES DE RELACIONAMENTO COM CLIENTES
-    100: '08.02.23',  # ENDOMARKETING
-    239: '08.05.07',  # WORKSHOPS E EVENTOS
-    236: '08.05.04',  # CONSULTORIAS E ASSESSORIAS DE MARKETING
-    241: '08.06.01',  # CAMPANHAS COMERCIAIS
-    242: '08.06.02',  # BRINDES
-
-    # 08.10 - DESPESAS COM VENDAS
-    27: '08.10.01',   # FRETES VENDAS
-    34: '08.10.07',   # COMISSAO VENDEDOR
-    35: '08.10.03',   # COMISSAO REPRESENTANTE
-    33: '08.10.02',   # COMISSAO GERENTE
-    140: '08.10.12',  # COMISSAO SUPERVISOR
-    272: '08.10.09',  # COMISSAO COORDENADOR
-    59: '08.10.05',   # TAXAS CARTAO
-    245: '08.06.05',  # AJUDA DE CUSTO DE VIAGENS COMERCIAIS
-    244: '08.06.04',  # AJUDA DE CUSTO DE DESLOCAMENTO COMERCIAIS
-    32: '08.10.08',   # COMISSAO CORRETOR
-
-    # 08.11 - DESPESAS COM CREDITO E COBRANCA
-    49: '08.11.01',   # CONSULTA CADASTRAL
-
-    # 08.12 - DESPESAS COM VEICULOS
-    22: '08.12.01',   # COMBUSTIVEL/LUBRIFICANTE
-    73: '08.12.02',   # MANUTENCAO DE VEICULOS
-    83: '08.12.03',   # SEGURO VEICULOS
-    87: '08.12.05',   # TX DETRAN/IPVA
-
-    # 10.03 - DESPESAS FINANCEIRAS
-    48: '10.03.02',   # IOF
-    121: '10.03.02',  # IOF S/ EMPRESTIMO
-    25: '10.03.01',   # MULTA/JUROS
-    137: '10.03.04',  # JUROS S/EMPREST. E FINANCIAM.
-    186: '10.03.05',  # JUROS S/ ANTECIPACAO
-    258: '10.03.06',  # SEGURO SOBRE EMPRESTIMOS
-    147: '08.07.06',  # TARIFAS DE BAIXAS DE TITULOS
-    68: '08.07.04',   # TARIFA MANUT DE CONTA
-    65: '08.07.01',   # TARIFA DOC/TED
-    67: '08.07.03',   # TARIFA NEGATIVACAO
-    275: '08.07.09',  # TARIFAS BANCARIAS
-    541: '10.03.07',  # RECOMPRA DE TITULOS
-
-    # 13.01 - DESPESAS TRIBUTARIAS
-    124: '13.01.01',  # CSLL APURACAO
-    125: '13.01.02',  # IRPJ APURACAO
-    260: '13.01.01',  # CSLL PROVISAO
-    261: '13.01.02',  # IRPJ PROVISAO
-    119: '04.01.02',  # ICMS SUBSTITUICAO
-    127: '02.02.03',  # COFINS SOBRE RECEITA
-    117: '04.01.01',  # ICMS ANTECIPADO
-    111: '02.02.01',  # ICMS SOBRE VENDAS
-    126: '02.02.02',  # PIS SOBRE RECEITA
-    250: '02.02.05',  # DIFAL GNRE
-    158: '18.07',     # MULTAS SEFAZ
-
-    # 17.01 - INVESTIMENTOS - IMOBILIZADOS (excluídos do lucro líquido)
-    11: '17.01.01',   # INV. COMPUTADORES E PERIFERICOS
-    138: '17.01.03',  # INV. MAQUINAS E EQUIPAMENTOS
-    139: '17.01.04',  # INV. MOVEIS E UTENSILIOS
-    150: '17.01.06',  # INV. REFORMAS E OBRAS
-    164: '17.01.07',  # INV. SOFTWARES
-    169: '17.01.08',  # INV. CDU - CESSAO DE DIREITOS
-    30: '17.01.17',   # RETIRADA - CAIRO -> INVESTIMENTOS CAIRO
-    162: '08.08.01',  # RETIRADA - THAIS
-    57: '08.08.05',   # RETIRADA - GERLANO
-    135: '08.08.06',  # RETIRADA - SHENIA
-    993: '17.01.06',  # REFORMA VICENTE 2025
-
-    # 18 - AMORTIZAÇÃO E DÍVIDAS
-    114: '18.02',     # EMPRESTIMO PRINCIPAL
-    148: '18.04',     # EMPRESTIMO MUTUO
-}
 
 
 def _execute_query_with_date_fallback(execute_query_fn, query_emissao, query_fallback, params, context):
@@ -590,7 +227,6 @@ def get_dre(
 
         # Buscar classificações do banco de dados (prioridade) e depois usar mapeamento fixo como fallback
         classificacoes_db = {}
-        classificacoes_desc_db = {}
         try:
             rows = execute_query("SELECT cd_despesaitem, ds_despesaitem, conta_dre FROM classificacao_despesas_dre", ())
             for row in rows or []:
@@ -601,8 +237,6 @@ def get_dre(
                     # Extrair apenas o código (ex: "08.01.02" de "08.01.02 ALUGUEL MINIMO")
                     codigo = conta_dre.split(' ')[0] if ' ' in conta_dre else conta_dre
                     classificacoes_db[cd] = codigo
-                    if ds:
-                        classificacoes_desc_db[_normalizar_texto(ds)] = codigo
             print(f"[DRE] Classificações carregadas do banco: {len(classificacoes_db)}")
         except Exception as e:
             print(f"[DRE] Aviso: não foi possível carregar classificações do banco: {e}")
@@ -614,7 +248,7 @@ def get_dre(
         for d in despesas:
             cd_despesaitem = d['cd_despesaitem']
             descricao_despesa = d.get('descricao_despesa')
-            conta = _classificar_conta_dre(cd_despesaitem, descricao_despesa, classificacoes_db, classificacoes_desc_db)
+            conta = _classificar_conta_dre(cd_despesaitem, descricao_despesa, classificacoes_db)
             valor = -abs(float(d['valor'] or 0))
             dt_emissao = d['dt_emissao']
 
@@ -910,7 +544,6 @@ def get_dre_fabrica(
 
         # Buscar classificacoes do banco de dados
         classificacoes_db = {}
-        classificacoes_desc_db = {}
         try:
             rows = execute_query("SELECT cd_despesaitem, ds_despesaitem, conta_dre FROM classificacao_despesas_dre", ())
             for row in rows or []:
@@ -920,8 +553,6 @@ def get_dre_fabrica(
                 if cd and conta_dre:
                     codigo = conta_dre.split(' ')[0] if ' ' in conta_dre else conta_dre
                     classificacoes_db[cd] = codigo
-                    if ds:
-                        classificacoes_desc_db[_normalizar_texto(ds)] = codigo
             print(f"[DRE FABRICA] Classificacoes carregadas: {len(classificacoes_db)}")
         except Exception as e:
             print(f"[DRE FABRICA] Aviso: nao foi possivel carregar classificacoes: {e}")
@@ -933,7 +564,7 @@ def get_dre_fabrica(
         for d in despesas:
             cd_despesaitem = d['cd_despesaitem']
             descricao_despesa = d.get('descricao_despesa')
-            conta = _classificar_conta_dre(cd_despesaitem, descricao_despesa, classificacoes_db, classificacoes_desc_db)
+            conta = _classificar_conta_dre(cd_despesaitem, descricao_despesa, classificacoes_db)
             valor = -abs(float(d['valor'] or 0))
             dt_emissao = d['dt_emissao']
 
@@ -1159,7 +790,6 @@ def get_dre_lojas(
 
         # Buscar classificacoes do banco de dados
         classificacoes_db = {}
-        classificacoes_desc_db = {}
         try:
             rows = execute_query("SELECT cd_despesaitem, ds_despesaitem, conta_dre FROM classificacao_despesas_dre", ())
             for row in rows or []:
@@ -1169,8 +799,6 @@ def get_dre_lojas(
                 if cd and conta_dre:
                     codigo = conta_dre.split(' ')[0] if ' ' in conta_dre else conta_dre
                     classificacoes_db[cd] = codigo
-                    if ds:
-                        classificacoes_desc_db[_normalizar_texto(ds)] = codigo
         except Exception as e:
             print(f"[DRE LOJAS] Aviso: nao foi possivel carregar classificacoes: {e}")
 
@@ -1181,7 +809,7 @@ def get_dre_lojas(
         for d in despesas:
             cd_despesaitem = d['cd_despesaitem']
             descricao_despesa = d.get('descricao_despesa')
-            conta = _classificar_conta_dre(cd_despesaitem, descricao_despesa, classificacoes_db, classificacoes_desc_db)
+            conta = _classificar_conta_dre(cd_despesaitem, descricao_despesa, classificacoes_db)
             valor = -abs(float(d['valor'] or 0))
             dt_emissao = d['dt_emissao']
 
@@ -1387,21 +1015,12 @@ def get_dre_lojas_duplicatas(
         except Exception:
             pass
 
-        # Resolver cd_despesaitem associados a conta
+        # Resolver cd_despesaitem associados a conta (APENAS do banco)
         conta_prefixo = f"{conta}."
-        itens_db = [
+        itens = [
             cd for cd, c in classificacoes_db.items()
             if c == conta or c.startswith(conta_prefixo)
         ]
-
-        if itens_db:
-            itens = itens_db
-        else:
-            itens_mapa = [
-                cd for cd, c in MAPEAMENTO_DESPESA_DRE.items()
-                if c == conta or c.startswith(conta_prefixo)
-            ]
-            itens = itens_mapa
 
         if not itens:
             return {
@@ -1487,7 +1106,6 @@ def get_dre_fabrica_duplicatas(
 
         # Carregar classificacoes do banco
         classificacoes_db = {}
-        classificacoes_desc_db = {}
         try:
             rows = execute_query("SELECT cd_despesaitem, ds_despesaitem, conta_dre FROM classificacao_despesas_dre", ())
             for row in rows or []:
@@ -1497,32 +1115,15 @@ def get_dre_fabrica_duplicatas(
                 if cd and conta_dre:
                     codigo = conta_dre.split(' ')[0] if ' ' in conta_dre else conta_dre
                     classificacoes_db[cd] = codigo
-                    if ds:
-                        classificacoes_desc_db[_normalizar_texto(ds)] = codigo
         except Exception:
             pass
 
-        # Resolver cd_despesaitem associados a conta (exato ou por prefixo)
-        # PRIORIDADE: banco de dados primeiro, mapeamento fixo como fallback
+        # Resolver cd_despesaitem associados a conta (APENAS do banco)
         conta_prefixo = f"{conta}."
-
-        # Buscar do banco de dados (prioridade)
-        itens_db = [
+        itens = [
             cd for cd, c in classificacoes_db.items()
             if c == conta or c.startswith(conta_prefixo)
         ]
-
-        # Se tem no banco, usar APENAS o banco (ignora mapeamento fixo)
-        # Isso garante que a tabela classificacao_despesas_dre tem controle total
-        if itens_db:
-            itens = itens_db
-        else:
-            # Fallback para mapeamento fixo se nao tem no banco
-            itens_mapa = [
-                cd for cd, c in MAPEAMENTO_DESPESA_DRE.items()
-                if c == conta or c.startswith(conta_prefixo)
-            ]
-            itens = itens_mapa
 
         if not itens:
             return {
@@ -1676,7 +1277,6 @@ def get_dre_fabrica_sintetico(
 
         # Carregar classificações do banco
         classificacoes_db = {}
-        classificacoes_desc_db = {}
         try:
             rows_cls = execute_query("SELECT cd_despesaitem, ds_despesaitem, conta_dre FROM classificacao_despesas_dre", ())
             for row in rows_cls or []:
@@ -1686,8 +1286,6 @@ def get_dre_fabrica_sintetico(
                 if cd and conta_dre:
                     codigo = conta_dre.split(' ')[0] if ' ' in conta_dre else conta_dre
                     classificacoes_db[cd] = codigo
-                    if ds:
-                        classificacoes_desc_db[_normalizar_texto(ds)] = codigo
         except Exception:
             pass
 
@@ -1696,7 +1294,7 @@ def get_dre_fabrica_sintetico(
         for d in despesas_raw:
             conta = _classificar_conta_dre(
                 d['cd_despesaitem'], d.get('descricao_despesa'),
-                classificacoes_db, classificacoes_desc_db
+                classificacoes_db
             )
             # Só contar como despesa operacional contas 08.xx
             if not conta.startswith('08.'):
@@ -1808,7 +1406,6 @@ def get_dre_fabrica_por_ccusto(
 
         # Buscar classificações do banco
         classificacoes_db = {}
-        classificacoes_desc_db = {}
         try:
             rows = execute_query("SELECT cd_despesaitem, ds_despesaitem, conta_dre FROM classificacao_despesas_dre", ())
             for row in rows or []:
@@ -1818,8 +1415,6 @@ def get_dre_fabrica_por_ccusto(
                 if cd and conta_dre:
                     codigo = conta_dre.split(' ')[0] if ' ' in conta_dre else conta_dre
                     classificacoes_db[cd] = codigo
-                    if ds:
-                        classificacoes_desc_db[_normalizar_texto(ds)] = codigo
         except Exception as e:
             print(f"[DRE-FAB-CCUSTO] Aviso: não foi possível carregar classificações: {e}")
 
@@ -1830,7 +1425,7 @@ def get_dre_fabrica_por_ccusto(
         for d in despesas:
             cd_despesaitem = d['cd_despesaitem']
             descricao_despesa = d.get('descricao_despesa')
-            conta = _classificar_conta_dre(cd_despesaitem, descricao_despesa, classificacoes_db, classificacoes_desc_db)
+            conta = _classificar_conta_dre(cd_despesaitem, descricao_despesa, classificacoes_db)
             valor = -abs(float(d['valor'] or 0))
             cd_ccusto = d['cd_ccusto']
 
@@ -2064,7 +1659,6 @@ def get_dre_totais(
         despesas = execute_query(query_despesas, (dataInicio, dataFim, *EMPRESAS_EXCLUIDAS))
 
         classificacoes_db = {}
-        classificacoes_desc_db = {}
         try:
             rows = execute_query("SELECT cd_despesaitem, ds_despesaitem, conta_dre FROM classificacao_despesas_dre", ())
             for row in rows or []:
@@ -2074,8 +1668,6 @@ def get_dre_totais(
                 if cd and conta_dre:
                     codigo = conta_dre.split(' ')[0] if ' ' in conta_dre else conta_dre
                     classificacoes_db[cd] = codigo
-                    if ds:
-                        classificacoes_desc_db[_normalizar_texto(ds)] = codigo
         except Exception:
             pass
 
@@ -2106,7 +1698,7 @@ def get_dre_totais(
 
         for d in despesas:
             cd = d["cd_despesaitem"]
-            conta = _classificar_conta_dre(cd, d.get("descricao_despesa"), classificacoes_db, classificacoes_desc_db)
+            conta = _classificar_conta_dre(cd, d.get("descricao_despesa"), classificacoes_db)
             if not conta:
                 continue
             grupo = ".".join(conta.split(".")[:2])
@@ -2188,7 +1780,7 @@ def get_dre_duplicatas(
 ):
     """
     Retorna duplicatas relacionadas a uma conta DRE em um período mensal.
-    Usa o mesmo mapeamento fixo da DRE para manter consistência com os totais.
+    Usa classificações do banco de dados.
     """
     try:
         import calendar
@@ -2201,10 +1793,23 @@ def get_dre_duplicatas(
         ultimo_dia = calendar.monthrange(int(ano), int(mes))[1]
         data_fim = f"{periodo}-{ultimo_dia:02d}"
 
-        # Resolver cd_despesaitem associados à conta (exato ou por prefixo)
+        # Carregar classificações do banco
+        classificacoes_db = {}
+        try:
+            rows = execute_query("SELECT cd_despesaitem, conta_dre FROM classificacao_despesas_dre", ())
+            for row in rows or []:
+                cd = row.get('cd_despesaitem')
+                conta_dre = row.get('conta_dre', '')
+                if cd and conta_dre:
+                    codigo = conta_dre.split(' ')[0] if ' ' in conta_dre else conta_dre
+                    classificacoes_db[cd] = codigo
+        except Exception:
+            pass
+
+        # Resolver cd_despesaitem associados à conta (APENAS do banco)
         conta_prefixo = f"{conta}."
         itens = [
-            cd for cd, c in MAPEAMENTO_DESPESA_DRE.items()
+            cd for cd, c in classificacoes_db.items()
             if c == conta or c.startswith(conta_prefixo)
         ]
 
@@ -2365,7 +1970,6 @@ def get_dre_por_empresa(
 
         # Buscar classificações do banco
         classificacoes_db = {}
-        classificacoes_desc_db = {}
         try:
             rows = execute_query("SELECT cd_despesaitem, ds_despesaitem, conta_dre FROM classificacao_despesas_dre", ())
             for row in rows or []:
@@ -2375,8 +1979,6 @@ def get_dre_por_empresa(
                 if cd and conta_dre:
                     codigo = conta_dre.split(' ')[0] if ' ' in conta_dre else conta_dre
                     classificacoes_db[cd] = codigo
-                    if ds:
-                        classificacoes_desc_db[_normalizar_texto(ds)] = codigo
         except Exception as e:
             print(f"[DRE-EMP] Aviso: não foi possível carregar classificações: {e}")
 
@@ -2386,7 +1988,7 @@ def get_dre_por_empresa(
         for d in despesas:
             cd_despesaitem = d['cd_despesaitem']
             descricao_despesa = d.get('descricao_despesa')
-            conta = _classificar_conta_dre(cd_despesaitem, descricao_despesa, classificacoes_db, classificacoes_desc_db)
+            conta = _classificar_conta_dre(cd_despesaitem, descricao_despesa, classificacoes_db)
             valor = -abs(float(d['valor'] or 0))
 
             # Pular despesas excluidas (ex: MERC P/ REVENDA)
@@ -2659,7 +2261,6 @@ def get_dre_sintetico(
 
         # Carregar classificações do banco (mesma lógica da DRE analítica)
         classificacoes_db = {}
-        classificacoes_desc_db = {}
         try:
             rows_cls = execute_query("SELECT cd_despesaitem, ds_despesaitem, conta_dre FROM classificacao_despesas_dre", ())
             for row in rows_cls or []:
@@ -2669,8 +2270,6 @@ def get_dre_sintetico(
                 if cd and conta_dre:
                     codigo = conta_dre.split(' ')[0] if ' ' in conta_dre else conta_dre
                     classificacoes_db[cd] = codigo
-                    if ds:
-                        classificacoes_desc_db[_normalizar_texto(ds)] = codigo
         except Exception:
             pass
 
@@ -2679,7 +2278,7 @@ def get_dre_sintetico(
         for d in despesas_raw:
             conta = _classificar_conta_dre(
                 d['cd_despesaitem'], d.get('descricao_despesa'),
-                classificacoes_db, classificacoes_desc_db
+                classificacoes_db
             )
             # Só contar como despesa operacional contas 08.xx
             if not conta.startswith('08.'):
@@ -2902,7 +2501,6 @@ def get_dre_unificada(
 
         # Buscar classificacoes do banco de dados
         classificacoes_db = {}
-        classificacoes_desc_db = {}
         try:
             rows = execute_query("SELECT cd_despesaitem, ds_despesaitem, conta_dre FROM classificacao_despesas_dre", ())
             for row in rows or []:
@@ -2912,8 +2510,6 @@ def get_dre_unificada(
                 if cd and conta_dre:
                     codigo = conta_dre.split(' ')[0] if ' ' in conta_dre else conta_dre
                     classificacoes_db[cd] = codigo
-                    if ds:
-                        classificacoes_desc_db[_normalizar_texto(ds)] = codigo
         except Exception as e:
             print(f"[DRE UNIFICADA] Aviso: nao foi possivel carregar classificacoes: {e}")
 
@@ -2924,7 +2520,7 @@ def get_dre_unificada(
         for d in despesas:
             cd_despesaitem = d['cd_despesaitem']
             descricao_despesa = d.get('descricao_despesa')
-            conta = _classificar_conta_dre(cd_despesaitem, descricao_despesa, classificacoes_db, classificacoes_desc_db)
+            conta = _classificar_conta_dre(cd_despesaitem, descricao_despesa, classificacoes_db)
             valor = -abs(float(d['valor'] or 0))
             dt_emissao = d['dt_emissao']
 
@@ -3194,7 +2790,6 @@ def get_dre_unificada_duplicatas(
 
         # Buscar classificacoes
         classificacoes_db = {}
-        classificacoes_desc_db = {}
         try:
             rows = execute_query("SELECT cd_despesaitem, ds_despesaitem, conta_dre FROM classificacao_despesas_dre", ())
             for row in rows or []:
@@ -3204,63 +2799,27 @@ def get_dre_unificada_duplicatas(
                 if cd and conta_dre:
                     codigo = conta_dre.split(' ')[0] if ' ' in conta_dre else conta_dre
                     classificacoes_db[cd] = codigo
-                    if ds:
-                        classificacoes_desc_db[_normalizar_texto(ds)] = codigo
         except Exception as e:
             print(f"[DRE UNIFICADA DUPLICATAS] Aviso: {e}")
 
-        # Encontrar cd_despesaitem que mapeiam para esta conta
+        # Encontrar cd_despesaitem que mapeiam para esta conta (APENAS do banco)
         itens_conta = []
-        for cd_item, cd_conta in MAPEAMENTO_DESPESA_DRE.items():
-            if cd_conta == conta or cd_conta.startswith(conta + '.'):
-                itens_conta.append(cd_item)
         for cd_item, cd_conta in classificacoes_db.items():
             if cd_conta == conta or cd_conta.startswith(conta + '.'):
-                if cd_item not in itens_conta:
-                    itens_conta.append(cd_item)
+                itens_conta.append(cd_item)
 
-        # Verificar se ha regras de descricao que mapeiam para esta conta
-        # Se sim, precisamos buscar por descricao tambem (nao apenas por cd_despesaitem)
-        tem_regra_descricao = False
-        for desc, cd_conta in REGRAS_DESCRICAO_DRE:
-            if cd_conta == conta or cd_conta.startswith(conta + '.'):
-                tem_regra_descricao = True
-                break
-
-        # Se nao tem itens e nao tem regra de descricao, retorna vazio
-        if not itens_conta and not tem_regra_descricao:
+        # Se nao tem itens, retorna vazio
+        if not itens_conta:
             return {"duplicatas": [], "total": 0, "conta": conta, "periodo": periodo}
-
-        # Coletar descricoes que mapeiam para esta conta (para busca por LIKE)
-        descricoes_conta = []
-        for desc, cd_conta in REGRAS_DESCRICAO_DRE:
-            if cd_conta == conta or cd_conta.startswith(conta + '.'):
-                descricoes_conta.append(desc)
 
         # Buscar duplicatas
         ccusto_placeholders = ",".join(["%s"] * len(ccustos))
 
-        # Construir clausula WHERE dinamicamente
-        where_conditions = []
+        # Construir clausula WHERE apenas por cd_despesaitem
         params = [primeiro_dia, data_fim]
-
-        if itens_conta:
-            itens_placeholders = ",".join(["%s"] * len(itens_conta))
-            where_conditions.append(f"d.cd_despesaitem IN ({itens_placeholders})")
-            params.extend(itens_conta)
-
-        if descricoes_conta:
-            desc_conditions = []
-            for desc in descricoes_conta:
-                desc_conditions.append("UPPER(i.ds_despesaitem) LIKE %s")
-                params.append(f"%{desc}%")
-            where_conditions.append(f"({' OR '.join(desc_conditions)})")
-
-        if not where_conditions:
-            return {"duplicatas": [], "total": 0, "conta": conta, "periodo": periodo}
-
-        # Unir condicoes com OR (itens OU descricoes)
-        items_or_desc = " OR ".join(where_conditions) if len(where_conditions) > 1 else where_conditions[0]
+        itens_placeholders = ",".join(["%s"] * len(itens_conta))
+        items_or_desc = f"d.cd_despesaitem IN ({itens_placeholders})"
+        params.extend(itens_conta)
 
         params.extend(ccustos)
         params.extend(CCUSTOS_EXCLUIDOS_FABRICA)
@@ -3277,10 +2836,12 @@ def get_dre_unificada_duplicatas(
                 ABS(d.vl_rateio) as valor,
                 d.cd_ccusto,
                 cc.ds_ccusto as nome_ccusto,
-                d.cd_fornecedor
+                d.cd_fornecedor,
+                COALESCE(p.nm_fantasia, p.nm_pessoa, 'N/A') as nm_fornecedor
             FROM vr_fcp_despduplicatai d
             JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
             LEFT JOIN vr_gec_ccusto cc ON cc.cd_ccusto = d.cd_ccusto
+            LEFT JOIN vr_pes_pessoa p ON p.cd_pessoa = d.cd_fornecedor
             WHERE d.dt_emissao >= %s
               AND d.dt_emissao <= %s
               AND ({items_or_desc})
@@ -3302,8 +2863,7 @@ def get_dre_unificada_duplicatas(
             conta_classificada = _classificar_conta_dre(
                 row['cd_despesaitem'],
                 descricao,
-                classificacoes_db,
-                classificacoes_desc_db
+                classificacoes_db
             )
 
             # Verificar se este registro realmente pertence a conta solicitada
@@ -3322,7 +2882,8 @@ def get_dre_unificada_duplicatas(
                 "valor": valor,
                 "cdCCusto": row['cd_ccusto'],
                 "nomeCCusto": row['nome_ccusto'],
-                "cdFornecedor": row['cd_fornecedor']
+                "cdFornecedor": row['cd_fornecedor'],
+                "nmFornecedor": row['nm_fornecedor']
             })
 
         return {
@@ -3386,7 +2947,6 @@ def get_dre_unificada_sintetico(
 
         # Buscar classificacoes uma vez
         classificacoes_db = {}
-        classificacoes_desc_db = {}
         try:
             rows = execute_query("SELECT cd_despesaitem, ds_despesaitem, conta_dre FROM classificacao_despesas_dre", ())
             for row in rows or []:
@@ -3396,8 +2956,6 @@ def get_dre_unificada_sintetico(
                 if cd and conta_dre:
                     codigo = conta_dre.split(' ')[0] if ' ' in conta_dre else conta_dre
                     classificacoes_db[cd] = codigo
-                    if ds:
-                        classificacoes_desc_db[_normalizar_texto(ds)] = codigo
         except Exception as e:
             print(f"[SINTETICO] Aviso: {e}")
 
@@ -3431,7 +2989,7 @@ def get_dre_unificada_sintetico(
             for d in despesas:
                 cd_despesaitem = d['cd_despesaitem']
                 descricao_despesa = d.get('descricao_despesa')
-                conta = _classificar_conta_dre(cd_despesaitem, descricao_despesa, classificacoes_db, classificacoes_desc_db)
+                conta = _classificar_conta_dre(cd_despesaitem, descricao_despesa, classificacoes_db)
                 valor = float(d['valor'] or 0)
 
                 if conta.startswith('08'):
@@ -3609,7 +3167,6 @@ def get_dre_unificada_por_loja(
 
         # Buscar classificacoes
         classificacoes_db = {}
-        classificacoes_desc_db = {}
         try:
             rows = execute_query("SELECT cd_despesaitem, ds_despesaitem, conta_dre FROM classificacao_despesas_dre", ())
             for row in rows or []:
@@ -3619,8 +3176,6 @@ def get_dre_unificada_por_loja(
                 if cd and conta_dre:
                     codigo = conta_dre.split(' ')[0] if ' ' in conta_dre else conta_dre
                     classificacoes_db[cd] = codigo
-                    if ds:
-                        classificacoes_desc_db[_normalizar_texto(ds)] = codigo
         except Exception as e:
             print(f"[POR LOJA] Aviso: {e}")
 
@@ -3650,7 +3205,7 @@ def get_dre_unificada_por_loja(
             for d in despesas:
                 cd_despesaitem = d['cd_despesaitem']
                 descricao_despesa = d.get('descricao_despesa')
-                conta = _classificar_conta_dre(cd_despesaitem, descricao_despesa, classificacoes_db, classificacoes_desc_db)
+                conta = _classificar_conta_dre(cd_despesaitem, descricao_despesa, classificacoes_db)
                 valor = -float(d['valor'] or 0)
 
                 if conta not in valores_conta:
@@ -3753,7 +3308,6 @@ def get_duplicatas_por_empresa(
 
         # Carregar classificacoes do banco
         classificacoes_db = {}
-        classificacoes_desc_db = {}
         try:
             rows = execute_query("SELECT cd_despesaitem, ds_despesaitem, conta_dre FROM classificacao_despesas_dre", ())
             for row in rows or []:
@@ -3763,29 +3317,17 @@ def get_duplicatas_por_empresa(
                 if cd and conta_dre:
                     codigo = conta_dre.split(' ')[0] if ' ' in conta_dre else conta_dre
                     classificacoes_db[cd] = codigo
-                    if ds:
-                        classificacoes_desc_db[_normalizar_texto(ds)] = codigo
         except Exception as e:
             print(f"[DUPLICATAS-EMP] Aviso: nao foi possivel carregar classificacoes: {e}")
 
         # Primeiro, identificar quais cd_despesaitem correspondem a conta solicitada
         conta_prefixo = f"{conta}."
 
-        # Buscar do banco de dados (prioridade)
-        itens_db = [
+        # Buscar do banco de dados (APENAS)
+        itens = [
             cd for cd, c in classificacoes_db.items()
             if c == conta or c.startswith(conta_prefixo)
         ]
-
-        # Fallback para mapeamento fixo se nao tem no banco
-        if not itens_db:
-            itens_mapa = [
-                cd for cd, c in MAPEAMENTO_DESPESA_DRE.items()
-                if c == conta or c.startswith(conta_prefixo)
-            ]
-            itens = itens_mapa
-        else:
-            itens = itens_db
 
         # Criar filtros. cdEmpresa=0 representa o total da linha, sem filtro de centro de custo.
         # cdEmpresa=1 representa a fabrica agrupada: centro 1 + centros maiores que 120.
@@ -3860,24 +3402,6 @@ def get_duplicatas_por_empresa(
             """
             despesas = execute_query(query, (dataInicio, dataFim, *params_ccusto, *EMPRESAS_EXCLUIDAS, *itens))
 
-        print(f"[DUPLICATAS-EMP] Total despesas encontradas para ccustos {ccustos_filtro}: {len(despesas)}")
-        print(f"[DUPLICATAS-EMP] Itens mapeados para conta {conta}: {itens[:10] if itens else 'nenhum'}...")
-
-        # Se nao encontrou despesas, mostrar debug
-        if len(despesas) == 0:
-            print(f"[DUPLICATAS-EMP] DEBUG: Nenhuma despesa encontrada.")
-            # Verificar se existem despesas para estes ccustos no periodo
-            query_debug = f"""
-                SELECT COUNT(*) as qtd
-                FROM vr_fcp_despduplicatai d
-                WHERE d.dt_emissao >= %s AND d.dt_emissao <= %s
-                  AND d.tp_situacao = 'N'
-                  {filtro_ccusto_sql}
-            """
-            debug_result = execute_query(query_debug, (dataInicio, dataFim, *params_ccusto))
-            if debug_result:
-                print(f"[DUPLICATAS-EMP] DEBUG: Total despesas dos ccustos {ccustos_filtro} no periodo: {debug_result[0]['qtd']}")
-
         # Filtrar e processar duplicatas
         duplicatas = []
         total = 0
@@ -3886,7 +3410,7 @@ def get_duplicatas_por_empresa(
         for d in despesas:
             cd_despesaitem = d['cd_despesaitem']
             descricao = d.get('ds_despesaitem')
-            conta_classificada = _classificar_conta_dre(cd_despesaitem, descricao, classificacoes_db, classificacoes_desc_db)
+            conta_classificada = _classificar_conta_dre(cd_despesaitem, descricao, classificacoes_db)
             contas_encontradas.add(f"{conta_classificada}:{descricao}")
 
             # Verificar se a conta classificada corresponde a conta solicitada
