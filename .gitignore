@@ -1,4 +1,5 @@
 node_modules
+.venv/
 .env
 .env.local
 **/.env
@@ -7,4 +8,7 @@ node_modules
 tsconfig.tsbuildinfo
 **/__pycache__/
 *.pyc
+backend.*.log
+*.out.log
+*.err.log
 

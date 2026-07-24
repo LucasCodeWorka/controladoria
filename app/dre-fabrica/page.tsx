@@ -25,7 +25,7 @@ import { PLANO_CONTAS_DRE_FABRICA, type ContaDRE } from './planoContasDREFabrica
 import { formatarValor } from '../utils/formatters';
 
 // Tipos
-type TipoVisao = 'analitica' | 'sintetica' | 'por-empresa';
+type TipoVisao = 'analitica' | 'sintetica' | 'por-empresa' | 'por-ccusto';
 
 interface OpcaoFiltro {
   valor: string;
@@ -88,8 +88,12 @@ interface ResumoLoja {
   despesasOperacionais: number;
   ebitda: number;
   ebitdaPct: number;
+  resultadoNaoOperacional: number;
   despesasFinanceiras: number;
   despesasTributarias: number;
+  lucroLiquido12m: number | null;
+  lucroLiquido6m: number | null;
+  lucroLiquido3m: number | null;
   lucroLiquido: number;
 }
 
@@ -103,6 +107,21 @@ interface DadosPorEmpresa {
   valores: Record<string, Record<string, number>>;
   metadata: {
     totalEmpresas: number;
+    dataInicio: string;
+    dataFim: string;
+  };
+}
+
+interface CentroCustoInfo {
+  cd_ccusto: number;
+  nome: string;
+}
+
+interface DadosPorCCusto {
+  centros_custo: CentroCustoInfo[];
+  valores: Record<string, Record<string, number>>;
+  metadata: {
+    totalCentrosCusto: number;
     dataInicio: string;
     dataFim: string;
   };
@@ -133,6 +152,39 @@ function criarResultado(codigo: string, nome: string, codigoExibicao?: string): 
     valores: {},
     total: 0,
   };
+}
+
+function valorNumerico(registro: unknown, campos: string[], fallback = 0): number {
+  if (!registro || typeof registro !== 'object') return fallback;
+  const valores = registro as Record<string, unknown>;
+  for (const campo of campos) {
+    const valor = valores[campo];
+    if (typeof valor === 'number' && Number.isFinite(valor)) return valor;
+    if (typeof valor === 'string') {
+      const normalizado = Number(valor.replace(/\./g, '').replace(',', '.'));
+      if (Number.isFinite(normalizado)) return normalizado;
+    }
+  }
+  return fallback;
+}
+
+function valorNumericoOuNulo(registro: unknown, campos: string[]): number | null {
+  if (!registro || typeof registro !== 'object') return null;
+  const valores = registro as Record<string, unknown>;
+  for (const campo of campos) {
+    const valor = valores[campo];
+    if (valor === null) return null;
+    if (typeof valor === 'number' && Number.isFinite(valor)) return valor;
+    if (typeof valor === 'string') {
+      const normalizado = Number(valor.replace(/\./g, '').replace(',', '.'));
+      if (Number.isFinite(normalizado)) return normalizado;
+    }
+  }
+  return null;
+}
+
+function formatarValorOpcional(valor: number | null): string {
+  return valor === null ? 'CMV incompleto' : formatarValor(valor);
 }
 
 function montarEstruturaDRE(): ContaDREValores[] {
@@ -367,6 +419,7 @@ export default function DREPage() {
   const [dadosSinteticos, setDadosSinteticos] = useState<ResumoLoja[]>([]);
   const [totaisSinteticos, setTotaisSinteticos] = useState<Record<string, number>>({});
   const [dadosPorEmpresa, setDadosPorEmpresa] = useState<DadosPorEmpresa | null>(null);
+  const [dadosPorCCusto, setDadosPorCCusto] = useState<DadosPorCCusto | null>(null);
   const [contasExpandidas, setContasExpandidas] = useState<Set<string>>(
     new Set(['01', '02', '04', '06', '08', '10', '13', '16', '17', '18', '19'])
   );
@@ -689,7 +742,7 @@ export default function DREPage() {
     try {
       if (tipoVisao === 'analitica') {
         const controller = new AbortController();
-        const timeout = window.setTimeout(() => controller.abort(), 60000);
+        const timeout = window.setTimeout(() => controller.abort(), 300000);
         const response = await fetch(`/api/dre/unificada?dataInicio=${dataInicio}&dataFim=${dataFim}&filtro=${filtro}`, {
           signal: controller.signal,
           cache: 'no-store',
@@ -763,7 +816,18 @@ export default function DREPage() {
         setUltimaAtualizacao(new Date().toLocaleString('pt-BR'));
 
       } else if (tipoVisao === 'sintetica') {
-        const response = await fetch(`/api/dre/unificada/sintetico?dataInicio=${dataInicio}&dataFim=${dataFim}`);
+        const params = new URLSearchParams({
+          dataInicio,
+          dataFim,
+          t: String(Date.now()),
+        });
+        const controller = new AbortController();
+        const timeout = window.setTimeout(() => controller.abort(), 300000);
+        const response = await fetch(`/api/dre/unificada/sintetico?${params.toString()}`, {
+          signal: controller.signal,
+          cache: 'no-store',
+        });
+        window.clearTimeout(timeout);
         const data = await response.json();
 
         if (data.error) {
@@ -790,10 +854,30 @@ export default function DREPage() {
         const dadosOrdenados = calcularLinhasOrdenadas(dadosEstrutura, []);
         setDadosDRE(dadosOrdenados);
         setUltimaAtualizacao(new Date().toLocaleString('pt-BR'));
+      } else if (tipoVisao === 'por-ccusto') {
+        const response = await fetch(`/api/dre/fabrica/por-ccusto?dataInicio=${dataInicio}&dataFim=${dataFim}`);
+        const data = await response.json();
+
+        if (data.error) {
+          setStatusCarregamento(`Erro do backend: ${data.error}`);
+          return;
+        }
+
+        setDadosPorCCusto(data);
+
+        // Criar estrutura de contas ordenada para renderizacao
+        const dadosEstrutura = JSON.parse(JSON.stringify(ESTRUTURA_DRE)) as ContaDREValores[];
+        const dadosOrdenados = calcularLinhasOrdenadas(dadosEstrutura, []);
+        setDadosDRE(dadosOrdenados);
+        setUltimaAtualizacao(new Date().toLocaleString('pt-BR'));
       }
 
     } catch (error) {
       console.error('Erro ao buscar dados DRE:', error);
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        setStatusCarregamento('A consulta demorou mais de 5 minutos e foi cancelada. Tente um periodo menor ou consulte novamente.');
+        return;
+      }
       if (dadosDRE.length === 0) {
         setStatusCarregamento('Falha ao conectar com o backend. Verifique se o servidor esta rodando.');
       }
@@ -802,11 +886,11 @@ export default function DREPage() {
     }
   }
 
-  // Buscar dados quando mudar filtro ou visao
+  // Buscar dados quando mudar filtro, visao ou periodo
   useEffect(() => {
     buscarDados();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filtro, tipoVisao]);
+  }, [filtro, tipoVisao, dataInicio, dataFim]);
 
   const receitaLiquida = dadosDRE.find((conta) => conta.codigo === '03')?.total || 0;
   const margemContribuicao = dadosDRE.find((conta) => conta.codigo === '05')?.total || 0;
@@ -817,6 +901,146 @@ export default function DREPage() {
   const filtroLabel = opcoesFiltro.find(o => o.valor === filtro)?.label || filtro;
   const isFabrica = filtro === 'fabrica';
   const isLoja = !['consolidado', 'fabrica'].includes(filtro);
+  const colunasSinteticas = [
+    { key: 'receitaLiquida', label: 'RECEITA LÍQUIDA', tipo: 'valor' },
+    { key: 'lucroLiquido', label: 'LUCRO LÍQUIDO', tipo: 'valor' },
+    { key: 'lucroLiquidoPct', label: '%', tipo: 'av' },
+    { key: 'lucroLiquido3mPct', label: '%3M', tipo: 'av' },
+    { key: 'lucroLiquido6mPct', label: '%6M', tipo: 'av' },
+    { key: 'lucroLiquido12mPct', label: '%12M', tipo: 'av' },
+    { key: 'cmv', label: 'CMV', tipo: 'valor', negativo: true },
+    { key: 'cmvPct', label: '%', tipo: 'av' },
+    { key: 'lucroOperBruto', label: 'LUCRO OPER. BRUTO', tipo: 'valor' },
+    { key: 'lucroOperBrutoPct', label: '%', tipo: 'av' },
+    { key: 'despOcupacao', label: 'DESP. OCUPAÇÃO', tipo: 'valor', negativo: true },
+    { key: 'despOcupacaoPct', label: '%', tipo: 'av' },
+    { key: 'despAdministrativas', label: 'DESP. ADMINISTRATIVAS', tipo: 'valor', negativo: true },
+    { key: 'despAdministrativasPct', label: '%', tipo: 'av' },
+    { key: 'despManutencao', label: 'DESP. MANUTENÇÃO', tipo: 'valor', negativo: true },
+    { key: 'despManutencaoPct', label: '%', tipo: 'av' },
+    { key: 'despPessoal', label: 'DESP. PESSOAL', tipo: 'valor', negativo: true },
+    { key: 'despPessoalPct', label: '%', tipo: 'av' },
+    { key: 'despBancarias', label: 'DESP. BANCÁRIAS', tipo: 'valor', negativo: true },
+    { key: 'despBancariasPct', label: '%', tipo: 'av' },
+    { key: 'impostosDiretos', label: 'IMPOSTOS DIRETOS', tipo: 'valor', negativo: true },
+    { key: 'impostosDiretosPct', label: '%', tipo: 'av' },
+    { key: 'despMarketing', label: 'DESP. MARKETING', tipo: 'valor', negativo: true },
+    { key: 'despMarketingPct', label: '%', tipo: 'av' },
+    { key: 'despVendas', label: 'DESP. VENDAS', tipo: 'valor', negativo: true },
+    { key: 'despVendasPct', label: '%', tipo: 'av' },
+    { key: 'despCobranca', label: 'DESP. COBRANÇA', tipo: 'valor', negativo: true },
+    { key: 'despCobrancaPct', label: '%', tipo: 'av' },
+    { key: 'freteVendas', label: 'FRETE VENDAS', tipo: 'valor', negativo: true },
+    { key: 'freteVendasPct', label: '%', tipo: 'av' },
+    { key: 'comissaoRepresentante', label: 'COMISSÃO REPRESENTANTES', tipo: 'valor', negativo: true },
+    { key: 'comissaoRepresentantePct', label: '%', tipo: 'av' },
+    { key: 'premiacaoComercial', label: 'PREMIAÇÃO COMERCIAL', tipo: 'valor', negativo: true },
+    { key: 'premiacaoComercialPct', label: '%', tipo: 'av' },
+    { key: 'despesasFinanceiras', label: 'DESP. FINANCEIRAS', tipo: 'valor', negativo: true },
+    { key: 'despesasFinanceirasPct', label: '%', tipo: 'av' },
+  ] as const;
+  const larguraTabelaSintetica = larguraColunaContas
+    + colunasSinteticas.reduce((total, coluna) => total + (coluna.tipo === 'av' ? larguraColunaAV : larguraColunaValor), 0);
+
+  function percentualSobreReceita(valor: number | null, receita: number | null): number | null {
+    if (valor === null || receita === null || receita === 0) return null;
+    return (valor / Math.abs(receita)) * 100;
+  }
+
+  function calcularColunaSintetica(registro: unknown, coluna: typeof colunasSinteticas[number]): number | null {
+    const receitaLiquidaRegistro = valorNumericoOuNulo(registro, ['receitaLiquida']);
+    const receitaLiquidaAbs = receitaLiquidaRegistro === null ? null : Math.abs(receitaLiquidaRegistro);
+    const valorCampo = (campo: string) => valorNumerico(registro, [campo]);
+    const pctCampo = (campo: string) => percentualSobreReceita(valorCampo(campo), receitaLiquidaAbs);
+
+    switch (coluna.key) {
+      case 'receitaLiquida':
+        return receitaLiquidaRegistro;
+      case 'lucroLiquido':
+        return valorCampo('lucroLiquido');
+      case 'lucroLiquidoPct':
+        return pctCampo('lucroLiquido');
+      case 'lucroLiquido3mPct':
+        return percentualSobreReceita(valorNumericoOuNulo(registro, ['lucroLiquido3m']), valorNumericoOuNulo(registro, ['receitaLiquida3m']));
+      case 'lucroLiquido6mPct':
+        return percentualSobreReceita(valorNumericoOuNulo(registro, ['lucroLiquido6m']), valorNumericoOuNulo(registro, ['receitaLiquida6m']));
+      case 'lucroLiquido12mPct':
+        return percentualSobreReceita(valorNumericoOuNulo(registro, ['lucroLiquido12m']), valorNumericoOuNulo(registro, ['receitaLiquida12m']));
+      case 'impostosDiretos':
+        return valorCampo('despesasTributarias');
+      case 'impostosDiretosPct':
+        return pctCampo('despesasTributarias');
+      case 'cmv':
+        return valorCampo('cmv');
+      case 'cmvPct':
+        return pctCampo('cmv');
+      case 'lucroOperBruto':
+        return valorCampo('margemContribuicao');
+      case 'lucroOperBrutoPct':
+        return pctCampo('margemContribuicao');
+      case 'despOcupacao':
+      case 'despAdministrativas':
+      case 'despManutencao':
+      case 'despPessoal':
+      case 'despBancarias':
+      case 'despMarketing':
+      case 'despVendas':
+      case 'despCobranca':
+      case 'freteVendas':
+      case 'comissaoRepresentante':
+      case 'premiacaoComercial':
+      case 'despesasFinanceiras':
+        return valorCampo(coluna.key);
+      case 'despOcupacaoPct':
+        return pctCampo('despOcupacao');
+      case 'despAdministrativasPct':
+        return pctCampo('despAdministrativas');
+      case 'despManutencaoPct':
+        return pctCampo('despManutencao');
+      case 'despPessoalPct':
+        return pctCampo('despPessoal');
+      case 'despBancariasPct':
+        return pctCampo('despBancarias');
+      case 'despMarketingPct':
+        return pctCampo('despMarketing');
+      case 'despVendasPct':
+        return pctCampo('despVendas');
+      case 'despCobrancaPct':
+        return pctCampo('despCobranca');
+      case 'freteVendasPct':
+        return pctCampo('freteVendas');
+      case 'comissaoRepresentantePct':
+        return pctCampo('comissaoRepresentante');
+      case 'premiacaoComercialPct':
+        return pctCampo('premiacaoComercial');
+      case 'despesasFinanceirasPct':
+        return pctCampo('despesasFinanceiras');
+      default:
+        return null;
+    }
+  }
+
+  function formatarColunaSintetica(registro: unknown, coluna: typeof colunasSinteticas[number]): string {
+    const valor = calcularColunaSintetica(registro, coluna);
+    if (valor === null) return '-';
+    if (coluna.tipo === 'av') return `${valor.toFixed(1)}%`;
+    return formatarValor(('negativo' in coluna && coluna.negativo) ? -Math.abs(valor) : valor);
+  }
+
+  function isPercentualLucroLiquidoSintetico(coluna: typeof colunasSinteticas[number]): boolean {
+    return ['lucroLiquidoPct', 'lucroLiquido3mPct', 'lucroLiquido6mPct', 'lucroLiquido12mPct'].includes(coluna.key);
+  }
+
+  function normalizarNomeLojaSintetica(nome: string): string {
+    const normalizado = nome.trim().toUpperCase();
+    const nomesCurtos: Record<string, string> = {
+      'BARRA SHOPPING - RJ': 'BARRA',
+      'ECOMMERCE ANGELICA': 'ECOMMERCE',
+      'SALVADOR SHOPPING - BA': 'SALVADOR',
+      'MORUMBI SHOPPING': 'MORUMBI',
+    };
+    return nomesCurtos[normalizado] || normalizado.replace(/\s+-\s+[A-Z]{2}$/, '');
+  }
 
   return (
     <div className="max-w-[98%] mx-auto py-6 px-4 space-y-6">
@@ -893,6 +1117,17 @@ export default function DREPage() {
           >
             <Building2 className="w-4 h-4" />
             Por Empresa
+          </button>
+          <button
+            onClick={() => setTipoVisao('por-ccusto')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-md transition-all ${
+              tipoVisao === 'por-ccusto'
+                ? 'bg-orange-600 text-white shadow-md'
+                : 'text-gray-600 hover:bg-gray-200'
+            }`}
+          >
+            <Factory className="w-4 h-4" />
+            Por Centro de Custo
           </button>
           <div className="w-px h-6 bg-gray-300 mx-2" />
           <button
@@ -1117,94 +1352,120 @@ export default function DREPage() {
       {tipoVisao === 'sintetica' && (
         <div className="bg-white rounded-lg shadow-lg overflow-hidden">
           <div className="p-4 border-b border-gray-200 bg-green-50">
-            <h2 className="text-lg font-semibold text-gray-800">
-              Visao Sintetica - Comparativo por Centro de Custo
-            </h2>
-            <p className="text-sm text-gray-600">
-              Periodo: {formatarData(dataInicio)} a {formatarData(dataFim)}
-            </p>
+            <div className="flex items-center justify-between flex-wrap gap-4">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-800">
+                  Visao Sintetica - Comparativo por Centro de Custo
+                </h2>
+                <p className="text-sm text-gray-600">
+                  Periodo: {formatarData(dataInicio)} a {formatarData(dataFim)}
+                </p>
+              </div>
+              <div className="flex items-center gap-6">
+                <div className="flex items-center gap-2">
+                  <label className="text-xs text-gray-600">Contas:</label>
+                  <input
+                    type="range"
+                    min="250"
+                    max="500"
+                    value={larguraColunaContas}
+                    onChange={(e) => setLarguraColunaContas(Number(e.target.value))}
+                    className="w-20 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                  />
+                  <span className="text-xs text-gray-500 w-8">{larguraColunaContas}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <label className="text-xs text-gray-600">Valor:</label>
+                  <input
+                    type="range"
+                    min="60"
+                    max="150"
+                    value={larguraColunaValor}
+                    onChange={(e) => setLarguraColunaValor(Number(e.target.value))}
+                    className="w-20 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                  />
+                  <span className="text-xs text-gray-500 w-8">{larguraColunaValor}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <label className="text-xs text-gray-600">A/V%:</label>
+                  <input
+                    type="range"
+                    min="40"
+                    max="100"
+                    value={larguraColunaAV}
+                    onChange={(e) => setLarguraColunaAV(Number(e.target.value))}
+                    className="w-20 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                  />
+                  <span className="text-xs text-gray-500 w-8">{larguraColunaAV}</span>
+                </div>
+              </div>
+            </div>
           </div>
 
           <div className="overflow-x-auto">
-            <table className="w-full border-collapse text-sm">
+            <table className="border-collapse text-sm" style={{ minWidth: `${larguraTabelaSintetica}px` }}>
+              <colgroup>
+                <col style={{ width: `${larguraColunaContas}px`, minWidth: `${larguraColunaContas}px` }} />
+                {colunasSinteticas.map((tipo, index) => (
+                  <col
+                    key={`${tipo.key}-${index}`}
+                    style={{
+                      width: `${tipo.tipo === 'av' ? larguraColunaAV : larguraColunaValor}px`,
+                      minWidth: `${tipo.tipo === 'av' ? larguraColunaAV : larguraColunaValor}px`,
+                    }}
+                  />
+                ))}
+              </colgroup>
               <thead>
                 <tr className="bg-gray-100">
-                  <th className="px-4 py-3 text-left font-semibold border-b sticky left-0 bg-gray-100 z-10">Centro de Custo</th>
-                  <th className="px-3 py-3 text-right font-semibold border-b">Rec. Liquida</th>
-                  <th className="px-3 py-3 text-right font-semibold border-b">CMV</th>
-                  <th className="px-3 py-3 text-right font-semibold border-b text-gray-500">%</th>
-                  <th className="px-3 py-3 text-right font-semibold border-b">Margem</th>
-                  <th className="px-3 py-3 text-right font-semibold border-b text-gray-500">%</th>
-                  <th className="px-3 py-3 text-right font-semibold border-b">EBITDA</th>
-                  <th className="px-3 py-3 text-right font-semibold border-b text-gray-500">%</th>
-                  <th className="px-3 py-3 text-right font-semibold border-b">Lucro Liq.</th>
-                  <th className="px-3 py-3 text-right font-semibold border-b text-gray-500">%</th>
+                  <th className="px-4 py-3 text-left font-semibold border-b sticky left-0 bg-gray-100 z-10" style={{ width: `${larguraColunaContas}px`, minWidth: `${larguraColunaContas}px` }}>LOJA</th>
+                  {colunasSinteticas.map((coluna, index) => (
+                    <th
+                      key={`${coluna.key}-${index}`}
+                      className={`px-3 py-3 text-right font-semibold border-b ${coluna.tipo === 'av' ? 'text-gray-500' : ''}`}
+                    >
+                      {coluna.label}
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
-                {dadosSinteticos.map((item) => {
-                  const cmvPct = item.receitaLiquida !== 0 ? ((item.cmv / Math.abs(item.receitaLiquida)) * 100).toFixed(1) : '0.0';
-                  const lucroLiqPct = item.receitaLiquida !== 0 ? ((item.lucroLiquido / Math.abs(item.receitaLiquida)) * 100).toFixed(1) : '0.0';
-                  return (
-                    <tr key={item.codigo} className="hover:bg-gray-50 border-b">
-                      <td className="px-4 py-2 sticky left-0 bg-white">
-                        <div className="flex items-center gap-2">
-                          {item.tipo === 'fabrica' ? (
-                            <Factory className="w-4 h-4 text-blue-500" />
-                          ) : (
-                            <Store className="w-4 h-4 text-purple-500" />
-                          )}
-                          <span className="font-medium">{item.nome}</span>
-                        </div>
+                {dadosSinteticos.map((item) => (
+                  <tr key={item.codigo} className="hover:bg-gray-50 border-b">
+                    <td className="px-4 py-2 sticky left-0 bg-white" style={{ width: `${larguraColunaContas}px`, minWidth: `${larguraColunaContas}px` }}>
+                      <span className="font-medium whitespace-nowrap">{normalizarNomeLojaSintetica(item.nome)}</span>
+                    </td>
+                    {colunasSinteticas.map((coluna, index) => {
+                      const valor = calcularColunaSintetica(item, coluna);
+                      const negativo = coluna.tipo === 'valor' && valor !== null && (('negativo' in coluna && coluna.negativo) || valor < 0);
+                      const percentualLucro = coluna.tipo === 'av' && isPercentualLucroLiquidoSintetico(coluna);
+                      return (
+                        <td
+                          key={`${item.codigo}-${coluna.key}-${index}`}
+                          className={`px-3 py-2 text-right ${percentualLucro && valor !== null ? valor >= 0 ? 'text-green-600' : 'text-red-600' : coluna.tipo === 'av' ? 'text-gray-500' : negativo ? 'text-red-600' : valor && valor > 0 ? 'text-gray-800' : 'text-gray-400'}`}
+                        >
+                          {formatarColunaSintetica(item, coluna)}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+                <tr className="bg-gray-100 font-bold">
+                  <td className="px-4 py-3 sticky left-0 bg-gray-100" style={{ width: `${larguraColunaContas}px`, minWidth: `${larguraColunaContas}px` }}>TOTAL CONSOLIDADO</td>
+                  {colunasSinteticas.map((coluna, index) => {
+                    const valor = calcularColunaSintetica(totaisSinteticos, coluna);
+                    const negativo = coluna.tipo === 'valor' && valor !== null && (('negativo' in coluna && coluna.negativo) || valor < 0);
+                    const percentualLucro = coluna.tipo === 'av' && isPercentualLucroLiquidoSintetico(coluna);
+                    return (
+                      <td
+                        key={`total-${coluna.key}-${index}`}
+                        className={`px-3 py-3 text-right ${percentualLucro && valor !== null ? valor >= 0 ? 'text-green-600' : 'text-red-600' : coluna.tipo === 'av' ? 'text-gray-600' : negativo ? 'text-red-600' : valor && valor > 0 ? 'text-gray-800' : 'text-gray-400'}`}
+                      >
+                        {formatarColunaSintetica(totaisSinteticos, coluna)}
                       </td>
-                      <td className="px-3 py-2 text-right">{formatarValor(item.receitaLiquida)}</td>
-                      <td className="px-3 py-2 text-right text-red-600">{formatarValor(-item.cmv)}</td>
-                      <td className="px-3 py-2 text-right text-gray-500">{cmvPct}%</td>
-                      <td className="px-3 py-2 text-right">{formatarValor(item.margemContribuicao)}</td>
-                      <td className="px-3 py-2 text-right text-gray-500">{item.margemPct}%</td>
-                      <td className={`px-3 py-2 text-right ${item.ebitda >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                        {formatarValor(item.ebitda)}
-                      </td>
-                      <td className="px-3 py-2 text-right text-gray-500">{item.ebitdaPct}%</td>
-                      <td className={`px-3 py-2 text-right font-medium ${item.lucroLiquido >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                        {formatarValor(item.lucroLiquido)}
-                      </td>
-                      <td className={`px-3 py-2 text-right text-gray-500 ${parseFloat(lucroLiqPct) < 0 ? 'text-red-500' : ''}`}>
-                        {lucroLiqPct}%
-                      </td>
-                    </tr>
-                  );
-                })}
-                {/* Linha de Total */}
-                {(() => {
-                  const recLiq = totaisSinteticos.receitaLiquida || 0;
-                  const totalCmvPct = recLiq !== 0
-                    ? (((totaisSinteticos.cmv || 0) / Math.abs(recLiq)) * 100).toFixed(1)
-                    : '0.0';
-                  const totalLucroPct = recLiq !== 0
-                    ? (((totaisSinteticos.lucroLiquido || 0) / Math.abs(recLiq)) * 100).toFixed(1)
-                    : '0.0';
-                  return (
-                    <tr className="bg-gray-100 font-bold">
-                      <td className="px-4 py-3 sticky left-0 bg-gray-100">TOTAL CONSOLIDADO</td>
-                      <td className="px-3 py-3 text-right">{formatarValor(totaisSinteticos.receitaLiquida || 0)}</td>
-                      <td className="px-3 py-3 text-right text-red-600">{formatarValor(-(totaisSinteticos.cmv || 0))}</td>
-                      <td className="px-3 py-3 text-right text-gray-600">{totalCmvPct}%</td>
-                      <td className="px-3 py-3 text-right">{formatarValor(totaisSinteticos.margemContribuicao || 0)}</td>
-                      <td className="px-3 py-3 text-right text-gray-600">{totaisSinteticos.margemPct || 0}%</td>
-                      <td className={`px-3 py-3 text-right ${(totaisSinteticos.ebitda || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                        {formatarValor(totaisSinteticos.ebitda || 0)}
-                      </td>
-                      <td className="px-3 py-3 text-right text-gray-600">{totaisSinteticos.ebitdaPct || 0}%</td>
-                      <td className={`px-3 py-3 text-right ${(totaisSinteticos.lucroLiquido || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                        {formatarValor(totaisSinteticos.lucroLiquido || 0)}
-                      </td>
-                      <td className={`px-3 py-3 text-right text-gray-600 ${parseFloat(totalLucroPct) < 0 ? 'text-red-600' : ''}`}>
-                        {totalLucroPct}%
-                      </td>
-                    </tr>
-                  );
-                })()}
+                    );
+                  })}
+                </tr>
               </tbody>
             </table>
           </div>
@@ -1573,6 +1834,195 @@ export default function DREPage() {
 
                   // Renderizar todas as contas do DRE
                   return dadosDREFiltrados.map((conta) => renderizarLinhaEmpresa(conta));
+                })()}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Visao Por Centro de Custo */}
+      {tipoVisao === 'por-ccusto' && dadosPorCCusto && (
+        <div className="bg-white rounded-lg shadow-lg overflow-hidden">
+          <div className="p-4 border-b border-gray-200 bg-orange-50">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-800">
+                  DRE Fabrica Por Centro de Custo
+                </h2>
+                <p className="text-sm text-gray-600">
+                  Periodo: {formatarData(dataInicio)} a {formatarData(dataFim)}
+                  {' | '}{dadosPorCCusto.centros_custo.length} centros de custo
+                </p>
+              </div>
+              <div className="flex items-center gap-6">
+                <div className="flex items-center gap-2">
+                  <label className="text-xs text-gray-600">Contas:</label>
+                  <input
+                    type="range"
+                    min="250"
+                    max="500"
+                    value={larguraColunaContas}
+                    onChange={(e) => setLarguraColunaContas(Number(e.target.value))}
+                    className="w-20 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                  />
+                  <span className="text-xs text-gray-500 w-8">{larguraColunaContas}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <label className="text-xs text-gray-600">Valor:</label>
+                  <input
+                    type="range"
+                    min="60"
+                    max="150"
+                    value={larguraColunaValor}
+                    onChange={(e) => setLarguraColunaValor(Number(e.target.value))}
+                    className="w-20 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                  />
+                  <span className="text-xs text-gray-500 w-8">{larguraColunaValor}</span>
+                </div>
+                <div className="flex items-center gap-1 border-l border-orange-200 pl-4">
+                  <span className="text-xs text-gray-600 mr-1">Niveis:</span>
+                  <button
+                    onClick={recolherTodos}
+                    className="px-2 py-1 text-xs bg-gray-200 hover:bg-gray-300 text-gray-700 rounded transition-colors"
+                    title="Recolher todos"
+                  >
+                    0
+                  </button>
+                  <button
+                    onClick={expandirNivel1}
+                    className="px-2 py-1 text-xs bg-orange-200 hover:bg-orange-300 text-orange-700 rounded transition-colors"
+                    title="Expandir nivel 1"
+                  >
+                    1
+                  </button>
+                  <button
+                    onClick={expandirNivel2}
+                    className="px-2 py-1 text-xs bg-orange-300 hover:bg-orange-400 text-orange-800 rounded transition-colors"
+                    title="Expandir nivel 2"
+                  >
+                    2
+                  </button>
+                  <button
+                    onClick={expandirTodos}
+                    className="px-2 py-1 text-xs bg-orange-500 hover:bg-orange-600 text-white rounded transition-colors"
+                    title="Expandir todos"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse text-sm">
+              <thead>
+                <tr className="bg-gradient-to-r from-orange-600 to-orange-700">
+                  <th className="px-4 py-2 text-left font-bold text-white border-b border-orange-500 sticky left-0 bg-orange-600 z-20" style={{ minWidth: `${larguraColunaContas}px`, width: `${larguraColunaContas}px` }}>
+                    CONTA
+                  </th>
+                  {dadosPorCCusto.centros_custo.map((cc) => (
+                    <th
+                      key={cc.cd_ccusto}
+                      className="px-2 py-2 text-center font-bold text-white border-b border-orange-500 text-xs cursor-help"
+                      style={{ minWidth: `${larguraColunaValor}px` }}
+                      title={cc.nome}
+                    >
+                      {cc.nome.length > 12 ? cc.nome.substring(0, 12) + '...' : cc.nome}
+                    </th>
+                  ))}
+                  <th className="px-2 py-2 text-center font-bold text-white border-b border-orange-500 bg-orange-800 text-xs" style={{ minWidth: `${larguraColunaValor}px` }}>
+                    TOTAL
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {(() => {
+                  // Funções auxiliares para buscar valores por centro de custo
+                  const getValorCCusto = (codigo: string, cdCCusto: number): number => {
+                    const valoresConta = dadosPorCCusto?.valores[codigo];
+                    if (!valoresConta) return 0;
+                    return valoresConta[String(cdCCusto)] || 0;
+                  };
+
+                  const getValorTotalCC = (codigo: string): number => {
+                    const valoresConta = dadosPorCCusto?.valores[codigo];
+                    if (!valoresConta) return 0;
+                    return valoresConta['total'] || 0;
+                  };
+
+                  // Lista de contas calculadas
+                  const contasCalculadas = ['03', '05', '07', '09', '11', '12', '14', '15', '16', '19'];
+
+                  // Filtrar contas baseado em mostrarExtras
+                  const dadosDREFiltrados = mostrarExtras
+                    ? dadosDRE
+                    : dadosDRE.filter((conta) => !['15', '16', '17', '18', '19'].includes(conta.codigo));
+
+                  const renderizarLinhaCCusto = (conta: ContaDREValores, nivel = 0): React.ReactNode[] => {
+                    const linhas: React.ReactNode[] = [];
+                    const expandida = contasExpandidas.has(conta.codigo);
+                    const temFilhos = conta.filhos && conta.filhos.length > 0;
+                    const isCalculada = contasCalculadas.includes(conta.codigo);
+
+                    const bgClass = nivel === 0
+                      ? (isCalculada ? 'bg-orange-100 font-semibold' : 'bg-orange-50')
+                      : nivel === 1 ? 'bg-gray-50' : '';
+                    const fontClass = isCalculada ? 'font-medium' : '';
+                    const paddingLeft = 16 + nivel * 16;
+
+                    linhas.push(
+                      <tr key={conta.codigo} className={`${bgClass} hover:bg-orange-50 transition-colors`}>
+                        <td
+                          className="px-4 py-2 border-b border-gray-200 sticky left-0 z-10 bg-inherit"
+                          style={{ paddingLeft: `${paddingLeft}px`, minWidth: `${larguraColunaContas}px`, width: `${larguraColunaContas}px` }}
+                        >
+                          <div className="flex items-center gap-1 whitespace-nowrap">
+                            {temFilhos && (
+                              <button
+                                onClick={() => toggleExpansao(conta.codigo)}
+                                className="w-4 h-4 flex items-center justify-center text-gray-500 hover:text-gray-700"
+                              >
+                                {expandida ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                              </button>
+                            )}
+                            {!temFilhos && <span className="w-4" />}
+                            <span className="text-sm">{conta.codigo} {conta.nome}</span>
+                          </div>
+                        </td>
+                        {dadosPorCCusto.centros_custo.map((cc) => {
+                          const valor = getValorCCusto(conta.codigo, cc.cd_ccusto);
+                          return (
+                            <td
+                              key={cc.cd_ccusto}
+                              className={`px-2 py-2 text-right border-b border-gray-200 text-sm ${
+                                valor < 0 ? 'text-red-600' : ''
+                              } ${fontClass}`}
+                              style={{ minWidth: `${larguraColunaValor}px`, width: `${larguraColunaValor}px` }}
+                            >
+                              {valor !== 0 ? formatarValor(valor) : '-'}
+                            </td>
+                          );
+                        })}
+                        <td className={`px-2 py-2 text-right border-b border-gray-200 text-sm bg-orange-100/50 ${fontClass} ${
+                          getValorTotalCC(conta.codigo) < 0 ? 'text-red-600' : ''
+                        }`} style={{ minWidth: `${larguraColunaValor}px`, width: `${larguraColunaValor}px` }}>
+                          {formatarValor(getValorTotalCC(conta.codigo))}
+                        </td>
+                      </tr>
+                    );
+
+                    if (temFilhos && expandida) {
+                      for (const filho of conta.filhos || []) {
+                        linhas.push(...renderizarLinhaCCusto(filho, nivel + 1));
+                      }
+                    }
+
+                    return linhas;
+                  };
+
+                  return dadosDREFiltrados.map((conta) => renderizarLinhaCCusto(conta));
                 })()}
               </tbody>
             </table>

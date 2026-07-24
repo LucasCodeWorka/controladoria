@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Query
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 from database import execute_query
 import services
 import unicodedata
@@ -26,6 +26,9 @@ router = APIRouter()
 # Para incluir essas empresas novamente, remova os IDs da lista abaixo.
 # ============================================================================
 EMPRESAS_EXCLUIDAS = [50, 100, 110, 9, 11, 12, 13, 16, 18]
+
+# Centros de custo das lojas ATIVAS (exclui lojas encerradas: 9, 11, 12, 13, 16, 18)
+CCUSTOS_LOJAS_ATIVOS = [2, 3, 4, 5, 6, 7, 8, 10, 14, 15, 17, 19, 20, 21, 22, 120]
 
 
 def _normalizar_texto(value: Optional[str]) -> str:
@@ -378,7 +381,7 @@ def get_dre(
 
         cmv_loja_raw = execute_query(f"""
             SELECT DATE_TRUNC('month', data) AS mes, ABS(SUM(valor)) AS cmv
-            FROM mv_cmv_loja
+            FROM mv_cmv_loja_v2
             WHERE data >= %s AND data <= %s
               {cmv_empresa_filter}
             GROUP BY DATE_TRUNC('month', data)
@@ -670,7 +673,7 @@ def get_dre_fabrica(
         _merge_conta('02.01.03', devolucoes_brutas)
 
         # =========================================================================
-        # CMV - APENAS mv_cmv_fab (sem mv_cmv_loja)
+        # CMV - APENAS mv_cmv_fab (sem mv_cmv_loja_v2)
         # =========================================================================
         cmv_fab_raw = execute_query("""
             SELECT DATE_TRUNC('month', data) AS mes, ABS(COALESCE(SUM(valor), 0)) AS cmv
@@ -911,11 +914,11 @@ def get_dre_lojas(
         _merge_conta('02.01.03', devolucoes_brutas)
 
         # =========================================================================
-        # CMV - mv_cmv_loja para lojas
+        # CMV - mv_cmv_loja_v2 para lojas
         # =========================================================================
         cmv_loja_raw = execute_query("""
             SELECT DATE_TRUNC('month', data) AS mes, ABS(COALESCE(SUM(valor), 0)) AS cmv
-            FROM mv_cmv_loja
+            FROM mv_cmv_loja_v2
             WHERE data >= %s AND data <= %s
             GROUP BY DATE_TRUNC('month', data)
         """, (dataInicio, dataFim))
@@ -2070,7 +2073,7 @@ def get_dre_por_empresa(
                 idcentrodecusto AS cd_empresa,
                 DATE_TRUNC('month', data) AS mes,
                 ABS(SUM(valor)) AS cmv
-            FROM mv_cmv_loja
+            FROM mv_cmv_loja_v2
             WHERE data >= %s AND data <= %s
             GROUP BY idcentrodecusto, DATE_TRUNC('month', data)
         """, (dataInicio, dataFim))
@@ -2187,6 +2190,8 @@ def get_dre_sintetico(
     try:
         print(f"[INFO] Buscando DRE Sintético: {dataInicio} até {dataFim}")
 
+        data_fim_exclusivo = (datetime.strptime(dataFim, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+
         # Buscar nomes das empresas
         query_empresas = """
             SELECT e.cd_empresa, COALESCE(p.nm_fantasia, p.nm_pessoa, 'Empresa ' || e.cd_empresa::text) AS nome
@@ -2206,14 +2211,14 @@ def get_dre_sintetico(
                 SUM(t.vl_transacao) as receita_bruta
             FROM vr_tra_transacao t
             WHERE t.dt_transacao >= %s
-              AND t.dt_transacao <= %s
+              AND t.dt_transacao < %s
               AND t.tp_situacao = 4
               AND t.tp_modalidade IN ('4')
               AND t.tp_operacao = 'S'
               AND t.cd_empresa NOT IN ({exclusao_sint_placeholders})
             GROUP BY t.cd_empresa
         """
-        vendas = execute_query(query_vendas, (dataInicio, dataFim, *EMPRESAS_EXCLUIDAS))
+        vendas = execute_query(query_vendas, (dataInicio, data_fim_exclusivo, *EMPRESAS_EXCLUIDAS))
         receita_por_empresa = {r['cd_empresa']: float(r['receita_bruta'] or 0) for r in vendas}
 
         # Buscar devoluções por empresa
@@ -2223,25 +2228,46 @@ def get_dre_sintetico(
                 SUM(t.vl_transacao) as devolucoes
             FROM vr_tra_transacao t
             WHERE t.dt_transacao >= %s
-              AND t.dt_transacao <= %s
+              AND t.dt_transacao < %s
               AND t.tp_situacao = 4
               AND t.tp_modalidade IN ('3')
               AND t.tp_operacao = 'E'
               AND t.cd_empresa NOT IN ({exclusao_sint_placeholders})
             GROUP BY t.cd_empresa
         """
-        devolucoes = execute_query(query_devolucoes, (dataInicio, dataFim, *EMPRESAS_EXCLUIDAS))
+        devolucoes = execute_query(query_devolucoes, (dataInicio, data_fim_exclusivo, *EMPRESAS_EXCLUIDAS))
         devolucoes_por_empresa = {r['cd_empresa']: float(r['devolucoes'] or 0) for r in devolucoes}
 
-        # Buscar CMV por empresa (lojas)
+        # Buscar CMV por empresa (lojas) - filtrado por lojas ativas para bater com DRE Unificada
+        # Exclui lojas encerradas (9, 11, 12, 13, 16, 18)
+        # CORRIGIDO: Agrupar por mes primeiro, aplicar ABS a cada mes, depois somar
+        # Isso garante que valores positivos e negativos em meses diferentes sejam tratados corretamente
+        ccustos_lojas_placeholders = ",".join(["%s"] * len(CCUSTOS_LOJAS_ATIVOS))
         cmv_loja_raw = execute_query(f"""
-            SELECT idcentrodecusto AS cd_empresa, ABS(SUM(valor)) AS cmv
-            FROM mv_cmv_loja
-            WHERE data >= %s AND data <= %s
-              AND idcentrodecusto NOT IN ({exclusao_sint_placeholders})
-            GROUP BY idcentrodecusto
-        """, (dataInicio, dataFim, *EMPRESAS_EXCLUIDAS))
-        cmv_por_empresa = {r['cd_empresa']: float(r['cmv'] or 0) for r in cmv_loja_raw}
+            SELECT idcentrodecusto AS cd_empresa, DATE_TRUNC('month', data) AS mes, ABS(COALESCE(SUM(valor), 0)) AS cmv_mes
+            FROM mv_cmv_loja_v2
+            WHERE data >= %s AND data < %s
+              AND idcentrodecusto IN ({ccustos_lojas_placeholders})
+            GROUP BY idcentrodecusto, DATE_TRUNC('month', data)
+        """, (dataInicio, data_fim_exclusivo, *CCUSTOS_LOJAS_ATIVOS))
+        # Somar CMV por empresa (somando todos os meses)
+        cmv_por_empresa = {}
+        for r in cmv_loja_raw:
+            emp = r['cd_empresa']
+            cmv_mes = float(r['cmv_mes'] or 0)
+            cmv_por_empresa[emp] = cmv_por_empresa.get(emp, 0) + cmv_mes
+
+        # Buscar CMV fábrica - CORRIGIDO: agrupar por mes primeiro
+        cmv_fab_raw = execute_query("""
+            SELECT DATE_TRUNC('month', data) AS mes, ABS(COALESCE(SUM(valor), 0)) AS cmv_mes
+            FROM mv_cmv_fab
+            WHERE data >= %s AND data < %s
+            GROUP BY DATE_TRUNC('month', data)
+        """, (dataInicio, data_fim_exclusivo))
+        # Adicionar CMV fábrica ao centro de custo 1 (FABRICA) - somando todos os meses
+        cmv_fab_total = sum(float(r['cmv_mes'] or 0) for r in cmv_fab_raw)
+        if cmv_fab_total > 0:
+            cmv_por_empresa[1] = cmv_por_empresa.get(1, 0) + cmv_fab_total
 
         # Buscar despesas por empresa — com cd_despesaitem para classificar
         query_despesas = f"""
@@ -2253,11 +2279,11 @@ def get_dre_sintetico(
             FROM vr_fcp_despduplicatai d
             JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
             WHERE d.dt_emissao >= %s
-              AND d.dt_emissao <= %s
+              AND d.dt_emissao < %s
               AND d.tp_situacao = 'N'
               AND d.cd_empresa NOT IN ({exclusao_sint_placeholders})
         """
-        despesas_raw = execute_query(query_despesas, (dataInicio, dataFim, *EMPRESAS_EXCLUIDAS))
+        despesas_raw = execute_query(query_despesas, (dataInicio, data_fim_exclusivo, *EMPRESAS_EXCLUIDAS))
 
         # Carregar classificações do banco (mesma lógica da DRE analítica)
         classificacoes_db = {}
@@ -2273,21 +2299,37 @@ def get_dre_sintetico(
         except Exception:
             pass
 
-        # Somar apenas despesas operacionais (08.xx) por empresa
-        despesas_por_empresa = {}
+        # Somar despesas por categoria para cada empresa
+        despesas_por_empresa = {}        # 08.xx - Despesas Operacionais
+        custos_fixos_por_empresa = {}    # 06.xx - Custos Fixos
+        outras_despesas_por_empresa = {} # 10, 12, 13 - Resultados, Depreciação, Tributárias
+
         for d in despesas_raw:
             conta = _classificar_conta_dre(
                 d['cd_despesaitem'], d.get('descricao_despesa'),
                 classificacoes_db
             )
-            # Só contar como despesa operacional contas 08.xx
-            if not conta.startswith('08.'):
-                continue
             cd_emp = d['cd_empresa']
-            despesas_por_empresa[cd_emp] = despesas_por_empresa.get(cd_emp, 0) + float(d['valor'] or 0)
+            valor = float(d['valor'] or 0)
 
-        # Consolidar empresas
-        todas_empresas = set(receita_por_empresa.keys()) | set(cmv_por_empresa.keys()) | set(despesas_por_empresa.keys())
+            if conta.startswith('08.'):
+                # Despesas Operacionais
+                despesas_por_empresa[cd_emp] = despesas_por_empresa.get(cd_emp, 0) + valor
+            elif conta.startswith('06.'):
+                # Custos Fixos (Gastos Gerais de Fabricação)
+                custos_fixos_por_empresa[cd_emp] = custos_fixos_por_empresa.get(cd_emp, 0) + valor
+            elif conta.startswith('10.') or conta.startswith('12.') or conta.startswith('13.'):
+                # Outras despesas (Resultados, Depreciação, Tributárias)
+                outras_despesas_por_empresa[cd_emp] = outras_despesas_por_empresa.get(cd_emp, 0) + valor
+
+        # Consolidar empresas (incluindo todas com qualquer tipo de custo)
+        todas_empresas = (
+            set(receita_por_empresa.keys()) |
+            set(cmv_por_empresa.keys()) |
+            set(despesas_por_empresa.keys()) |
+            set(custos_fixos_por_empresa.keys()) |
+            set(outras_despesas_por_empresa.keys())
+        )
 
         resultados = []
         totais = {
@@ -2295,8 +2337,10 @@ def get_dre_sintetico(
             "devolucoes": 0,
             "receita_liquida": 0,
             "cmv": 0,
+            "custos_fixos": 0,
             "lucro_bruto": 0,
             "despesas_operacionais": 0,
+            "outras_despesas": 0,
             "lucro_liquido": 0
         }
 
@@ -2305,9 +2349,13 @@ def get_dre_sintetico(
             devolucoes_val = devolucoes_por_empresa.get(cd_emp, 0)
             receita_liquida = receita_bruta - devolucoes_val
             cmv = cmv_por_empresa.get(cd_emp, 0)
-            lucro_bruto = receita_liquida - cmv
+            custos_fixos = custos_fixos_por_empresa.get(cd_emp, 0)
+            # Lucro bruto = Receita Líquida - CMV - Custos Fixos
+            lucro_bruto = receita_liquida - cmv - custos_fixos
             despesas_op = despesas_por_empresa.get(cd_emp, 0)
-            lucro_liquido = lucro_bruto - despesas_op
+            outras_desp = outras_despesas_por_empresa.get(cd_emp, 0)
+            # Lucro líquido = Lucro Bruto - Despesas Operacionais - Outras Despesas
+            lucro_liquido = lucro_bruto - despesas_op - outras_desp
             margem = (lucro_liquido / receita_liquida * 100) if receita_liquida > 0 else 0
 
             resultados.append({
@@ -2317,8 +2365,10 @@ def get_dre_sintetico(
                 "devolucoes": devolucoes_val,
                 "receita_liquida": receita_liquida,
                 "cmv": cmv,
+                "custos_fixos": custos_fixos,
                 "lucro_bruto": lucro_bruto,
                 "despesas_operacionais": despesas_op,
+                "outras_despesas": outras_desp,
                 "lucro_liquido": lucro_liquido,
                 "margem_percentual": round(margem, 2)
             })
@@ -2327,8 +2377,10 @@ def get_dre_sintetico(
             totais["devolucoes"] += devolucoes_val
             totais["receita_liquida"] += receita_liquida
             totais["cmv"] += cmv
+            totais["custos_fixos"] += custos_fixos
             totais["lucro_bruto"] += lucro_bruto
             totais["despesas_operacionais"] += despesas_op
+            totais["outras_despesas"] += outras_desp
             totais["lucro_liquido"] += lucro_liquido
 
         totais["margem_percentual"] = round(
@@ -2366,22 +2418,22 @@ def get_dre_sintetico(
 # Mapeamento fixo dos centros de custo das lojas
 # Lojas encerradas removidas: 9, 11, 12, 13, 16, 18
 CCUSTOS_LOJAS = {
-    2: "LIEBE MARAPONGA",
-    3: "LIEBE IGUATEMI",
-    4: "LIEBE TABOSA",
-    5: "LIEBE NORTH",
-    6: "LIEBE DOM LUIS",
-    7: "LIEBE PARANGABA",
-    8: "LIEBE RIO MAR",
-    10: "LIEBE BARRA SHOPPING - RJ",
-    14: "LIEBE SALVADOR SHOPPING - BA",
-    15: "LIEBE MORUMBI SHOPPING",
-    17: "LIEBE RIO MAR RECIFE",
-    19: "LIEBE NORTH JOQUEI",
-    20: "LIEBE PORTO ALEGRE",
-    21: "LIEBE RIOMAR KENNEDY",
-    22: "LIEBE INTIMATES",
-    120: "LIEBE ECOMMERCE ANGELICA",
+    2: "MARAPONGA",
+    3: "IGUATEMI",
+    4: "TABOSA",
+    5: "NORTH",
+    6: "DOM LUIS",
+    7: "PARANGABA",
+    8: "RIO MAR",
+    10: "BARRA SHOPPING - RJ",
+    14: "SALVADOR SHOPPING - BA",
+    15: "MORUMBI SHOPPING",
+    17: "RIO MAR RECIFE",
+    19: "NORTH JOQUEI",
+    20: "PORTO ALEGRE",
+    21: "RIOMAR KENNEDY",
+    22: "INTIMATES",
+    120: "ECOMMERCE ANGELICA",
 }
 
 
@@ -2683,7 +2735,7 @@ def get_dre_unificada(
             except Exception as e:
                 print(f"[DRE UNIFICADA] Erro ao buscar CMV fabrica: {e}")
 
-        # CMV Lojas (mv_cmv_loja) - AGREGADO por mes
+        # CMV Lojas (mv_cmv_loja_v2) - AGREGADO por mes
         if usar_cmv_loja:
             try:
                 ccustos_lojas_filtro = [c for c in ccustos if c in CCUSTOS_LOJAS]
@@ -2694,7 +2746,7 @@ def get_dre_unificada(
                             DATE_TRUNC('month', data) AS mes,
                             idcentrodecusto,
                             ABS(COALESCE(SUM(valor), 0)) AS cmv
-                        FROM mv_cmv_loja
+                        FROM mv_cmv_loja_v2
                         WHERE data >= %s
                           AND data <= %s
                           AND idcentrodecusto IN ({ccusto_placeholders_loja})
@@ -2911,14 +2963,90 @@ def get_dre_unificada_sintetico(
     """
     Retorna visao sintetica da DRE com metricas principais por centro de custo.
     Mostra: Receita Liquida, CMV, Margem de Contribuicao, EBITDA, Lucro Liquido
+
+    IMPORTANTE: Os valores de CMV sao calculados usando a MESMA logica do endpoint
+    /api/dre/unificada (analitico) para garantir que os totais batam:
+    - Agrupa por mes primeiro
+    - Aplica ABS ao SUM de cada mes
+    - Depois soma todos os meses
     """
     try:
         print(f"[INFO] Buscando DRE SINTETICO: {dataInicio} ate {dataFim}")
+        data_fim_exclusivo = (datetime.strptime(dataFim, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+
+        # =========================================================================
+        # 1. BUSCAR TODOS OS DADOS DE CMV DE UMA VEZ (igual ao endpoint analitico)
+        # =========================================================================
+
+        # CMV Fabrica - agrupado por mes (igual /api/dre/unificada)
+        cmv_fabrica_total = 0
+        try:
+            query_cmv_fab = """
+                SELECT DATE_TRUNC('month', data) AS mes, ABS(COALESCE(SUM(valor), 0)) AS cmv
+                FROM mv_cmv_fab
+                WHERE data >= %s AND data < %s
+                GROUP BY DATE_TRUNC('month', data)
+            """
+            cmv_fab_rows = execute_query(query_cmv_fab, (dataInicio, data_fim_exclusivo))
+            for row in cmv_fab_rows or []:
+                cmv_fabrica_total += float(row['cmv'] or 0)
+            print(f"[SINTETICO] CMV Fabrica total: {cmv_fabrica_total:.2f}")
+        except Exception as e:
+            print(f"[SINTETICO] Erro CMV fabrica: {e}")
+
+        # CMV Lojas - agrupado por mes E por idcentrodecusto (igual /api/dre/unificada)
+        cmv_por_loja = {}  # {cd_ccusto: total_cmv}
+        try:
+            ccustos_lojas_list = list(CCUSTOS_LOJAS.keys())
+            ccusto_placeholders = ",".join(["%s"] * len(ccustos_lojas_list))
+            query_cmv_loja = f"""
+                SELECT
+                    DATE_TRUNC('month', data) AS mes,
+                    idcentrodecusto,
+                    ABS(COALESCE(SUM(valor), 0)) AS cmv
+                FROM mv_cmv_loja_v2
+                WHERE data >= %s
+                  AND data < %s
+                  AND idcentrodecusto IN ({ccusto_placeholders})
+                GROUP BY DATE_TRUNC('month', data), idcentrodecusto
+            """
+            cmv_loja_rows = execute_query(query_cmv_loja, (dataInicio, data_fim_exclusivo, *ccustos_lojas_list))
+            for row in cmv_loja_rows or []:
+                cd_ccusto = row['idcentrodecusto']
+                cmv_mes = float(row['cmv'] or 0)
+                cmv_por_loja[cd_ccusto] = cmv_por_loja.get(cd_ccusto, 0) + cmv_mes
+            print(f"[SINTETICO] CMV Lojas calculado para {len(cmv_por_loja)} centros de custo")
+        except Exception as e:
+            print(f"[SINTETICO] Erro CMV lojas: {e}")
+
+        # Calcular CMV total das lojas (para comparacao)
+        cmv_lojas_total = sum(cmv_por_loja.values())
+        cmv_total = cmv_fabrica_total + cmv_lojas_total
+        print(f"[SINTETICO] CMV Total (fab + lojas): {cmv_total:.2f}")
+
+        # =========================================================================
+        # 2. BUSCAR CLASSIFICACOES
+        # =========================================================================
+        classificacoes_db = {}
+        try:
+            rows = execute_query("SELECT cd_despesaitem, ds_despesaitem, conta_dre FROM classificacao_despesas_dre", ())
+            for row in rows or []:
+                cd = row.get('cd_despesaitem')
+                conta_dre = row.get('conta_dre', '')
+                if cd and conta_dre:
+                    codigo = conta_dre.split(' ')[0] if ' ' in conta_dre else conta_dre
+                    classificacoes_db[cd] = codigo
+        except Exception as e:
+            print(f"[SINTETICO] Aviso classificacoes: {e}")
+
+        # =========================================================================
+        # 3. PROCESSAR CADA CENTRO DE CUSTO
+        # =========================================================================
 
         # Lista de todos os centros de custo (fabrica + lojas)
         todos_ccustos = []
 
-        # Adicionar fabrica como um unico item
+        # Adicionar fabrica
         todos_ccustos.append({
             "codigo": "fabrica",
             "nome": "FABRICA",
@@ -2926,7 +3054,7 @@ def get_dre_unificada_sintetico(
             "tipo": "fabrica"
         })
 
-        # Adicionar cada loja individualmente
+        # Adicionar cada loja
         for cd_ccusto in sorted(CCUSTOS_LOJAS.keys()):
             todos_ccustos.append({
                 "codigo": str(cd_ccusto),
@@ -2935,6 +3063,215 @@ def get_dre_unificada_sintetico(
                 "tipo": "loja"
             })
 
+        def _inicio_janela_meses(data_fim_str: str, meses: int) -> str:
+            data_fim_dt = datetime.strptime(data_fim_str, "%Y-%m-%d")
+            mes_base = data_fim_dt.year * 12 + data_fim_dt.month - 1
+            mes_inicio = mes_base - (meses - 1)
+            ano_inicio = mes_inicio // 12
+            mes_inicio_num = mes_inicio % 12 + 1
+            return f"{ano_inicio}-{mes_inicio_num:02d}-01"
+
+        def _calcular_lucro_liquido_janelas(data_inicio_minimo: str, data_fim_periodo: str, inicios_janelas):
+            periodos_janelas = services.gerar_periodos(data_inicio_minimo, data_fim_periodo)
+            data_fim_janela_exclusivo = (datetime.strptime(data_fim_periodo, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+            metricas = {}
+
+            def garantir_metricas(codigo_item, periodo):
+                if codigo_item not in metricas:
+                    metricas[codigo_item] = {}
+                if periodo not in metricas[codigo_item]:
+                    metricas[codigo_item][periodo] = {
+                        "receitaBruta": 0,
+                        "devolucoes": 0,
+                        "cmv": 0,
+                        "despesasOperacionais": 0,
+                        "resultadoNaoOperacional": 0,
+                        "despesasTributarias": 0,
+                    }
+                return metricas[codigo_item][periodo]
+
+            empresas_lojas = [c for c in CCUSTOS_LOJAS.keys() if c not in EMPRESAS_EXCLUIDAS]
+            empresas_vendas = [1] + empresas_lojas
+            empresa_placeholders = ",".join(["%s"] * len(empresas_vendas))
+
+            query_vendas_janelas = f"""
+                SELECT
+                    DATE_TRUNC('month', t.dt_transacao) AS mes,
+                    t.cd_empresa,
+                    t.tp_modalidade,
+                    SUM(t.vl_transacao) AS valor
+                FROM vr_tra_transacao t
+                WHERE t.dt_transacao >= %s
+                  AND t.dt_transacao < %s
+                  AND t.tp_situacao = 4
+                  AND t.cd_empresa IN ({empresa_placeholders})
+                  AND t.tp_modalidade IN ('3', '4')
+                  AND (
+                    (t.tp_modalidade = '4' AND t.tp_operacao = 'S')
+                    OR (t.tp_modalidade = '3' AND t.tp_operacao = 'E')
+                  )
+                GROUP BY DATE_TRUNC('month', t.dt_transacao), t.cd_empresa, t.tp_modalidade
+            """
+            vendas_janelas = execute_query(query_vendas_janelas, (data_inicio_minimo, data_fim_janela_exclusivo, *empresas_vendas))
+            for row in vendas_janelas or []:
+                dt = row.get('mes')
+                if not dt:
+                    continue
+                periodo = dt.strftime('%Y-%m')
+                if periodo not in periodos_janelas:
+                    continue
+                cd_empresa = row.get('cd_empresa')
+                codigo_item = "fabrica" if cd_empresa == 1 else str(cd_empresa)
+                if codigo_item != "fabrica" and cd_empresa not in CCUSTOS_LOJAS:
+                    continue
+                valores = garantir_metricas(codigo_item, periodo)
+                valor = float(row.get('valor') or 0)
+                if row.get('tp_modalidade') == '4':
+                    valores["receitaBruta"] += valor
+                else:
+                    valores["devolucoes"] += abs(valor)
+
+            query_cmv_fab_janelas = """
+                SELECT DATE_TRUNC('month', data) AS mes, ABS(COALESCE(SUM(valor), 0)) AS cmv
+                FROM mv_cmv_fab
+                WHERE data >= %s AND data < %s
+                GROUP BY DATE_TRUNC('month', data)
+            """
+            cmv_fab_janelas = execute_query(query_cmv_fab_janelas, (data_inicio_minimo, data_fim_janela_exclusivo))
+            for row in cmv_fab_janelas or []:
+                dt = row.get('mes')
+                if not dt:
+                    continue
+                periodo = dt.strftime('%Y-%m')
+                if periodo in periodos_janelas:
+                    garantir_metricas("fabrica", periodo)["cmv"] += float(row.get('cmv') or 0)
+
+            ccustos_lojas_list = list(CCUSTOS_LOJAS.keys())
+            ccusto_loja_placeholders = ",".join(["%s"] * len(ccustos_lojas_list))
+            query_cmv_loja_janelas = f"""
+                SELECT
+                    DATE_TRUNC('month', data) AS mes,
+                    idcentrodecusto,
+                    ABS(COALESCE(SUM(valor), 0)) AS cmv
+                FROM mv_cmv_loja_v2
+                WHERE data >= %s
+                  AND data < %s
+                  AND idcentrodecusto IN ({ccusto_loja_placeholders})
+                GROUP BY DATE_TRUNC('month', data), idcentrodecusto
+            """
+            cmv_loja_janelas = execute_query(query_cmv_loja_janelas, (data_inicio_minimo, data_fim_janela_exclusivo, *ccustos_lojas_list))
+            for row in cmv_loja_janelas or []:
+                dt = row.get('mes')
+                if not dt:
+                    continue
+                periodo = dt.strftime('%Y-%m')
+                if periodo in periodos_janelas:
+                    garantir_metricas(str(row.get('idcentrodecusto')), periodo)["cmv"] += float(row.get('cmv') or 0)
+
+            ccustos_despesas = list(set(CCUSTOS_FABRICA + list(CCUSTOS_LOJAS.keys())))
+            ccusto_despesa_placeholders = ",".join(["%s"] * len(ccustos_despesas))
+            query_despesas_janelas = f"""
+                SELECT
+                    DATE_TRUNC('month', d.dt_emissao) AS mes,
+                    d.cd_ccusto,
+                    d.cd_despesaitem,
+                    i.ds_despesaitem as descricao_despesa,
+                    SUM(ABS(d.vl_rateio)) as valor
+                FROM vr_fcp_despduplicatai d
+                JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
+                WHERE d.dt_emissao >= %s
+                  AND d.dt_emissao < %s
+                  AND d.tp_situacao = 'N'
+                  AND d.cd_ccusto IN ({ccusto_despesa_placeholders})
+                  AND d.cd_ccusto NOT IN ({",".join(["%s"] * len(CCUSTOS_EXCLUIDOS_FABRICA))})
+                GROUP BY DATE_TRUNC('month', d.dt_emissao), d.cd_ccusto, d.cd_despesaitem, i.ds_despesaitem
+            """
+            despesas_janelas = execute_query(
+                query_despesas_janelas,
+                (data_inicio_minimo, data_fim_janela_exclusivo, *ccustos_despesas, *CCUSTOS_EXCLUIDOS_FABRICA)
+            )
+            for row in despesas_janelas or []:
+                dt = row.get('mes')
+                if not dt:
+                    continue
+                periodo = dt.strftime('%Y-%m')
+                if periodo not in periodos_janelas:
+                    continue
+                cd_ccusto = row.get('cd_ccusto')
+                codigo_item = "fabrica" if cd_ccusto in CCUSTOS_FABRICA else str(cd_ccusto)
+                if codigo_item != "fabrica" and cd_ccusto not in CCUSTOS_LOJAS:
+                    continue
+                conta = _classificar_conta_dre(row.get('cd_despesaitem'), row.get('descricao_despesa'), classificacoes_db)
+                valores = garantir_metricas(codigo_item, periodo)
+                valor = float(row.get('valor') or 0)
+                if conta.startswith('08'):
+                    valores["despesasOperacionais"] += valor
+                elif conta.startswith('10'):
+                    valores["resultadoNaoOperacional"] += valor
+                elif conta.startswith('13'):
+                    valores["despesasTributarias"] += valor
+
+            resultado = {}
+            resultado_receita = {}
+            cmv_incompleto = {}
+            for label, inicio in inicios_janelas.items():
+                lucros = {}
+                receitas = {}
+                total = 0
+                total_receita = 0
+                cmv_incompleto[label] = []
+                for item_janela in todos_ccustos:
+                    codigo_item = item_janela["codigo"]
+                    lucro = 0
+                    receita_janela = 0
+                    periodos_sem_cmv = []
+                    for periodo in periodos_janelas:
+                        if periodo < inicio[:7]:
+                            continue
+                        valores = metricas.get(codigo_item, {}).get(periodo, {})
+                        receita_liquida = (
+                            valores.get("receitaBruta", 0)
+                            - valores.get("devolucoes", 0)
+                        )
+                        receita_janela += receita_liquida
+                        if item_janela["tipo"] == "loja" and receita_liquida > 0 and valores.get("cmv", 0) == 0:
+                            periodos_sem_cmv.append(periodo)
+                        lucro += (
+                            receita_liquida
+                            - valores.get("cmv", 0)
+                            - valores.get("despesasOperacionais", 0)
+                            - valores.get("resultadoNaoOperacional", 0)
+                            - valores.get("despesasTributarias", 0)
+                        )
+                    lucros[codigo_item] = lucro
+                    receitas[codigo_item] = receita_janela
+                    total += lucro
+                    total_receita += receita_janela
+                    if periodos_sem_cmv:
+                        cmv_incompleto[label].append({
+                            "codigo": codigo_item,
+                            "nome": item_janela["nome"],
+                            "periodos": periodos_sem_cmv,
+                        })
+                resultado[label] = (lucros, total)
+                resultado_receita[label] = (receitas, total_receita)
+            return resultado, resultado_receita, cmv_incompleto
+
+        inicio_12m = _inicio_janela_meses(dataFim, 12)
+        inicio_6m = _inicio_janela_meses(dataFim, 6)
+        inicio_3m = _inicio_janela_meses(dataFim, 3)
+        lucros_janelas, receitas_janelas, cmv_incompleto_janelas = _calcular_lucro_liquido_janelas(
+            inicio_12m,
+            dataFim,
+            {"12m": inicio_12m, "6m": inicio_6m, "3m": inicio_3m}
+        )
+        lucro_12m_por_ccusto, lucro_12m_total = lucros_janelas["12m"]
+        lucro_6m_por_ccusto, lucro_6m_total = lucros_janelas["6m"]
+        lucro_3m_por_ccusto, lucro_3m_total = lucros_janelas["3m"]
+        receita_12m_por_ccusto, receita_12m_total = receitas_janelas["12m"]
+        receita_6m_por_ccusto, receita_6m_total = receitas_janelas["6m"]
+        receita_3m_por_ccusto, receita_3m_total = receitas_janelas["3m"]
+
         resultados = []
         totais = {
             "receitaLiquida": 0,
@@ -2942,24 +3279,32 @@ def get_dre_unificada_sintetico(
             "margemContribuicao": 0,
             "despesasOperacionais": 0,
             "ebitda": 0,
+            "resultadoNaoOperacional": 0,
+            "despesasFinanceiras": 0,
+            "despesasTributarias": 0,
+            # Despesas detalhadas
+            "despOcupacao": 0,
+            "despAdministrativas": 0,
+            "despManutencao": 0,
+            "despPessoal": 0,
+            "despMarketing": 0,
+            "despVendas": 0,
+            "despCobranca": 0,
+            "despVeiculos": 0,
+            "despBancarias": 0,
+            "freteVendas": 0,
+            "comissaoRepresentante": 0,
+            "premiacaoComercial": 0,
+            # Janelas de lucro
+            "lucroLiquido12m": lucro_12m_total,
+            "lucroLiquido6m": lucro_6m_total,
+            "lucroLiquido3m": lucro_3m_total,
+            "receitaLiquida12m": receita_12m_total,
+            "receitaLiquida6m": receita_6m_total,
+            "receitaLiquida3m": receita_3m_total,
             "lucroLiquido": 0
         }
 
-        # Buscar classificacoes uma vez
-        classificacoes_db = {}
-        try:
-            rows = execute_query("SELECT cd_despesaitem, ds_despesaitem, conta_dre FROM classificacao_despesas_dre", ())
-            for row in rows or []:
-                cd = row.get('cd_despesaitem')
-                ds = row.get('ds_despesaitem')
-                conta_dre = row.get('conta_dre', '')
-                if cd and conta_dre:
-                    codigo = conta_dre.split(' ')[0] if ' ' in conta_dre else conta_dre
-                    classificacoes_db[cd] = codigo
-        except Exception as e:
-            print(f"[SINTETICO] Aviso: {e}")
-
-        # Processar cada centro de custo
         for item in todos_ccustos:
             ccustos = item["ccustos"]
             ccusto_placeholders = ",".join(["%s"] * len(ccustos))
@@ -2973,18 +3318,32 @@ def get_dre_unificada_sintetico(
                 FROM vr_fcp_despduplicatai d
                 JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
                 WHERE d.dt_emissao >= %s
-                  AND d.dt_emissao <= %s
+                  AND d.dt_emissao < %s
                   AND d.tp_situacao = 'N'
                   AND d.cd_ccusto IN ({ccusto_placeholders})
                   AND d.cd_ccusto NOT IN ({",".join(["%s"] * len(CCUSTOS_EXCLUIDOS_FABRICA))})
                 GROUP BY d.cd_despesaitem, i.ds_despesaitem
             """
-            despesas = execute_query(query_despesas, (dataInicio, dataFim, *ccustos, *CCUSTOS_EXCLUIDOS_FABRICA))
+            despesas = execute_query(query_despesas, (dataInicio, data_fim_exclusivo, *ccustos, *CCUSTOS_EXCLUIDOS_FABRICA))
 
-            # Agrupar despesas por grupo
             despesas_operacionais = 0
             despesas_financeiras = 0
             despesas_tributarias = 0
+
+            # Despesas detalhadas por grupo
+            desp_ocupacao = 0        # 08.01
+            desp_administrativas = 0 # 08.02
+            desp_manutencao = 0      # 08.03
+            desp_pessoal = 0         # 08.04
+            desp_marketing = 0       # 08.05
+            desp_vendas = 0          # 08.10
+            desp_cobranca = 0        # 08.11
+            desp_veiculos = 0        # 08.12
+            # Subcontas especiais
+            frete_vendas = 0         # 08.10.03
+            comissao_representante = 0  # 08.10.04
+            premiacao_comercial = 0  # 08.10.02
+            desp_bancarias = 0       # 10.03.01
 
             for d in despesas:
                 cd_despesaitem = d['cd_despesaitem']
@@ -2994,8 +3353,34 @@ def get_dre_unificada_sintetico(
 
                 if conta.startswith('08'):
                     despesas_operacionais += valor
+                    # Detalhar por grupo
+                    if conta.startswith('08.01'):
+                        desp_ocupacao += valor
+                    elif conta.startswith('08.02'):
+                        desp_administrativas += valor
+                    elif conta.startswith('08.03'):
+                        desp_manutencao += valor
+                    elif conta.startswith('08.04'):
+                        desp_pessoal += valor
+                    elif conta.startswith('08.05'):
+                        desp_marketing += valor
+                    elif conta.startswith('08.10'):
+                        desp_vendas += valor
+                        # Subcontas de vendas
+                        if conta.startswith('08.10.02'):
+                            premiacao_comercial += valor
+                        elif conta.startswith('08.10.03'):
+                            frete_vendas += valor
+                        elif conta.startswith('08.10.04'):
+                            comissao_representante += valor
+                    elif conta.startswith('08.11'):
+                        desp_cobranca += valor
+                    elif conta.startswith('08.12'):
+                        desp_veiculos += valor
                 elif conta.startswith('10'):
                     despesas_financeiras += valor
+                    if conta.startswith('10.03.01'):
+                        desp_bancarias += valor
                 elif conta.startswith('13'):
                     despesas_tributarias += valor
 
@@ -3003,75 +3388,48 @@ def get_dre_unificada_sintetico(
             receita_bruta = 0
             devolucoes = 0
 
-            # IMPORTANTE: Para lojas, cd_empresa = idcentrodecusto (mesmos codigos)
             if item["tipo"] == "fabrica":
                 empresas_filtro = [1]
             else:
-                # Usar os proprios ccustos como cd_empresa (pois sao iguais para lojas)
                 empresas_filtro = [c for c in ccustos if c not in EMPRESAS_EXCLUIDAS]
 
             if empresas_filtro:
                 empresa_placeholders = ",".join(["%s"] * len(empresas_filtro))
 
-                # Vendas
                 query_vendas = f"""
                     SELECT SUM(t.vl_transacao) as valor
                     FROM vr_tra_transacao t
                     WHERE t.dt_transacao >= %s
-                      AND t.dt_transacao <= %s
+                      AND t.dt_transacao < %s
                       AND t.tp_situacao = 4
                       AND t.cd_empresa IN ({empresa_placeholders})
                       AND t.tp_modalidade IN ('4')
                       AND t.tp_operacao = 'S'
                 """
-                result_vendas = execute_query(query_vendas, (dataInicio, dataFim, *empresas_filtro))
+                result_vendas = execute_query(query_vendas, (dataInicio, data_fim_exclusivo, *empresas_filtro))
                 if result_vendas and result_vendas[0]['valor']:
                     receita_bruta = float(result_vendas[0]['valor'])
 
-                # Devolucoes
                 query_devolucoes = f"""
                     SELECT SUM(t.vl_transacao) as valor
                     FROM vr_tra_transacao t
                     WHERE t.dt_transacao >= %s
-                      AND t.dt_transacao <= %s
+                      AND t.dt_transacao < %s
                       AND t.tp_situacao = 4
                       AND t.cd_empresa IN ({empresa_placeholders})
                       AND t.tp_modalidade IN ('3')
                       AND t.tp_operacao = 'E'
                 """
-                result_devolucoes = execute_query(query_devolucoes, (dataInicio, dataFim, *empresas_filtro))
+                result_devolucoes = execute_query(query_devolucoes, (dataInicio, data_fim_exclusivo, *empresas_filtro))
                 if result_devolucoes and result_devolucoes[0]['valor']:
                     devolucoes = abs(float(result_devolucoes[0]['valor']))
 
-            # CMV
-            cmv = 0
+            # CMV - usar os valores pre-calculados (mesma logica do analitico)
             if item["tipo"] == "fabrica":
-                try:
-                    query_cmv = """
-                        SELECT SUM(ABS(valor)) as total
-                        FROM mv_cmv_fab
-                        WHERE data >= %s AND data <= %s
-                    """
-                    result = execute_query(query_cmv, (dataInicio, dataFim))
-                    if result and result[0]['total']:
-                        cmv = abs(float(result[0]['total']))
-                except:
-                    pass
+                cmv = cmv_fabrica_total
             else:
-                try:
-                    ccusto_ph = ",".join(["%s"] * len(ccustos))
-                    query_cmv = f"""
-                        SELECT SUM(ABS(valor)) as total
-                        FROM mv_cmv_loja
-                        WHERE data >= %s
-                          AND data <= %s
-                          AND idcentrodecusto IN ({ccusto_ph})
-                    """
-                    result = execute_query(query_cmv, (dataInicio, dataFim, *ccustos))
-                    if result and result[0]['total']:
-                        cmv = abs(float(result[0]['total']))
-                except:
-                    pass
+                # Para lojas, somar o CMV de cada ccusto do item
+                cmv = sum(cmv_por_loja.get(c, 0) for c in ccustos)
 
             # Calcular metricas
             receita_liquida = receita_bruta - devolucoes
@@ -3079,7 +3437,6 @@ def get_dre_unificada_sintetico(
             ebitda = margem_contribuicao - despesas_operacionais
             lucro_liquido = ebitda - despesas_financeiras - despesas_tributarias
 
-            # Calcular percentuais
             margem_pct = (margem_contribuicao / receita_liquida * 100) if receita_liquida > 0 else 0
             ebitda_pct = (ebitda / receita_liquida * 100) if receita_liquida > 0 else 0
 
@@ -3096,22 +3453,57 @@ def get_dre_unificada_sintetico(
                 "despesasOperacionais": despesas_operacionais,
                 "ebitda": ebitda,
                 "ebitdaPct": round(ebitda_pct, 1),
+                "resultadoNaoOperacional": despesas_financeiras,
                 "despesasFinanceiras": despesas_financeiras,
                 "despesasTributarias": despesas_tributarias,
+                # Despesas detalhadas
+                "despOcupacao": desp_ocupacao,
+                "despAdministrativas": desp_administrativas,
+                "despManutencao": desp_manutencao,
+                "despPessoal": desp_pessoal,
+                "despMarketing": desp_marketing,
+                "despVendas": desp_vendas,
+                "despCobranca": desp_cobranca,
+                "despVeiculos": desp_veiculos,
+                "despBancarias": desp_bancarias,
+                "freteVendas": frete_vendas,
+                "comissaoRepresentante": comissao_representante,
+                "premiacaoComercial": premiacao_comercial,
+                # Janelas de lucro
+                "lucroLiquido12m": lucro_12m_por_ccusto.get(item["codigo"], 0),
+                "lucroLiquido6m": lucro_6m_por_ccusto.get(item["codigo"], 0),
+                "lucroLiquido3m": lucro_3m_por_ccusto.get(item["codigo"], 0),
+                "receitaLiquida12m": receita_12m_por_ccusto.get(item["codigo"], 0),
+                "receitaLiquida6m": receita_6m_por_ccusto.get(item["codigo"], 0),
+                "receitaLiquida3m": receita_3m_por_ccusto.get(item["codigo"], 0),
                 "lucroLiquido": lucro_liquido
             }
 
             resultados.append(resultado)
 
-            # Acumular totais
             totais["receitaLiquida"] += receita_liquida
             totais["cmv"] += cmv
             totais["margemContribuicao"] += margem_contribuicao
             totais["despesasOperacionais"] += despesas_operacionais
             totais["ebitda"] += ebitda
+            totais["resultadoNaoOperacional"] += despesas_financeiras
+            totais["despesasFinanceiras"] += despesas_financeiras
+            totais["despesasTributarias"] += despesas_tributarias
+            # Despesas detalhadas
+            totais["despOcupacao"] += desp_ocupacao
+            totais["despAdministrativas"] += desp_administrativas
+            totais["despManutencao"] += desp_manutencao
+            totais["despPessoal"] += desp_pessoal
+            totais["despMarketing"] += desp_marketing
+            totais["despVendas"] += desp_vendas
+            totais["despCobranca"] += desp_cobranca
+            totais["despVeiculos"] += desp_veiculos
+            totais["despBancarias"] += desp_bancarias
+            totais["freteVendas"] += frete_vendas
+            totais["comissaoRepresentante"] += comissao_representante
+            totais["premiacaoComercial"] += premiacao_comercial
             totais["lucroLiquido"] += lucro_liquido
 
-        # Calcular percentuais dos totais
         if totais["receitaLiquida"] > 0:
             totais["margemPct"] = round(totais["margemContribuicao"] / totais["receitaLiquida"] * 100, 1)
             totais["ebitdaPct"] = round(totais["ebitda"] / totais["receitaLiquida"] * 100, 1)
@@ -3126,6 +3518,12 @@ def get_dre_unificada_sintetico(
                 "totalCentrosCusto": len(resultados),
                 "dataInicio": dataInicio,
                 "dataFim": dataFim,
+                "janelasLucroLiquido": {
+                    "12m": {"dataInicio": inicio_12m, "dataFim": dataFim},
+                    "6m": {"dataInicio": inicio_6m, "dataFim": dataFim},
+                    "3m": {"dataInicio": inicio_3m, "dataFim": dataFim}
+                },
+                "cmvIncompletoJanelas": cmv_incompleto_janelas,
                 "dataConsulta": datetime.now().isoformat()
             }
         }
@@ -3216,7 +3614,7 @@ def get_dre_unificada_por_loja(
             try:
                 query_cmv = """
                     SELECT SUM(ABS(valor)) as total
-                    FROM mv_cmv_loja
+                    FROM mv_cmv_loja_v2
                     WHERE data >= %s
                       AND data <= %s
                       AND idcentrodecusto = %s

@@ -18,7 +18,7 @@ export async function GET(request: NextRequest) {
     });
 
     const response = await fetch(
-      `${PYTHON_API_URL}/api/dre/unificada/sintetico?${params.toString()}`,
+      `${PYTHON_API_URL}/api/dre/fabrica/por-ccusto?${params.toString()}`,
       {
         method: 'GET',
         cache: 'no-store',
@@ -37,9 +37,9 @@ export async function GET(request: NextRequest) {
       },
     });
   } catch (error) {
-    console.error('Erro ao buscar DRE Sintetico:', error);
+    console.error('Erro ao buscar DRE Fabrica por Centro de Custo:', error);
     return NextResponse.json(
-      { error: 'Erro ao buscar DRE Sintetico' },
+      { error: 'Erro ao buscar DRE Fabrica por Centro de Custo' },
       { status: 500 }
     );
   }
