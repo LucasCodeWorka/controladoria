@@ -9,9 +9,16 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const dataInicio = searchParams.get('dataInicio') || '2026-01-01';
     const dataFim = searchParams.get('dataFim') || '2026-12-31';
+    const lojas = searchParams.get('lojas') || '';
+
+    const params = new URLSearchParams({
+      dataInicio,
+      dataFim,
+    });
+    if (lojas) params.set('lojas', lojas);
 
     const response = await fetch(
-      `${PYTHON_API_URL}/api/dre/sintetico?dataInicio=${dataInicio}&dataFim=${dataFim}`,
+      `${PYTHON_API_URL}/api/dre/sintetico?${params.toString()}`,
       {
         method: 'GET',
         headers: {

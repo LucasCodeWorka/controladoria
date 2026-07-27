@@ -10,9 +10,10 @@ export async function GET(request: NextRequest) {
     const dataInicio = searchParams.get('dataInicio') || '2026-01-01';
     const dataFim = searchParams.get('dataFim') || '2026-12-31';
     const filtro = searchParams.get('filtro') || 'consolidado';
+    const params = new URLSearchParams({ dataInicio, dataFim, filtro });
 
     const response = await fetch(
-      `${PYTHON_API_URL}/api/dre/unificada?dataInicio=${dataInicio}&dataFim=${dataFim}&filtro=${filtro}`,
+      `${PYTHON_API_URL}/api/dre/unificada?${params.toString()}`,
       {
         method: 'GET',
         headers: {

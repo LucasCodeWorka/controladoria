@@ -4,6 +4,12 @@ import React, { useEffect, useState } from 'react';
 import { RefreshCw, Calendar, TrendingUp, TrendingDown, Building2, X, ChevronRight, ChevronDown } from 'lucide-react';
 import { formatarValor } from '../../utils/formatters';
 
+interface LojaOpcao {
+  valor: string;
+  label: string;
+  tipo: string;
+}
+
 interface EmpresaResultado {
   cd_empresa: number;
   nome: string;
@@ -11,8 +17,10 @@ interface EmpresaResultado {
   devolucoes: number;
   receita_liquida: number;
   cmv: number;
+  custos_fixos: number;
   lucro_bruto: number;
   despesas_operacionais: number;
+  outras_despesas: number;
   lucro_liquido: number;
   margem_percentual: number;
 }
@@ -22,8 +30,10 @@ interface TotaisConsolidados {
   devolucoes: number;
   receita_liquida: number;
   cmv: number;
+  custos_fixos: number;
   lucro_bruto: number;
   despesas_operacionais: number;
+  outras_despesas: number;
   lucro_liquido: number;
   margem_percentual: number;
 }
@@ -48,17 +58,21 @@ export interface ContaDRE {
 // Quais prefixos de conta compõem cada métrica
 const GRUPOS_METRICA: Record<string, string[]> = {
   receita_liquida: ['01', '02', '03'],
-  cmv:             ['04', '06'],
+  cmv:             ['04'],
+  custos_fixos:    ['06'],
   lucro_bruto:     ['01', '02', '03', '04', '06'],
   despesas_operacionais: ['08'],
+  outras_despesas: ['10', '12', '13'],
   lucro_liquido:   ['01', '02', '03', '04', '06', '08', '10', '12', '13'],
 };
 
 const LABEL_METRICA: Record<string, string> = {
   receita_liquida: 'Receita Líquida',
   cmv: 'CMV',
+  custos_fixos: 'Custos Fixos',
   lucro_bruto: 'Lucro Bruto',
   despesas_operacionais: 'Despesas Operacionais',
+  outras_despesas: 'Outras Despesas',
   lucro_liquido: 'Lucro Líquido',
 };
 
@@ -254,12 +268,30 @@ export default function DRESintetico({
   const [totais, setTotais] = useState<TotaisConsolidados | null>(null);
   const [erro, setErro] = useState<string | null>(null);
   const [modal, setModal] = useState<ModalState>({ aberto: false, metrica: '', empresa: null, valor: 0 });
+  const [lojasDisponiveis, setLojasDisponiveis] = useState<LojaOpcao[]>([]);
+  const [lojasSelecionadas, setLojasSelecionadas] = useState<string[]>([]);
+  const [seletorLojasAberto, setSeletorLojasAberto] = useState(false);
 
-  async function buscarDados() {
+  const lojasSelecionadasLabel =
+    lojasSelecionadas.length === 0
+      ? 'Todas as lojas'
+      : lojasSelecionadas.length === 1
+        ? lojasDisponiveis.find((loja) => loja.valor === lojasSelecionadas[0])?.label || '1 loja'
+        : `${lojasSelecionadas.length} lojas selecionadas`;
+
+  async function buscarDados(lojasOverride?: string[]) {
     setLoading(true);
     setErro(null);
     try {
-      const response = await fetch(`/api/dre/sintetico?dataInicio=${dataInicio}&dataFim=${dataFim}`);
+      const params = new URLSearchParams({ dataInicio, dataFim });
+      const lojasFiltro = lojasOverride ?? (
+        lojasSelecionadas.length > 0 ? lojasSelecionadas : lojasDisponiveis.map((loja) => loja.valor)
+      );
+      if (lojasFiltro.length > 0) {
+        params.set('lojas', lojasFiltro.join(','));
+      }
+
+      const response = await fetch(`/api/dre/sintetico?${params.toString()}`);
       const data: DRESinteticoResponse = await response.json();
       if (data.error) { setErro(data.error); return; }
       setEmpresas(data.empresas || []);
@@ -271,7 +303,28 @@ export default function DRESintetico({
     }
   }
 
-  useEffect(() => { buscarDados(); }, []);
+  useEffect(() => {
+    async function carregarLojas() {
+      try {
+        const response = await fetch('/api/dre/centros-custo');
+        const data = await response.json();
+        const lojas = (data.opcoes || []).filter((opcao: LojaOpcao) => opcao.tipo === 'loja');
+        setLojasDisponiveis(lojas);
+        buscarDados(lojas.map((loja: LojaOpcao) => loja.valor));
+      } catch (error) {
+        console.error('Erro ao carregar lojas:', error);
+        buscarDados([]);
+      }
+    }
+
+    carregarLojas();
+  }, []);
+
+  function toggleLoja(valor: string) {
+    setLojasSelecionadas((prev) =>
+      prev.includes(valor) ? prev.filter((item) => item !== valor) : [...prev, valor]
+    );
+  }
 
   function abrirModal(metrica: string, empresa: EmpresaResultado | null, valor: number) {
     setModal({ aberto: true, metrica, empresa, valor });
@@ -309,11 +362,54 @@ export default function DRESintetico({
           <span className="text-gray-500">ate</span>
           <input type="date" value={dataFim} onChange={(e) => setDataFim(e.target.value)}
             className="px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-primary" />
-          <button onClick={buscarDados} disabled={loading}
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setSeletorLojasAberto((aberto) => !aberto)}
+              className="min-w-[220px] flex items-center justify-between gap-2 px-3 py-2 text-sm border border-gray-300 rounded-md bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-brand-primary"
+            >
+              <span className="truncate text-left">{lojasSelecionadasLabel}</span>
+              <ChevronDown className="w-4 h-4 text-gray-500 flex-shrink-0" />
+            </button>
+            {seletorLojasAberto && (
+              <div className="absolute z-30 mt-2 w-[280px] max-h-[360px] overflow-auto rounded-md border border-gray-200 bg-white shadow-lg">
+                <div className="sticky top-0 flex items-center justify-between gap-2 border-b border-gray-100 bg-white px-3 py-2">
+                  <button
+                    type="button"
+                    onClick={() => setLojasSelecionadas(lojasDisponiveis.map((loja) => loja.valor))}
+                    className="text-xs font-medium text-blue-700 hover:text-blue-900"
+                  >
+                    Selecionar todas
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setLojasSelecionadas([])}
+                    className="text-xs font-medium text-gray-600 hover:text-gray-900"
+                  >
+                    Limpar
+                  </button>
+                </div>
+                <div className="py-1">
+                  {lojasDisponiveis.map((loja) => (
+                    <label key={loja.valor} className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-gray-50 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={lojasSelecionadas.includes(loja.valor)}
+                        onChange={() => toggleLoja(loja.valor)}
+                        className="rounded border-gray-300 text-brand-primary focus:ring-brand-primary"
+                      />
+                      <span className="truncate">{loja.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+          <button onClick={() => buscarDados()} disabled={loading}
             className="px-5 py-2 text-sm bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors disabled:opacity-50">
             {loading ? 'Carregando...' : 'Consultar'}
           </button>
-          <button onClick={buscarDados} disabled={loading} title="Atualizar"
+          <button onClick={() => buscarDados()} disabled={loading} title="Atualizar"
             className="p-2 text-sm bg-gray-100 text-gray-600 rounded-md hover:bg-gray-200 transition-colors disabled:opacity-50">
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
@@ -330,25 +426,33 @@ export default function DRESintetico({
 
       {/* Cards de Totais */}
       {totais && (
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <div className="bg-white rounded-lg shadow p-4 border-l-4 border-blue-500">
-            <div className="flex items-center gap-2 text-gray-600 text-sm"><Building2 className="w-4 h-4" />Receita Líquida Total</div>
-            <p className="text-2xl font-bold text-gray-800 mt-1">{formatarValor(totais.receita_liquida)}</p>
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+          <div className="bg-white rounded-lg shadow p-3 border-l-4 border-blue-500">
+            <div className="flex items-center gap-2 text-gray-600 text-xs"><Building2 className="w-3 h-3" />Receita Líquida</div>
+            <p className="text-lg font-bold text-gray-800 mt-1">{formatarValor(totais.receita_liquida)}</p>
           </div>
-          <div className="bg-white rounded-lg shadow p-4 border-l-4 border-orange-500">
-            <div className="text-gray-600 text-sm">CMV Total</div>
-            <p className="text-2xl font-bold text-gray-800 mt-1">{formatarValor(totais.cmv)}</p>
+          <div className="bg-white rounded-lg shadow p-3 border-l-4 border-orange-500">
+            <div className="text-gray-600 text-xs">CMV</div>
+            <p className="text-lg font-bold text-red-600 mt-1">-{formatarValor(totais.cmv)}</p>
           </div>
-          <div className="bg-white rounded-lg shadow p-4 border-l-4 border-purple-500">
-            <div className="text-gray-600 text-sm">Despesas Operacionais</div>
-            <p className="text-2xl font-bold text-gray-800 mt-1">{formatarValor(totais.despesas_operacionais)}</p>
+          <div className="bg-white rounded-lg shadow p-3 border-l-4 border-yellow-500">
+            <div className="text-gray-600 text-xs">Custos Fixos</div>
+            <p className="text-lg font-bold text-red-600 mt-1">-{formatarValor(totais.custos_fixos || 0)}</p>
           </div>
-          <div className={`bg-white rounded-lg shadow p-4 border-l-4 ${totais.lucro_liquido >= 0 ? 'border-green-500' : 'border-red-500'}`}>
-            <div className="flex items-center gap-2 text-gray-600 text-sm">
-              {totais.lucro_liquido >= 0 ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
-              Lucro Líquido Total
+          <div className="bg-white rounded-lg shadow p-3 border-l-4 border-purple-500">
+            <div className="text-gray-600 text-xs">Desp. Operacionais</div>
+            <p className="text-lg font-bold text-red-600 mt-1">-{formatarValor(totais.despesas_operacionais)}</p>
+          </div>
+          <div className="bg-white rounded-lg shadow p-3 border-l-4 border-pink-500">
+            <div className="text-gray-600 text-xs">Outras Despesas</div>
+            <p className="text-lg font-bold text-red-600 mt-1">-{formatarValor(totais.outras_despesas || 0)}</p>
+          </div>
+          <div className={`bg-white rounded-lg shadow p-3 border-l-4 ${totais.lucro_liquido >= 0 ? 'border-green-500' : 'border-red-500'}`}>
+            <div className="flex items-center gap-1 text-gray-600 text-xs">
+              {totais.lucro_liquido >= 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
+              Lucro Líquido
             </div>
-            <p className={`text-2xl font-bold mt-1 ${totais.lucro_liquido >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+            <p className={`text-lg font-bold mt-1 ${totais.lucro_liquido >= 0 ? 'text-green-600' : 'text-red-600'}`}>
               {formatarValor(totais.lucro_liquido)}
             </p>
             <p className="text-xs text-gray-500">Margem: {formatarPercentual(totais.margem_percentual)}</p>
@@ -382,8 +486,10 @@ export default function DRESintetico({
                   <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 border-b">Empresa</th>
                   <th className="px-3 py-3 text-right text-sm font-semibold text-gray-700 border-b">Receita Líquida</th>
                   <th className="px-3 py-3 text-right text-sm font-semibold text-gray-700 border-b">CMV</th>
+                  <th className="px-3 py-3 text-right text-sm font-semibold text-gray-700 border-b">Custos Fixos</th>
                   <th className="px-3 py-3 text-right text-sm font-semibold text-gray-700 border-b">Lucro Bruto</th>
                   <th className="px-3 py-3 text-right text-sm font-semibold text-gray-700 border-b">Desp. Operacionais</th>
+                  <th className="px-3 py-3 text-right text-sm font-semibold text-gray-700 border-b">Outras Desp.</th>
                   <th className="px-3 py-3 text-right text-sm font-semibold text-gray-700 border-b">Lucro Líquido</th>
                   <th className="px-3 py-3 text-right text-sm font-semibold text-gray-700 border-b bg-blue-50">Margem %</th>
                 </tr>
@@ -394,8 +500,10 @@ export default function DRESintetico({
                     <td className="px-4 py-3 border-b border-gray-200 font-medium">{emp.nome}</td>
                     <CelulaClicavel valor={emp.receita_liquida}        metrica="receita_liquida"        empresa={emp} />
                     <CelulaClicavel valor={emp.cmv}                    metrica="cmv"                    empresa={emp} negativo />
+                    <CelulaClicavel valor={emp.custos_fixos || 0}      metrica="custos_fixos"           empresa={emp} negativo />
                     <CelulaClicavel valor={emp.lucro_bruto}            metrica="lucro_bruto"            empresa={emp} />
                     <CelulaClicavel valor={emp.despesas_operacionais}  metrica="despesas_operacionais"  empresa={emp} negativo />
+                    <CelulaClicavel valor={emp.outras_despesas || 0}   metrica="outras_despesas"        empresa={emp} negativo />
                     <CelulaClicavel valor={emp.lucro_liquido}          metrica="lucro_liquido"          empresa={emp} bold />
                     <td className={`px-3 py-3 border-b border-gray-200 text-right text-sm font-bold bg-blue-50 ${emp.margem_percentual >= 0 ? 'text-green-700' : 'text-red-700'}`}>
                       {formatarPercentual(emp.margem_percentual)}
@@ -407,8 +515,10 @@ export default function DRESintetico({
                     <td className="px-4 py-3 border-b border-gray-300">TOTAL CONSOLIDADO</td>
                     <CelulaClicavel valor={totais.receita_liquida}       metrica="receita_liquida"       empresa={null} />
                     <CelulaClicavel valor={totais.cmv}                   metrica="cmv"                   empresa={null} negativo />
+                    <CelulaClicavel valor={totais.custos_fixos || 0}     metrica="custos_fixos"          empresa={null} negativo />
                     <CelulaClicavel valor={totais.lucro_bruto}           metrica="lucro_bruto"           empresa={null} />
                     <CelulaClicavel valor={totais.despesas_operacionais} metrica="despesas_operacionais" empresa={null} negativo />
+                    <CelulaClicavel valor={totais.outras_despesas || 0}  metrica="outras_despesas"       empresa={null} negativo />
                     <CelulaClicavel valor={totais.lucro_liquido}         metrica="lucro_liquido"         empresa={null} bold />
                     <td className={`px-3 py-3 border-b border-gray-300 text-right text-sm bg-blue-100 ${totais.margem_percentual >= 0 ? 'text-green-700' : 'text-red-700'}`}>
                       {formatarPercentual(totais.margem_percentual)}

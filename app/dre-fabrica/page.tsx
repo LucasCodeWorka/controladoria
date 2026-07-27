@@ -404,6 +404,7 @@ export default function DREPage() {
   const [loading, setLoading] = useState(true);
   const [tipoVisao, setTipoVisao] = useState<TipoVisao>('analitica');
   const [filtro, setFiltro] = useState('consolidado');
+  const [filtroAberto, setFiltroAberto] = useState(false);
   const [opcoesFiltro, setOpcoesFiltro] = useState<OpcaoFiltro[]>([]);
   const [dataInicio, setDataInicio] = useState(() => {
     const hoje = new Date();
@@ -418,6 +419,8 @@ export default function DREPage() {
   const [dadosDRE, setDadosDRE] = useState<ContaDREValores[]>([]);
   const [dadosSinteticos, setDadosSinteticos] = useState<ResumoLoja[]>([]);
   const [totaisSinteticos, setTotaisSinteticos] = useState<Record<string, number>>({});
+  const [dadosSinteticosAno, setDadosSinteticosAno] = useState<ResumoLoja[]>([]);
+  const [totaisSinteticosAno, setTotaisSinteticosAno] = useState<Record<string, number>>({});
   const [dadosPorEmpresa, setDadosPorEmpresa] = useState<DadosPorEmpresa | null>(null);
   const [dadosPorCCusto, setDadosPorCCusto] = useState<DadosPorCCusto | null>(null);
   const [contasExpandidas, setContasExpandidas] = useState<Set<string>>(
@@ -743,7 +746,8 @@ export default function DREPage() {
       if (tipoVisao === 'analitica') {
         const controller = new AbortController();
         const timeout = window.setTimeout(() => controller.abort(), 300000);
-        const response = await fetch(`/api/dre/unificada?dataInicio=${dataInicio}&dataFim=${dataFim}&filtro=${filtro}`, {
+        const params = new URLSearchParams({ dataInicio, dataFim, filtro });
+        const response = await fetch(`/api/dre/unificada?${params.toString()}`, {
           signal: controller.signal,
           cache: 'no-store',
         });
@@ -816,27 +820,54 @@ export default function DREPage() {
         setUltimaAtualizacao(new Date().toLocaleString('pt-BR'));
 
       } else if (tipoVisao === 'sintetica') {
+        setDadosSinteticos([]);
+        setTotaisSinteticos({});
+        setDadosSinteticosAno([]);
+        setTotaisSinteticosAno({});
+
         const params = new URLSearchParams({
           dataInicio,
           dataFim,
+          filtro,
+          t: String(Date.now()),
+        });
+        const dataInicioComparativo = `${Number(dataInicio.split('-')[0]) - 1}-${dataInicio.split('-')[1]}-${dataInicio.split('-')[2]}`;
+        const dataFimComparativo = `${Number(dataFim.split('-')[0]) - 1}-${dataFim.split('-')[1]}-${dataFim.split('-')[2]}`;
+        const paramsAno = new URLSearchParams({
+          dataInicio: dataInicioComparativo,
+          dataFim: dataFimComparativo,
+          filtro,
           t: String(Date.now()),
         });
         const controller = new AbortController();
         const timeout = window.setTimeout(() => controller.abort(), 300000);
-        const response = await fetch(`/api/dre/unificada/sintetico?${params.toString()}`, {
-          signal: controller.signal,
-          cache: 'no-store',
-        });
+        const [response, responseAno] = await Promise.all([
+          fetch(`/api/dre/unificada/sintetico?${params.toString()}`, {
+            signal: controller.signal,
+            cache: 'no-store',
+          }),
+          fetch(`/api/dre/unificada/sintetico?${paramsAno.toString()}`, {
+            signal: controller.signal,
+            cache: 'no-store',
+          }),
+        ]);
         window.clearTimeout(timeout);
         const data = await response.json();
+        const dataAno = await responseAno.json();
 
         if (data.error) {
           setStatusCarregamento(`Erro do backend: ${data.error}`);
           return;
         }
+        if (dataAno.error) {
+          setStatusCarregamento(`Erro do backend na tabela anual: ${dataAno.error}`);
+          return;
+        }
 
         setDadosSinteticos(data.resumo || []);
         setTotaisSinteticos(data.totais || {});
+        setDadosSinteticosAno(dataAno.resumo || []);
+        setTotaisSinteticosAno(dataAno.totais || {});
         setUltimaAtualizacao(new Date().toLocaleString('pt-BR'));
       } else if (tipoVisao === 'por-empresa') {
         const response = await fetch(`/api/dre/por-empresa?dataInicio=${dataInicio}&dataFim=${dataFim}`);
@@ -898,9 +929,38 @@ export default function DREPage() {
   const lucroLiquido = dadosDRE.find((conta) => conta.codigo === '14')?.total || 0;
 
   // Obter label do filtro selecionado
-  const filtroLabel = opcoesFiltro.find(o => o.valor === filtro)?.label || filtro;
+  const filtrosSelecionados = filtro.split(',').filter(Boolean);
+  const opcoesLojas = opcoesFiltro.filter((opcao) => opcao.tipo === 'loja');
+  const filtrosLojasSelecionados = filtrosSelecionados.filter((valor) =>
+    opcoesLojas.some((opcao) => opcao.valor === valor)
+  );
+  const filtroLabel = filtro === 'consolidado'
+    ? 'CONSOLIDADO (TODAS)'
+    : filtro === 'fabrica'
+      ? 'FABRICA'
+      : filtrosLojasSelecionados.length === 1
+        ? opcoesFiltro.find(o => o.valor === filtrosLojasSelecionados[0])?.label || filtro
+        : `${filtrosLojasSelecionados.length} LOJAS`;
   const isFabrica = filtro === 'fabrica';
-  const isLoja = !['consolidado', 'fabrica'].includes(filtro);
+  const isLoja = filtro !== 'consolidado' && filtro !== 'fabrica';
+
+  function selecionarFiltroUnico(valor: string) {
+    setFiltro(valor);
+    setFiltroAberto(false);
+  }
+
+  function toggleFiltroLoja(valor: string) {
+    setFiltro((atual) => {
+      const selecionadasAtuais = atual.split(',').filter((item) =>
+        opcoesLojas.some((loja) => loja.valor === item)
+      );
+      const novas = selecionadasAtuais.includes(valor)
+        ? selecionadasAtuais.filter((item) => item !== valor)
+        : [...selecionadasAtuais, valor];
+
+      return novas.length > 0 ? novas.join(',') : 'consolidado';
+    });
+  }
   const colunasSinteticas = [
     { key: 'receitaLiquida', label: 'RECEITA LÍQUIDA', tipo: 'valor' },
     { key: 'lucroLiquido', label: 'LUCRO LÍQUIDO', tipo: 'valor' },
@@ -1042,6 +1102,78 @@ export default function DREPage() {
     return nomesCurtos[normalizado] || normalizado.replace(/\s+-\s+[A-Z]{2}$/, '');
   }
 
+  function renderTabelaSintetica(dados: ResumoLoja[], totais: Record<string, number>, prefixo: string) {
+    return (
+      <div className="overflow-x-auto">
+        <table className="border-collapse text-sm" style={{ minWidth: `${larguraTabelaSintetica}px` }}>
+          <colgroup>
+            <col style={{ width: `${larguraColunaContas}px`, minWidth: `${larguraColunaContas}px` }} />
+            {colunasSinteticas.map((tipo, index) => (
+              <col
+                key={`${prefixo}-${tipo.key}-${index}`}
+                style={{
+                  width: `${tipo.tipo === 'av' ? larguraColunaAV : larguraColunaValor}px`,
+                  minWidth: `${tipo.tipo === 'av' ? larguraColunaAV : larguraColunaValor}px`,
+                }}
+              />
+            ))}
+          </colgroup>
+          <thead>
+            <tr className="bg-gray-100">
+              <th className="px-4 py-3 text-left font-semibold border-b sticky left-0 bg-gray-100 z-10" style={{ width: `${larguraColunaContas}px`, minWidth: `${larguraColunaContas}px` }}>LOJA</th>
+              {colunasSinteticas.map((coluna, index) => (
+                <th
+                  key={`${prefixo}-${coluna.key}-${index}`}
+                  className={`px-3 py-3 text-right font-semibold border-b ${coluna.tipo === 'av' ? 'text-gray-500' : ''}`}
+                >
+                  {coluna.label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {dados.map((item) => (
+              <tr key={`${prefixo}-${item.codigo}`} className="hover:bg-gray-50 border-b">
+                <td className="px-4 py-2 sticky left-0 bg-white" style={{ width: `${larguraColunaContas}px`, minWidth: `${larguraColunaContas}px` }}>
+                  <span className="font-medium whitespace-nowrap">{normalizarNomeLojaSintetica(item.nome)}</span>
+                </td>
+                {colunasSinteticas.map((coluna, index) => {
+                  const valor = calcularColunaSintetica(item, coluna);
+                  const negativo = coluna.tipo === 'valor' && valor !== null && (('negativo' in coluna && coluna.negativo) || valor < 0);
+                  const percentualLucro = coluna.tipo === 'av' && isPercentualLucroLiquidoSintetico(coluna);
+                  return (
+                    <td
+                      key={`${prefixo}-${item.codigo}-${coluna.key}-${index}`}
+                      className={`px-3 py-2 text-right ${percentualLucro && valor !== null ? valor >= 0 ? 'text-green-600' : 'text-red-600' : coluna.tipo === 'av' ? 'text-gray-500' : negativo ? 'text-red-600' : valor && valor > 0 ? 'text-gray-800' : 'text-gray-400'}`}
+                    >
+                      {formatarColunaSintetica(item, coluna)}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+            <tr className="bg-gray-100 font-bold">
+              <td className="px-4 py-3 sticky left-0 bg-gray-100" style={{ width: `${larguraColunaContas}px`, minWidth: `${larguraColunaContas}px` }}>TOTAL CONSOLIDADO</td>
+              {colunasSinteticas.map((coluna, index) => {
+                const valor = calcularColunaSintetica(totais, coluna);
+                const negativo = coluna.tipo === 'valor' && valor !== null && (('negativo' in coluna && coluna.negativo) || valor < 0);
+                const percentualLucro = coluna.tipo === 'av' && isPercentualLucroLiquidoSintetico(coluna);
+                return (
+                  <td
+                    key={`${prefixo}-total-${coluna.key}-${index}`}
+                    className={`px-3 py-3 text-right ${percentualLucro && valor !== null ? valor >= 0 ? 'text-green-600' : 'text-red-600' : coluna.tipo === 'av' ? 'text-gray-600' : negativo ? 'text-red-600' : valor && valor > 0 ? 'text-gray-800' : 'text-gray-400'}`}
+                  >
+                    {formatarColunaSintetica(totais, coluna)}
+                  </td>
+                );
+              })}
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-[98%] mx-auto py-6 px-4 space-y-6">
       {/* Header */}
@@ -1066,20 +1198,78 @@ export default function DREPage() {
             </div>
           </div>
 
-          {/* Dropdown de Filtro */}
+          {/* Filtro */}
           <div className="flex items-center gap-3">
             <Filter className="w-5 h-5 text-gray-500" />
-            <select
-              value={filtro}
-              onChange={(e) => setFiltro(e.target.value)}
-              className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white min-w-[250px]"
-            >
-              {opcoesFiltro.map((opcao) => (
-                <option key={opcao.valor} value={opcao.valor}>
-                  {opcao.label}
-                </option>
-              ))}
-            </select>
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setFiltroAberto((aberto) => !aberto)}
+                className="min-w-[280px] max-w-[360px] flex items-center justify-between gap-2 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white hover:bg-gray-50"
+              >
+                <span className="truncate text-left">{filtroLabel}</span>
+                <ChevronDown className="w-4 h-4 text-gray-500 flex-shrink-0" />
+              </button>
+
+              {filtroAberto && (
+                <div className="absolute right-0 z-40 mt-2 w-[320px] max-h-[420px] overflow-auto rounded-lg border border-gray-200 bg-white shadow-xl">
+                  <div className="border-b border-gray-100 p-2 space-y-1">
+                    <button
+                      type="button"
+                      onClick={() => selecionarFiltroUnico('consolidado')}
+                      className={`w-full text-left px-3 py-2 rounded-md text-sm ${
+                        filtro === 'consolidado' ? 'bg-green-50 text-green-800 font-semibold' : 'hover:bg-gray-50 text-gray-700'
+                      }`}
+                    >
+                      CONSOLIDADO (TODAS)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => selecionarFiltroUnico('fabrica')}
+                      className={`w-full text-left px-3 py-2 rounded-md text-sm ${
+                        filtro === 'fabrica' ? 'bg-blue-50 text-blue-800 font-semibold' : 'hover:bg-gray-50 text-gray-700'
+                      }`}
+                    >
+                      FABRICA
+                    </button>
+                  </div>
+
+                  <div className="sticky top-0 flex items-center justify-between gap-2 border-b border-gray-100 bg-white px-3 py-2">
+                    <span className="text-xs font-semibold text-gray-500 uppercase">Lojas</span>
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setFiltro(opcoesLojas.map((loja) => loja.valor).join(','))}
+                        className="text-xs font-medium text-purple-700 hover:text-purple-900"
+                      >
+                        Todas
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setFiltro('consolidado')}
+                        className="text-xs font-medium text-gray-600 hover:text-gray-900"
+                      >
+                        Limpar
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="py-1">
+                    {opcoesLojas.map((opcao) => (
+                      <label key={opcao.valor} className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-gray-50 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={filtrosLojasSelecionados.includes(opcao.valor)}
+                          onChange={() => toggleFiltroLoja(opcao.valor)}
+                          className="rounded border-gray-300 text-purple-600 focus:ring-purple-500"
+                        />
+                        <span className="truncate">{opcao.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
@@ -1350,6 +1540,20 @@ export default function DREPage() {
 
       {/* Visao Sintetica */}
       {tipoVisao === 'sintetica' && (
+        <>
+        {loading && (
+          <div className="bg-white rounded-lg shadow-lg border border-green-100 p-8">
+            <div className="flex flex-col items-center justify-center gap-3 text-gray-600">
+              <RefreshCw className="w-8 h-8 animate-spin text-green-600" />
+              <div className="text-center">
+                <p className="font-semibold text-gray-800">Carregando visao sintetica...</p>
+                <p className="text-sm text-gray-500">Buscando periodo selecionado e comparativo do ano anterior.</p>
+              </div>
+            </div>
+          </div>
+        )}
+        {!loading && (
+        <>
         <div className="bg-white rounded-lg shadow-lg overflow-hidden">
           <div className="p-4 border-b border-gray-200 bg-green-50">
             <div className="flex items-center justify-between flex-wrap gap-4">
@@ -1470,6 +1674,27 @@ export default function DREPage() {
             </table>
           </div>
         </div>
+        <div className="bg-white rounded-lg shadow-lg overflow-hidden">
+          <div className="p-4 border-b border-gray-200 bg-emerald-50">
+            <div className="flex items-center justify-between flex-wrap gap-4">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-800">
+                  Visao Sintetica - Comparativo por Centro de Custo
+                </h2>
+                <p className="text-sm text-gray-600">
+                  Periodo: {formatarData(`${Number(dataInicio.split('-')[0]) - 1}-${dataInicio.split('-')[1]}-${dataInicio.split('-')[2]}`)} a {formatarData(`${Number(dataFim.split('-')[0]) - 1}-${dataFim.split('-')[1]}-${dataFim.split('-')[2]}`)}
+                </p>
+              </div>
+              <div className="px-3 py-1.5 rounded-md bg-emerald-100 text-emerald-800 text-sm font-semibold">
+                {filtroLabel}
+              </div>
+            </div>
+          </div>
+          {renderTabelaSintetica(dadosSinteticosAno, totaisSinteticosAno, 'ano')}
+        </div>
+        </>
+        )}
+        </>
       )}
 
       {/* Visao Por Empresa */}

@@ -10,10 +10,12 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const dataInicio = searchParams.get('dataInicio') || '2026-01-01';
     const dataFim = searchParams.get('dataFim') || '2026-12-31';
+    const filtro = searchParams.get('filtro') || 'consolidado';
 
     const params = new URLSearchParams({
       dataInicio,
       dataFim,
+      filtro,
       t: String(Date.now()),
     });
 

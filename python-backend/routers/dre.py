@@ -2181,16 +2181,28 @@ def get_dre_por_empresa(
 @router.get("/api/dre/sintetico")
 def get_dre_sintetico(
     dataInicio: str = Query("2026-01-01", description="Data inicial (YYYY-MM-DD)"),
-    dataFim: str = Query("2026-12-31", description="Data final (YYYY-MM-DD)")
+    dataFim: str = Query("2026-12-31", description="Data final (YYYY-MM-DD)"),
+    lojas: Optional[str] = Query(None, description="Codigos das lojas separados por virgula (ex: 2,3,4)")
 ):
     """
     Retorna visão sintética da DRE com métricas principais por empresa.
     Métricas: Receita Líquida, CMV, Despesas Operacionais, Lucro Líquido, Margem %
     """
     try:
-        print(f"[INFO] Buscando DRE Sintético: {dataInicio} até {dataFim}")
+        print(f"[INFO] Buscando DRE Sintético: {dataInicio} até {dataFim}, lojas={lojas}")
 
         data_fim_exclusivo = (datetime.strptime(dataFim, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+
+        lojas_ids = None
+        if lojas:
+            try:
+                lojas_ids = [int(loja.strip()) for loja in lojas.split(",") if loja.strip()]
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Parametro 'lojas' invalido. Use IDs separados por virgula.")
+
+            lojas_ids = [loja for loja in lojas_ids if loja in CCUSTOS_LOJAS and loja not in EMPRESAS_EXCLUIDAS]
+            if not lojas_ids:
+                raise HTTPException(status_code=400, detail="Nenhuma loja valida selecionada.")
 
         # Buscar nomes das empresas
         query_empresas = """
@@ -2216,9 +2228,10 @@ def get_dre_sintetico(
               AND t.tp_modalidade IN ('4')
               AND t.tp_operacao = 'S'
               AND t.cd_empresa NOT IN ({exclusao_sint_placeholders})
+              {"AND t.cd_empresa IN (" + ",".join(["%s"] * len(lojas_ids)) + ")" if lojas_ids else ""}
             GROUP BY t.cd_empresa
         """
-        vendas = execute_query(query_vendas, (dataInicio, data_fim_exclusivo, *EMPRESAS_EXCLUIDAS))
+        vendas = execute_query(query_vendas, (dataInicio, data_fim_exclusivo, *EMPRESAS_EXCLUIDAS, *(lojas_ids or [])))
         receita_por_empresa = {r['cd_empresa']: float(r['receita_bruta'] or 0) for r in vendas}
 
         # Buscar devoluções por empresa
@@ -2233,23 +2246,25 @@ def get_dre_sintetico(
               AND t.tp_modalidade IN ('3')
               AND t.tp_operacao = 'E'
               AND t.cd_empresa NOT IN ({exclusao_sint_placeholders})
+              {"AND t.cd_empresa IN (" + ",".join(["%s"] * len(lojas_ids)) + ")" if lojas_ids else ""}
             GROUP BY t.cd_empresa
         """
-        devolucoes = execute_query(query_devolucoes, (dataInicio, data_fim_exclusivo, *EMPRESAS_EXCLUIDAS))
+        devolucoes = execute_query(query_devolucoes, (dataInicio, data_fim_exclusivo, *EMPRESAS_EXCLUIDAS, *(lojas_ids or [])))
         devolucoes_por_empresa = {r['cd_empresa']: float(r['devolucoes'] or 0) for r in devolucoes}
 
         # Buscar CMV por empresa (lojas) - filtrado por lojas ativas para bater com DRE Unificada
         # Exclui lojas encerradas (9, 11, 12, 13, 16, 18)
         # CORRIGIDO: Agrupar por mes primeiro, aplicar ABS a cada mes, depois somar
         # Isso garante que valores positivos e negativos em meses diferentes sejam tratados corretamente
-        ccustos_lojas_placeholders = ",".join(["%s"] * len(CCUSTOS_LOJAS_ATIVOS))
+        ccustos_lojas_cmv = lojas_ids or CCUSTOS_LOJAS_ATIVOS
+        ccustos_lojas_placeholders = ",".join(["%s"] * len(ccustos_lojas_cmv))
         cmv_loja_raw = execute_query(f"""
             SELECT idcentrodecusto AS cd_empresa, DATE_TRUNC('month', data) AS mes, ABS(COALESCE(SUM(valor), 0)) AS cmv_mes
             FROM mv_cmv_loja_v2
             WHERE data >= %s AND data < %s
               AND idcentrodecusto IN ({ccustos_lojas_placeholders})
             GROUP BY idcentrodecusto, DATE_TRUNC('month', data)
-        """, (dataInicio, data_fim_exclusivo, *CCUSTOS_LOJAS_ATIVOS))
+        """, (dataInicio, data_fim_exclusivo, *ccustos_lojas_cmv))
         # Somar CMV por empresa (somando todos os meses)
         cmv_por_empresa = {}
         for r in cmv_loja_raw:
@@ -2257,22 +2272,31 @@ def get_dre_sintetico(
             cmv_mes = float(r['cmv_mes'] or 0)
             cmv_por_empresa[emp] = cmv_por_empresa.get(emp, 0) + cmv_mes
 
-        # Buscar CMV fábrica - CORRIGIDO: agrupar por mes primeiro
-        cmv_fab_raw = execute_query("""
-            SELECT DATE_TRUNC('month', data) AS mes, ABS(COALESCE(SUM(valor), 0)) AS cmv_mes
-            FROM mv_cmv_fab
-            WHERE data >= %s AND data < %s
-            GROUP BY DATE_TRUNC('month', data)
-        """, (dataInicio, data_fim_exclusivo))
-        # Adicionar CMV fábrica ao centro de custo 1 (FABRICA) - somando todos os meses
-        cmv_fab_total = sum(float(r['cmv_mes'] or 0) for r in cmv_fab_raw)
-        if cmv_fab_total > 0:
-            cmv_por_empresa[1] = cmv_por_empresa.get(1, 0) + cmv_fab_total
+        if not lojas_ids:
+            # Buscar CMV fábrica - CORRIGIDO: agrupar por mes primeiro
+            cmv_fab_raw = execute_query("""
+                SELECT DATE_TRUNC('month', data) AS mes, ABS(COALESCE(SUM(valor), 0)) AS cmv_mes
+                FROM mv_cmv_fab
+                WHERE data >= %s AND data < %s
+                GROUP BY DATE_TRUNC('month', data)
+            """, (dataInicio, data_fim_exclusivo))
+            # Adicionar CMV fábrica ao centro de custo 1 (FABRICA) - somando todos os meses
+            cmv_fab_total = sum(float(r['cmv_mes'] or 0) for r in cmv_fab_raw)
+            if cmv_fab_total > 0:
+                cmv_por_empresa[1] = cmv_por_empresa.get(1, 0) + cmv_fab_total
 
         # Buscar despesas por empresa — com cd_despesaitem para classificar
+        filtro_lojas_despesas = ""
+        params_lojas_despesas = []
+        campo_empresa_despesas = "d.cd_empresa"
+        if lojas_ids:
+            filtro_lojas_despesas = "AND d.cd_ccusto IN (" + ",".join(["%s"] * len(lojas_ids)) + ")"
+            params_lojas_despesas = lojas_ids
+            campo_empresa_despesas = "d.cd_ccusto"
+
         query_despesas = f"""
             SELECT
-                d.cd_empresa,
+                {campo_empresa_despesas} AS cd_empresa,
                 d.cd_despesaitem,
                 i.ds_despesaitem as descricao_despesa,
                 ABS(d.vl_rateio) as valor
@@ -2282,8 +2306,9 @@ def get_dre_sintetico(
               AND d.dt_emissao < %s
               AND d.tp_situacao = 'N'
               AND d.cd_empresa NOT IN ({exclusao_sint_placeholders})
+              {filtro_lojas_despesas}
         """
-        despesas_raw = execute_query(query_despesas, (dataInicio, data_fim_exclusivo, *EMPRESAS_EXCLUIDAS))
+        despesas_raw = execute_query(query_despesas, (dataInicio, data_fim_exclusivo, *EMPRESAS_EXCLUIDAS, *params_lojas_despesas))
 
         # Carregar classificações do banco (mesma lógica da DRE analítica)
         classificacoes_db = {}
@@ -2360,7 +2385,7 @@ def get_dre_sintetico(
 
             resultados.append({
                 "cd_empresa": cd_emp,
-                "nome": nomes_empresas.get(cd_emp, f"Empresa {cd_emp}"),
+                "nome": CCUSTOS_LOJAS.get(cd_emp) or nomes_empresas.get(cd_emp, f"Empresa {cd_emp}"),
                 "receita_bruta": receita_bruta,
                 "devolucoes": devolucoes_val,
                 "receita_liquida": receita_liquida,
@@ -2395,6 +2420,7 @@ def get_dre_sintetico(
                 "totalEmpresas": len(resultados),
                 "dataInicio": dataInicio,
                 "dataFim": dataFim,
+                "lojasSelecionadas": lojas_ids or [],
                 "dataConsulta": datetime.now().isoformat()
             }
         }
@@ -2502,6 +2528,21 @@ def get_dre_unificada(
             tipo_filtro = "fabrica"
             usar_cmv_fab = True
             usar_cmv_loja = False
+        elif "," in filtro:
+            try:
+                ccustos_selecionados = [int(item.strip()) for item in filtro.split(",") if item.strip()]
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"Filtro invalido: {filtro}")
+
+            ccustos_lojas = [cd for cd in ccustos_selecionados if cd in CCUSTOS_LOJAS]
+            if not ccustos_lojas:
+                raise HTTPException(status_code=400, detail="Nenhuma loja valida selecionada")
+
+            ccustos = ccustos_lojas
+            nome_filtro = f"{len(ccustos_lojas)} LOJAS"
+            tipo_filtro = "loja"
+            usar_cmv_fab = False
+            usar_cmv_loja = True
         else:
             # Centro de custo específico (loja)
             try:
@@ -2958,7 +2999,8 @@ def get_dre_unificada_duplicatas(
 @router.get("/api/dre/unificada/sintetico")
 def get_dre_unificada_sintetico(
     dataInicio: str = Query("2026-01-01", description="Data inicial (YYYY-MM-DD)"),
-    dataFim: str = Query("2026-12-31", description="Data final (YYYY-MM-DD)")
+    dataFim: str = Query("2026-12-31", description="Data final (YYYY-MM-DD)"),
+    filtro: str = Query("consolidado", description="Filtro: 'consolidado', 'fabrica', codigo ou codigos de lojas")
 ):
     """
     Retorna visao sintetica da DRE com metricas principais por centro de custo.
@@ -2971,8 +3013,20 @@ def get_dre_unificada_sintetico(
     - Depois soma todos os meses
     """
     try:
-        print(f"[INFO] Buscando DRE SINTETICO: {dataInicio} ate {dataFim}")
+        print(f"[INFO] Buscando DRE SINTETICO: {dataInicio} ate {dataFim}, filtro={filtro}")
         data_fim_exclusivo = (datetime.strptime(dataFim, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+
+        incluir_fabrica = filtro in ("consolidado", "fabrica")
+        lojas_filtradas = list(CCUSTOS_LOJAS.keys()) if filtro == "consolidado" else []
+        if filtro not in ("consolidado", "fabrica"):
+            try:
+                lojas_solicitadas = [int(item.strip()) for item in filtro.split(",") if item.strip()]
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"Filtro invalido: {filtro}")
+
+            lojas_filtradas = [loja for loja in lojas_solicitadas if loja in CCUSTOS_LOJAS]
+            if not lojas_filtradas:
+                raise HTTPException(status_code=400, detail="Nenhuma loja valida selecionada")
 
         # =========================================================================
         # 1. BUSCAR TODOS OS DADOS DE CMV DE UMA VEZ (igual ao endpoint analitico)
@@ -2981,6 +3035,8 @@ def get_dre_unificada_sintetico(
         # CMV Fabrica - agrupado por mes (igual /api/dre/unificada)
         cmv_fabrica_total = 0
         try:
+            if not incluir_fabrica:
+                raise RuntimeError("CMV fabrica ignorado pelo filtro")
             query_cmv_fab = """
                 SELECT DATE_TRUNC('month', data) AS mes, ABS(COALESCE(SUM(valor), 0)) AS cmv
                 FROM mv_cmv_fab
@@ -2997,7 +3053,9 @@ def get_dre_unificada_sintetico(
         # CMV Lojas - agrupado por mes E por idcentrodecusto (igual /api/dre/unificada)
         cmv_por_loja = {}  # {cd_ccusto: total_cmv}
         try:
-            ccustos_lojas_list = list(CCUSTOS_LOJAS.keys())
+            ccustos_lojas_list = lojas_filtradas
+            if not ccustos_lojas_list:
+                raise RuntimeError("CMV lojas ignorado pelo filtro")
             ccusto_placeholders = ",".join(["%s"] * len(ccustos_lojas_list))
             query_cmv_loja = f"""
                 SELECT
@@ -3047,15 +3105,16 @@ def get_dre_unificada_sintetico(
         todos_ccustos = []
 
         # Adicionar fabrica
-        todos_ccustos.append({
-            "codigo": "fabrica",
-            "nome": "FABRICA",
-            "ccustos": CCUSTOS_FABRICA,
-            "tipo": "fabrica"
-        })
+        if incluir_fabrica:
+            todos_ccustos.append({
+                "codigo": "fabrica",
+                "nome": "FABRICA",
+                "ccustos": CCUSTOS_FABRICA,
+                "tipo": "fabrica"
+            })
 
         # Adicionar cada loja
-        for cd_ccusto in sorted(CCUSTOS_LOJAS.keys()):
+        for cd_ccusto in sorted(lojas_filtradas):
             todos_ccustos.append({
                 "codigo": str(cd_ccusto),
                 "nome": CCUSTOS_LOJAS[cd_ccusto],
