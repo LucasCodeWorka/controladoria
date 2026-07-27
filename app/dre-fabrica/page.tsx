@@ -401,7 +401,8 @@ function calcularLinhasOrdenadas(base: ContaDREValores[], periodos: PeriodoDRE[]
 
 
 export default function DREPage() {
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [consultaExecutada, setConsultaExecutada] = useState(false);
   const [tipoVisao, setTipoVisao] = useState<TipoVisao>('analitica');
   const [filtro, setFiltro] = useState('consolidado');
   const [filtroAberto, setFiltroAberto] = useState(false);
@@ -813,6 +814,7 @@ export default function DREPage() {
         const dadosOrdenados = calcularLinhasOrdenadas(dadosProcessados, periodosAtuais, contasTotalizadoras);
         setDadosDRE(dadosOrdenados);
         setUltimaAtualizacao(new Date().toLocaleString('pt-BR'));
+        setConsultaExecutada(true);
 
       } else if (tipoVisao === 'sintetica') {
         setDadosSinteticos([]);
@@ -864,6 +866,7 @@ export default function DREPage() {
         setDadosSinteticosAno(dataAno.resumo || []);
         setTotaisSinteticosAno(dataAno.totais || {});
         setUltimaAtualizacao(new Date().toLocaleString('pt-BR'));
+        setConsultaExecutada(true);
       } else if (tipoVisao === 'por-empresa') {
         const response = await fetch(`/api/dre/por-empresa?dataInicio=${dataInicio}&dataFim=${dataFim}`);
         const data = await response.json();
@@ -880,6 +883,7 @@ export default function DREPage() {
         const dadosOrdenados = calcularLinhasOrdenadas(dadosEstrutura, []);
         setDadosDRE(dadosOrdenados);
         setUltimaAtualizacao(new Date().toLocaleString('pt-BR'));
+        setConsultaExecutada(true);
       } else if (tipoVisao === 'por-ccusto') {
         const response = await fetch(`/api/dre/fabrica/por-ccusto?dataInicio=${dataInicio}&dataFim=${dataFim}`);
         const data = await response.json();
@@ -896,6 +900,7 @@ export default function DREPage() {
         const dadosOrdenados = calcularLinhasOrdenadas(dadosEstrutura, []);
         setDadosDRE(dadosOrdenados);
         setUltimaAtualizacao(new Date().toLocaleString('pt-BR'));
+        setConsultaExecutada(true);
       }
 
     } catch (error) {
@@ -912,15 +917,19 @@ export default function DREPage() {
     }
   }
 
-  // Buscar dados quando mudar filtro, visao ou periodo. O debounce evita disparar
-  // varias consultas pesadas enquanto o usuario marca lojas em sequencia.
+  // Mudancas de filtro/periodo/visao apenas limpam a tela. A consulta pesada
+  // roda somente quando o usuario clicar em Consultar.
   useEffect(() => {
-    const timeout = window.setTimeout(() => {
-      buscarDados();
-    }, 500);
-
-    return () => window.clearTimeout(timeout);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    setConsultaExecutada(false);
+    setStatusCarregamento(null);
+    setFiltroInfo('');
+    setDadosDRE([]);
+    setDadosSinteticos([]);
+    setTotaisSinteticos({});
+    setDadosSinteticosAno([]);
+    setTotaisSinteticosAno({});
+    setDadosPorEmpresa(null);
+    setDadosPorCCusto(null);
   }, [filtro, tipoVisao, dataInicio, dataFim]);
 
   const receitaLiquida = dadosDRE.find((conta) => conta.codigo === '03')?.total || 0;
@@ -1348,7 +1357,7 @@ export default function DREPage() {
       </div>
 
       {/* Cards de resumo - Apenas na visao analitica */}
-      {tipoVisao === 'analitica' && (
+      {tipoVisao === 'analitica' && consultaExecutada && (
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <div className="bg-white rounded-lg shadow p-4 border-l-4 border-blue-500">
             <div className="flex items-center gap-2 text-gray-600 text-sm">
@@ -1446,8 +1455,18 @@ export default function DREPage() {
         )}
       </div>
 
+      {!loading && !consultaExecutada && (
+        <div className="bg-white rounded-lg shadow border border-gray-200 p-8">
+          <div className="text-center text-gray-600">
+            <Calendar className="w-8 h-8 mx-auto mb-3 text-green-600" />
+            <p className="font-semibold text-gray-800">Selecione os filtros e clique em Consultar.</p>
+            <p className="text-sm text-gray-500 mt-1">A DRE nao sera carregada automaticamente ao abrir ou alterar filtros.</p>
+          </div>
+        </div>
+      )}
+
       {/* Visao Analitica - Tabela DRE */}
-      {tipoVisao === 'analitica' && (
+      {tipoVisao === 'analitica' && consultaExecutada && (
         <div className="bg-white rounded-xl shadow-lg overflow-hidden border border-gray-200">
           <div className={`p-5 border-b-2 ${
             isLoja ? 'bg-gradient-to-r from-purple-50 to-purple-100 border-purple-200'
@@ -1539,7 +1558,7 @@ export default function DREPage() {
       )}
 
       {/* Visao Sintetica */}
-      {tipoVisao === 'sintetica' && (
+      {tipoVisao === 'sintetica' && (loading || consultaExecutada) && (
         <>
         {loading && (
           <div className="bg-white rounded-lg shadow-lg border border-green-100 p-8">
@@ -1552,7 +1571,7 @@ export default function DREPage() {
             </div>
           </div>
         )}
-        {!loading && (
+        {!loading && consultaExecutada && (
         <>
         <div className="bg-white rounded-lg shadow-lg overflow-hidden">
           <div className="p-4 border-b border-gray-200 bg-green-50">
@@ -1698,7 +1717,7 @@ export default function DREPage() {
       )}
 
       {/* Visao Por Empresa */}
-      {tipoVisao === 'por-empresa' && dadosPorEmpresa && (
+      {tipoVisao === 'por-empresa' && consultaExecutada && dadosPorEmpresa && (
         <div className="bg-white rounded-lg shadow-lg overflow-hidden">
           <div className="p-4 border-b border-gray-200 bg-purple-50">
             <div className="flex items-center justify-between">
@@ -2067,7 +2086,7 @@ export default function DREPage() {
       )}
 
       {/* Visao Por Centro de Custo */}
-      {tipoVisao === 'por-ccusto' && dadosPorCCusto && (
+      {tipoVisao === 'por-ccusto' && consultaExecutada && dadosPorCCusto && (
         <div className="bg-white rounded-lg shadow-lg overflow-hidden">
           <div className="p-4 border-b border-gray-200 bg-orange-50">
             <div className="flex items-center justify-between">
