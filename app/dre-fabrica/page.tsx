@@ -485,11 +485,6 @@ export default function DREPage() {
     setPeriodos(novosPeriodos);
   }, [dataInicio, dataFim]);
 
-  useEffect(() => {
-    buscarDados();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   function toggleExpansao(codigo: string) {
     setContasExpandidas((prev) => {
       const novo = new Set(prev);
@@ -917,9 +912,14 @@ export default function DREPage() {
     }
   }
 
-  // Buscar dados quando mudar filtro, visao ou periodo
+  // Buscar dados quando mudar filtro, visao ou periodo. O debounce evita disparar
+  // varias consultas pesadas enquanto o usuario marca lojas em sequencia.
   useEffect(() => {
-    buscarDados();
+    const timeout = window.setTimeout(() => {
+      buscarDados();
+    }, 500);
+
+    return () => window.clearTimeout(timeout);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filtro, tipoVisao, dataInicio, dataFim]);
 

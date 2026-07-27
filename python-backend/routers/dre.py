@@ -3149,27 +3149,26 @@ def get_dre_unificada_sintetico(
                     }
                 return metricas[codigo_item][periodo]
 
-            empresas_lojas = [c for c in CCUSTOS_LOJAS.keys() if c not in EMPRESAS_EXCLUIDAS]
-            empresas_vendas = [1] + empresas_lojas
+            empresas_lojas = [c for c in lojas_filtradas if c not in EMPRESAS_EXCLUIDAS]
+            empresas_vendas = []
+            if incluir_fabrica:
+                empresas_vendas.append(1)
+            empresas_vendas.extend(empresas_lojas)
+            if not empresas_vendas:
+                return {}, {}, {}
             empresa_placeholders = ",".join(["%s"] * len(empresas_vendas))
 
             query_vendas_janelas = f"""
                 SELECT
-                    DATE_TRUNC('month', t.dt_transacao) AS mes,
-                    t.cd_empresa,
-                    t.tp_modalidade,
-                    SUM(t.vl_transacao) AS valor
-                FROM vr_tra_transacao t
-                WHERE t.dt_transacao >= %s
-                  AND t.dt_transacao < %s
-                  AND t.tp_situacao = 4
-                  AND t.cd_empresa IN ({empresa_placeholders})
-                  AND t.tp_modalidade IN ('3', '4')
-                  AND (
-                    (t.tp_modalidade = '4' AND t.tp_operacao = 'S')
-                    OR (t.tp_modalidade = '3' AND t.tp_operacao = 'E')
-                  )
-                GROUP BY DATE_TRUNC('month', t.dt_transacao), t.cd_empresa, t.tp_modalidade
+                    DATE_TRUNC('month', data) AS mes,
+                    cd_empresa,
+                    SUM(receita_bruta) AS receita_bruta,
+                    SUM(devolucoes) AS devolucoes
+                FROM mv_vendas_loja_dia
+                WHERE data >= %s
+                  AND data < %s
+                  AND cd_empresa IN ({empresa_placeholders})
+                GROUP BY DATE_TRUNC('month', data), cd_empresa
             """
             vendas_janelas = execute_query(query_vendas_janelas, (data_inicio_minimo, data_fim_janela_exclusivo, *empresas_vendas))
             for row in vendas_janelas or []:
@@ -3184,50 +3183,55 @@ def get_dre_unificada_sintetico(
                 if codigo_item != "fabrica" and cd_empresa not in CCUSTOS_LOJAS:
                     continue
                 valores = garantir_metricas(codigo_item, periodo)
-                valor = float(row.get('valor') or 0)
-                if row.get('tp_modalidade') == '4':
-                    valores["receitaBruta"] += valor
-                else:
-                    valores["devolucoes"] += abs(valor)
+                valores["receitaBruta"] += float(row.get('receita_bruta') or 0)
+                valores["devolucoes"] += abs(float(row.get('devolucoes') or 0))
 
-            query_cmv_fab_janelas = """
-                SELECT DATE_TRUNC('month', data) AS mes, ABS(COALESCE(SUM(valor), 0)) AS cmv
-                FROM mv_cmv_fab
-                WHERE data >= %s AND data < %s
-                GROUP BY DATE_TRUNC('month', data)
-            """
-            cmv_fab_janelas = execute_query(query_cmv_fab_janelas, (data_inicio_minimo, data_fim_janela_exclusivo))
-            for row in cmv_fab_janelas or []:
-                dt = row.get('mes')
-                if not dt:
-                    continue
-                periodo = dt.strftime('%Y-%m')
-                if periodo in periodos_janelas:
-                    garantir_metricas("fabrica", periodo)["cmv"] += float(row.get('cmv') or 0)
+            if incluir_fabrica:
+                query_cmv_fab_janelas = """
+                    SELECT DATE_TRUNC('month', data) AS mes, ABS(COALESCE(SUM(valor), 0)) AS cmv
+                    FROM mv_cmv_fab
+                    WHERE data >= %s AND data < %s
+                    GROUP BY DATE_TRUNC('month', data)
+                """
+                cmv_fab_janelas = execute_query(query_cmv_fab_janelas, (data_inicio_minimo, data_fim_janela_exclusivo))
+                for row in cmv_fab_janelas or []:
+                    dt = row.get('mes')
+                    if not dt:
+                        continue
+                    periodo = dt.strftime('%Y-%m')
+                    if periodo in periodos_janelas:
+                        garantir_metricas("fabrica", periodo)["cmv"] += float(row.get('cmv') or 0)
 
-            ccustos_lojas_list = list(CCUSTOS_LOJAS.keys())
-            ccusto_loja_placeholders = ",".join(["%s"] * len(ccustos_lojas_list))
-            query_cmv_loja_janelas = f"""
-                SELECT
-                    DATE_TRUNC('month', data) AS mes,
-                    idcentrodecusto,
-                    ABS(COALESCE(SUM(valor), 0)) AS cmv
-                FROM mv_cmv_loja_v2
-                WHERE data >= %s
-                  AND data < %s
-                  AND idcentrodecusto IN ({ccusto_loja_placeholders})
-                GROUP BY DATE_TRUNC('month', data), idcentrodecusto
-            """
-            cmv_loja_janelas = execute_query(query_cmv_loja_janelas, (data_inicio_minimo, data_fim_janela_exclusivo, *ccustos_lojas_list))
-            for row in cmv_loja_janelas or []:
-                dt = row.get('mes')
-                if not dt:
-                    continue
-                periodo = dt.strftime('%Y-%m')
-                if periodo in periodos_janelas:
-                    garantir_metricas(str(row.get('idcentrodecusto')), periodo)["cmv"] += float(row.get('cmv') or 0)
+            ccustos_lojas_list = lojas_filtradas
+            if ccustos_lojas_list:
+                ccusto_loja_placeholders = ",".join(["%s"] * len(ccustos_lojas_list))
+                query_cmv_loja_janelas = f"""
+                    SELECT
+                        DATE_TRUNC('month', data) AS mes,
+                        idcentrodecusto,
+                        ABS(COALESCE(SUM(valor), 0)) AS cmv
+                    FROM mv_cmv_loja_v2
+                    WHERE data >= %s
+                      AND data < %s
+                      AND idcentrodecusto IN ({ccusto_loja_placeholders})
+                    GROUP BY DATE_TRUNC('month', data), idcentrodecusto
+                """
+                cmv_loja_janelas = execute_query(query_cmv_loja_janelas, (data_inicio_minimo, data_fim_janela_exclusivo, *ccustos_lojas_list))
+                for row in cmv_loja_janelas or []:
+                    dt = row.get('mes')
+                    if not dt:
+                        continue
+                    periodo = dt.strftime('%Y-%m')
+                    if periodo in periodos_janelas:
+                        garantir_metricas(str(row.get('idcentrodecusto')), periodo)["cmv"] += float(row.get('cmv') or 0)
 
-            ccustos_despesas = list(set(CCUSTOS_FABRICA + list(CCUSTOS_LOJAS.keys())))
+            ccustos_despesas = []
+            if incluir_fabrica:
+                ccustos_despesas.extend(CCUSTOS_FABRICA)
+            ccustos_despesas.extend(lojas_filtradas)
+            ccustos_despesas = list(set(ccustos_despesas))
+            if not ccustos_despesas:
+                return {}, {}, {}
             ccusto_despesa_placeholders = ",".join(["%s"] * len(ccustos_despesas))
             query_despesas_janelas = f"""
                 SELECT
@@ -3456,32 +3460,18 @@ def get_dre_unificada_sintetico(
                 empresa_placeholders = ",".join(["%s"] * len(empresas_filtro))
 
                 query_vendas = f"""
-                    SELECT SUM(t.vl_transacao) as valor
-                    FROM vr_tra_transacao t
-                    WHERE t.dt_transacao >= %s
-                      AND t.dt_transacao < %s
-                      AND t.tp_situacao = 4
-                      AND t.cd_empresa IN ({empresa_placeholders})
-                      AND t.tp_modalidade IN ('4')
-                      AND t.tp_operacao = 'S'
+                    SELECT
+                        COALESCE(SUM(receita_bruta), 0) AS receita_bruta,
+                        COALESCE(SUM(devolucoes), 0) AS devolucoes
+                    FROM mv_vendas_loja_dia
+                    WHERE data >= %s
+                      AND data < %s
+                      AND cd_empresa IN ({empresa_placeholders})
                 """
                 result_vendas = execute_query(query_vendas, (dataInicio, data_fim_exclusivo, *empresas_filtro))
-                if result_vendas and result_vendas[0]['valor']:
-                    receita_bruta = float(result_vendas[0]['valor'])
-
-                query_devolucoes = f"""
-                    SELECT SUM(t.vl_transacao) as valor
-                    FROM vr_tra_transacao t
-                    WHERE t.dt_transacao >= %s
-                      AND t.dt_transacao < %s
-                      AND t.tp_situacao = 4
-                      AND t.cd_empresa IN ({empresa_placeholders})
-                      AND t.tp_modalidade IN ('3')
-                      AND t.tp_operacao = 'E'
-                """
-                result_devolucoes = execute_query(query_devolucoes, (dataInicio, data_fim_exclusivo, *empresas_filtro))
-                if result_devolucoes and result_devolucoes[0]['valor']:
-                    devolucoes = abs(float(result_devolucoes[0]['valor']))
+                if result_vendas:
+                    receita_bruta = float(result_vendas[0]['receita_bruta'] or 0)
+                    devolucoes = abs(float(result_vendas[0]['devolucoes'] or 0))
 
             # CMV - usar os valores pre-calculados (mesma logica do analitico)
             if item["tipo"] == "fabrica":
