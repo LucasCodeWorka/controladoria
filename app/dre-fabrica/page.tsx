@@ -1092,7 +1092,7 @@ export default function DREPage() {
   function formatarColunaSintetica(registro: unknown, coluna: typeof colunasSinteticas[number]): string {
     const valor = calcularColunaSintetica(registro, coluna);
     if (valor === null) return '-';
-    if (coluna.tipo === 'av') return `${valor.toFixed(1)}%`;
+    if (coluna.tipo === 'av') return `${valor.toFixed(2)}%`;
     return formatarValor(('negativo' in coluna && coluna.negativo) ? -Math.abs(valor) : valor);
   }
 
@@ -1111,7 +1111,13 @@ export default function DREPage() {
     return nomesCurtos[normalizado] || normalizado.replace(/\s+-\s+[A-Z]{2}$/, '');
   }
 
+  function filtrarLinhasVisiveisSintetica(dados: ResumoLoja[]): ResumoLoja[] {
+    return dados.filter((item) => item.codigo !== 'outros');
+  }
+
   function renderTabelaSintetica(dados: ResumoLoja[], totais: Record<string, number>, prefixo: string) {
+    const linhasVisiveis = filtrarLinhasVisiveisSintetica(dados);
+
     return (
       <div className="overflow-x-auto">
         <table className="border-collapse text-sm" style={{ minWidth: `${larguraTabelaSintetica}px` }}>
@@ -1141,7 +1147,7 @@ export default function DREPage() {
             </tr>
           </thead>
           <tbody>
-            {dados.map((item) => (
+            {linhasVisiveis.map((item) => (
               <tr key={`${prefixo}-${item.codigo}`} className="hover:bg-gray-50 border-b">
                 <td className="px-4 py-2 sticky left-0 bg-white" style={{ width: `${larguraColunaContas}px`, minWidth: `${larguraColunaContas}px` }}>
                   <span className="font-medium whitespace-nowrap">{normalizarNomeLojaSintetica(item.nome)}</span>
@@ -1653,7 +1659,7 @@ export default function DREPage() {
                 </tr>
               </thead>
               <tbody>
-                {dadosSinteticos.map((item) => (
+                {filtrarLinhasVisiveisSintetica(dadosSinteticos).map((item) => (
                   <tr key={item.codigo} className="hover:bg-gray-50 border-b">
                     <td className="px-4 py-2 sticky left-0 bg-white" style={{ width: `${larguraColunaContas}px`, minWidth: `${larguraColunaContas}px` }}>
                       <span className="font-medium whitespace-nowrap">{normalizarNomeLojaSintetica(item.nome)}</span>
