@@ -14,6 +14,7 @@ export async function GET(request: NextRequest) {
       `${PYTHON_API_URL}/api/dre/fabrica/duplicatas?conta=${encodeURIComponent(conta)}&periodo=${periodo}`,
       {
         method: 'GET',
+        cache: 'no-store',
         headers: {
           'Content-Type': 'application/json',
         },

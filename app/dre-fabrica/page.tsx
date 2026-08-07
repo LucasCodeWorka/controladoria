@@ -10,6 +10,12 @@ import {
   RefreshCw,
   TrendingDown,
   TrendingUp,
+  ArrowUp,
+  ArrowDown,
+  SearchCheck,
+  HelpCircle,
+  ChevronsDown,
+  ChevronsUp,
   X,
   FileText,
   Building2,
@@ -61,7 +67,24 @@ interface Duplicata {
   valor: number;
   cdCCusto: number;
   nomeCCusto: string;
+  cdFornecedor?: number | string;
   nmFornecedor?: string;
+}
+
+interface AuditoriaDespesaItem {
+  cdDespesaItem: number;
+  descricao: string;
+  quantidade: number;
+  percentual: number;
+}
+
+interface AuditoriaFornecedorDespesa {
+  totalDuplicatas: number;
+  amostraInsuficiente: boolean;
+  distribuicao: AuditoriaDespesaItem[];
+  dominante: AuditoriaDespesaItem | null;
+  despesaAtual: AuditoriaDespesaItem | null;
+  alerta: boolean;
 }
 
 interface ModalDuplicatasState {
@@ -199,6 +222,64 @@ const CORES_NIVEL: Record<number, string> = {
   3: 'bg-white',
   4: 'bg-white pl-8',
 };
+
+// Deteccao de anomalias mes-a-mes: o gatilho da seta e sempre a variacao vs.
+// o mes anterior. A media movel do historico ja carregado na grade entra so
+// como informacao extra no tooltip, para dar mais contexto.
+const ANOMALIA_LIMIAR_PCT = 15;
+const ANOMALIA_JANELA_MEDIA = 6;
+const ANOMALIA_MIN_HISTORICO_MEDIA = 2;
+
+interface Anomalia {
+  direcao: 'alta' | 'baixa';
+  percentualAnterior: number;
+  valorAnterior: number;
+  media?: {
+    valor: number;
+    percentual: number;
+    meses: number;
+  };
+}
+
+function detectarAnomalia(
+  valores: Record<string, number>,
+  periodosRange: PeriodoDRE[],
+  periodoIndex: number
+): Anomalia | null {
+  const valorAtual = valores[periodosRange[periodoIndex].key] || 0;
+  if (valorAtual === 0) return null;
+
+  const anteriores = periodosRange
+    .slice(0, periodoIndex)
+    .map((p) => valores[p.key] || 0)
+    .filter((v) => v !== 0);
+
+  if (anteriores.length === 0) return null;
+
+  const valorAnterior = anteriores[anteriores.length - 1];
+  const percentualAnterior = ((Math.abs(valorAtual) - Math.abs(valorAnterior)) / Math.abs(valorAnterior)) * 100;
+  if (Math.abs(percentualAnterior) < ANOMALIA_LIMIAR_PCT) return null;
+
+  let media: Anomalia['media'];
+  if (anteriores.length >= ANOMALIA_MIN_HISTORICO_MEDIA) {
+    const janela = anteriores.slice(-ANOMALIA_JANELA_MEDIA);
+    const valorMedia = janela.reduce((a, b) => a + b, 0) / janela.length;
+    if (valorMedia !== 0) {
+      media = {
+        valor: valorMedia,
+        percentual: ((Math.abs(valorAtual) - Math.abs(valorMedia)) / Math.abs(valorMedia)) * 100,
+        meses: janela.length,
+      };
+    }
+  }
+
+  return {
+    direcao: percentualAnterior > 0 ? 'alta' : 'baixa',
+    percentualAnterior,
+    valorAnterior,
+    media,
+  };
+}
 
 function indexarContas(contas: ContaDREValores[], mapa = new Map<string, ContaDREValores>()) {
   for (const conta of contas) {
@@ -428,6 +509,10 @@ export default function DREPage() {
     new Set(['01', '02', '04', '06', '08', '10', '13', '16', '17', '18', '19'])
   );
   const [mostrarExtras, setMostrarExtras] = useState(false); // Controla visibilidade de 15, 16, 17, 18, 19
+  const [despesaFiltroSelecionada, setDespesaFiltroSelecionada] = useState('');
+  const [despesaBusca, setDespesaBusca] = useState('');
+  const [despesaDropdownAberto, setDespesaDropdownAberto] = useState(false);
+  const [mostrarApenasComAlerta, setMostrarApenasComAlerta] = useState(false);
   const [statusCarregamento, setStatusCarregamento] = useState<string | null>(null);
   const [filtroInfo, setFiltroInfo] = useState<string>('');
   const [modalDuplicatas, setModalDuplicatas] = useState<ModalDuplicatasState>({
@@ -440,6 +525,14 @@ export default function DREPage() {
     total: 0,
     loading: false,
   });
+  const [auditoriaModal, setAuditoriaModal] = useState<{ aberto: boolean; dup: Duplicata | null }>({
+    aberto: false,
+    dup: null,
+  });
+  const [auditoriaCache, setAuditoriaCache] = useState<
+    Record<string, AuditoriaFornecedorDespesa | 'loading' | 'erro'>
+  >({});
+  const [celulasAlertadas, setCelulasAlertadas] = useState<Set<string>>(new Set());
   const [ultimaAtualizacao, setUltimaAtualizacao] = useState<string | null>(null);
   const [larguraColunaContas, setLarguraColunaContas] = useState(350);
   const [larguraColunaValor, setLarguraColunaValor] = useState(85);
@@ -512,6 +605,76 @@ export default function DREPage() {
     if (mostrarExtras) return dadosDRE;
     return dadosDRE.filter((conta) => !CONTAS_EXTRAS.includes(conta.codigo));
   }, [dadosDRE, mostrarExtras]);
+
+  // Filtros da visao Analitica: escolher uma despesa (conta-folha) especifica
+  // mostra so ela; "somente com alerta" mantem apenas contas que tem alguma
+  // celula sinalizada pela auditoria fornecedor x despesa no periodo.
+  function contaTemAlertaNoPeriodo(conta: ContaDREValores): boolean {
+    return periodos.some((periodo) => celulasAlertadas.has(`${conta.codigo}:${periodo.key}`));
+  }
+
+  // Lista de contas-folha de despesa disponiveis para o seletor de filtro,
+  // extraida uma unica vez da estrutura estatica do plano de contas.
+  const contasFolhaDespesa = useMemo(() => {
+    const resultado: { codigo: string; nome: string }[] = [];
+    function coletar(contas: ContaDREValores[]) {
+      for (const conta of contas) {
+        if (conta.filhos?.length) {
+          coletar(conta.filhos);
+        } else if (conta.tipo !== 'resultado') {
+          resultado.push({ codigo: conta.codigo, nome: conta.nome });
+        }
+      }
+    }
+    coletar(ESTRUTURA_DRE);
+    return resultado.sort((a, b) => a.codigo.localeCompare(b.codigo));
+  }, []);
+
+  const despesasFiltradasBusca = useMemo(() => {
+    const termo = despesaBusca.trim().toLowerCase();
+    if (!termo) return contasFolhaDespesa;
+    return contasFolhaDespesa.filter(
+      (c) => c.codigo.toLowerCase().includes(termo) || c.nome.toLowerCase().includes(termo)
+    );
+  }, [contasFolhaDespesa, despesaBusca]);
+
+  function filtrarAnalitica(contas: ContaDREValores[]): ContaDREValores[] {
+    const resultado: ContaDREValores[] = [];
+
+    for (const conta of contas) {
+      const temFilhos = !!conta.filhos?.length;
+
+      if (temFilhos) {
+        const filhosFiltrados = filtrarAnalitica(conta.filhos!);
+
+        if (despesaFiltroSelecionada) {
+          resultado.push(...filhosFiltrados);
+          continue;
+        }
+
+        if (mostrarApenasComAlerta && filhosFiltrados.length === 0) {
+          continue;
+        }
+
+        resultado.push({ ...conta, filhos: filhosFiltrados });
+      } else {
+        if (despesaFiltroSelecionada) {
+          if (conta.codigo !== despesaFiltroSelecionada) continue;
+        } else if (mostrarApenasComAlerta && !contaTemAlertaNoPeriodo(conta)) {
+          continue;
+        }
+        resultado.push(conta);
+      }
+    }
+
+    return resultado;
+  }
+
+  const dadosAnaliticaExibicao = useMemo(() => {
+    if (!despesaFiltroSelecionada && !mostrarApenasComAlerta) return dadosDREFiltrados;
+    return filtrarAnalitica(dadosDREFiltrados);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dadosDREFiltrados, despesaFiltroSelecionada, mostrarApenasComAlerta, celulasAlertadas, periodos]);
 
   function calcularAV(valor: number): string {
     if (receitaLiquidaTotal === 0) return '-';
@@ -607,6 +770,53 @@ export default function DREPage() {
 
   function fecharModal() {
     setModalDuplicatas((prev) => ({ ...prev, aberto: false }));
+    setAuditoriaModal({ aberto: false, dup: null });
+  }
+
+  async function verificarAuditoria(dup: Duplicata) {
+    setAuditoriaModal({ aberto: true, dup });
+
+    const chave = `${dup.cdFornecedor}_${dup.cdDespesaItem}`;
+    if (auditoriaCache[chave]) return;
+
+    setAuditoriaCache((prev) => ({ ...prev, [chave]: 'loading' }));
+    try {
+      const response = await fetch(
+        `/api/dre/auditoria/fornecedor-despesa?cdFornecedor=${dup.cdFornecedor}&cdDespesaItemAtual=${dup.cdDespesaItem}`
+      );
+      const data: AuditoriaFornecedorDespesa = await response.json();
+      setAuditoriaCache((prev) => ({ ...prev, [chave]: data }));
+    } catch (error) {
+      console.error('Erro ao verificar auditoria fornecedor-despesa:', error);
+      setAuditoriaCache((prev) => ({ ...prev, [chave]: 'erro' }));
+    }
+  }
+
+  // Busca em lote quais celulas (conta:periodo) da grade tem duplicata fora do
+  // padrao do fornecedor, pra sinalizar antes mesmo de abrir o modal. Roda em
+  // paralelo com a carga principal e nao bloqueia a grade se falhar/demorar.
+  async function buscarAlertasAuditoria() {
+    try {
+      const params = new URLSearchParams({ dataInicio, dataFim, filtro });
+      const response = await fetch(`/api/dre/auditoria/alertas?${params.toString()}`, {
+        cache: 'no-store',
+      });
+      const data = await response.json();
+      const celulas: string[] = data.celulasAlertadas || [];
+
+      const expandido = new Set<string>();
+      for (const chave of celulas) {
+        const [conta, periodo] = chave.split(':');
+        expandido.add(chave);
+        const partes = conta.split('.');
+        for (let i = partes.length - 1; i > 0; i--) {
+          expandido.add(`${partes.slice(0, i).join('.')}:${periodo}`);
+        }
+      }
+      setCelulasAlertadas(expandido);
+    } catch (error) {
+      console.error('Erro ao buscar alertas de auditoria:', error);
+    }
   }
 
   // Funcoes para expandir/recolher niveis
@@ -680,9 +890,13 @@ export default function DREPage() {
             )}
           </div>
         </td>
-        {periodos.map((periodo) => {
+        {periodos.map((periodo, periodoIndex) => {
           const valorPeriodo = conta.valores[periodo.key] || 0;
           const podeClicar = !temFilhos && !isResultado && valorPeriodo !== 0 && isDespesa;
+          const anomalia = !isResultado && isDespesa
+            ? detectarAnomalia(conta.valores, periodos, periodoIndex)
+            : null;
+          const alertaAuditoria = !isResultado && isDespesa && celulasAlertadas.has(`${conta.codigo}:${periodo.key}`);
           return (
             <React.Fragment key={periodo.key}>
               <td
@@ -690,17 +904,53 @@ export default function DREPage() {
                   valorPeriodo < 0 ? 'text-red-600' : ''
                 }`}
               >
-                {podeClicar ? (
-                  <button
-                    onClick={() => abrirDuplicatas(conta.codigo, conta.nome, periodo.key, periodo.label)}
-                    className="hover:underline hover:text-blue-600 cursor-pointer"
-                    title="Clique para ver duplicatas"
-                  >
-                    {formatarValor(valorPeriodo)}
-                  </button>
-                ) : (
-                  formatarValor(valorPeriodo)
-                )}
+                <span className="inline-flex items-center justify-end gap-1 whitespace-nowrap">
+                  {alertaAuditoria && (
+                    <span className="group relative inline-flex text-blue-600">
+                      <HelpCircle className="w-3.5 h-3.5" strokeWidth={2.5} />
+                      <span className="pointer-events-none absolute right-0 top-full z-50 mt-1 hidden w-max max-w-xs whitespace-normal rounded bg-gray-900 px-2 py-1.5 text-left text-xs font-normal leading-snug text-white shadow-lg group-hover:block">
+                        Tem duplicata classificada fora do padrão do fornecedor neste mês. Abra os detalhes e use a
+                        lupa de auditoria pra conferir.
+                      </span>
+                    </span>
+                  )}
+                  {anomalia && (
+                    <span className="group relative inline-flex">
+                      <span className={anomalia.direcao === 'alta' ? 'text-red-600' : 'text-green-600'}>
+                        {anomalia.direcao === 'alta' ? (
+                          <ArrowUp className="w-3 h-3" strokeWidth={3} />
+                        ) : (
+                          <ArrowDown className="w-3 h-3" strokeWidth={3} />
+                        )}
+                      </span>
+                      <span className="pointer-events-none absolute right-0 top-full z-50 mt-1 hidden w-max max-w-xs whitespace-normal rounded bg-gray-900 px-2 py-1.5 text-left text-xs font-normal leading-snug text-white shadow-lg group-hover:block">
+                        <span className="block">
+                          {anomalia.direcao === 'alta' ? 'Alta' : 'Queda'} de{' '}
+                          {Math.abs(anomalia.percentualAnterior).toFixed(0)}% vs. mês anterior (
+                          {formatarValor(anomalia.valorAnterior)})
+                        </span>
+                        {anomalia.media && (
+                          <span className="mt-0.5 block text-gray-300">
+                            {anomalia.media.percentual >= 0 ? 'Alta' : 'Queda'} de{' '}
+                            {Math.abs(anomalia.media.percentual).toFixed(0)}% vs. média dos últimos{' '}
+                            {anomalia.media.meses} meses ({formatarValor(anomalia.media.valor)})
+                          </span>
+                        )}
+                      </span>
+                    </span>
+                  )}
+                  {podeClicar ? (
+                    <button
+                      onClick={() => abrirDuplicatas(conta.codigo, conta.nome, periodo.key, periodo.label)}
+                      className="hover:underline hover:text-blue-600 cursor-pointer"
+                      title="Clique para ver duplicatas"
+                    >
+                      {formatarValor(valorPeriodo)}
+                    </button>
+                  ) : (
+                    formatarValor(valorPeriodo)
+                  )}
+                </span>
               </td>
               <td className={`px-2 py-2 border-b border-gray-200 text-right text-xs bg-gray-50 ${
                 valorPeriodo < 0 ? 'text-red-500' : 'text-gray-500'
@@ -740,6 +990,8 @@ export default function DREPage() {
 
     try {
       if (tipoVisao === 'analitica') {
+        buscarAlertasAuditoria();
+
         const controller = new AbortController();
         const timeout = window.setTimeout(() => controller.abort(), 300000);
         const params = new URLSearchParams({ dataInicio, dataFim, filtro });
@@ -1347,6 +1599,93 @@ export default function DREPage() {
             {mostrarExtras ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
             Extras
           </button>
+          {tipoVisao === 'analitica' && (
+            <>
+              <div className="w-px h-6 bg-gray-300 mx-2" />
+              <button
+                onClick={expandirTodos}
+                title="Expandir todas as contas"
+                className="flex items-center gap-2 px-3 py-2 rounded-md bg-gray-200 text-gray-600 hover:bg-gray-300 transition-colors"
+              >
+                <ChevronsDown className="w-4 h-4" />
+                Expandir tudo
+              </button>
+              <button
+                onClick={recolherTodos}
+                title="Recolher todas as contas"
+                className="flex items-center gap-2 px-3 py-2 rounded-md bg-gray-200 text-gray-600 hover:bg-gray-300 transition-colors"
+              >
+                <ChevronsUp className="w-4 h-4" />
+                Recolher tudo
+              </button>
+              <div className="w-px h-6 bg-gray-300 mx-2" />
+              <div className="relative w-64">
+                <input
+                  type="text"
+                  value={despesaBusca}
+                  onChange={(e) => {
+                    setDespesaBusca(e.target.value);
+                    setDespesaDropdownAberto(true);
+                    if (despesaFiltroSelecionada) setDespesaFiltroSelecionada('');
+                  }}
+                  onFocus={() => setDespesaDropdownAberto(true)}
+                  onBlur={() => setTimeout(() => setDespesaDropdownAberto(false), 150)}
+                  placeholder="Filtrar despesa..."
+                  title="Digite o código ou nome de uma despesa para filtrar a grade"
+                  className={`w-full pl-3 pr-8 py-2 rounded-md border text-sm ${
+                    despesaFiltroSelecionada
+                      ? 'bg-blue-600 text-white border-blue-600 placeholder-blue-200'
+                      : 'bg-gray-200 text-gray-700 border-gray-200'
+                  }`}
+                />
+                {despesaBusca && (
+                  <button
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      setDespesaFiltroSelecionada('');
+                      setDespesaBusca('');
+                    }}
+                    className={`absolute right-2 top-1/2 -translate-y-1/2 ${
+                      despesaFiltroSelecionada ? 'text-blue-200 hover:text-white' : 'text-gray-400 hover:text-gray-600'
+                    }`}
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+                {despesaDropdownAberto && despesasFiltradasBusca.length > 0 && (
+                  <div className="absolute z-50 mt-1 w-full max-h-64 overflow-auto rounded-md border border-gray-200 bg-white shadow-lg">
+                    {despesasFiltradasBusca.map((c) => (
+                      <button
+                        key={c.codigo}
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          setDespesaFiltroSelecionada(c.codigo);
+                          setDespesaBusca(`${c.codigo} - ${c.nome}`);
+                          setDespesaDropdownAberto(false);
+                        }}
+                        className="block w-full truncate px-3 py-1.5 text-left text-sm text-gray-700 hover:bg-blue-50"
+                        title={`${c.codigo} - ${c.nome}`}
+                      >
+                        {c.codigo} - {c.nome}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <button
+                onClick={() => setMostrarApenasComAlerta(!mostrarApenasComAlerta)}
+                title="Mostrar apenas contas com duplicata fora do padrão do fornecedor"
+                className={`flex items-center gap-2 px-3 py-2 rounded-md transition-colors ${
+                  mostrarApenasComAlerta
+                    ? 'bg-blue-600 text-white hover:bg-blue-700'
+                    : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
+                }`}
+              >
+                <HelpCircle className="w-4 h-4" />
+                Só com problema
+              </button>
+            </>
+          )}
         </div>
 
         {filtroInfo && (
@@ -1556,7 +1895,7 @@ export default function DREPage() {
                 </tr>
               </thead>
               <tbody>
-                {dadosDREFiltrados.map((conta) => renderizarLinhaConta(conta))}
+                {dadosAnaliticaExibicao.map((conta) => renderizarLinhaConta(conta))}
               </tbody>
             </table>
           </div>
@@ -2346,7 +2685,14 @@ export default function DREPage() {
                         <th className="px-4 py-3 text-left border-b-2 border-gray-300 font-semibold text-gray-700 w-28">Nr Duplicata</th>
                         <th className="px-4 py-3 text-left border-b-2 border-gray-300 font-semibold text-gray-700 w-28">Data Emissao</th>
                         <th className="px-4 py-3 text-left border-b-2 border-gray-300 font-semibold text-gray-700 w-36">Centro de Custo</th>
+                        <th className="px-4 py-3 text-left border-b-2 border-gray-300 font-semibold text-gray-700 w-24">Cód. Fornecedor</th>
                         <th className="px-4 py-3 text-left border-b-2 border-gray-300 font-semibold text-gray-700 w-44">Fornecedor</th>
+                        <th
+                          className="px-2 py-3 text-center border-b-2 border-gray-300 font-semibold text-gray-700 w-10"
+                          title="Compara a despesa lançada com o padrão histórico do fornecedor"
+                        >
+                          Aud.
+                        </th>
                         <th className="px-4 py-3 text-left border-b-2 border-gray-300 font-semibold text-gray-700">Descricao</th>
                         <th className="px-4 py-3 text-right border-b-2 border-gray-300 font-semibold text-gray-700 w-28">Valor</th>
                       </tr>
@@ -2361,10 +2707,29 @@ export default function DREPage() {
                               {dup.nomeCCusto || '-'}
                             </span>
                           </td>
+                          <td className="px-4 py-2.5 text-gray-600 font-mono text-xs">
+                            {dup.cdFornecedor ?? '-'}
+                          </td>
                           <td className="px-4 py-2.5">
                             <span className="block truncate text-gray-700" title={dup.nmFornecedor}>
                               {dup.nmFornecedor || 'N/A'}
                             </span>
+                          </td>
+                          <td className="px-2 py-2.5 text-center">
+                            {dup.cdFornecedor && (() => {
+                              const chave = `${dup.cdFornecedor}_${dup.cdDespesaItem}`;
+                              const resultado = auditoriaCache[chave];
+                              const alertaConhecido = resultado && resultado !== 'loading' && resultado !== 'erro' && resultado.alerta;
+                              return (
+                                <button
+                                  onClick={() => verificarAuditoria(dup)}
+                                  className={alertaConhecido ? 'text-red-600 hover:text-red-700 transition-colors' : 'text-gray-400 hover:text-blue-600 transition-colors'}
+                                  title="Verificar padrão de classificação deste fornecedor"
+                                >
+                                  <SearchCheck className="w-4 h-4" />
+                                </button>
+                              );
+                            })()}
                           </td>
                           <td className="px-4 py-2.5">
                             <span className="block truncate text-gray-600" title={dup.descricao}>
@@ -2407,6 +2772,112 @@ export default function DREPage() {
           </div>
         </div>
       )}
+
+      {auditoriaModal.aberto && auditoriaModal.dup && (() => {
+        const dup = auditoriaModal.dup;
+        const chave = `${dup.cdFornecedor}_${dup.cdDespesaItem}`;
+        const resultado = auditoriaCache[chave];
+        return (
+          <div
+            className="fixed inset-0 bg-black bg-opacity-50 z-[60] flex items-center justify-center p-4"
+            onClick={() => setAuditoriaModal({ aberto: false, dup: null })}
+          >
+            <div
+              className="bg-white rounded-lg shadow-2xl w-full max-w-md"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+                <div className="flex items-center gap-2">
+                  <SearchCheck className="w-5 h-5 text-blue-600" />
+                  <h3 className="text-base font-bold text-gray-800">Auditoria de Classificação</h3>
+                </div>
+                <button
+                  onClick={() => setAuditoriaModal({ aberto: false, dup: null })}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="px-6 py-5">
+                <div className="mb-4 text-sm text-gray-600">
+                  <div className="font-semibold text-gray-800">{dup.nmFornecedor || 'N/A'}</div>
+                  <div>
+                    Duplicata {dup.nrDuplicata || dup.id} · lançada em{' '}
+                    <span className="font-medium">{dup.descricao}</span>
+                  </div>
+                </div>
+
+                {!resultado || resultado === 'loading' ? (
+                  <div className="flex items-center gap-2 text-gray-500 py-6 justify-center">
+                    <RefreshCw className="w-5 h-5 animate-spin" /> Verificando histórico do fornecedor...
+                  </div>
+                ) : resultado === 'erro' ? (
+                  <div className="text-red-600 py-4">Erro ao verificar auditoria. Tente novamente.</div>
+                ) : resultado.amostraInsuficiente ? (
+                  <div className="text-gray-600 bg-gray-50 rounded-lg p-4 text-sm">
+                    Histórico insuficiente ({resultado.totalDuplicatas}{' '}
+                    {resultado.totalDuplicatas === 1 ? 'duplicata' : 'duplicatas'}) para avaliar o padrão deste
+                    fornecedor. É preciso um mínimo de histórico pra essa comparação fazer sentido.
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="text-sm text-gray-600">
+                      <span className="font-semibold text-gray-800">{resultado.totalDuplicatas}</span> duplicatas no
+                      histórico deste fornecedor
+                    </div>
+
+                    <div className="rounded-lg border border-gray-200 divide-y divide-gray-100">
+                      {resultado.distribuicao.map((item) => (
+                        <div
+                          key={item.cdDespesaItem}
+                          className={`flex items-center justify-between px-3 py-2 text-sm ${
+                            item.cdDespesaItem === dup.cdDespesaItem ? 'bg-blue-50' : ''
+                          }`}
+                        >
+                          <span className="text-gray-700">
+                            {item.descricao}
+                            {item.cdDespesaItem === dup.cdDespesaItem && (
+                              <span className="ml-2 text-xs text-blue-600 font-medium">(esta duplicata)</span>
+                            )}
+                          </span>
+                          <span className="font-mono text-xs text-gray-500 whitespace-nowrap">
+                            {item.quantidade}x · {item.percentual}%
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+
+                    {resultado.alerta ? (
+                      <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
+                        <span className="font-semibold">⚠ Fora do padrão. </span>
+                        Este fornecedor lança {resultado.dominante?.percentual}% das duplicatas em &quot;
+                        {resultado.dominante?.descricao}&quot;, mas esta está em &quot;
+                        {resultado.despesaAtual?.descricao || dup.descricao}&quot;. Vale conferir se a classificação
+                        está correta.
+                      </div>
+                    ) : (
+                      <div className="rounded-lg bg-green-50 border border-green-200 px-4 py-3 text-sm text-green-700">
+                        <span className="font-semibold">✓ Dentro do padrão. </span>
+                        Consistente com o histórico deste fornecedor.
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div className="px-6 py-4 border-t border-gray-200 bg-gray-50 rounded-b-lg">
+                <button
+                  onClick={() => setAuditoriaModal({ aberto: false, dup: null })}
+                  className="px-5 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-md transition-colors font-medium"
+                >
+                  Fechar
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

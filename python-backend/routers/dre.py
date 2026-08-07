@@ -1048,7 +1048,7 @@ def get_dre_lojas_duplicatas(
                 d.cd_fornecedor as cd_fornecedor,
                 d.cd_ccusto,
                 COALESCE(p.nm_pessoa, 'N/A') as nm_fornecedor,
-                COALESCE(p.nm_fantasia, p.nm_pessoa, 'N/A') as nm_fantasia
+                CASE WHEN p.nm_fantasia IS NULL OR TRIM(p.nm_fantasia) = '' OR p.nm_fantasia ~ '^\*+$' THEN COALESCE(p.nm_pessoa, 'N/A') ELSE p.nm_fantasia END as nm_fantasia
             FROM vr_fcp_despduplicatai d
             JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
             LEFT JOIN vr_pes_pessoa p ON p.cd_pessoa = d.cd_fornecedor
@@ -1154,7 +1154,7 @@ def get_dre_fabrica_duplicatas(
                 d.cd_fornecedor as cd_fornecedor,
                 d.cd_ccusto,
                 COALESCE(p.nm_pessoa, 'N/A') as nm_fornecedor,
-                COALESCE(p.nm_fantasia, p.nm_pessoa, 'N/A') as nm_fantasia
+                CASE WHEN p.nm_fantasia IS NULL OR TRIM(p.nm_fantasia) = '' OR p.nm_fantasia ~ '^\*+$' THEN COALESCE(p.nm_pessoa, 'N/A') ELSE p.nm_fantasia END as nm_fantasia
             FROM vr_fcp_despduplicatai d
             JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
             LEFT JOIN vr_pes_pessoa p ON p.cd_pessoa = d.cd_fornecedor
@@ -1836,7 +1836,7 @@ def get_dre_duplicatas(
                 origem_tabela,
                 tipo_documento,
                 COALESCE(p.nm_pessoa, 'N/A') as nm_fornecedor,
-                COALESCE(p.nm_fantasia, p.nm_pessoa, 'N/A') as nm_fantasia
+                CASE WHEN p.nm_fantasia IS NULL OR TRIM(p.nm_fantasia) = '' OR p.nm_fantasia ~ '^\*+$' THEN COALESCE(p.nm_pessoa, 'N/A') ELSE p.nm_fantasia END as nm_fantasia
             FROM vw_fluxo_pagamentos
             LEFT JOIN vr_pes_pessoa p ON p.cd_pessoa = idfornecedorcliente
             WHERE dt_emissao >= %s
@@ -1856,7 +1856,7 @@ def get_dre_duplicatas(
                 origem_tabela,
                 tipo_documento,
                 COALESCE(p.nm_pessoa, 'N/A') as nm_fornecedor,
-                COALESCE(p.nm_fantasia, p.nm_pessoa, 'N/A') as nm_fantasia
+                CASE WHEN p.nm_fantasia IS NULL OR TRIM(p.nm_fantasia) = '' OR p.nm_fantasia ~ '^\*+$' THEN COALESCE(p.nm_pessoa, 'N/A') ELSE p.nm_fantasia END as nm_fantasia
             FROM vw_fluxo_pagamentos
             LEFT JOIN vr_pes_pessoa p ON p.cd_pessoa = idfornecedorcliente
             WHERE dtvencimento >= %s
@@ -2930,7 +2930,7 @@ def get_dre_unificada_duplicatas(
                 d.cd_ccusto,
                 cc.ds_ccusto as nome_ccusto,
                 d.cd_fornecedor,
-                COALESCE(p.nm_fantasia, p.nm_pessoa, 'N/A') as nm_fornecedor
+                CASE WHEN p.nm_fantasia IS NULL OR TRIM(p.nm_fantasia) = '' OR p.nm_fantasia ~ '^\*+$' THEN COALESCE(p.nm_pessoa, 'N/A') ELSE p.nm_fantasia END as nm_fornecedor
             FROM vr_fcp_despduplicatai d
             JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
             LEFT JOIN vr_gec_ccusto cc ON cc.cd_ccusto = d.cd_ccusto
@@ -2991,6 +2991,217 @@ def get_dre_unificada_duplicatas(
         raise
     except Exception as e:
         print(f"[ERROR] Erro ao buscar duplicatas DRE UNIFICADA: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# AUDITORIA: fornecedor x despesa
+# ============================================================================
+# Um fornecedor normalmente sempre lanca duplicatas na mesma despesa. Se um
+# fornecedor com bastante historico tem uma despesa fortemente dominante e
+# a duplicata em questao esta fora desse padrao, provavelmente foi
+# classificada errado. Isso e so um indicio estatistico (moda por
+# fornecedor), nao uma certeza - precisa de revisao humana.
+AUDITORIA_MIN_DUPLICATAS = 10
+AUDITORIA_LIMIAR_DOMINANCIA_PCT = 85
+
+
+@router.get("/api/dre/auditoria/fornecedor-despesa")
+def get_auditoria_fornecedor_despesa(
+    cdFornecedor: int = Query(..., description="Codigo do fornecedor (cd_pessoa)"),
+    cdDespesaItemAtual: int = Query(..., description="Codigo da despesa lancada na duplicata em analise")
+):
+    """
+    Compara a despesa lancada em uma duplicata especifica com o padrao
+    historico do fornecedor (despesa mais frequente nas duplicatas dele).
+    """
+    try:
+        query = """
+            SELECT
+                d.cd_despesaitem,
+                i.ds_despesaitem as descricao,
+                COUNT(*) as quantidade
+            FROM vr_fcp_despduplicatai d
+            JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
+            WHERE d.cd_fornecedor = %s
+              AND d.tp_situacao = 'N'
+            GROUP BY d.cd_despesaitem, i.ds_despesaitem
+            ORDER BY quantidade DESC
+        """
+        rows = execute_query(query, (cdFornecedor,)) or []
+        total = sum(r['quantidade'] for r in rows)
+
+        if total == 0:
+            return {
+                "totalDuplicatas": 0,
+                "amostraInsuficiente": True,
+                "distribuicao": [],
+                "dominante": None,
+                "despesaAtual": None,
+                "alerta": False,
+            }
+
+        distribuicao = [
+            {
+                "cdDespesaItem": r['cd_despesaitem'],
+                "descricao": r['descricao'],
+                "quantidade": r['quantidade'],
+                "percentual": round(r['quantidade'] / total * 100, 1),
+            }
+            for r in rows
+        ]
+
+        dominante = distribuicao[0]
+        despesa_atual = next((d for d in distribuicao if d['cdDespesaItem'] == cdDespesaItemAtual), None)
+        amostra_insuficiente = total < AUDITORIA_MIN_DUPLICATAS
+        atual_e_dominante = despesa_atual is not None and despesa_atual['cdDespesaItem'] == dominante['cdDespesaItem']
+
+        alerta = (
+            not amostra_insuficiente
+            and dominante['percentual'] >= AUDITORIA_LIMIAR_DOMINANCIA_PCT
+            and not atual_e_dominante
+        )
+
+        return {
+            "totalDuplicatas": total,
+            "amostraInsuficiente": amostra_insuficiente,
+            "distribuicao": distribuicao[:5],
+            "dominante": dominante,
+            "despesaAtual": despesa_atual,
+            "alerta": alerta,
+        }
+
+    except Exception as e:
+        print(f"[ERROR] Erro na auditoria fornecedor-despesa: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/api/dre/auditoria/alertas")
+def get_auditoria_alertas(
+    dataInicio: str = Query(..., description="Data inicial (YYYY-MM-DD)"),
+    dataFim: str = Query(..., description="Data final (YYYY-MM-DD)"),
+    filtro: str = Query("consolidado", description="Filtro: 'consolidado', 'fabrica', ou codigo do centro de custo")
+):
+    """
+    Versao em lote da auditoria fornecedor x despesa: varre todas as
+    duplicatas do periodo/filtro selecionados e retorna quais celulas
+    (conta:periodo) da grade tem pelo menos uma duplicata fora do padrao
+    do fornecedor, para sinalizar antes mesmo de abrir o modal.
+    """
+    try:
+        if filtro == "consolidado":
+            ccustos = CCUSTOS_FABRICA + list(CCUSTOS_LOJAS.keys())
+        elif filtro == "fabrica":
+            ccustos = CCUSTOS_FABRICA
+        else:
+            try:
+                cd_ccusto = int(filtro)
+                if cd_ccusto in CCUSTOS_LOJAS or cd_ccusto in CCUSTOS_FABRICA:
+                    ccustos = [cd_ccusto]
+                else:
+                    raise HTTPException(status_code=400, detail=f"Centro de custo {cd_ccusto} nao encontrado")
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"Filtro invalido: {filtro}")
+
+        # OBS: o filtro de cd_ccusto e aplicado em Python (mais abaixo), nao no SQL.
+        # A view vr_fcp_despduplicatai fica muito lenta (45s+) com "cd_ccusto IN (...)"
+        # numa lista grande combinado com filtro de data - sem esse filtro no SQL a
+        # mesma consulta roda em poucos segundos.
+        query = """
+            WITH fornecedores_periodo AS (
+                SELECT DISTINCT cd_fornecedor
+                FROM vr_fcp_despduplicatai
+                WHERE dt_emissao >= %s
+                  AND dt_emissao <= %s
+                  AND tp_situacao = 'N'
+                  AND cd_fornecedor IS NOT NULL
+            ),
+            fornecedor_despesa AS (
+                SELECT d.cd_fornecedor, d.cd_despesaitem, COUNT(*) as qtd
+                FROM vr_fcp_despduplicatai d
+                JOIN fornecedores_periodo fp ON fp.cd_fornecedor = d.cd_fornecedor
+                WHERE d.tp_situacao = 'N'
+                GROUP BY d.cd_fornecedor, d.cd_despesaitem
+            ),
+            fornecedor_total AS (
+                SELECT cd_fornecedor, SUM(qtd) as total
+                FROM fornecedor_despesa
+                GROUP BY cd_fornecedor
+            ),
+            fornecedor_dominante AS (
+                SELECT DISTINCT ON (fd.cd_fornecedor)
+                    fd.cd_fornecedor,
+                    fd.cd_despesaitem as despesa_dominante,
+                    ft.total,
+                    (fd.qtd::float / ft.total * 100) as percentual
+                FROM fornecedor_despesa fd
+                JOIN fornecedor_total ft ON ft.cd_fornecedor = fd.cd_fornecedor
+                ORDER BY fd.cd_fornecedor, fd.qtd DESC
+            ),
+            fornecedor_alerta AS (
+                SELECT cd_fornecedor, despesa_dominante
+                FROM fornecedor_dominante
+                WHERE total >= %s AND percentual >= %s
+            )
+            SELECT DISTINCT
+                d.cd_despesaitem,
+                d.cd_ccusto,
+                d.dt_emissao
+            FROM vr_fcp_despduplicatai d
+            JOIN fornecedor_alerta fa ON fa.cd_fornecedor = d.cd_fornecedor
+            WHERE d.dt_emissao >= %s
+              AND d.dt_emissao <= %s
+              AND d.tp_situacao = 'N'
+              AND d.cd_despesaitem != fa.despesa_dominante
+        """
+        params = [
+            dataInicio, dataFim,
+            AUDITORIA_MIN_DUPLICATAS, AUDITORIA_LIMIAR_DOMINANCIA_PCT,
+            dataInicio, dataFim,
+        ]
+        rows_brutas = execute_query(query, params) or []
+
+        ccustos_set = set(ccustos)
+        excluidos_set = set(CCUSTOS_EXCLUIDOS_FABRICA)
+        rows = [
+            r for r in rows_brutas
+            if r['cd_ccusto'] in ccustos_set and r['cd_ccusto'] not in excluidos_set
+        ]
+
+        classificacoes_db = {}
+        try:
+            crows = execute_query(
+                "SELECT cd_despesaitem, ds_despesaitem, conta_dre FROM classificacao_despesas_dre", ()
+            )
+            for crow in crows or []:
+                cd = crow.get('cd_despesaitem')
+                conta_dre = crow.get('conta_dre', '')
+                if cd and conta_dre:
+                    codigo = conta_dre.split(' ')[0] if ' ' in conta_dre else conta_dre
+                    classificacoes_db[cd] = codigo
+        except Exception as e:
+            print(f"[AUDITORIA ALERTAS] Aviso ao carregar classificacoes: {e}")
+
+        celulas = set()
+        for row in rows:
+            conta = _classificar_conta_dre(row['cd_despesaitem'], None, classificacoes_db)
+            if conta in ('NAO_CLASSIFICADO', 'EXCLUIDO'):
+                continue
+            if not row['dt_emissao']:
+                continue
+            periodo = row['dt_emissao'].strftime('%Y-%m')
+            celulas.add(f"{conta}:{periodo}")
+
+        return {"celulasAlertadas": sorted(celulas)}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[ERROR] Erro na auditoria de alertas em lote: {e}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
@@ -3904,7 +4115,7 @@ def get_duplicatas_por_empresa(
                     d.cd_empresa,
                     d.cd_fornecedor,
                     COALESCE(c.ds_ccusto, '') as nome_ccusto,
-                    COALESCE(p.nm_fantasia, p.nm_pessoa, 'N/A') as nm_fantasia
+                    CASE WHEN p.nm_fantasia IS NULL OR TRIM(p.nm_fantasia) = '' OR p.nm_fantasia ~ '^\*+$' THEN COALESCE(p.nm_pessoa, 'N/A') ELSE p.nm_fantasia END as nm_fantasia
                 FROM vr_fcp_despduplicatai d
                 JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
                 LEFT JOIN vr_gec_ccusto c ON c.cd_ccusto = d.cd_ccusto
@@ -3932,7 +4143,7 @@ def get_duplicatas_por_empresa(
                     d.cd_empresa,
                     d.cd_fornecedor,
                     COALESCE(c.ds_ccusto, '') as nome_ccusto,
-                    COALESCE(p.nm_fantasia, p.nm_pessoa, 'N/A') as nm_fantasia
+                    CASE WHEN p.nm_fantasia IS NULL OR TRIM(p.nm_fantasia) = '' OR p.nm_fantasia ~ '^\*+$' THEN COALESCE(p.nm_pessoa, 'N/A') ELSE p.nm_fantasia END as nm_fantasia
                 FROM vr_fcp_despduplicatai d
                 JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
                 LEFT JOIN vr_gec_ccusto c ON c.cd_ccusto = d.cd_ccusto
@@ -3973,6 +4184,7 @@ def get_duplicatas_por_empresa(
                     "valor": -valor,  # Negativo pois é despesa
                     "cdCCusto": d['cd_ccusto'],
                     "nomeCCusto": d['nome_ccusto'],
+                    "cdFornecedor": d.get('cd_fornecedor'),
                     "nmFornecedor": d.get('nm_fantasia', 'N/A')
                 })
 

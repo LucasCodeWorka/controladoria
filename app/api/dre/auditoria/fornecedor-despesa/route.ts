@@ -7,19 +7,18 @@ const PYTHON_API_URL = process.env.PYTHON_API_URL || 'http://127.0.0.1:8000';
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
-    const conta = searchParams.get('conta') || '';
-    const periodo = searchParams.get('periodo') || '';
-    const filtro = searchParams.get('filtro') || 'consolidado';
+    const cdFornecedor = searchParams.get('cdFornecedor');
+    const cdDespesaItemAtual = searchParams.get('cdDespesaItemAtual');
 
-    if (!conta || !periodo) {
+    if (!cdFornecedor || !cdDespesaItemAtual) {
       return NextResponse.json(
-        { error: 'Parametros conta e periodo sao obrigatorios' },
+        { error: 'Parametros cdFornecedor e cdDespesaItemAtual sao obrigatorios' },
         { status: 400 }
       );
     }
 
     const response = await fetch(
-      `${PYTHON_API_URL}/api/dre/unificada/duplicatas?conta=${conta}&periodo=${periodo}&filtro=${filtro}`,
+      `${PYTHON_API_URL}/api/dre/auditoria/fornecedor-despesa?cdFornecedor=${cdFornecedor}&cdDespesaItemAtual=${cdDespesaItemAtual}`,
       {
         method: 'GET',
         cache: 'no-store',
@@ -32,9 +31,9 @@ export async function GET(request: NextRequest) {
     const data = await response.json();
     return NextResponse.json(data, { status: response.status });
   } catch (error) {
-    console.error('Erro ao buscar duplicatas DRE Unificada:', error);
+    console.error('Erro ao buscar auditoria fornecedor-despesa:', error);
     return NextResponse.json(
-      { error: 'Erro ao buscar duplicatas' },
+      { error: 'Erro ao buscar auditoria fornecedor-despesa' },
       { status: 500 }
     );
   }

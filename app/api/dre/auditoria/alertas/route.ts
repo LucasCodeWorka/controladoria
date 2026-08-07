@@ -7,19 +7,19 @@ const PYTHON_API_URL = process.env.PYTHON_API_URL || 'http://127.0.0.1:8000';
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
-    const conta = searchParams.get('conta') || '';
-    const periodo = searchParams.get('periodo') || '';
+    const dataInicio = searchParams.get('dataInicio');
+    const dataFim = searchParams.get('dataFim');
     const filtro = searchParams.get('filtro') || 'consolidado';
 
-    if (!conta || !periodo) {
+    if (!dataInicio || !dataFim) {
       return NextResponse.json(
-        { error: 'Parametros conta e periodo sao obrigatorios' },
+        { error: 'Parametros dataInicio e dataFim sao obrigatorios' },
         { status: 400 }
       );
     }
 
     const response = await fetch(
-      `${PYTHON_API_URL}/api/dre/unificada/duplicatas?conta=${conta}&periodo=${periodo}&filtro=${filtro}`,
+      `${PYTHON_API_URL}/api/dre/auditoria/alertas?dataInicio=${dataInicio}&dataFim=${dataFim}&filtro=${filtro}`,
       {
         method: 'GET',
         cache: 'no-store',
@@ -32,9 +32,9 @@ export async function GET(request: NextRequest) {
     const data = await response.json();
     return NextResponse.json(data, { status: response.status });
   } catch (error) {
-    console.error('Erro ao buscar duplicatas DRE Unificada:', error);
+    console.error('Erro ao buscar alertas de auditoria:', error);
     return NextResponse.json(
-      { error: 'Erro ao buscar duplicatas' },
+      { error: 'Erro ao buscar alertas de auditoria' },
       { status: 500 }
     );
   }
