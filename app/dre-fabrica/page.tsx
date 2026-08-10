@@ -641,6 +641,7 @@ export default function DREPage() {
   // pulando a primeira renderizacao pra nao sobrescrever o que acabou de ser
   // restaurado do localStorage (useEffect acima) com os valores padrao.
   const primeiraRenderizacaoFiltroRef = useRef(true);
+  const chavesAuditoriaSolicitadasRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (primeiraRenderizacaoFiltroRef.current) {
       primeiraRenderizacaoFiltroRef.current = false;
@@ -961,16 +962,12 @@ export default function DREPage() {
     );
   }
 
-  async function verificarAuditoria(dup: Duplicata) {
-    setAuditoriaModal({ aberto: true, dup });
-
-    const chave = `${dup.cdFornecedor}_${dup.cdDespesaItem}`;
-    if (auditoriaCache[chave]) return;
-
+  async function verificarAuditoriaSilenciosa(cdFornecedor: number | string, cdDespesaItem: number) {
+    const chave = `${cdFornecedor}_${cdDespesaItem}`;
     setAuditoriaCache((prev) => ({ ...prev, [chave]: 'loading' }));
     try {
       const response = await fetch(
-        `/api/dre/auditoria/fornecedor-despesa?cdFornecedor=${dup.cdFornecedor}&cdDespesaItemAtual=${dup.cdDespesaItem}`
+        `/api/dre/auditoria/fornecedor-despesa?cdFornecedor=${cdFornecedor}&cdDespesaItemAtual=${cdDespesaItem}`
       );
       const data: AuditoriaFornecedorDespesa = await response.json();
       setAuditoriaCache((prev) => ({ ...prev, [chave]: data }));
@@ -979,6 +976,32 @@ export default function DREPage() {
       setAuditoriaCache((prev) => ({ ...prev, [chave]: 'erro' }));
     }
   }
+
+  async function verificarAuditoria(dup: Duplicata) {
+    setAuditoriaModal({ aberto: true, dup });
+
+    const chave = `${dup.cdFornecedor}_${dup.cdDespesaItem}`;
+    if (auditoriaCache[chave]) return;
+
+    await verificarAuditoriaSilenciosa(dup.cdFornecedor!, dup.cdDespesaItem);
+  }
+
+  // Ao abrir o modal de Duplicatas, verifica em segundo plano a auditoria
+  // fornecedor x despesa de cada combinacao unica da lista, pra ja marcar
+  // com bolinha vermelha quem tem problema, sem precisar clicar um por um.
+  useEffect(() => {
+    if (!modalDuplicatas.aberto || modalDuplicatas.duplicatas.length === 0) return;
+    const vistos = new Set<string>();
+    for (const dup of modalDuplicatas.duplicatas) {
+      if (!dup.cdFornecedor) continue;
+      const chave = `${dup.cdFornecedor}_${dup.cdDespesaItem}`;
+      if (vistos.has(chave) || chavesAuditoriaSolicitadasRef.current.has(chave)) continue;
+      vistos.add(chave);
+      chavesAuditoriaSolicitadasRef.current.add(chave);
+      verificarAuditoriaSilenciosa(dup.cdFornecedor, dup.cdDespesaItem);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modalDuplicatas.aberto, modalDuplicatas.duplicatas]);
 
   async function validarAuditoria(dup: Duplicata) {
     const chave = `${dup.cdFornecedor}_${dup.cdDespesaItem}`;
@@ -3465,14 +3488,18 @@ export default function DREPage() {
                             {dup.cdFornecedor && (() => {
                               const chave = `${dup.cdFornecedor}_${dup.cdDespesaItem}`;
                               const resultado = auditoriaCache[chave];
+                              const verificando = resultado === 'loading';
                               const alertaConhecido = resultado && resultado !== 'loading' && resultado !== 'erro' && resultado.alerta;
                               return (
                                 <button
                                   onClick={() => verificarAuditoria(dup)}
-                                  className={alertaConhecido ? 'text-red-600 hover:text-red-700 transition-colors' : 'text-gray-400 hover:text-blue-600 transition-colors'}
-                                  title="Verificar padrão de classificação deste fornecedor"
+                                  className={`relative inline-flex ${alertaConhecido ? 'text-red-600 hover:text-red-700 transition-colors' : 'text-gray-400 hover:text-blue-600 transition-colors'}`}
+                                  title={alertaConhecido ? 'Duplicata fora do padrão do fornecedor — clique para ver detalhes' : 'Verificar padrão de classificação deste fornecedor'}
                                 >
-                                  <SearchCheck className="w-4 h-4" />
+                                  <SearchCheck className={`w-4 h-4 ${verificando ? 'animate-pulse' : ''}`} />
+                                  {alertaConhecido && (
+                                    <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-red-600 ring-1 ring-white" />
+                                  )}
                                 </button>
                               );
                             })()}
