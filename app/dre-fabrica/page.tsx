@@ -546,6 +546,9 @@ export default function DREPage() {
     Record<string, AuditoriaFornecedorDespesa | 'loading' | 'erro'>
   >({});
   const [celulasAlertadas, setCelulasAlertadas] = useState<Set<string>>(new Set());
+  const [compararAnoAnterior, setCompararAnoAnterior] = useState(false);
+  const [valoresAnoAnterior, setValoresAnoAnterior] = useState<Record<string, Record<string, number>>>({});
+  const [carregandoAnoAnterior, setCarregandoAnoAnterior] = useState(false);
   const [nomesCustomizados, setNomesCustomizados] = useState<Record<string, string>>({});
   const [tiposCusto, setTiposCusto] = useState<Record<string, 'fixo' | 'variavel'>>({});
   const [modalSemAssociacao, setModalSemAssociacao] = useState<{
@@ -742,7 +745,16 @@ export default function DREPage() {
     const percentual = (valor / receitaAbs) * 100;
     // Se o valor original é negativo, garantir que o percentual também seja negativo
     const percentualFinal = valor < 0 ? -Math.abs(percentual) : Math.abs(percentual);
-    return `${percentualFinal.toFixed(1)}%`;
+    return `${percentualFinal.toFixed(2)}%`;
+  }
+
+  function calcularAVAnoAnterior(valor: number, periodoAnoAnteriorKey: string): string {
+    const receitaPeriodo = valoresAnoAnterior['03']?.[periodoAnoAnteriorKey] || 0;
+    if (receitaPeriodo === 0) return '-';
+    const receitaAbs = Math.abs(receitaPeriodo);
+    const percentual = (valor / receitaAbs) * 100;
+    const percentualFinal = valor < 0 ? -Math.abs(percentual) : Math.abs(percentual);
+    return `${percentualFinal.toFixed(2)}%`;
   }
 
   async function abrirDuplicatas(conta: string, nomeConta: string, periodo: string, labelPeriodo: string) {
@@ -893,6 +905,37 @@ export default function DREPage() {
     }
   }
 
+  // Desloca um periodo "YYYY-MM" um ano para tras, pra achar o mes correspondente do ano anterior
+  function anoAnteriorDe(periodoKey: string): string {
+    const [ano, mes] = periodoKey.split('-');
+    return `${parseInt(ano, 10) - 1}-${mes}`;
+  }
+
+  function deslocarDataUmAno(data: string): string {
+    const [ano, mes, dia] = data.split('-');
+    return `${parseInt(ano, 10) - 1}-${mes}-${dia}`;
+  }
+
+  async function buscarDadosAnoAnterior() {
+    setCarregandoAnoAnterior(true);
+    try {
+      const params = new URLSearchParams({
+        dataInicio: deslocarDataUmAno(dataInicio),
+        dataFim: deslocarDataUmAno(dataFim),
+        filtro,
+      });
+      const response = await fetch(`/api/dre/unificada?${params.toString()}`, {
+        cache: 'no-store',
+      });
+      const data = await response.json();
+      setValoresAnoAnterior(data.valores || {});
+    } catch (error) {
+      console.error('Erro ao buscar dados do ano anterior:', error);
+    } finally {
+      setCarregandoAnoAnterior(false);
+    }
+  }
+
   async function abrirDespesasSemAssociacao() {
     setModalSemAssociacao({ aberto: true, loading: true, despesas: [], totalItens: 0, valorTotal: 0 });
     try {
@@ -1008,8 +1051,24 @@ export default function DREPage() {
             ? detectarAnomalia(conta.valores, periodos, periodoIndex)
             : null;
           const alertaAuditoria = !isResultado && isDespesa && celulasAlertadas.has(`${conta.codigo}:${periodo.key}`);
+          const periodoAnoAnteriorKey = anoAnteriorDe(periodo.key);
+          const valorAnoAnteriorPeriodo = valoresAnoAnterior[conta.codigo]?.[periodoAnoAnteriorKey] || 0;
           return (
             <React.Fragment key={periodo.key}>
+              {compararAnoAnterior && (
+                <>
+                  <td className={`px-2 py-2 border-b border-gray-200 text-right text-sm bg-gray-100 ${
+                    valorAnoAnteriorPeriodo < 0 ? 'text-red-500' : 'text-gray-600'
+                  }`}>
+                    {formatarValor(valorAnoAnteriorPeriodo)}
+                  </td>
+                  <td className={`px-2 py-2 border-b border-gray-200 text-right text-xs bg-gray-100 ${
+                    valorAnoAnteriorPeriodo < 0 ? 'text-red-400' : 'text-gray-400'
+                  }`}>
+                    {calcularAVAnoAnterior(valorAnoAnteriorPeriodo, periodoAnoAnteriorKey)}
+                  </td>
+                </>
+              )}
               <td
                 className={`px-2 py-2 border-b border-gray-200 text-right text-sm ${
                   valorPeriodo < 0 ? 'text-red-600' : ''
@@ -1108,8 +1167,31 @@ export default function DREPage() {
               </td>
               {periodos.map((periodo) => {
                 const totalPeriodo = itens.reduce((acc, item) => acc + (item.valores[periodo.key] || 0), 0);
+                const periodoAnoAnteriorKey = anoAnteriorDe(periodo.key);
+                const totalAnoAnteriorPeriodo = itens.reduce(
+                  (acc, item) => acc + (valoresAnoAnterior[item.codigo]?.[periodoAnoAnteriorKey] || 0),
+                  0
+                );
                 return (
                   <React.Fragment key={periodo.key}>
+                    {compararAnoAnterior && (
+                      <>
+                        <td
+                          className={`px-2 py-1.5 border-b border-gray-200 bg-gray-200 text-right text-xs font-bold ${
+                            totalAnoAnteriorPeriodo < 0 ? 'text-red-600' : 'text-gray-600'
+                          }`}
+                        >
+                          {formatarValor(totalAnoAnteriorPeriodo)}
+                        </td>
+                        <td
+                          className={`px-2 py-1.5 border-b border-gray-200 bg-gray-200 text-right text-[11px] ${
+                            totalAnoAnteriorPeriodo < 0 ? 'text-red-500' : 'text-gray-500'
+                          }`}
+                        >
+                          {calcularAVAnoAnterior(totalAnoAnteriorPeriodo, periodoAnoAnteriorKey)}
+                        </td>
+                      </>
+                    )}
                     <td
                       className={`px-2 py-1.5 border-b border-gray-200 bg-gray-50 text-right text-xs font-bold ${
                         totalPeriodo < 0 ? 'text-red-600' : 'text-gray-700'
@@ -1168,6 +1250,7 @@ export default function DREPage() {
     try {
       if (tipoVisao === 'analitica') {
         buscarAlertasAuditoria();
+        if (compararAnoAnterior) buscarDadosAnoAnterior();
 
         const controller = new AbortController();
         const timeout = window.setTimeout(() => controller.abort(), 300000);
@@ -2025,12 +2108,36 @@ export default function DREPage() {
                   Periodo: {formatarData(dataInicio)} a {formatarData(dataFim)}
                 </p>
               </div>
-              <div className={`px-4 py-2 rounded-lg text-sm font-semibold ${
-                isLoja ? 'bg-purple-200 text-purple-800'
-                : isFabrica ? 'bg-blue-200 text-blue-800'
-                : 'bg-green-200 text-green-800'
-              }`}>
-                {periodos.length > 0 ? periodos[0].key.split('-')[0] : new Date().getFullYear()}
+              <div className="flex items-center gap-3">
+                <label className="flex items-center gap-2 text-xs font-medium text-gray-600 cursor-pointer select-none">
+                  {carregandoAnoAnterior && <RefreshCw className="w-3 h-3 animate-spin text-gray-400" />}
+                  Comparar com ano anterior
+                  <button
+                    role="switch"
+                    aria-checked={compararAnoAnterior}
+                    onClick={() => {
+                      const novoValor = !compararAnoAnterior;
+                      setCompararAnoAnterior(novoValor);
+                      if (novoValor && periodos.length > 0) buscarDadosAnoAnterior();
+                    }}
+                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                      compararAnoAnterior ? 'bg-blue-600' : 'bg-gray-300'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                        compararAnoAnterior ? 'translate-x-5' : 'translate-x-1'
+                      }`}
+                    />
+                  </button>
+                </label>
+                <div className={`px-4 py-2 rounded-lg text-sm font-semibold ${
+                  isLoja ? 'bg-purple-200 text-purple-800'
+                  : isFabrica ? 'bg-blue-200 text-blue-800'
+                  : 'bg-green-200 text-green-800'
+                }`}>
+                  {periodos.length > 0 ? periodos[0].key.split('-')[0] : new Date().getFullYear()}
+                </div>
               </div>
             </div>
           </div>
@@ -2044,10 +2151,13 @@ export default function DREPage() {
                     CONTA
                   </th>
                   <th
-                    colSpan={periodos.length * 2}
+                    colSpan={periodos.length * (compararAnoAnterior ? 4 : 2)}
                     className="px-3 py-2 text-center text-sm font-bold text-white border-b border-blue-500"
                   >
                     {periodos.length > 0 ? `EXERCÍCIO ${periodos[0].key.split('-')[0]}` : 'EXERCÍCIO'}
+                    {compararAnoAnterior && periodos.length > 0
+                      ? ` vs ${parseInt(periodos[0].key.split('-')[0], 10) - 1}`
+                      : ''}
                   </th>
                   <th colSpan={2} className="px-3 py-2 text-center text-sm font-bold text-white border-b border-blue-500 bg-blue-800">
                     ACUMULADO
@@ -2062,14 +2172,25 @@ export default function DREPage() {
                     const [ano, mes] = periodo.key.split('-');
                     const meses = ['', 'JAN', 'FEV', 'MAR', 'ABR', 'MAI', 'JUN', 'JUL', 'AGO', 'SET', 'OUT', 'NOV', 'DEZ'];
                     const nomeMes = meses[parseInt(mes)] || mes;
+                    const anoCurto = ano.slice(2);
+                    const anoAnteriorCurto = (parseInt(ano, 10) - 1).toString().slice(2);
                     return (
-                      <th
-                        key={periodo.key}
-                        colSpan={2}
-                        className="px-2 py-2 text-center text-xs font-bold text-gray-700 border-b border-gray-300 bg-gray-50"
-                      >
-                        {nomeMes}
-                      </th>
+                      <React.Fragment key={periodo.key}>
+                        {compararAnoAnterior && (
+                          <th
+                            colSpan={2}
+                            className="px-2 py-2 text-center text-xs font-bold text-gray-500 border-b border-gray-300 bg-gray-200"
+                          >
+                            {nomeMes}/{anoAnteriorCurto}
+                          </th>
+                        )}
+                        <th
+                          colSpan={2}
+                          className="px-2 py-2 text-center text-xs font-bold text-gray-700 border-b border-gray-300 bg-gray-50"
+                        >
+                          {compararAnoAnterior ? `${nomeMes}/${anoCurto}` : nomeMes}
+                        </th>
+                      </React.Fragment>
                     );
                   })}
                   <th className="px-3 py-2 text-center text-xs font-bold text-blue-700 border-b border-gray-300 bg-blue-50">
@@ -2084,6 +2205,12 @@ export default function DREPage() {
                   <th className="px-4 py-1 text-left text-[10px] text-gray-400 border-b border-gray-200 sticky left-0 bg-gray-50 z-20"></th>
                   {periodos.map((periodo) => (
                     <React.Fragment key={`sub-${periodo.key}`}>
+                      {compararAnoAnterior && (
+                        <>
+                          <th className="px-2 py-1 text-right text-[10px] text-gray-400 border-b border-gray-200 bg-gray-200">R$</th>
+                          <th className="px-2 py-1 text-right text-[10px] text-gray-400 border-b border-gray-200 bg-gray-200">%</th>
+                        </>
+                      )}
                       <th className="px-2 py-1 text-right text-[10px] text-gray-400 border-b border-gray-200">R$</th>
                       <th className="px-2 py-1 text-right text-[10px] text-gray-400 border-b border-gray-200 bg-gray-100">%</th>
                     </React.Fragment>
