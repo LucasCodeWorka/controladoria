@@ -1047,11 +1047,12 @@ def get_dre_lojas_duplicatas(
                 d.cd_despesaitem,
                 d.cd_fornecedor as cd_fornecedor,
                 d.cd_ccusto,
-                COALESCE(p.nm_pessoa, 'N/A') as nm_fornecedor,
-                CASE WHEN p.nm_fantasia IS NULL OR TRIM(p.nm_fantasia) = '' OR p.nm_fantasia ~ '^\*+$' THEN COALESCE(p.nm_pessoa, 'N/A') ELSE p.nm_fantasia END as nm_fantasia
+                COALESCE(p.nm_pessoa, pf.nm_pessoa, 'N/A') as nm_fornecedor,
+                CASE WHEN p.nm_fantasia IS NULL OR TRIM(p.nm_fantasia) = '' OR p.nm_fantasia ~ '^\*+$' THEN COALESCE(p.nm_pessoa, pf.nm_pessoa, 'N/A') ELSE p.nm_fantasia END as nm_fantasia
             FROM vr_fcp_despduplicatai d
             JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
             LEFT JOIN vr_pes_pessoa p ON p.cd_pessoa = d.cd_fornecedor
+            LEFT JOIN vr_pes_pesfisica pf ON pf.cd_pessoa = d.cd_fornecedor
             WHERE d.dt_emissao >= %s
               AND d.dt_emissao <= %s
               AND d.tp_situacao = 'N'
@@ -1153,11 +1154,12 @@ def get_dre_fabrica_duplicatas(
                 d.cd_despesaitem,
                 d.cd_fornecedor as cd_fornecedor,
                 d.cd_ccusto,
-                COALESCE(p.nm_pessoa, 'N/A') as nm_fornecedor,
-                CASE WHEN p.nm_fantasia IS NULL OR TRIM(p.nm_fantasia) = '' OR p.nm_fantasia ~ '^\*+$' THEN COALESCE(p.nm_pessoa, 'N/A') ELSE p.nm_fantasia END as nm_fantasia
+                COALESCE(p.nm_pessoa, pf.nm_pessoa, 'N/A') as nm_fornecedor,
+                CASE WHEN p.nm_fantasia IS NULL OR TRIM(p.nm_fantasia) = '' OR p.nm_fantasia ~ '^\*+$' THEN COALESCE(p.nm_pessoa, pf.nm_pessoa, 'N/A') ELSE p.nm_fantasia END as nm_fantasia
             FROM vr_fcp_despduplicatai d
             JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
             LEFT JOIN vr_pes_pessoa p ON p.cd_pessoa = d.cd_fornecedor
+            LEFT JOIN vr_pes_pesfisica pf ON pf.cd_pessoa = d.cd_fornecedor
             WHERE d.dt_emissao >= %s
               AND d.dt_emissao <= %s
               AND d.tp_situacao = 'N'
@@ -1835,10 +1837,11 @@ def get_dre_duplicatas(
                 idfornecedorcliente as cd_fornecedor,
                 origem_tabela,
                 tipo_documento,
-                COALESCE(p.nm_pessoa, 'N/A') as nm_fornecedor,
-                CASE WHEN p.nm_fantasia IS NULL OR TRIM(p.nm_fantasia) = '' OR p.nm_fantasia ~ '^\*+$' THEN COALESCE(p.nm_pessoa, 'N/A') ELSE p.nm_fantasia END as nm_fantasia
+                COALESCE(p.nm_pessoa, pf.nm_pessoa, 'N/A') as nm_fornecedor,
+                CASE WHEN p.nm_fantasia IS NULL OR TRIM(p.nm_fantasia) = '' OR p.nm_fantasia ~ '^\*+$' THEN COALESCE(p.nm_pessoa, pf.nm_pessoa, 'N/A') ELSE p.nm_fantasia END as nm_fantasia
             FROM vw_fluxo_pagamentos
             LEFT JOIN vr_pes_pessoa p ON p.cd_pessoa = idfornecedorcliente
+            LEFT JOIN vr_pes_pesfisica pf ON pf.cd_pessoa = idfornecedorcliente
             WHERE dt_emissao >= %s
               AND dt_emissao <= %s
               AND cd_despesaitem IN ({placeholders})
@@ -1855,10 +1858,11 @@ def get_dre_duplicatas(
                 idfornecedorcliente as cd_fornecedor,
                 origem_tabela,
                 tipo_documento,
-                COALESCE(p.nm_pessoa, 'N/A') as nm_fornecedor,
-                CASE WHEN p.nm_fantasia IS NULL OR TRIM(p.nm_fantasia) = '' OR p.nm_fantasia ~ '^\*+$' THEN COALESCE(p.nm_pessoa, 'N/A') ELSE p.nm_fantasia END as nm_fantasia
+                COALESCE(p.nm_pessoa, pf.nm_pessoa, 'N/A') as nm_fornecedor,
+                CASE WHEN p.nm_fantasia IS NULL OR TRIM(p.nm_fantasia) = '' OR p.nm_fantasia ~ '^\*+$' THEN COALESCE(p.nm_pessoa, pf.nm_pessoa, 'N/A') ELSE p.nm_fantasia END as nm_fantasia
             FROM vw_fluxo_pagamentos
             LEFT JOIN vr_pes_pessoa p ON p.cd_pessoa = idfornecedorcliente
+            LEFT JOIN vr_pes_pesfisica pf ON pf.cd_pessoa = idfornecedorcliente
             WHERE dtvencimento >= %s
               AND dtvencimento <= %s
               AND cd_despesaitem IN ({placeholders})
@@ -3064,11 +3068,12 @@ def get_dre_unificada_duplicatas(
                 d.cd_ccusto,
                 cc.ds_ccusto as nome_ccusto,
                 d.cd_fornecedor,
-                CASE WHEN p.nm_fantasia IS NULL OR TRIM(p.nm_fantasia) = '' OR p.nm_fantasia ~ '^\*+$' THEN COALESCE(p.nm_pessoa, 'N/A') ELSE p.nm_fantasia END as nm_fornecedor
+                CASE WHEN p.nm_fantasia IS NULL OR TRIM(p.nm_fantasia) = '' OR p.nm_fantasia ~ '^\*+$' THEN COALESCE(p.nm_pessoa, pf.nm_pessoa, 'N/A') ELSE p.nm_fantasia END as nm_fornecedor
             FROM vr_fcp_despduplicatai d
             JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
             LEFT JOIN vr_gec_ccusto cc ON cc.cd_ccusto = d.cd_ccusto
             LEFT JOIN vr_pes_pessoa p ON p.cd_pessoa = d.cd_fornecedor
+            LEFT JOIN vr_pes_pesfisica pf ON pf.cd_pessoa = d.cd_fornecedor
             WHERE d.dt_emissao >= %s
               AND d.dt_emissao <= %s
               AND ({items_or_desc})
@@ -4328,11 +4333,12 @@ def get_duplicatas_por_empresa(
                     d.cd_empresa,
                     d.cd_fornecedor,
                     COALESCE(c.ds_ccusto, '') as nome_ccusto,
-                    CASE WHEN p.nm_fantasia IS NULL OR TRIM(p.nm_fantasia) = '' OR p.nm_fantasia ~ '^\*+$' THEN COALESCE(p.nm_pessoa, 'N/A') ELSE p.nm_fantasia END as nm_fantasia
+                    CASE WHEN p.nm_fantasia IS NULL OR TRIM(p.nm_fantasia) = '' OR p.nm_fantasia ~ '^\*+$' THEN COALESCE(p.nm_pessoa, pf.nm_pessoa, 'N/A') ELSE p.nm_fantasia END as nm_fantasia
                 FROM vr_fcp_despduplicatai d
                 JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
                 LEFT JOIN vr_gec_ccusto c ON c.cd_ccusto = d.cd_ccusto
                 LEFT JOIN vr_pes_pessoa p ON p.cd_pessoa = d.cd_fornecedor
+                LEFT JOIN vr_pes_pesfisica pf ON pf.cd_pessoa = d.cd_fornecedor
                 WHERE d.dt_emissao >= %s
                   AND d.dt_emissao <= %s
                   AND d.tp_situacao = 'N'
@@ -4356,11 +4362,12 @@ def get_duplicatas_por_empresa(
                     d.cd_empresa,
                     d.cd_fornecedor,
                     COALESCE(c.ds_ccusto, '') as nome_ccusto,
-                    CASE WHEN p.nm_fantasia IS NULL OR TRIM(p.nm_fantasia) = '' OR p.nm_fantasia ~ '^\*+$' THEN COALESCE(p.nm_pessoa, 'N/A') ELSE p.nm_fantasia END as nm_fantasia
+                    CASE WHEN p.nm_fantasia IS NULL OR TRIM(p.nm_fantasia) = '' OR p.nm_fantasia ~ '^\*+$' THEN COALESCE(p.nm_pessoa, pf.nm_pessoa, 'N/A') ELSE p.nm_fantasia END as nm_fantasia
                 FROM vr_fcp_despduplicatai d
                 JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
                 LEFT JOIN vr_gec_ccusto c ON c.cd_ccusto = d.cd_ccusto
                 LEFT JOIN vr_pes_pessoa p ON p.cd_pessoa = d.cd_fornecedor
+                LEFT JOIN vr_pes_pesfisica pf ON pf.cd_pessoa = d.cd_fornecedor
                 WHERE d.dt_emissao >= %s
                   AND d.dt_emissao <= %s
                   AND d.tp_situacao = 'N'
