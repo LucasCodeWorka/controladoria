@@ -558,6 +558,10 @@ export default function DREPage() {
     total: 0,
     loading: false,
   });
+  const [ordenacaoDuplicatas, setOrdenacaoDuplicatas] = useState<{
+    campo: keyof Duplicata;
+    direcao: 'asc' | 'desc';
+  } | null>(null);
   const [auditoriaModal, setAuditoriaModal] = useState<{ aberto: boolean; dup: Duplicata | null }>({
     aberto: false,
     dup: null,
@@ -832,6 +836,7 @@ export default function DREPage() {
   }
 
   async function abrirDuplicatas(conta: string, nomeConta: string, periodo: string, labelPeriodo: string) {
+    setOrdenacaoDuplicatas(null);
     setModalDuplicatas({
       aberto: true,
       conta,
@@ -863,6 +868,7 @@ export default function DREPage() {
   }
 
   async function abrirDuplicatasPorEmpresa(conta: string, nomeConta: string, cdEmpresa: number, nomeEmpresa: string) {
+    setOrdenacaoDuplicatas(null);
     setModalDuplicatas({
       aberto: true,
       conta,
@@ -905,6 +911,54 @@ export default function DREPage() {
   function fecharModal() {
     setModalDuplicatas((prev) => ({ ...prev, aberto: false }));
     setAuditoriaModal({ aberto: false, dup: null });
+  }
+
+  function alternarOrdenacaoDuplicatas(campo: keyof Duplicata) {
+    setOrdenacaoDuplicatas((atual) => {
+      if (atual?.campo === campo) {
+        return { campo, direcao: atual.direcao === 'asc' ? 'desc' : 'asc' };
+      }
+      return { campo, direcao: 'asc' };
+    });
+  }
+
+  function compararDuplicatas(a: Duplicata, b: Duplicata, campo: keyof Duplicata): number {
+    if (campo === 'valor') {
+      return (a.valor || 0) - (b.valor || 0);
+    }
+    if (campo === 'cdFornecedor') {
+      return (Number(a.cdFornecedor) || 0) - (Number(b.cdFornecedor) || 0);
+    }
+    if (campo === 'nrDuplicata') {
+      const na = Number(a.nrDuplicata);
+      const nb = Number(b.nrDuplicata);
+      if (!Number.isNaN(na) && !Number.isNaN(nb)) return na - nb;
+    }
+    return String(a[campo] ?? '').localeCompare(String(b[campo] ?? ''), 'pt-BR');
+  }
+
+  function renderizarCabecalhoDuplicatas(campo: keyof Duplicata, label: string, extraClasses = '', alinhamento: 'left' | 'right' = 'left') {
+    const ativo = ordenacaoDuplicatas?.campo === campo;
+    const direcao = ativo ? ordenacaoDuplicatas!.direcao : null;
+    return (
+      <th
+        onClick={() => alternarOrdenacaoDuplicatas(campo)}
+        className={`px-4 py-3 border-b-2 border-gray-300 font-semibold text-gray-700 cursor-pointer select-none hover:bg-gray-200 transition-colors ${
+          alinhamento === 'right' ? 'text-right' : 'text-left'
+        } ${extraClasses}`}
+      >
+        <span className={`inline-flex items-center gap-1 ${alinhamento === 'right' ? 'flex-row-reverse' : ''}`}>
+          {label}
+          {direcao === 'asc' ? (
+            <ArrowUp className="w-3 h-3 text-blue-600" strokeWidth={3} />
+          ) : direcao === 'desc' ? (
+            <ArrowDown className="w-3 h-3 text-blue-600" strokeWidth={3} />
+          ) : (
+            <ArrowUp className="w-3 h-3 text-gray-300" strokeWidth={3} />
+          )}
+        </span>
+      </th>
+    );
   }
 
   async function verificarAuditoria(dup: Duplicata) {
@@ -3368,23 +3422,29 @@ export default function DREPage() {
                   <table className="w-full table-fixed border-collapse text-sm">
                     <thead className="sticky top-0 z-10">
                       <tr className="bg-gray-100">
-                        <th className="px-4 py-3 text-left border-b-2 border-gray-300 font-semibold text-gray-700 w-24">Nr Duplicata</th>
-                        <th className="px-4 py-3 text-left border-b-2 border-gray-300 font-semibold text-gray-700 w-24">Data Emissao</th>
-                        <th className="px-4 py-3 text-left border-b-2 border-gray-300 font-semibold text-gray-700 w-32">Centro de Custo</th>
-                        <th className="px-4 py-3 text-left border-b-2 border-gray-300 font-semibold text-gray-700 w-20">Cód. Fornecedor</th>
-                        <th className="px-4 py-3 text-left border-b-2 border-gray-300 font-semibold text-gray-700 w-1/5">Fornecedor</th>
+                        {renderizarCabecalhoDuplicatas('nrDuplicata', 'Nr Duplicata', 'w-24')}
+                        {renderizarCabecalhoDuplicatas('dtEmissao', 'Data Emissao', 'w-24')}
+                        {renderizarCabecalhoDuplicatas('nomeCCusto', 'Centro de Custo', 'w-32')}
+                        {renderizarCabecalhoDuplicatas('cdFornecedor', 'Cód. Fornecedor', 'w-20')}
+                        {renderizarCabecalhoDuplicatas('nmFornecedor', 'Fornecedor', 'w-1/5')}
                         <th
                           className="px-2 py-3 text-center border-b-2 border-gray-300 font-semibold text-gray-700 w-10"
                           title="Compara a despesa lançada com o padrão histórico do fornecedor"
                         >
                           Aud.
                         </th>
-                        <th className="px-4 py-3 text-left border-b-2 border-gray-300 font-semibold text-gray-700 w-1/5">Descricao</th>
-                        <th className="px-4 py-3 text-right border-b-2 border-gray-300 font-semibold text-gray-700 w-24">Valor</th>
+                        {renderizarCabecalhoDuplicatas('descricao', 'Descricao', 'w-1/5')}
+                        {renderizarCabecalhoDuplicatas('valor', 'Valor', 'w-24', 'right')}
                       </tr>
                     </thead>
                     <tbody>
-                      {modalDuplicatas.duplicatas.map((dup, idx) => (
+                      {(ordenacaoDuplicatas
+                        ? [...modalDuplicatas.duplicatas].sort((a, b) => {
+                            const resultado = compararDuplicatas(a, b, ordenacaoDuplicatas.campo);
+                            return ordenacaoDuplicatas.direcao === 'asc' ? resultado : -resultado;
+                          })
+                        : modalDuplicatas.duplicatas
+                      ).map((dup, idx) => (
                         <tr key={idx} className="hover:bg-blue-50 border-b border-gray-100 transition-colors">
                           <td className="px-4 py-2.5 text-gray-600 font-mono text-xs">{dup.nrDuplicata || dup.id || '-'}</td>
                           <td className="px-4 py-2.5 text-gray-600">{formatarData(dup.dtEmissao)}</td>
