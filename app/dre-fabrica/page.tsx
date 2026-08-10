@@ -27,7 +27,9 @@ import {
   Filter,
   Eye,
   EyeOff,
+  Sparkles,
 } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
 
 import { PLANO_CONTAS_DRE_FABRICA, type ContaDRE } from './planoContasDREFabrica';
 import { formatarValor } from '../utils/formatters';
@@ -340,6 +342,24 @@ function somarFilhos(contas: ContaDREValores[], periodos: PeriodoDRE[]): void {
   }
 }
 
+function achatarContas(
+  contas: ContaDREValores[],
+  periodos: PeriodoDRE[]
+): { codigo: string; nome: string; tipo: string; total: number; valores: Record<string, number> }[] {
+  const linhas: { codigo: string; nome: string; tipo: string; total: number; valores: Record<string, number> }[] = [];
+  for (const conta of contas) {
+    const valores: Record<string, number> = {};
+    for (const periodo of periodos) {
+      valores[periodo.label] = conta.valores[periodo.key] || 0;
+    }
+    linhas.push({ codigo: conta.codigo, nome: conta.nome, tipo: conta.tipo, total: conta.total, valores });
+    if (conta.filhos?.length) {
+      linhas.push(...achatarContas(conta.filhos, periodos));
+    }
+  }
+  return linhas;
+}
+
 function calcularLinhasOrdenadas(base: ContaDREValores[], periodos: PeriodoDRE[], contasTotalizadoras: Record<string, ContaDREValores> = {}) {
   const contasMap = indexarContas(base);
 
@@ -558,6 +578,12 @@ export default function DREPage() {
     totalItens: number;
     valorTotal: number;
   }>({ aberto: false, loading: false, despesas: [], totalItens: 0, valorTotal: 0 });
+  const [modalAnaliseExecutiva, setModalAnaliseExecutiva] = useState<{
+    aberto: boolean;
+    loading: boolean;
+    texto: string;
+    erro: string | null;
+  }>({ aberto: false, loading: false, texto: '', erro: null });
   const [ultimaAtualizacao, setUltimaAtualizacao] = useState<string | null>(null);
   const [larguraColunaContas, setLarguraColunaContas] = useState(350);
   const [larguraColunaValor, setLarguraColunaValor] = useState(85);
@@ -1009,6 +1035,77 @@ export default function DREPage() {
     setModalSemAssociacao((prev) => ({ ...prev, aberto: false }));
   }
 
+  async function gerarAnaliseExecutiva() {
+    setModalAnaliseExecutiva({ aberto: true, loading: true, texto: '', erro: null });
+    try {
+      const contasAchatadas = achatarContas(dadosDRE, periodos);
+      const comparativoAnoAnterior = compararAnoAnterior
+        ? {
+            contas: contasAchatadas.map((c) => ({
+              codigo: c.codigo,
+              nome: c.nome,
+              valores: Object.fromEntries(
+                periodos.map((p) => [p.label, valoresAnoAnterior[c.codigo]?.[anoAnteriorDe(p.key)] || 0])
+              ),
+            })),
+          }
+        : null;
+
+      const payload = {
+        periodo: {
+          dataInicio,
+          dataFim,
+          filtroLabel,
+          periodos: periodos.map((p) => p.label),
+        },
+        contas: contasAchatadas,
+        resumo: {
+          receitaLiquida,
+          margemContribuicao,
+          ebitda,
+          lucroLiquido,
+          despesasFixas: despesasFixasTotal,
+          despesasVariaveis: despesasVariaveisTotal,
+          custosProdutosVendidos: custosProdutosVendidosTotal,
+        },
+        comparativoAnoAnterior,
+        alertasAuditoriaFornecedorDespesa: Array.from(celulasAlertadas),
+      };
+
+      const response = await fetch('/api/dre/analise-executiva', {
+        method: 'POST',
+        cache: 'no-store',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        setModalAnaliseExecutiva({
+          aberto: true,
+          loading: false,
+          texto: '',
+          erro: data.detail || data.error || 'Erro ao gerar a análise executiva.',
+        });
+        return;
+      }
+
+      setModalAnaliseExecutiva({ aberto: true, loading: false, texto: data.analise || '', erro: null });
+    } catch (error) {
+      console.error('Erro ao gerar analise executiva:', error);
+      setModalAnaliseExecutiva({
+        aberto: true,
+        loading: false,
+        texto: '',
+        erro: 'Erro ao gerar a análise executiva.',
+      });
+    }
+  }
+
+  function fecharModalAnaliseExecutiva() {
+    setModalAnaliseExecutiva((prev) => ({ ...prev, aberto: false }));
+  }
+
   // Funcoes para expandir/recolher niveis
   const CONTAS_NIVEL_1 = ['01', '02', '04', '06', '08', '10', '13', '17', '18'];
   const CONTAS_NIVEL_2 = ['02.01', '04.01', '04.02', '06.01', '08.01', '08.02', '08.03', '08.04', '08.05', '08.06', '08.07', '08.08', '08.09', '08.10', '08.11', '08.12', '10.01', '10.03', '13.01'];
@@ -1298,7 +1395,7 @@ export default function DREPage() {
     try {
       if (tipoVisao === 'analitica') {
         buscarAlertasAuditoria();
-        if (compararAnoAnterior) buscarDadosAnoAnterior();
+        buscarDadosAnoAnterior();
 
         const controller = new AbortController();
         const timeout = window.setTimeout(() => controller.abort(), 300000);
@@ -1496,6 +1593,62 @@ export default function DREPage() {
   const margemContribuicao = dadosDRE.find((conta) => conta.codigo === '05')?.total || 0;
   const ebitda = dadosDRE.find((conta) => conta.codigo === '09')?.total || 0;
   const lucroLiquido = dadosDRE.find((conta) => conta.codigo === '14')?.total || 0;
+
+  const despesasOperacionaisConta = dadosDRE.find((conta) => conta.codigo === '08');
+  const despesasFixasTotal = (despesasOperacionaisConta?.filhos || [])
+    .filter((filho) => tiposCusto[filho.codigo] === 'fixo')
+    .reduce((acc, filho) => acc + (filho.total || 0), 0);
+  const despesasVariaveisTotal = (despesasOperacionaisConta?.filhos || [])
+    .filter((filho) => tiposCusto[filho.codigo] === 'variavel')
+    .reduce((acc, filho) => acc + (filho.total || 0), 0);
+  const custosProdutosVendidosTotal = dadosDRE
+    .find((conta) => conta.codigo === '04')
+    ?.filhos?.find((filho) => filho.codigo === '04.02')?.total || 0;
+  const despesasOcupacaoTotal = (despesasOperacionaisConta?.filhos || [])
+    .find((filho) => filho.codigo === '08.01')?.total || 0;
+  const despesasPessoalTotal = (despesasOperacionaisConta?.filhos || [])
+    .find((filho) => filho.codigo === '08.04')?.total || 0;
+  const despesasVendasTotal = (despesasOperacionaisConta?.filhos || [])
+    .find((filho) => filho.codigo === '08.10')?.total || 0;
+
+  function totalAnoAnteriorConta(codigo: string): number {
+    return periodos.reduce(
+      (acc, p) => acc + (valoresAnoAnterior[codigo]?.[anoAnteriorDe(p.key)] || 0),
+      0
+    );
+  }
+
+  const receitaLiquidaAnoAnterior = totalAnoAnteriorConta('03');
+  const margemContribuicaoAnoAnterior = totalAnoAnteriorConta('05');
+  const ebitdaAnoAnterior = totalAnoAnteriorConta('09');
+  const lucroLiquidoAnoAnterior = totalAnoAnteriorConta('14');
+  const despesasFixasAnoAnterior = (despesasOperacionaisConta?.filhos || [])
+    .filter((filho) => tiposCusto[filho.codigo] === 'fixo')
+    .reduce((acc, filho) => acc + totalAnoAnteriorConta(filho.codigo), 0);
+  const despesasVariaveisAnoAnterior = (despesasOperacionaisConta?.filhos || [])
+    .filter((filho) => tiposCusto[filho.codigo] === 'variavel')
+    .reduce((acc, filho) => acc + totalAnoAnteriorConta(filho.codigo), 0);
+  const custosProdutosVendidosAnoAnterior = totalAnoAnteriorConta('04.02');
+  const despesasOcupacaoAnoAnterior = totalAnoAnteriorConta('08.01');
+  const despesasPessoalAnoAnterior = totalAnoAnteriorConta('08.04');
+  const despesasVendasAnoAnterior = totalAnoAnteriorConta('08.10');
+
+  function renderizarLinhaAnoAnterior(anterior: number) {
+    return (
+      <p className="text-xs text-black font-medium mt-0.5">
+        {carregandoAnoAnterior ? 'Ano anterior: carregando...' : `Ano anterior: ${formatarValor(anterior)}`}
+      </p>
+    );
+  }
+
+  function renderizarLinhaMediaMensal(total: number) {
+    if (periodos.length <= 1) return null;
+    return (
+      <p className="text-xs text-black font-medium mt-0.5">
+        {`Média mensal: ${formatarValor(total / periodos.length)}`}
+      </p>
+    );
+  }
 
   // Obter label do filtro selecionado
   const filtrosSelecionados = filtro.split(',').filter(Boolean);
@@ -2001,6 +2154,16 @@ export default function DREPage() {
                 <HelpCircle className="w-4 h-4" />
                 Só com problema
               </button>
+              <div className="w-px h-6 bg-gray-300 mx-2" />
+              <button
+                onClick={gerarAnaliseExecutiva}
+                disabled={!consultaExecutada || dadosDRE.length === 0}
+                title="Gerar leitura executiva do período/filtro atual com IA"
+                className="flex items-center gap-2 px-3 py-2 rounded-md bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                <Sparkles className="w-4 h-4" />
+                Análise Executiva
+              </button>
             </>
           )}
         </div>
@@ -2020,46 +2183,138 @@ export default function DREPage() {
 
       {/* Cards de resumo - Apenas na visao analitica */}
       {tipoVisao === 'analitica' && consultaExecutada && (
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <div className="bg-white rounded-lg shadow p-4 border-l-4 border-blue-500">
-            <div className="flex items-center gap-2 text-gray-600 text-sm">
+        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3">
+          <div className="bg-white rounded-lg shadow p-3 border-l-4 border-blue-500">
+            <div className="flex items-center gap-2 text-black text-xs font-medium">
               <DollarSign className="w-4 h-4" />
               Receita Liquida
             </div>
-            <p className="text-2xl font-bold text-gray-800 mt-1">{formatarValor(receitaLiquida)}</p>
-            <p className="text-xs text-gray-500">100% (base A/V)</p>
+            <p className="text-lg font-bold text-black mt-1">{formatarValor(receitaLiquida)}</p>
+            <p className="text-xs text-black font-medium">100% (base A/V)</p>
+            {renderizarLinhaMediaMensal(receitaLiquida)}
+            {renderizarLinhaAnoAnterior(receitaLiquidaAnoAnterior)}
           </div>
-          <div className="bg-white rounded-lg shadow p-4 border-l-4 border-green-500">
-            <div className="flex items-center gap-2 text-gray-600 text-sm">
+          <div className="bg-white rounded-lg shadow p-3 border-l-4 border-green-500">
+            <div className="flex items-center gap-2 text-black text-xs font-medium">
               <TrendingUp className="w-4 h-4" />
               Margem Contribuicao
             </div>
-            <p className="text-2xl font-bold text-gray-800 mt-1">{formatarValor(margemContribuicao)}</p>
+            <p className="text-lg font-bold text-black mt-1">{formatarValor(margemContribuicao)}</p>
             {receitaLiquida > 0 && (
-              <p className="text-xs text-gray-500">{((margemContribuicao / receitaLiquida) * 100).toFixed(2)}% da Receita</p>
+              <p className="text-xs text-black font-medium">{((margemContribuicao / receitaLiquida) * 100).toFixed(2)}% da Receita</p>
             )}
+            {renderizarLinhaMediaMensal(margemContribuicao)}
+            {renderizarLinhaAnoAnterior(margemContribuicaoAnoAnterior)}
           </div>
-          <div className="bg-white rounded-lg shadow p-4 border-l-4 border-yellow-500">
-            <div className="flex items-center gap-2 text-gray-600 text-sm">
+          <div className="bg-white rounded-lg shadow p-3 border-l-4 border-yellow-500">
+            <div className="flex items-center gap-2 text-black text-xs font-medium">
               <TrendingUp className="w-4 h-4" />
               EBITDA
             </div>
-            <p className="text-2xl font-bold text-gray-800 mt-1">{formatarValor(ebitda)}</p>
+            <p className="text-lg font-bold text-black mt-1">{formatarValor(ebitda)}</p>
             {receitaLiquida > 0 && (
-              <p className="text-xs text-gray-500">{((ebitda / receitaLiquida) * 100).toFixed(2)}% da Receita</p>
+              <p className="text-xs text-black font-medium">{((ebitda / receitaLiquida) * 100).toFixed(2)}% da Receita</p>
             )}
+            {renderizarLinhaMediaMensal(ebitda)}
+            {renderizarLinhaAnoAnterior(ebitdaAnoAnterior)}
           </div>
-          <div className={`bg-white rounded-lg shadow p-4 border-l-4 ${lucroLiquido >= 0 ? 'border-green-500' : 'border-red-500'}`}>
-            <div className="flex items-center gap-2 text-gray-600 text-sm">
+          <div className={`bg-white rounded-lg shadow p-3 border-l-4 ${lucroLiquido >= 0 ? 'border-green-500' : 'border-red-500'}`}>
+            <div className="flex items-center gap-2 text-black text-xs font-medium">
               {lucroLiquido >= 0 ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
               Lucro Liquido
             </div>
-            <p className={`text-2xl font-bold mt-1 ${lucroLiquido >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+            <p className="text-lg font-bold mt-1 text-black">
               {formatarValor(lucroLiquido)}
             </p>
             {receitaLiquida > 0 && (
-              <p className="text-xs text-gray-500">{((lucroLiquido / receitaLiquida) * 100).toFixed(2)}% da Receita</p>
+              <p className="text-xs text-black font-medium">{((lucroLiquido / receitaLiquida) * 100).toFixed(2)}% da Receita</p>
             )}
+            {renderizarLinhaMediaMensal(lucroLiquido)}
+            {renderizarLinhaAnoAnterior(lucroLiquidoAnoAnterior)}
+          </div>
+          <div className="bg-white rounded-lg shadow p-3 border-l-4 border-blue-600">
+            <div className="flex items-center gap-2 text-black text-xs font-medium">
+              <TrendingDown className="w-4 h-4" />
+              Despesas Fixas
+            </div>
+            <p className="text-lg font-bold mt-1 text-black">
+              {formatarValor(despesasFixasTotal)}
+            </p>
+            {receitaLiquida > 0 && (
+              <p className="text-xs text-black font-medium">{((despesasFixasTotal / receitaLiquida) * 100).toFixed(2)}% da Receita</p>
+            )}
+            {renderizarLinhaMediaMensal(despesasFixasTotal)}
+            {renderizarLinhaAnoAnterior(despesasFixasAnoAnterior)}
+          </div>
+          <div className="bg-white rounded-lg shadow p-3 border-l-4 border-orange-500">
+            <div className="flex items-center gap-2 text-black text-xs font-medium">
+              <TrendingDown className="w-4 h-4" />
+              Despesas Variaveis
+            </div>
+            <p className="text-lg font-bold mt-1 text-black">
+              {formatarValor(despesasVariaveisTotal)}
+            </p>
+            {receitaLiquida > 0 && (
+              <p className="text-xs text-black font-medium">{((despesasVariaveisTotal / receitaLiquida) * 100).toFixed(2)}% da Receita</p>
+            )}
+            {renderizarLinhaMediaMensal(despesasVariaveisTotal)}
+            {renderizarLinhaAnoAnterior(despesasVariaveisAnoAnterior)}
+          </div>
+          <div className="bg-white rounded-lg shadow p-3 border-l-4 border-red-500">
+            <div className="flex items-center gap-2 text-black text-xs font-medium">
+              <TrendingDown className="w-4 h-4" />
+              Custos Produtos Vendidos
+            </div>
+            <p className="text-lg font-bold mt-1 text-black">
+              {formatarValor(custosProdutosVendidosTotal)}
+            </p>
+            {receitaLiquida > 0 && (
+              <p className="text-xs text-black font-medium">{((custosProdutosVendidosTotal / receitaLiquida) * 100).toFixed(2)}% da Receita</p>
+            )}
+            {renderizarLinhaMediaMensal(custosProdutosVendidosTotal)}
+            {renderizarLinhaAnoAnterior(custosProdutosVendidosAnoAnterior)}
+          </div>
+          <div className="bg-white rounded-lg shadow p-3 border-l-4 border-orange-600">
+            <div className="flex items-center gap-2 text-black text-xs font-medium">
+              <TrendingDown className="w-4 h-4" />
+              Despesas Ocupação
+            </div>
+            <p className="text-lg font-bold mt-1 text-black">
+              {formatarValor(despesasOcupacaoTotal)}
+            </p>
+            {receitaLiquida > 0 && (
+              <p className="text-xs text-black font-medium">{((despesasOcupacaoTotal / receitaLiquida) * 100).toFixed(2)}% da Receita</p>
+            )}
+            {renderizarLinhaMediaMensal(despesasOcupacaoTotal)}
+            {renderizarLinhaAnoAnterior(despesasOcupacaoAnoAnterior)}
+          </div>
+          <div className="bg-white rounded-lg shadow p-3 border-l-4 border-purple-500">
+            <div className="flex items-center gap-2 text-black text-xs font-medium">
+              <TrendingDown className="w-4 h-4" />
+              Despesas Pessoal
+            </div>
+            <p className="text-lg font-bold mt-1 text-black">
+              {formatarValor(despesasPessoalTotal)}
+            </p>
+            {receitaLiquida > 0 && (
+              <p className="text-xs text-black font-medium">{((despesasPessoalTotal / receitaLiquida) * 100).toFixed(2)}% da Receita</p>
+            )}
+            {renderizarLinhaMediaMensal(despesasPessoalTotal)}
+            {renderizarLinhaAnoAnterior(despesasPessoalAnoAnterior)}
+          </div>
+          <div className="bg-white rounded-lg shadow p-3 border-l-4 border-pink-500">
+            <div className="flex items-center gap-2 text-black text-xs font-medium">
+              <TrendingDown className="w-4 h-4" />
+              Despesas Vendas
+            </div>
+            <p className="text-lg font-bold mt-1 text-black">
+              {formatarValor(despesasVendasTotal)}
+            </p>
+            {receitaLiquida > 0 && (
+              <p className="text-xs text-black font-medium">{((despesasVendasTotal / receitaLiquida) * 100).toFixed(2)}% da Receita</p>
+            )}
+            {renderizarLinhaMediaMensal(despesasVendasTotal)}
+            {renderizarLinhaAnoAnterior(despesasVendasAnoAnterior)}
           </div>
         </div>
       )}
@@ -3365,6 +3620,57 @@ export default function DREPage() {
             <div className="px-6 py-4 border-t border-gray-200 bg-gray-50 rounded-b-lg">
               <button
                 onClick={fecharModalSemAssociacao}
+                className="px-5 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-md transition-colors font-medium"
+              >
+                Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {modalAnaliseExecutiva.aberto && (
+        <div
+          className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4"
+          onClick={fecharModalAnaliseExecutiva}
+        >
+          <div
+            className="bg-white rounded-lg shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-5 h-5 text-indigo-600" />
+                  <h3 className="text-base font-bold text-gray-800">Análise Executiva</h3>
+                </div>
+                <p className="text-xs text-gray-500 mt-1">
+                  Período: {formatarData(dataInicio)} a {formatarData(dataFim)} · Filtro: {filtroInfo || filtro}
+                </p>
+              </div>
+              <button onClick={fecharModalAnaliseExecutiva} className="text-gray-400 hover:text-gray-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-auto px-6 py-4">
+              {modalAnaliseExecutiva.loading ? (
+                <div className="flex items-center justify-center py-12">
+                  <RefreshCw className="w-8 h-8 animate-spin text-indigo-600" />
+                  <span className="ml-3 text-gray-600">Gerando análise...</span>
+                </div>
+              ) : modalAnaliseExecutiva.erro ? (
+                <div className="text-center py-12 text-red-600">{modalAnaliseExecutiva.erro}</div>
+              ) : (
+                <div className="prose prose-sm max-w-none prose-headings:font-bold prose-headings:text-gray-800 prose-p:text-gray-700 prose-li:text-gray-700 prose-strong:text-gray-900">
+                  <ReactMarkdown>{modalAnaliseExecutiva.texto}</ReactMarkdown>
+                </div>
+              )}
+            </div>
+
+            <div className="px-6 py-4 border-t border-gray-200 bg-gray-50 rounded-b-lg">
+              <button
+                onClick={fecharModalAnaliseExecutiva}
                 className="px-5 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-md transition-colors font-medium"
               >
                 Fechar
