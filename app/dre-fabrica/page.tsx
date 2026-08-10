@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Calendar,
   ChevronDown,
@@ -592,6 +592,37 @@ export default function DREPage() {
     carregarNomesCustomizados();
   }, []);
 
+  // Restaura o filtro (periodo + loja/fabrica) salvo da ultima visita, se houver
+  useEffect(() => {
+    try {
+      const salvo = localStorage.getItem('dre_analitica_filtros');
+      if (salvo) {
+        const filtrosSalvos = JSON.parse(salvo);
+        if (filtrosSalvos.dataInicio) setDataInicio(filtrosSalvos.dataInicio);
+        if (filtrosSalvos.dataFim) setDataFim(filtrosSalvos.dataFim);
+        if (filtrosSalvos.filtro) setFiltro(filtrosSalvos.filtro);
+      }
+    } catch (error) {
+      console.error('Erro ao carregar filtros salvos:', error);
+    }
+  }, []);
+
+  // Salva o filtro atual sempre que o usuario alterar data ou loja/fabrica,
+  // pulando a primeira renderizacao pra nao sobrescrever o que acabou de ser
+  // restaurado do localStorage (useEffect acima) com os valores padrao.
+  const primeiraRenderizacaoFiltroRef = useRef(true);
+  useEffect(() => {
+    if (primeiraRenderizacaoFiltroRef.current) {
+      primeiraRenderizacaoFiltroRef.current = false;
+      return;
+    }
+    try {
+      localStorage.setItem('dre_analitica_filtros', JSON.stringify({ dataInicio, dataFim, filtro }));
+    } catch (error) {
+      console.error('Erro ao salvar filtros:', error);
+    }
+  }, [dataInicio, dataFim, filtro]);
+
   useEffect(() => {
     async function carregarTiposCusto() {
       try {
@@ -649,6 +680,23 @@ export default function DREPage() {
     const conta = dadosDRE.find((c) => c.codigo === '03');
     return conta?.valores || {};
   }, [dadosDRE]);
+
+  // Agrupa os periodos em blocos consecutivos do mesmo ano, para o cabecalho
+  // "EXERCICIO" dividir corretamente quando o intervalo selecionado cruza
+  // dois anos (ex: filtro "Ultimos 12 Meses" indo de ago/2025 a jul/2026).
+  const gruposPorAno = useMemo(() => {
+    const grupos: { ano: string; qtd: number }[] = [];
+    for (const periodo of periodos) {
+      const ano = periodo.key.split('-')[0];
+      const ultimo = grupos[grupos.length - 1];
+      if (ultimo && ultimo.ano === ano) {
+        ultimo.qtd += 1;
+      } else {
+        grupos.push({ ano, qtd: 1 });
+      }
+    }
+    return grupos;
+  }, [periodos]);
 
   // Filtrar contas extras (15, 16, 17, 18, 19) quando mostrarExtras for false
   const CONTAS_EXTRAS = ['16', '17', '18', '19'];
@@ -2064,6 +2112,12 @@ export default function DREPage() {
             Últimos 6 Meses
           </button>
           <button
+            onClick={() => definirUltimosMeses(12)}
+            className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md transition-colors"
+          >
+            Últimos 12 Meses
+          </button>
+          <button
             onClick={() => {
               const hoje = new Date();
               setDataInicio(`${hoje.getFullYear()}-01-01`);
@@ -2136,7 +2190,13 @@ export default function DREPage() {
                   : isFabrica ? 'bg-blue-200 text-blue-800'
                   : 'bg-green-200 text-green-800'
                 }`}>
-                  {periodos.length > 0 ? periodos[0].key.split('-')[0] : new Date().getFullYear()}
+                  {periodos.length > 0
+                    ? (() => {
+                        const anoInicio = periodos[0].key.split('-')[0];
+                        const anoFim = periodos[periodos.length - 1].key.split('-')[0];
+                        return anoInicio === anoFim ? anoInicio : `${anoInicio}-${anoFim}`;
+                      })()
+                    : new Date().getFullYear()}
                 </div>
               </div>
             </div>
@@ -2150,15 +2210,22 @@ export default function DREPage() {
                   <th className="px-4 py-2 text-left text-sm font-bold text-white border-b border-blue-500 sticky left-0 bg-blue-600 z-20 min-w-[320px]">
                     CONTA
                   </th>
-                  <th
-                    colSpan={periodos.length * (compararAnoAnterior ? 4 : 2)}
-                    className="px-3 py-2 text-center text-sm font-bold text-white border-b border-blue-500"
-                  >
-                    {periodos.length > 0 ? `EXERCÍCIO ${periodos[0].key.split('-')[0]}` : 'EXERCÍCIO'}
-                    {compararAnoAnterior && periodos.length > 0
-                      ? ` vs ${parseInt(periodos[0].key.split('-')[0], 10) - 1}`
-                      : ''}
-                  </th>
+                  {gruposPorAno.length > 0 ? (
+                    gruposPorAno.map((grupo) => (
+                      <th
+                        key={grupo.ano}
+                        colSpan={grupo.qtd * (compararAnoAnterior ? 4 : 2)}
+                        className="px-3 py-2 text-center text-sm font-bold text-white border-b border-blue-500 border-r border-blue-400 last:border-r-0"
+                      >
+                        EXERCÍCIO {grupo.ano}
+                        {compararAnoAnterior ? ` vs ${parseInt(grupo.ano, 10) - 1}` : ''}
+                      </th>
+                    ))
+                  ) : (
+                    <th className="px-3 py-2 text-center text-sm font-bold text-white border-b border-blue-500">
+                      EXERCÍCIO
+                    </th>
+                  )}
                   <th colSpan={2} className="px-3 py-2 text-center text-sm font-bold text-white border-b border-blue-500 bg-blue-800">
                     ACUMULADO
                   </th>
