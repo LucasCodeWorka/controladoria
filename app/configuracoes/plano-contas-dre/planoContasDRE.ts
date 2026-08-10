@@ -24,7 +24,15 @@ export const PLANO_CONTAS_DRE: ContaDRE[] = [
           { codigo: '01.01.03', nome: 'TRANSFERENCIA LOJAS', nivel: 3, tipo: 'conta' },
         ],
       },
-      { codigo: '01.02', nome: 'RECEITA FRETE VENDA', nivel: 2, tipo: 'conta' },
+      {
+        codigo: '01.02',
+        nome: 'RECEITA FRETE VENDA',
+        nivel: 2,
+        tipo: 'grupo',
+        filhos: [
+          { codigo: '01.02.01', nome: 'RECEITA DE FRETE', nivel: 3, tipo: 'conta' },
+        ],
+      },
     ],
   },
   {

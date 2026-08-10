@@ -1348,7 +1348,7 @@ MAPEAMENTO_OFICIAL_DRE = {
     90: '08.04.26',   # FERIAS
     6: '08.04.01',    # PREMIACOES FUNCIONARIOS
     10: '08.04.28',   # 13 SALARIO ADM
-    86: '08.04.29',   # ASSIST MEDICA EMP ADM -> corrigir para 08.04.19
+    86: '08.04.19',   # ASSIST MEDICA EMP ADM
     254: '08.04.30',  # ASSIST MEDICA FUNC
     132: '08.10.11',  # PREMIACOES COMERCIAIS
     47: '08.04.14',   # V. FUNC. PLANO ODONTOLOGICO
@@ -1718,4 +1718,121 @@ def comparar_impacto_mapeamentos():
         print(f"[ERROR] Erro ao comparar impacto: {e}")
         import traceback
         traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# NOMES CUSTOMIZADOS DO PLANO DE CONTAS DRE
+# ============================================================================
+# Os codigos/nomes do plano de contas vivem em arquivos estaticos no frontend
+# (um para a tela de configuracao, outro para a DRE Analitica), o que ja
+# causou divergencia entre as duas telas para o mesmo codigo. Esta tabela
+# guarda apenas os nomes customizados pelo usuario (por codigo de conta) para
+# que qualquer tela que consultar este endpoint sobrescreva o nome estatico
+# com o nome editado, evitando que as telas voltem a divergir.
+
+def _criar_tabela_nomes_plano_contas():
+    execute_insert("""
+        CREATE TABLE IF NOT EXISTS plano_contas_dre_nomes (
+            codigo TEXT PRIMARY KEY,
+            nome TEXT NOT NULL,
+            usuario_alteracao TEXT,
+            dt_atualizacao TIMESTAMP DEFAULT NOW()
+        )
+    """)
+
+
+@router.get("/api/plano-contas-dre/nomes")
+def listar_nomes_customizados_plano_contas():
+    try:
+        _criar_tabela_nomes_plano_contas()
+        rows = execute_query("SELECT codigo, nome FROM plano_contas_dre_nomes", ()) or []
+        return {row['codigo']: row['nome'] for row in rows}
+    except Exception as e:
+        print(f"[ERROR] Erro ao listar nomes customizados do plano de contas: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/api/plano-contas-dre/nomes")
+def salvar_nome_customizado_plano_contas(data: dict):
+    try:
+        codigo = (data.get('codigo') or '').strip()
+        nome = (data.get('nome') or '').strip()
+        usuario = data.get('usuario', 'sistema')
+
+        if not codigo or not nome:
+            raise HTTPException(status_code=400, detail="codigo e nome sao obrigatorios")
+
+        _criar_tabela_nomes_plano_contas()
+        execute_insert("""
+            INSERT INTO plano_contas_dre_nomes (codigo, nome, usuario_alteracao, dt_atualizacao)
+            VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+            ON CONFLICT (codigo)
+            DO UPDATE SET
+                nome = EXCLUDED.nome,
+                usuario_alteracao = EXCLUDED.usuario_alteracao,
+                dt_atualizacao = CURRENT_TIMESTAMP
+        """, (codigo, nome, usuario))
+
+        return {"success": True, "codigo": codigo, "nome": nome}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[ERROR] Erro ao salvar nome customizado do plano de contas: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# CLASSIFICACAO FIXA X VARIAVEL DAS CONTAS DE DESPESA (por enquanto so uso
+# visual na DRE Analitica, nao afeta os totais/calculos da DRE)
+# ============================================================================
+
+def _criar_tabela_tipo_custo_plano_contas():
+    execute_insert("""
+        CREATE TABLE IF NOT EXISTS plano_contas_dre_tipo_custo (
+            codigo TEXT PRIMARY KEY,
+            tipo TEXT NOT NULL CHECK (tipo IN ('fixo', 'variavel')),
+            usuario_alteracao TEXT,
+            dt_atualizacao TIMESTAMP DEFAULT NOW()
+        )
+    """)
+
+
+@router.get("/api/plano-contas-dre/tipo-custo")
+def listar_tipo_custo_plano_contas():
+    try:
+        _criar_tabela_tipo_custo_plano_contas()
+        rows = execute_query("SELECT codigo, tipo FROM plano_contas_dre_tipo_custo", ()) or []
+        return {row['codigo']: row['tipo'] for row in rows}
+    except Exception as e:
+        print(f"[ERROR] Erro ao listar tipo de custo do plano de contas: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/api/plano-contas-dre/tipo-custo")
+def salvar_tipo_custo_plano_contas(data: dict):
+    try:
+        codigo = (data.get('codigo') or '').strip()
+        tipo = (data.get('tipo') or '').strip()
+        usuario = data.get('usuario', 'sistema')
+
+        if not codigo or tipo not in ('fixo', 'variavel'):
+            raise HTTPException(status_code=400, detail="codigo e tipo ('fixo' ou 'variavel') sao obrigatorios")
+
+        _criar_tabela_tipo_custo_plano_contas()
+        execute_insert("""
+            INSERT INTO plano_contas_dre_tipo_custo (codigo, tipo, usuario_alteracao, dt_atualizacao)
+            VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+            ON CONFLICT (codigo)
+            DO UPDATE SET
+                tipo = EXCLUDED.tipo,
+                usuario_alteracao = EXCLUDED.usuario_alteracao,
+                dt_atualizacao = CURRENT_TIMESTAMP
+        """, (codigo, tipo, usuario))
+
+        return {"success": True, "codigo": codigo, "tipo": tipo}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[ERROR] Erro ao salvar tipo de custo do plano de contas: {e}")
         raise HTTPException(status_code=500, detail=str(e))

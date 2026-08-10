@@ -16,6 +16,8 @@ import {
   HelpCircle,
   ChevronsDown,
   ChevronsUp,
+  Unlink,
+  Check,
   X,
   FileText,
   Building2,
@@ -85,6 +87,16 @@ interface AuditoriaFornecedorDespesa {
   dominante: AuditoriaDespesaItem | null;
   despesaAtual: AuditoriaDespesaItem | null;
   alerta: boolean;
+  validado: boolean;
+}
+
+interface DespesaSemAssociacao {
+  cdDespesaItem: number;
+  descricao: string;
+  cdCcusto: number;
+  nomeCcusto: string;
+  quantidade: number;
+  valorTotal: number;
 }
 
 interface ModalDuplicatasState {
@@ -490,12 +502,13 @@ export default function DREPage() {
   const [opcoesFiltro, setOpcoesFiltro] = useState<OpcaoFiltro[]>([]);
   const [dataInicio, setDataInicio] = useState(() => {
     const hoje = new Date();
-    return `${hoje.getFullYear()}-01-01`;
+    const inicioMesAnterior = new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1);
+    return `${inicioMesAnterior.getFullYear()}-${String(inicioMesAnterior.getMonth() + 1).padStart(2, '0')}-01`;
   });
   const [dataFim, setDataFim] = useState(() => {
     const hoje = new Date();
-    const ultimoDia = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0).getDate();
-    return `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}-${ultimoDia}`;
+    const fimMesAnterior = new Date(hoje.getFullYear(), hoje.getMonth(), 0);
+    return `${fimMesAnterior.getFullYear()}-${String(fimMesAnterior.getMonth() + 1).padStart(2, '0')}-${String(fimMesAnterior.getDate()).padStart(2, '0')}`;
   });
   const [periodos, setPeriodos] = useState<PeriodoDRE[]>([]);
   const [dadosDRE, setDadosDRE] = useState<ContaDREValores[]>([]);
@@ -533,6 +546,15 @@ export default function DREPage() {
     Record<string, AuditoriaFornecedorDespesa | 'loading' | 'erro'>
   >({});
   const [celulasAlertadas, setCelulasAlertadas] = useState<Set<string>>(new Set());
+  const [nomesCustomizados, setNomesCustomizados] = useState<Record<string, string>>({});
+  const [tiposCusto, setTiposCusto] = useState<Record<string, 'fixo' | 'variavel'>>({});
+  const [modalSemAssociacao, setModalSemAssociacao] = useState<{
+    aberto: boolean;
+    loading: boolean;
+    despesas: DespesaSemAssociacao[];
+    totalItens: number;
+    valorTotal: number;
+  }>({ aberto: false, loading: false, despesas: [], totalItens: 0, valorTotal: 0 });
   const [ultimaAtualizacao, setUltimaAtualizacao] = useState<string | null>(null);
   const [larguraColunaContas, setLarguraColunaContas] = useState(350);
   const [larguraColunaValor, setLarguraColunaValor] = useState(85);
@@ -552,6 +574,32 @@ export default function DREPage() {
       }
     }
     carregarOpcoesFiltro();
+  }, []);
+
+  useEffect(() => {
+    async function carregarNomesCustomizados() {
+      try {
+        const response = await fetch('/api/plano-contas-dre/nomes');
+        const data = await response.json();
+        setNomesCustomizados(data || {});
+      } catch (error) {
+        console.error('Erro ao carregar nomes customizados do plano de contas:', error);
+      }
+    }
+    carregarNomesCustomizados();
+  }, []);
+
+  useEffect(() => {
+    async function carregarTiposCusto() {
+      try {
+        const response = await fetch('/api/plano-contas-dre/tipo-custo');
+        const data = await response.json();
+        setTiposCusto(data || {});
+      } catch (error) {
+        console.error('Erro ao carregar tipo de custo do plano de contas:', error);
+      }
+    }
+    carregarTiposCusto();
   }, []);
 
   useEffect(() => {
@@ -792,6 +840,32 @@ export default function DREPage() {
     }
   }
 
+  async function validarAuditoria(dup: Duplicata) {
+    const chave = `${dup.cdFornecedor}_${dup.cdDespesaItem}`;
+    const atual = auditoriaCache[chave];
+    if (!atual || atual === 'loading' || atual === 'erro') return;
+
+    setAuditoriaCache((prev) => ({
+      ...prev,
+      [chave]: { ...atual, alerta: false, validado: true },
+    }));
+
+    try {
+      await fetch('/api/dre/auditoria/validar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cdFornecedor: dup.cdFornecedor,
+          cdDespesaItem: dup.cdDespesaItem,
+          usuario: 'dre_analitica',
+        }),
+      });
+      buscarAlertasAuditoria();
+    } catch (error) {
+      console.error('Erro ao validar auditoria fornecedor-despesa:', error);
+    }
+  }
+
   // Busca em lote quais celulas (conta:periodo) da grade tem duplicata fora do
   // padrao do fornecedor, pra sinalizar antes mesmo de abrir o modal. Roda em
   // paralelo com a carga principal e nao bloqueia a grade se falhar/demorar.
@@ -817,6 +891,31 @@ export default function DREPage() {
     } catch (error) {
       console.error('Erro ao buscar alertas de auditoria:', error);
     }
+  }
+
+  async function abrirDespesasSemAssociacao() {
+    setModalSemAssociacao({ aberto: true, loading: true, despesas: [], totalItens: 0, valorTotal: 0 });
+    try {
+      const params = new URLSearchParams({ dataInicio, dataFim, filtro });
+      const response = await fetch(`/api/dre/despesas-sem-associacao?${params.toString()}`, {
+        cache: 'no-store',
+      });
+      const data = await response.json();
+      setModalSemAssociacao({
+        aberto: true,
+        loading: false,
+        despesas: data.despesas || [],
+        totalItens: data.totalItens || 0,
+        valorTotal: data.valorTotal || 0,
+      });
+    } catch (error) {
+      console.error('Erro ao buscar despesas sem associacao:', error);
+      setModalSemAssociacao((prev) => ({ ...prev, loading: false }));
+    }
+  }
+
+  function fecharModalSemAssociacao() {
+    setModalSemAssociacao((prev) => ({ ...prev, aberto: false }));
   }
 
   // Funcoes para expandir/recolher niveis
@@ -853,6 +952,18 @@ export default function DREPage() {
     return `${dia}/${mes}/${ano}`;
   }
 
+  // Define o periodo como os N meses mais recentes ja fechados (nao inclui o
+  // mes atual, que ainda esta em andamento), terminando no mes anterior.
+  function definirUltimosMeses(qtdMeses: number) {
+    const hoje = new Date();
+    const fimMesAnterior = new Date(hoje.getFullYear(), hoje.getMonth(), 0);
+    const inicioIntervalo = new Date(hoje.getFullYear(), hoje.getMonth() - qtdMeses, 1);
+    setDataInicio(`${inicioIntervalo.getFullYear()}-${String(inicioIntervalo.getMonth() + 1).padStart(2, '0')}-01`);
+    setDataFim(
+      `${fimMesAnterior.getFullYear()}-${String(fimMesAnterior.getMonth() + 1).padStart(2, '0')}-${String(fimMesAnterior.getDate()).padStart(2, '0')}`
+    );
+  }
+
   function renderizarLinhaConta(conta: ContaDREValores, nivel = 0): React.ReactNode[] {
     const linhas: React.ReactNode[] = [];
     const temFilhos = !!conta.filhos?.length;
@@ -884,7 +995,7 @@ export default function DREPage() {
               <div className="w-4" />
             )}
             <span className="font-mono text-xs text-gray-500">{conta.codigoExibicao || conta.codigo}</span>
-            <span className={`text-sm ${isResultado ? 'font-bold' : ''}`}>{conta.nome}</span>
+            <span className={`text-sm ${isResultado ? 'font-bold' : ''}`}>{nomesCustomizados[conta.codigo] ?? conta.nome}</span>
             {isPendente && (
               <span className="ml-2 px-2 py-0.5 text-xs bg-amber-200 text-amber-800 rounded">PENDENTE</span>
             )}
@@ -941,7 +1052,7 @@ export default function DREPage() {
                   )}
                   {podeClicar ? (
                     <button
-                      onClick={() => abrirDuplicatas(conta.codigo, conta.nome, periodo.key, periodo.label)}
+                      onClick={() => abrirDuplicatas(conta.codigo, nomesCustomizados[conta.codigo] ?? conta.nome, periodo.key, periodo.label)}
                       className="hover:underline hover:text-blue-600 cursor-pointer"
                       title="Clique para ver duplicatas"
                     >
@@ -976,8 +1087,74 @@ export default function DREPage() {
     );
 
     if (temFilhos && expandida) {
-      for (const filho of conta.filhos || []) {
-        linhas.push(...renderizarLinhaConta(filho, nivel + 1));
+      if (conta.codigo === '08') {
+        const filhos = conta.filhos || [];
+        const filhosFixos = filhos.filter((f) => tiposCusto[f.codigo] === 'fixo');
+        const filhosVariaveis = filhos.filter((f) => tiposCusto[f.codigo] === 'variavel');
+        const filhosSemClassificacao = filhos.filter((f) => !tiposCusto[f.codigo]);
+
+        const renderizarSubgrupo = (titulo: string, corTexto: string, itens: ContaDREValores[]) => {
+          if (itens.length === 0) return;
+
+          const totalGeral = itens.reduce((acc, item) => acc + (item.total || 0), 0);
+
+          linhas.push(
+            <tr key={`subgrupo-${conta.codigo}-${titulo}`} className="bg-gray-50">
+              <td
+                className="px-4 py-1.5 border-b border-gray-200 sticky left-0 bg-gray-50 z-10"
+                style={{ paddingLeft: `${(nivel + 1) * 16}px` }}
+              >
+                <span className={`text-[11px] font-bold tracking-wide ${corTexto}`}>{titulo}</span>
+              </td>
+              {periodos.map((periodo) => {
+                const totalPeriodo = itens.reduce((acc, item) => acc + (item.valores[periodo.key] || 0), 0);
+                return (
+                  <React.Fragment key={periodo.key}>
+                    <td
+                      className={`px-2 py-1.5 border-b border-gray-200 bg-gray-50 text-right text-xs font-bold ${
+                        totalPeriodo < 0 ? 'text-red-600' : 'text-gray-700'
+                      }`}
+                    >
+                      {formatarValor(totalPeriodo)}
+                    </td>
+                    <td
+                      className={`px-2 py-1.5 border-b border-gray-200 bg-gray-50 text-right text-[11px] ${
+                        totalPeriodo < 0 ? 'text-red-500' : 'text-gray-500'
+                      }`}
+                    >
+                      {calcularAVPeriodo(totalPeriodo, periodo.key)}
+                    </td>
+                  </React.Fragment>
+                );
+              })}
+              <td
+                className={`px-3 py-1.5 border-b border-gray-200 bg-gray-50 text-right text-xs font-bold ${
+                  totalGeral < 0 ? 'text-red-600' : 'text-gray-700'
+                }`}
+              >
+                {formatarValor(totalGeral)}
+              </td>
+              <td
+                className={`px-3 py-1.5 border-b border-gray-200 bg-gray-50 text-right text-[11px] ${
+                  totalGeral < 0 ? 'text-red-500' : 'text-gray-500'
+                }`}
+              >
+                {calcularAV(totalGeral)}
+              </td>
+            </tr>
+          );
+          for (const filho of itens) {
+            linhas.push(...renderizarLinhaConta(filho, nivel + 1));
+          }
+        };
+
+        renderizarSubgrupo('DESPESAS FIXAS', 'text-blue-700', filhosFixos);
+        renderizarSubgrupo('DESPESAS VARIÁVEIS', 'text-orange-700', filhosVariaveis);
+        renderizarSubgrupo('NÃO CLASSIFICADO', 'text-gray-400', filhosSemClassificacao);
+      } else {
+        for (const filho of conta.filhos || []) {
+          linhas.push(...renderizarLinhaConta(filho, nivel + 1));
+        }
       }
     }
 
@@ -1619,6 +1796,15 @@ export default function DREPage() {
                 Recolher tudo
               </button>
               <div className="w-px h-6 bg-gray-300 mx-2" />
+              <button
+                onClick={abrirDespesasSemAssociacao}
+                title="Verificar despesas do período/filtro atual que não estão associadas a nenhuma conta do plano de contas"
+                className="flex items-center gap-2 px-3 py-2 rounded-md bg-red-50 text-red-700 border border-red-200 hover:bg-red-100 transition-colors"
+              >
+                <Unlink className="w-4 h-4" />
+                Despesas sem associação
+              </button>
+              <div className="w-px h-6 bg-gray-300 mx-2" />
               <div className="relative w-64">
                 <input
                   type="text"
@@ -1781,6 +1967,18 @@ export default function DREPage() {
             className="p-2 text-sm bg-gray-100 text-gray-600 rounded-md hover:bg-gray-200 transition-colors disabled:opacity-50"
           >
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+          </button>
+          <button
+            onClick={() => definirUltimosMeses(3)}
+            className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md transition-colors"
+          >
+            Últimos 3 Meses
+          </button>
+          <button
+            onClick={() => definirUltimosMeses(6)}
+            className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md transition-colors"
+          >
+            Últimos 6 Meses
           </button>
           <button
             onClick={() => {
@@ -2348,7 +2546,7 @@ export default function DREPage() {
                               </button>
                             )}
                             {!temFilhos && <span className="w-4" />}
-                            <span className="text-sm">{conta.codigo} {conta.nome}</span>
+                            <span className="text-sm">{conta.codigo} {nomesCustomizados[conta.codigo] ?? conta.nome}</span>
                           </div>
                         </td>
                         {dadosPorEmpresa.empresas.map((emp) => {
@@ -2367,7 +2565,7 @@ export default function DREPage() {
                               >
                                 {podeClicar ? (
                                   <button
-                                    onClick={() => abrirDuplicatasPorEmpresa(conta.codigo, conta.nome, emp.cd_empresa, emp.nome)}
+                                    onClick={() => abrirDuplicatasPorEmpresa(conta.codigo, nomesCustomizados[conta.codigo] ?? conta.nome, emp.cd_empresa, emp.nome)}
                                     className="hover:underline hover:text-blue-600 cursor-pointer"
                                     title={`Clique para ver duplicatas - ${emp.nome}`}
                                   >
@@ -2393,7 +2591,7 @@ export default function DREPage() {
                             const podeClicarTotal = !temFilhos && !isCalculada && valorTotal !== 0 && isDespesa;
                             return podeClicarTotal ? (
                               <button
-                                onClick={() => abrirDuplicatasPorEmpresa(conta.codigo, conta.nome, 0, 'TOTAL')}
+                                onClick={() => abrirDuplicatasPorEmpresa(conta.codigo, nomesCustomizados[conta.codigo] ?? conta.nome, 0, 'TOTAL')}
                                 className="hover:underline hover:text-blue-600 cursor-pointer"
                                 title="Clique para ver duplicatas - TOTAL"
                               >
@@ -2577,7 +2775,7 @@ export default function DREPage() {
                               </button>
                             )}
                             {!temFilhos && <span className="w-4" />}
-                            <span className="text-sm">{conta.codigo} {conta.nome}</span>
+                            <span className="text-sm">{conta.codigo} {nomesCustomizados[conta.codigo] ?? conta.nome}</span>
                           </div>
                         </td>
                         {dadosPorCCusto.centros_custo.map((cc) => {
@@ -2849,12 +3047,27 @@ export default function DREPage() {
                     </div>
 
                     {resultado.alerta ? (
-                      <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
-                        <span className="font-semibold">⚠ Fora do padrão. </span>
-                        Este fornecedor lança {resultado.dominante?.percentual}% das duplicatas em &quot;
-                        {resultado.dominante?.descricao}&quot;, mas esta está em &quot;
-                        {resultado.despesaAtual?.descricao || dup.descricao}&quot;. Vale conferir se a classificação
-                        está correta.
+                      <div className="space-y-2">
+                        <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
+                          <span className="font-semibold">⚠ Fora do padrão. </span>
+                          Este fornecedor lança {resultado.dominante?.percentual}% das duplicatas em &quot;
+                          {resultado.dominante?.descricao}&quot;, mas esta está em &quot;
+                          {resultado.despesaAtual?.descricao || dup.descricao}&quot;. Vale conferir se a
+                          classificação está correta.
+                        </div>
+                        <button
+                          onClick={() => validarAuditoria(dup)}
+                          className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-md text-sm font-medium transition-colors"
+                        >
+                          <Check className="w-4 h-4" />
+                          Validar como correto
+                        </button>
+                      </div>
+                    ) : resultado.validado ? (
+                      <div className="rounded-lg bg-blue-50 border border-blue-200 px-4 py-3 text-sm text-blue-700">
+                        <span className="font-semibold">✓ Validado manualmente. </span>
+                        Confirmado como correto, mesmo fora do padrão estatístico do fornecedor. Não será mais
+                        sinalizado.
                       </div>
                     ) : (
                       <div className="rounded-lg bg-green-50 border border-green-200 px-4 py-3 text-sm text-green-700">
@@ -2878,6 +3091,94 @@ export default function DREPage() {
           </div>
         );
       })()}
+
+      {modalSemAssociacao.aberto && (
+        <div
+          className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4"
+          onClick={fecharModalSemAssociacao}
+        >
+          <div
+            className="bg-white rounded-lg shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Unlink className="w-5 h-5 text-red-600" />
+                  <h3 className="text-base font-bold text-gray-800">Despesas sem Associação</h3>
+                </div>
+                <p className="text-xs text-gray-500 mt-1">
+                  Período: {formatarData(dataInicio)} a {formatarData(dataFim)} · Filtro: {filtroInfo || filtro}
+                </p>
+              </div>
+              <button onClick={fecharModalSemAssociacao} className="text-gray-400 hover:text-gray-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-auto">
+              {modalSemAssociacao.loading ? (
+                <div className="flex items-center justify-center py-12">
+                  <RefreshCw className="w-8 h-8 animate-spin text-blue-600" />
+                  <span className="ml-3 text-gray-600">Verificando despesas...</span>
+                </div>
+              ) : modalSemAssociacao.despesas.length === 0 ? (
+                <div className="text-center py-12 text-gray-500">
+                  <div className="text-green-600 font-medium mb-1">✓ Nenhuma despesa sem associação</div>
+                  Todas as despesas lançadas neste período/filtro estão classificadas no plano de contas.
+                </div>
+              ) : (
+                <table className="w-full border-collapse text-sm">
+                  <thead className="sticky top-0 z-10 bg-gray-100">
+                    <tr>
+                      <th className="px-4 py-3 text-left border-b-2 border-gray-300 font-semibold text-gray-700 w-20">Código</th>
+                      <th className="px-4 py-3 text-left border-b-2 border-gray-300 font-semibold text-gray-700">Descrição</th>
+                      <th className="px-4 py-3 text-left border-b-2 border-gray-300 font-semibold text-gray-700 w-44">Centro de Custo</th>
+                      <th className="px-4 py-3 text-right border-b-2 border-gray-300 font-semibold text-gray-700 w-20">Qtd</th>
+                      <th className="px-4 py-3 text-right border-b-2 border-gray-300 font-semibold text-gray-700 w-32">Valor Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {modalSemAssociacao.despesas.map((d, idx) => (
+                      <tr key={`${d.cdDespesaItem}-${d.cdCcusto}-${idx}`} className="hover:bg-red-50 border-b border-gray-100">
+                        <td className="px-4 py-2.5 text-gray-600 font-mono text-xs">{d.cdDespesaItem}</td>
+                        <td className="px-4 py-2.5 text-gray-700">{d.descricao}</td>
+                        <td className="px-4 py-2.5 text-gray-600">{d.nomeCcusto}</td>
+                        <td className="px-4 py-2.5 text-right text-gray-600">{d.quantidade}</td>
+                        <td className="px-4 py-2.5 text-right font-medium text-red-600 whitespace-nowrap">
+                          {formatarValor(d.valorTotal)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            {!modalSemAssociacao.loading && modalSemAssociacao.despesas.length > 0 && (
+              <div className="border-t-2 border-gray-300 bg-gray-100 px-4 py-3">
+                <div className="flex justify-between items-center">
+                  <span className="text-sm font-semibold text-gray-700">
+                    TOTAL ({modalSemAssociacao.totalItens} {modalSemAssociacao.totalItens === 1 ? 'despesa' : 'despesas'})
+                  </span>
+                  <span className="text-base font-bold text-red-600">
+                    {formatarValor(modalSemAssociacao.valorTotal)}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            <div className="px-6 py-4 border-t border-gray-200 bg-gray-50 rounded-b-lg">
+              <button
+                onClick={fecharModalSemAssociacao}
+                className="px-5 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-md transition-colors font-medium"
+              >
+                Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

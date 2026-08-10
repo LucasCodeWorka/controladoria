@@ -25,7 +25,15 @@ export const PLANO_CONTAS_DRE_FABRICA: ContaDRE[] = [
           { codigo: '01.01.03', nome: 'TRANSFERENCIA LOJAS', nivel: 3, tipo: 'conta' },
         ],
       },
-      { codigo: '01.02', nome: 'RECEITA FRETE VENDA', nivel: 2, tipo: 'conta', pendente: true },
+      {
+        codigo: '01.02',
+        nome: 'RECEITA FRETE VENDA',
+        nivel: 2,
+        tipo: 'grupo',
+        filhos: [
+          { codigo: '01.02.01', nome: 'RECEITA DE FRETE', nivel: 3, tipo: 'conta' },
+        ],
+      },
     ],
   },
   {
@@ -105,16 +113,14 @@ export const PLANO_CONTAS_DRE_FABRICA: ContaDRE[] = [
     nome: 'CUSTOS FIXOS',
     nivel: 1,
     tipo: 'grupo',
-    pendente: true,
     filhos: [
       {
         codigo: '06.01',
         nome: 'GASTOS GERAIS DE FABRICACAO',
         nivel: 2,
         tipo: 'grupo',
-        pendente: true,
         filhos: [
-          { codigo: '06.01.04', nome: 'MANUTENCOES DE MAQUINAS INDUSTRIAIS', nivel: 3, tipo: 'conta', pendente: true },
+          { codigo: '06.01.04', nome: 'MANUTENCOES DE MAQUINAS INDUSTRIAIS', nivel: 3, tipo: 'conta' },
         ],
       },
     ],
@@ -232,7 +238,7 @@ export const PLANO_CONTAS_DRE_FABRICA: ContaDRE[] = [
           { codigo: '08.04.26', nome: 'ASSIST MEDICA FUNC ADM', nivel: 3, tipo: 'conta' },
           { codigo: '08.04.27', nome: 'VALE COMBUSTIVEL', nivel: 3, tipo: 'conta' },
           { codigo: '08.04.28', nome: '13 SALARIO ADM PROVISAO', nivel: 3, tipo: 'conta' },
-          { codigo: '08.04.29', nome: 'ASSIST MEDICA EMP ADM', nivel: 3, tipo: 'conta' },
+          { codigo: '08.04.29', nome: 'FERIAS ADM PROVISAO', nivel: 3, tipo: 'conta' },
           { codigo: '08.04.30', nome: 'ASSIST MEDICA FUNC', nivel: 3, tipo: 'conta' },
           { codigo: '08.04.31', nome: 'V. FUNC. PLANO ODONTOLOGICO PROD', nivel: 3, tipo: 'conta' },
           { codigo: '08.04.32', nome: 'FARDAMENTO PROD', nivel: 3, tipo: 'conta' },

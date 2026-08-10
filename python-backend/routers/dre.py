@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Query
 from typing import Optional
 from datetime import datetime, timedelta
-from database import execute_query
+from database import execute_query, execute_insert
 import services
 import unicodedata
 
@@ -2738,6 +2738,40 @@ def get_dre_unificada(
                 devolucoes_brutas[periodo] -= abs(valor)
                 devolucoes_brutas['total'] -= abs(valor)
 
+        # RECEITA DE FRETE (01.02.01) - repasse de frete cobrado do cliente,
+        # via nota fiscal (vr_fis_nf), nao via vr_tra_transacao. Por enquanto
+        # restrito ao e-commerce (cd_empfat = 120); so calculamos quando o
+        # ccusto 120 esta no escopo do filtro atual (consolidado ou loja 120
+        # especifica), senao a conta fica zerada nesse recorte.
+        receita_frete = _init_valores_periodo(periodos)
+        if 120 in ccustos:
+            query_frete = """
+                SELECT
+                    dt_emissao,
+                    SUM(vl_frete) as valor
+                FROM public.vr_fis_nf
+                WHERE cd_empfat = '120'
+                  AND tp_situacaonf = 'E'
+                  AND tp_operacao = 'S'
+                  AND tp_modalidade = '4'
+                  AND dt_emissao >= %s
+                  AND dt_emissao <= %s
+                  AND tp_frete = '2'
+                GROUP BY dt_emissao
+            """
+            rows_frete = execute_query(query_frete, (dataInicio, dataFim))
+
+            for row in (rows_frete or []):
+                dt_emissao = row['dt_emissao']
+                if not dt_emissao:
+                    continue
+                periodo = dt_emissao.strftime('%Y-%m')
+                if periodo not in periodos:
+                    continue
+                valor = float(row['valor'] or 0)
+                receita_frete[periodo] += valor
+                receita_frete['total'] += valor
+
         # Usar os codigos corretos do plano de contas
         def _merge_conta_unif(codigo: str, valores: dict):
             if codigo not in valores_por_conta:
@@ -2749,6 +2783,7 @@ def get_dre_unificada(
 
         _merge_conta_unif('01.01.02', receita_bruta)  # RECEITA VENDA MERCADORIAS
         _merge_conta_unif('02.01.03', devolucoes_brutas)  # DEVOLUCOES
+        _merge_conta_unif('01.02.01', receita_frete)  # RECEITA DE FRETE (e-commerce)
 
         # =========================================================================
         # CMV - Custo de Mercadoria Vendida
@@ -2845,6 +2880,105 @@ def get_dre_unificada(
             status_code=500,
             detail=f"Erro ao buscar dados da DRE UNIFICADA: {str(e)}"
         )
+
+
+@router.get("/api/dre/despesas-sem-associacao")
+def get_despesas_sem_associacao(
+    dataInicio: str = Query(..., description="Data inicial (YYYY-MM-DD)"),
+    dataFim: str = Query(..., description="Data final (YYYY-MM-DD)"),
+    filtro: str = Query(..., description="Filtro: 'consolidado', 'fabrica', codigo do centro de custo, ou lista separada por virgula")
+):
+    """
+    Lista despesas lancadas no periodo/centro(s) de custo selecionados que NAO
+    estao classificadas em nenhuma conta do plano de contas DRE
+    (NAO_CLASSIFICADO). Nao inclui despesas EXCLUIDO, pois essas ja sao
+    propositalmente deixadas de fora da DRE.
+    """
+    try:
+        # Mesma resolucao de ccustos usada em /api/dre/unificada
+        if filtro == "consolidado":
+            ccustos = list(set(CCUSTOS_FABRICA + list(CCUSTOS_LOJAS.keys()) + CCUSTOS_ECOMMERCE + [515]))
+        elif filtro == "fabrica":
+            ccustos = CCUSTOS_FABRICA
+        elif "," in filtro:
+            try:
+                ccustos = [int(item.strip()) for item in filtro.split(",") if item.strip()]
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"Filtro invalido: {filtro}")
+        else:
+            try:
+                ccustos = [int(filtro)]
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"Filtro invalido: {filtro}")
+
+        if not ccustos:
+            raise HTTPException(status_code=400, detail="Nenhum centro de custo valido no filtro")
+
+        ccusto_placeholders = ",".join(["%s"] * len(ccustos))
+
+        query = f"""
+            SELECT
+                d.cd_despesaitem,
+                i.ds_despesaitem as descricao,
+                d.cd_ccusto,
+                COUNT(*) as quantidade,
+                SUM(ABS(d.vl_rateio)) as valor_total
+            FROM vr_fcp_despduplicatai d
+            JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
+            WHERE d.dt_emissao >= %s
+              AND d.dt_emissao <= %s
+              AND d.cd_ccusto IN ({ccusto_placeholders})
+              AND d.tp_situacao = 'N'
+            GROUP BY d.cd_despesaitem, i.ds_despesaitem, d.cd_ccusto
+            ORDER BY valor_total DESC
+        """
+        params = [dataInicio, dataFim, *ccustos]
+        rows = execute_query(query, params) or []
+
+        classificacoes_db = {}
+        try:
+            crows = execute_query(
+                "SELECT cd_despesaitem, ds_despesaitem, conta_dre FROM classificacao_despesas_dre", ()
+            )
+            for crow in crows or []:
+                cd = crow.get('cd_despesaitem')
+                conta_dre = crow.get('conta_dre', '')
+                if cd and conta_dre:
+                    codigo = conta_dre.split(' ')[0] if ' ' in conta_dre else conta_dre
+                    classificacoes_db[cd] = codigo
+        except Exception as e:
+            print(f"[DESPESAS-SEM-ASSOCIACAO] Aviso ao carregar classificacoes: {e}")
+
+        sem_associacao = []
+        total = 0.0
+        for row in rows:
+            conta = _classificar_conta_dre(row['cd_despesaitem'], row['descricao'], classificacoes_db)
+            if conta != 'NAO_CLASSIFICADO':
+                continue
+            valor = float(row['valor_total'] or 0)
+            total += valor
+            sem_associacao.append({
+                "cdDespesaItem": row['cd_despesaitem'],
+                "descricao": row['descricao'],
+                "cdCcusto": row['cd_ccusto'],
+                "nomeCcusto": CCUSTOS_LOJAS.get(row['cd_ccusto'], f"CC {row['cd_ccusto']}"),
+                "quantidade": row['quantidade'],
+                "valorTotal": valor,
+            })
+
+        return {
+            "despesas": sem_associacao,
+            "totalItens": len(sem_associacao),
+            "valorTotal": total,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[ERROR] Erro ao buscar despesas sem associacao: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/api/dre/unificada/duplicatas")
@@ -3008,6 +3142,76 @@ AUDITORIA_MIN_DUPLICATAS = 10
 AUDITORIA_LIMIAR_DOMINANCIA_PCT = 85
 
 
+def _criar_tabela_auditoria_validado():
+    execute_insert("""
+        CREATE TABLE IF NOT EXISTS auditoria_fornecedor_despesa_validado (
+            cd_fornecedor INTEGER NOT NULL,
+            cd_despesaitem INTEGER NOT NULL,
+            usuario_validacao TEXT,
+            dt_validacao TIMESTAMP DEFAULT NOW(),
+            PRIMARY KEY (cd_fornecedor, cd_despesaitem)
+        )
+    """)
+
+
+def _combos_validados() -> set:
+    """Retorna o conjunto de (cd_fornecedor, cd_despesaitem) ja validados manualmente."""
+    _criar_tabela_auditoria_validado()
+    rows = execute_query(
+        "SELECT cd_fornecedor, cd_despesaitem FROM auditoria_fornecedor_despesa_validado", ()
+    ) or []
+    return {(r['cd_fornecedor'], r['cd_despesaitem']) for r in rows}
+
+
+@router.post("/api/dre/auditoria/validar")
+def validar_auditoria_fornecedor_despesa(data: dict):
+    """
+    Marca uma combinacao fornecedor+despesa como revisada e correta, para
+    que a auditoria pare de sinalizar essa combinacao (tanto no modal
+    individual quanto no icone da grade principal).
+    """
+    try:
+        cd_fornecedor = data.get('cdFornecedor')
+        cd_despesaitem = data.get('cdDespesaItem')
+        usuario = data.get('usuario', 'sistema')
+
+        if not cd_fornecedor or not cd_despesaitem:
+            raise HTTPException(status_code=400, detail="cdFornecedor e cdDespesaItem sao obrigatorios")
+
+        _criar_tabela_auditoria_validado()
+        execute_insert("""
+            INSERT INTO auditoria_fornecedor_despesa_validado (cd_fornecedor, cd_despesaitem, usuario_validacao, dt_validacao)
+            VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+            ON CONFLICT (cd_fornecedor, cd_despesaitem)
+            DO UPDATE SET usuario_validacao = EXCLUDED.usuario_validacao, dt_validacao = CURRENT_TIMESTAMP
+        """, (cd_fornecedor, cd_despesaitem, usuario))
+
+        return {"success": True, "cdFornecedor": cd_fornecedor, "cdDespesaItem": cd_despesaitem}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[ERROR] Erro ao validar auditoria fornecedor-despesa: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/api/dre/auditoria/validar")
+def desfazer_validacao_auditoria_fornecedor_despesa(
+    cdFornecedor: int = Query(...),
+    cdDespesaItem: int = Query(...)
+):
+    """Remove uma validacao manual, voltando a sinalizar a combinacao se aplicavel."""
+    try:
+        _criar_tabela_auditoria_validado()
+        execute_insert(
+            "DELETE FROM auditoria_fornecedor_despesa_validado WHERE cd_fornecedor = %s AND cd_despesaitem = %s",
+            (cdFornecedor, cdDespesaItem)
+        )
+        return {"success": True}
+    except Exception as e:
+        print(f"[ERROR] Erro ao desfazer validacao: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/api/dre/auditoria/fornecedor-despesa")
 def get_auditoria_fornecedor_despesa(
     cdFornecedor: int = Query(..., description="Codigo do fornecedor (cd_pessoa)"),
@@ -3064,6 +3268,10 @@ def get_auditoria_fornecedor_despesa(
             and not atual_e_dominante
         )
 
+        validado = (cdFornecedor, cdDespesaItemAtual) in _combos_validados()
+        if validado:
+            alerta = False
+
         return {
             "totalDuplicatas": total,
             "amostraInsuficiente": amostra_insuficiente,
@@ -3071,6 +3279,7 @@ def get_auditoria_fornecedor_despesa(
             "dominante": dominante,
             "despesaAtual": despesa_atual,
             "alerta": alerta,
+            "validado": validado,
         }
 
     except Exception as e:
@@ -3148,6 +3357,7 @@ def get_auditoria_alertas(
                 WHERE total >= %s AND percentual >= %s
             )
             SELECT DISTINCT
+                d.cd_fornecedor,
                 d.cd_despesaitem,
                 d.cd_ccusto,
                 d.dt_emissao
@@ -3165,11 +3375,14 @@ def get_auditoria_alertas(
         ]
         rows_brutas = execute_query(query, params) or []
 
+        combos_validados = _combos_validados()
         ccustos_set = set(ccustos)
         excluidos_set = set(CCUSTOS_EXCLUIDOS_FABRICA)
         rows = [
             r for r in rows_brutas
-            if r['cd_ccusto'] in ccustos_set and r['cd_ccusto'] not in excluidos_set
+            if r['cd_ccusto'] in ccustos_set
+            and r['cd_ccusto'] not in excluidos_set
+            and (r['cd_fornecedor'], r['cd_despesaitem']) not in combos_validados
         ]
 
         classificacoes_db = {}

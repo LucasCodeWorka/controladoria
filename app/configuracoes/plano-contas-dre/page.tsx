@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useMemo, useCallback, memo } from 'react';
-import { ChevronRight, ChevronDown, Save, RotateCcw, Settings, Zap, Plus, X, Tag, Search, Check, Download, FileSpreadsheet, Table2 } from 'lucide-react';
+import { ChevronRight, ChevronDown, Save, RotateCcw, Settings, Zap, Plus, X, Tag, Search, Check, Download, FileSpreadsheet, Table2, Pencil } from 'lucide-react';
 import { PLANO_CONTAS_DRE, type ContaDRE } from './planoContasDRE';
 
 interface Despesa {
@@ -588,6 +588,11 @@ export default function PlanoContasDREPage() {
   const [filtroCategoriaDFC, setFiltroCategoriaDFC] = useState<FiltroDFC>('TODAS');
   const [alteracoesPendentes, setAlteracoesPendentes] = useState(false);
   const [contasExpandidas, setContasExpandidas] = useState<Set<string>>(new Set(['08']));
+  const [contaDetalheAberta, setContaDetalheAberta] = useState<string | null>(null);
+  const [nomesCustomizados, setNomesCustomizados] = useState<Record<string, string>>({});
+  const [tiposCusto, setTiposCusto] = useState<Record<string, 'fixo' | 'variavel'>>({});
+  const [nomeEditando, setNomeEditando] = useState<string | null>(null);
+  const [nomeEditandoValor, setNomeEditandoValor] = useState('');
   const [despesasSelecionadas, setDespesasSelecionadas] = useState<Set<number>>(new Set());
 
   // Estados para classificação em lote
@@ -655,7 +660,74 @@ export default function PlanoContasDREPage() {
   // Buscar despesas
   useEffect(() => {
     buscarDespesas();
+    buscarNomesCustomizados();
+    buscarTiposCusto();
   }, []);
+
+  async function buscarNomesCustomizados() {
+    try {
+      const response = await fetch('/api/plano-contas-dre/nomes');
+      const data = await response.json();
+      setNomesCustomizados(data || {});
+    } catch (error) {
+      console.error('Erro ao buscar nomes customizados do plano de contas:', error);
+    }
+  }
+
+  async function buscarTiposCusto() {
+    try {
+      const response = await fetch('/api/plano-contas-dre/tipo-custo');
+      const data = await response.json();
+      setTiposCusto(data || {});
+    } catch (error) {
+      console.error('Erro ao buscar tipo de custo do plano de contas:', error);
+    }
+  }
+
+  async function salvarTipoCusto(codigo: string, tipo: 'fixo' | 'variavel') {
+    setTiposCusto((prev) => ({ ...prev, [codigo]: tipo }));
+    try {
+      await fetch('/api/plano-contas-dre/tipo-custo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ codigo, tipo, usuario: 'config_plano_contas' }),
+      });
+    } catch (error) {
+      console.error('Erro ao salvar tipo de custo do plano de contas:', error);
+    }
+  }
+
+  function iniciarEdicaoNome(codigo: string, nomeAtual: string) {
+    setNomeEditando(codigo);
+    setNomeEditandoValor(nomeAtual);
+  }
+
+  function cancelarEdicaoNome() {
+    setNomeEditando(null);
+    setNomeEditandoValor('');
+  }
+
+  async function salvarNomeCustomizado(codigo: string) {
+    const nome = nomeEditandoValor.trim();
+    if (!nome) {
+      cancelarEdicaoNome();
+      return;
+    }
+
+    setNomeEditando(null);
+    setNomesCustomizados((prev) => ({ ...prev, [codigo]: nome }));
+
+    try {
+      await fetch('/api/plano-contas-dre/nomes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ codigo, nome, usuario: 'config_plano_contas' }),
+      });
+    } catch (error) {
+      console.error('Erro ao salvar nome customizado do plano de contas:', error);
+      alert('Erro ao salvar o nome. Tente novamente.');
+    }
+  }
 
   const buscarDespesas = useCallback(async () => {
     try {
@@ -1078,18 +1150,29 @@ export default function PlanoContasDREPage() {
       const corNivel = CORES_NIVEL[conta.nivel] || 'bg-gray-100';
       const podeReceberDrop = conta.tipo === 'conta';
       const estaEmDropHover = contaHover === conta.codigo;
+      const podeVerDetalhe = conta.tipo === 'conta';
+      const detalheAberto = contaDetalheAberta === conta.codigo;
+      const nomeExibido = nomesCustomizados[conta.codigo] ?? conta.nome;
+      const ehGrupoDespesaOperacional = /^08\.\d+$/.test(conta.codigo);
+      const tipoCustoAtual = tiposCusto[conta.codigo];
 
       return (
         <div key={conta.codigo} className="mb-1">
           {/* Linha da Conta */}
           <div
-            className={`flex items-center gap-2 p-1.5 rounded-md border ${corNivel} ${
-              temFilhos ? 'cursor-pointer hover:opacity-80' : ''
+            className={`group flex items-center gap-2 p-1.5 rounded-md border ${corNivel} ${
+              temFilhos || podeVerDetalhe ? 'cursor-pointer hover:opacity-80' : ''
             } ${podeReceberDrop && modoVisual ? 'transition-all' : ''} ${
               estaEmDropHover ? 'ring-2 ring-sky-400 ring-offset-2' : ''
             }`}
             style={{ marginLeft: `${nivel * 14}px` }}
-            onClick={() => temFilhos && toggleExpansao(conta.codigo)}
+            onClick={() => {
+              if (temFilhos) {
+                toggleExpansao(conta.codigo);
+              } else if (podeVerDetalhe) {
+                setContaDetalheAberta(detalheAberto ? null : conta.codigo);
+              }
+            }}
             onDragOver={(event) => {
               if (!podeReceberDrop || !modoVisual) return;
               event.preventDefault();
@@ -1108,11 +1191,74 @@ export default function PlanoContasDREPage() {
           >
             {temFilhos ? (
               expandida ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />
+            ) : podeVerDetalhe ? (
+              detalheAberto ? (
+                <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
+              ) : (
+                <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
+              )
             ) : (
               <div className="w-3.5" />
             )}
             <span className="font-mono text-xs font-bold">{conta.codigo}</span>
-            <span className="text-xs flex-1 leading-tight">{conta.nome}</span>
+            {nomeEditando === conta.codigo ? (
+              <input
+                type="text"
+                value={nomeEditandoValor}
+                autoFocus
+                onClick={(e) => e.stopPropagation()}
+                onChange={(e) => setNomeEditandoValor(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    salvarNomeCustomizado(conta.codigo);
+                  } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    cancelarEdicaoNome();
+                  }
+                }}
+                onBlur={() => salvarNomeCustomizado(conta.codigo)}
+                className="flex-1 text-xs leading-tight px-1 py-0.5 rounded border border-sky-400 bg-white focus:outline-none focus:ring-1 focus:ring-sky-400"
+              />
+            ) : (
+              <span className="text-xs flex-1 leading-tight flex items-center gap-1">
+                {nomeExibido}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    iniciarEdicaoNome(conta.codigo, nomeExibido);
+                  }}
+                  title="Editar nome"
+                  className="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-slate-600 transition-opacity shrink-0"
+                >
+                  <Pencil className="w-3 h-3" />
+                </button>
+              </span>
+            )}
+            {ehGrupoDespesaOperacional && (
+              <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                <button
+                  onClick={() => salvarTipoCusto(conta.codigo, 'fixo')}
+                  className={`px-2 py-0.5 text-[10px] font-semibold rounded ${
+                    tipoCustoAtual === 'fixo'
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-white/70 text-slate-400 hover:bg-blue-100 hover:text-blue-700'
+                  }`}
+                >
+                  Fixa
+                </button>
+                <button
+                  onClick={() => salvarTipoCusto(conta.codigo, 'variavel')}
+                  className={`px-2 py-0.5 text-[10px] font-semibold rounded ${
+                    tipoCustoAtual === 'variavel'
+                      ? 'bg-orange-600 text-white'
+                      : 'bg-white/70 text-slate-400 hover:bg-orange-100 hover:text-orange-700'
+                  }`}
+                >
+                  Variável
+                </button>
+              </div>
+            )}
             {conta.tipo === 'conta' && (
               <div className="flex items-center gap-2">
                 {modoVisual && (
@@ -1129,10 +1275,53 @@ export default function PlanoContasDREPage() {
             )}
           </div>
 
+          {/* Detalhe das despesas associadas (contas-folha) */}
+          {podeVerDetalhe && detalheAberto && (
+            <div className="ml-6 mt-1 mb-2 rounded-md border border-slate-200 bg-white p-2" style={{ marginLeft: `${nivel * 14 + 22}px` }}>
+              {despesasDaConta.length === 0 ? (
+                <div className="text-xs italic text-slate-400">Nenhuma despesa associada a esta conta.</div>
+              ) : (
+                <div className="divide-y divide-slate-100">
+                  {despesasDaConta.map((d) => (
+                    <div key={d.cd_despesaitem} className="flex items-center gap-2 py-1 text-xs">
+                      <span className="font-mono text-slate-400 w-10 shrink-0">{d.cd_despesaitem}</span>
+                      <span className="flex-1 text-slate-700">{d.ds_despesaitem}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Filhos expandidos */}
           {temFilhos && expandida && conta.filhos && (
             <div className="ml-4">
-              {renderizarContaTree(conta.filhos, nivel + 1)}
+              {conta.codigo === '08' ? (() => {
+                const filhos = conta.filhos!;
+                const filhosFixos = filhos.filter((f) => tiposCusto[f.codigo] === 'fixo');
+                const filhosVariaveis = filhos.filter((f) => tiposCusto[f.codigo] === 'variavel');
+                const filhosSemClassificacao = filhos.filter((f) => !tiposCusto[f.codigo]);
+
+                const renderizarSubgrupo = (titulo: string, corTexto: string, itens: ContaDRE[]) => {
+                  if (itens.length === 0) return null;
+                  return (
+                    <div key={titulo} className="mb-1">
+                      <div className={`px-2 py-1 text-[11px] font-bold tracking-wide ${corTexto}`}>{titulo}</div>
+                      {renderizarContaTree(itens, nivel + 1)}
+                    </div>
+                  );
+                };
+
+                return (
+                  <>
+                    {renderizarSubgrupo('DESPESAS FIXAS', 'text-blue-700', filhosFixos)}
+                    {renderizarSubgrupo('DESPESAS VARIÁVEIS', 'text-orange-700', filhosVariaveis)}
+                    {renderizarSubgrupo('NÃO CLASSIFICADO', 'text-slate-400', filhosSemClassificacao)}
+                  </>
+                );
+              })() : (
+                renderizarContaTree(conta.filhos, nivel + 1)
+              )}
             </div>
           )}
         </div>
