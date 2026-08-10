@@ -3365,22 +3365,22 @@ export default function DREPage() {
                 </div>
               ) : (
                 <div className="flex-1 overflow-auto">
-                  <table className="w-full border-collapse text-sm">
+                  <table className="w-full table-fixed border-collapse text-sm">
                     <thead className="sticky top-0 z-10">
                       <tr className="bg-gray-100">
-                        <th className="px-4 py-3 text-left border-b-2 border-gray-300 font-semibold text-gray-700 w-28">Nr Duplicata</th>
-                        <th className="px-4 py-3 text-left border-b-2 border-gray-300 font-semibold text-gray-700 w-28">Data Emissao</th>
-                        <th className="px-4 py-3 text-left border-b-2 border-gray-300 font-semibold text-gray-700 w-36">Centro de Custo</th>
-                        <th className="px-4 py-3 text-left border-b-2 border-gray-300 font-semibold text-gray-700 w-24">Cód. Fornecedor</th>
-                        <th className="px-4 py-3 text-left border-b-2 border-gray-300 font-semibold text-gray-700 w-44">Fornecedor</th>
+                        <th className="px-4 py-3 text-left border-b-2 border-gray-300 font-semibold text-gray-700 w-24">Nr Duplicata</th>
+                        <th className="px-4 py-3 text-left border-b-2 border-gray-300 font-semibold text-gray-700 w-24">Data Emissao</th>
+                        <th className="px-4 py-3 text-left border-b-2 border-gray-300 font-semibold text-gray-700 w-32">Centro de Custo</th>
+                        <th className="px-4 py-3 text-left border-b-2 border-gray-300 font-semibold text-gray-700 w-20">Cód. Fornecedor</th>
+                        <th className="px-4 py-3 text-left border-b-2 border-gray-300 font-semibold text-gray-700 w-1/5">Fornecedor</th>
                         <th
                           className="px-2 py-3 text-center border-b-2 border-gray-300 font-semibold text-gray-700 w-10"
                           title="Compara a despesa lançada com o padrão histórico do fornecedor"
                         >
                           Aud.
                         </th>
-                        <th className="px-4 py-3 text-left border-b-2 border-gray-300 font-semibold text-gray-700">Descricao</th>
-                        <th className="px-4 py-3 text-right border-b-2 border-gray-300 font-semibold text-gray-700 w-28">Valor</th>
+                        <th className="px-4 py-3 text-left border-b-2 border-gray-300 font-semibold text-gray-700 w-1/5">Descricao</th>
+                        <th className="px-4 py-3 text-right border-b-2 border-gray-300 font-semibold text-gray-700 w-24">Valor</th>
                       </tr>
                     </thead>
                     <tbody>
