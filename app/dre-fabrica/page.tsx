@@ -582,6 +582,10 @@ export default function DREPage() {
     totalItens: number;
     valorTotal: number;
   }>({ aberto: false, loading: false, despesas: [], totalItens: 0, valorTotal: 0 });
+  const [ordenacaoSemAssociacao, setOrdenacaoSemAssociacao] = useState<{
+    campo: keyof DespesaSemAssociacao;
+    direcao: 'asc' | 'desc';
+  } | null>(null);
   const [modalAnaliseExecutiva, setModalAnaliseExecutiva] = useState<{
     aberto: boolean;
     loading: boolean;
@@ -1088,6 +1092,7 @@ export default function DREPage() {
   }
 
   async function abrirDespesasSemAssociacao() {
+    setOrdenacaoSemAssociacao(null);
     setModalSemAssociacao({ aberto: true, loading: true, despesas: [], totalItens: 0, valorTotal: 0 });
     try {
       const params = new URLSearchParams({ dataInicio, dataFim, filtro });
@@ -1110,6 +1115,46 @@ export default function DREPage() {
 
   function fecharModalSemAssociacao() {
     setModalSemAssociacao((prev) => ({ ...prev, aberto: false }));
+  }
+
+  function alternarOrdenacaoSemAssociacao(campo: keyof DespesaSemAssociacao) {
+    setOrdenacaoSemAssociacao((atual) => {
+      if (atual?.campo === campo) {
+        return { campo, direcao: atual.direcao === 'asc' ? 'desc' : 'asc' };
+      }
+      return { campo, direcao: 'asc' };
+    });
+  }
+
+  function compararSemAssociacao(a: DespesaSemAssociacao, b: DespesaSemAssociacao, campo: keyof DespesaSemAssociacao): number {
+    if (campo === 'valorTotal' || campo === 'quantidade' || campo === 'cdDespesaItem' || campo === 'cdCcusto') {
+      return (Number(a[campo]) || 0) - (Number(b[campo]) || 0);
+    }
+    return String(a[campo] ?? '').localeCompare(String(b[campo] ?? ''), 'pt-BR');
+  }
+
+  function renderizarCabecalhoSemAssociacao(campo: keyof DespesaSemAssociacao, label: string, extraClasses = '', alinhamento: 'left' | 'right' = 'left') {
+    const ativo = ordenacaoSemAssociacao?.campo === campo;
+    const direcao = ativo ? ordenacaoSemAssociacao!.direcao : null;
+    return (
+      <th
+        onClick={() => alternarOrdenacaoSemAssociacao(campo)}
+        className={`px-4 py-3 border-b-2 border-gray-300 font-semibold text-gray-700 cursor-pointer select-none hover:bg-gray-200 transition-colors ${
+          alinhamento === 'right' ? 'text-right' : 'text-left'
+        } ${extraClasses}`}
+      >
+        <span className={`inline-flex items-center gap-1 ${alinhamento === 'right' ? 'flex-row-reverse' : ''}`}>
+          {label}
+          {direcao === 'asc' ? (
+            <ArrowUp className="w-3 h-3 text-blue-600" strokeWidth={3} />
+          ) : direcao === 'desc' ? (
+            <ArrowDown className="w-3 h-3 text-blue-600" strokeWidth={3} />
+          ) : (
+            <ArrowUp className="w-3 h-3 text-gray-300" strokeWidth={3} />
+          )}
+        </span>
+      </th>
+    );
   }
 
   async function gerarAnaliseExecutiva() {
@@ -3703,22 +3748,28 @@ export default function DREPage() {
                   Todas as despesas lançadas neste período/filtro estão classificadas no plano de contas.
                 </div>
               ) : (
-                <table className="w-full border-collapse text-sm">
+                <table className="w-full table-fixed border-collapse text-sm">
                   <thead className="sticky top-0 z-10 bg-gray-100">
                     <tr>
-                      <th className="px-4 py-3 text-left border-b-2 border-gray-300 font-semibold text-gray-700 w-20">Código</th>
-                      <th className="px-4 py-3 text-left border-b-2 border-gray-300 font-semibold text-gray-700">Descrição</th>
-                      <th className="px-4 py-3 text-left border-b-2 border-gray-300 font-semibold text-gray-700 w-44">Centro de Custo</th>
-                      <th className="px-4 py-3 text-right border-b-2 border-gray-300 font-semibold text-gray-700 w-20">Qtd</th>
-                      <th className="px-4 py-3 text-right border-b-2 border-gray-300 font-semibold text-gray-700 w-32">Valor Total</th>
+                      {renderizarCabecalhoSemAssociacao('cdDespesaItem', 'Código', 'w-20')}
+                      {renderizarCabecalhoSemAssociacao('descricao', 'Descrição')}
+                      {renderizarCabecalhoSemAssociacao('nomeCcusto', 'Centro de Custo', 'w-44')}
+                      {renderizarCabecalhoSemAssociacao('quantidade', 'Qtd', 'w-20', 'right')}
+                      {renderizarCabecalhoSemAssociacao('valorTotal', 'Valor Total', 'w-32', 'right')}
                     </tr>
                   </thead>
                   <tbody>
-                    {modalSemAssociacao.despesas.map((d, idx) => (
+                    {(ordenacaoSemAssociacao
+                      ? [...modalSemAssociacao.despesas].sort((a, b) => {
+                          const resultado = compararSemAssociacao(a, b, ordenacaoSemAssociacao.campo);
+                          return ordenacaoSemAssociacao.direcao === 'asc' ? resultado : -resultado;
+                        })
+                      : modalSemAssociacao.despesas
+                    ).map((d, idx) => (
                       <tr key={`${d.cdDespesaItem}-${d.cdCcusto}-${idx}`} className="hover:bg-red-50 border-b border-gray-100">
                         <td className="px-4 py-2.5 text-gray-600 font-mono text-xs">{d.cdDespesaItem}</td>
-                        <td className="px-4 py-2.5 text-gray-700">{d.descricao}</td>
-                        <td className="px-4 py-2.5 text-gray-600">{d.nomeCcusto}</td>
+                        <td className="px-4 py-2.5 text-gray-700 truncate">{d.descricao}</td>
+                        <td className="px-4 py-2.5 text-gray-600 truncate">{d.nomeCcusto}</td>
                         <td className="px-4 py-2.5 text-right text-gray-600">{d.quantidade}</td>
                         <td className="px-4 py-2.5 text-right font-medium text-red-600 whitespace-nowrap">
                           {formatarValor(d.valorTotal)}
