@@ -3404,10 +3404,17 @@ def get_auditoria_alertas(
         except Exception as e:
             print(f"[AUDITORIA ALERTAS] Aviso ao carregar classificacoes: {e}")
 
+        # Mesma restricao do frontend: o icone de auditoria (e por consequencia o
+        # filtro "So com problema") so faz sentido para contas de despesa, nao
+        # para deducoes/impostos sobre a receita (conta 02) ou outros grupos.
+        prefixos_despesa = ('04', '06', '08', '10', '13')
+
         celulas = set()
         for row in rows:
             conta = _classificar_conta_dre(row['cd_despesaitem'], None, classificacoes_db)
             if conta in ('NAO_CLASSIFICADO', 'EXCLUIDO'):
+                continue
+            if not conta.startswith(prefixos_despesa):
                 continue
             if not row['dt_emissao']:
                 continue
