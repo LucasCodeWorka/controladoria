@@ -652,18 +652,19 @@ export default function DREPage() {
   const refScrollSinteticaAno = useRef<HTMLDivElement>(null);
 
   const scrollSinteticaRafRef = useRef<number | null>(null);
+  const scrollSinteticaValorRef = useRef(0);
 
   function sincronizarScrollSintetica(origem: 'atual' | 'ano') {
     return (e: React.UIEvent<HTMLDivElement>) => {
-      const scrollLeft = e.currentTarget.scrollLeft;
-      if (scrollSinteticaRafRef.current !== null) {
-        cancelAnimationFrame(scrollSinteticaRafRef.current);
-      }
+      scrollSinteticaValorRef.current = e.currentTarget.scrollLeft;
+      // Throttle: se ja tem um frame agendado, so atualiza o valor que ele vai ler.
+      // Nao cancela/reagenda a cada evento, senao vira debounce (so sincroniza ao parar).
+      if (scrollSinteticaRafRef.current !== null) return;
       scrollSinteticaRafRef.current = requestAnimationFrame(() => {
         scrollSinteticaRafRef.current = null;
         const alvo = origem === 'atual' ? refScrollSinteticaAno.current : refScrollSinteticaAtual.current;
-        if (alvo && alvo.scrollLeft !== scrollLeft) {
-          alvo.scrollLeft = scrollLeft;
+        if (alvo && alvo.scrollLeft !== scrollSinteticaValorRef.current) {
+          alvo.scrollLeft = scrollSinteticaValorRef.current;
         }
       });
     };
