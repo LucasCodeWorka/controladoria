@@ -536,6 +536,8 @@ export default function DREPage() {
   const [totaisSinteticos, setTotaisSinteticos] = useState<Record<string, number>>({});
   const [dadosSinteticosAno, setDadosSinteticosAno] = useState<ResumoLoja[]>([]);
   const [totaisSinteticosAno, setTotaisSinteticosAno] = useState<Record<string, number>>({});
+  const [compararAnoAnteriorSintetico, setCompararAnoAnteriorSintetico] = useState(false);
+  const [carregandoSinteticoAno, setCarregandoSinteticoAno] = useState(false);
   const [dadosPorEmpresa, setDadosPorEmpresa] = useState<DadosPorEmpresa | null>(null);
   const [dadosPorCCusto, setDadosPorCCusto] = useState<DadosPorCCusto | null>(null);
   const [contasExpandidas, setContasExpandidas] = useState<Set<string>>(
@@ -1091,6 +1093,34 @@ export default function DREPage() {
     }
   }
 
+  async function buscarDadosSinteticoAno() {
+    setCarregandoSinteticoAno(true);
+    try {
+      const dataInicioComparativo = `${Number(dataInicio.split('-')[0]) - 1}-${dataInicio.split('-')[1]}-${dataInicio.split('-')[2]}`;
+      const dataFimComparativo = `${Number(dataFim.split('-')[0]) - 1}-${dataFim.split('-')[1]}-${dataFim.split('-')[2]}`;
+      const paramsAno = new URLSearchParams({
+        dataInicio: dataInicioComparativo,
+        dataFim: dataFimComparativo,
+        filtro,
+        t: String(Date.now()),
+      });
+      const responseAno = await fetch(`/api/dre/unificada/sintetico?${paramsAno.toString()}`, {
+        cache: 'no-store',
+      });
+      const dataAno = await responseAno.json();
+      if (dataAno.error) {
+        setStatusCarregamento(`Erro do backend na tabela anual: ${dataAno.error}`);
+        return;
+      }
+      setDadosSinteticosAno(dataAno.resumo || []);
+      setTotaisSinteticosAno(dataAno.totais || {});
+    } catch (error) {
+      console.error('Erro ao buscar sintetico do ano anterior:', error);
+    } finally {
+      setCarregandoSinteticoAno(false);
+    }
+  }
+
   async function abrirDespesasSemAssociacao() {
     setOrdenacaoSemAssociacao(null);
     setModalSemAssociacao({ aberto: true, loading: true, despesas: [], totalItens: 0, valorTotal: 0 });
@@ -1627,45 +1657,26 @@ export default function DREPage() {
           filtro,
           t: String(Date.now()),
         });
-        const dataInicioComparativo = `${Number(dataInicio.split('-')[0]) - 1}-${dataInicio.split('-')[1]}-${dataInicio.split('-')[2]}`;
-        const dataFimComparativo = `${Number(dataFim.split('-')[0]) - 1}-${dataFim.split('-')[1]}-${dataFim.split('-')[2]}`;
-        const paramsAno = new URLSearchParams({
-          dataInicio: dataInicioComparativo,
-          dataFim: dataFimComparativo,
-          filtro,
-          t: String(Date.now()),
-        });
         const controller = new AbortController();
         const timeout = window.setTimeout(() => controller.abort(), 300000);
-        const [response, responseAno] = await Promise.all([
-          fetch(`/api/dre/unificada/sintetico?${params.toString()}`, {
-            signal: controller.signal,
-            cache: 'no-store',
-          }),
-          fetch(`/api/dre/unificada/sintetico?${paramsAno.toString()}`, {
-            signal: controller.signal,
-            cache: 'no-store',
-          }),
-        ]);
+        const response = await fetch(`/api/dre/unificada/sintetico?${params.toString()}`, {
+          signal: controller.signal,
+          cache: 'no-store',
+        });
         window.clearTimeout(timeout);
         const data = await response.json();
-        const dataAno = await responseAno.json();
 
         if (data.error) {
           setStatusCarregamento(`Erro do backend: ${data.error}`);
           return;
         }
-        if (dataAno.error) {
-          setStatusCarregamento(`Erro do backend na tabela anual: ${dataAno.error}`);
-          return;
-        }
 
         setDadosSinteticos(data.resumo || []);
         setTotaisSinteticos(data.totais || {});
-        setDadosSinteticosAno(dataAno.resumo || []);
-        setTotaisSinteticosAno(dataAno.totais || {});
         setUltimaAtualizacao(new Date().toLocaleString('pt-BR'));
         setConsultaExecutada(true);
+
+        if (compararAnoAnteriorSintetico) buscarDadosSinteticoAno();
       } else if (tipoVisao === 'por-empresa') {
         const response = await fetch(`/api/dre/por-empresa?dataInicio=${dataInicio}&dataFim=${dataFim}`);
         const data = await response.json();
@@ -2738,6 +2749,28 @@ export default function DREPage() {
                 </p>
               </div>
               <div className="flex items-center gap-6">
+                <label className="flex items-center gap-2 text-xs font-medium text-gray-600 cursor-pointer select-none">
+                  {carregandoSinteticoAno && <RefreshCw className="w-3 h-3 animate-spin text-gray-400" />}
+                  Comparar com ano anterior
+                  <button
+                    role="switch"
+                    aria-checked={compararAnoAnteriorSintetico}
+                    onClick={() => {
+                      const novoValor = !compararAnoAnteriorSintetico;
+                      setCompararAnoAnteriorSintetico(novoValor);
+                      if (novoValor && dadosSinteticos.length > 0) buscarDadosSinteticoAno();
+                    }}
+                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                      compararAnoAnteriorSintetico ? 'bg-blue-600' : 'bg-gray-300'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                        compararAnoAnteriorSintetico ? 'translate-x-5' : 'translate-x-1'
+                      }`}
+                    />
+                  </button>
+                </label>
                 <div className="flex items-center gap-2">
                   <label className="text-xs text-gray-600">Contas:</label>
                   <input
@@ -2846,24 +2879,33 @@ export default function DREPage() {
             </table>
           </div>
         </div>
-        <div className="bg-white rounded-lg shadow-lg overflow-hidden">
-          <div className="p-4 border-b border-gray-200 bg-emerald-50">
-            <div className="flex items-center justify-between flex-wrap gap-4">
-              <div>
-                <h2 className="text-lg font-semibold text-gray-800">
-                  Visao Sintetica - Comparativo por Centro de Custo
-                </h2>
-                <p className="text-sm text-gray-600">
-                  Periodo: {formatarData(`${Number(dataInicio.split('-')[0]) - 1}-${dataInicio.split('-')[1]}-${dataInicio.split('-')[2]}`)} a {formatarData(`${Number(dataFim.split('-')[0]) - 1}-${dataFim.split('-')[1]}-${dataFim.split('-')[2]}`)}
-                </p>
-              </div>
-              <div className="px-3 py-1.5 rounded-md bg-emerald-100 text-emerald-800 text-sm font-semibold">
-                {filtroLabel}
+        {compararAnoAnteriorSintetico && (
+          <div className="bg-white rounded-lg shadow-lg overflow-hidden">
+            <div className="p-4 border-b border-gray-200 bg-emerald-50">
+              <div className="flex items-center justify-between flex-wrap gap-4">
+                <div>
+                  <h2 className="text-lg font-semibold text-gray-800">
+                    Visao Sintetica - Comparativo por Centro de Custo
+                  </h2>
+                  <p className="text-sm text-gray-600">
+                    Periodo: {formatarData(`${Number(dataInicio.split('-')[0]) - 1}-${dataInicio.split('-')[1]}-${dataInicio.split('-')[2]}`)} a {formatarData(`${Number(dataFim.split('-')[0]) - 1}-${dataFim.split('-')[1]}-${dataFim.split('-')[2]}`)}
+                  </p>
+                </div>
+                <div className="px-3 py-1.5 rounded-md bg-emerald-100 text-emerald-800 text-sm font-semibold">
+                  {filtroLabel}
+                </div>
               </div>
             </div>
+            {carregandoSinteticoAno ? (
+              <div className="flex items-center justify-center py-8">
+                <RefreshCw className="w-6 h-6 animate-spin text-emerald-600" />
+                <span className="ml-3 text-gray-600">Carregando ano anterior...</span>
+              </div>
+            ) : (
+              renderTabelaSintetica(dadosSinteticosAno, totaisSinteticosAno, 'ano')
+            )}
           </div>
-          {renderTabelaSintetica(dadosSinteticosAno, totaisSinteticosAno, 'ano')}
-        </div>
+        )}
         </>
         )}
         </>
