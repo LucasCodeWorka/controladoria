@@ -648,6 +648,18 @@ export default function DREPage() {
   // restaurado do localStorage (useEffect acima) com os valores padrao.
   const primeiraRenderizacaoFiltroRef = useRef(true);
   const chavesAuditoriaSolicitadasRef = useRef<Set<string>>(new Set());
+  const refScrollSinteticaAtual = useRef<HTMLDivElement>(null);
+  const refScrollSinteticaAno = useRef<HTMLDivElement>(null);
+
+  function sincronizarScrollSintetica(origem: 'atual' | 'ano') {
+    return (e: React.UIEvent<HTMLDivElement>) => {
+      const scrollLeft = e.currentTarget.scrollLeft;
+      const alvo = origem === 'atual' ? refScrollSinteticaAno.current : refScrollSinteticaAtual.current;
+      if (alvo && alvo.scrollLeft !== scrollLeft) {
+        alvo.scrollLeft = scrollLeft;
+      }
+    };
+  }
   useEffect(() => {
     if (primeiraRenderizacaoFiltroRef.current) {
       primeiraRenderizacaoFiltroRef.current = false;
@@ -1985,7 +1997,11 @@ export default function DREPage() {
     const linhasVisiveis = filtrarLinhasVisiveisSintetica(dados);
 
     return (
-      <div className="overflow-x-auto">
+      <div
+        className="overflow-x-auto"
+        ref={prefixo === 'ano' ? refScrollSinteticaAno : undefined}
+        onScroll={prefixo === 'ano' ? sincronizarScrollSintetica('ano') : undefined}
+      >
         <table className="border-collapse text-sm" style={{ minWidth: `${larguraTabelaSintetica}px` }}>
           <colgroup>
             <col style={{ width: `${larguraColunaContas}px`, minWidth: `${larguraColunaContas}px` }} />
@@ -2811,7 +2827,11 @@ export default function DREPage() {
             </div>
           </div>
 
-          <div className="overflow-x-auto">
+          <div
+            className="overflow-x-auto"
+            ref={refScrollSinteticaAtual}
+            onScroll={sincronizarScrollSintetica('atual')}
+          >
             <table className="border-collapse text-sm" style={{ minWidth: `${larguraTabelaSintetica}px` }}>
               <colgroup>
                 <col style={{ width: `${larguraColunaContas}px`, minWidth: `${larguraColunaContas}px` }} />
