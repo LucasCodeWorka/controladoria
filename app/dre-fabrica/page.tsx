@@ -651,13 +651,21 @@ export default function DREPage() {
   const refScrollSinteticaAtual = useRef<HTMLDivElement>(null);
   const refScrollSinteticaAno = useRef<HTMLDivElement>(null);
 
+  const scrollSinteticaRafRef = useRef<number | null>(null);
+
   function sincronizarScrollSintetica(origem: 'atual' | 'ano') {
     return (e: React.UIEvent<HTMLDivElement>) => {
       const scrollLeft = e.currentTarget.scrollLeft;
-      const alvo = origem === 'atual' ? refScrollSinteticaAno.current : refScrollSinteticaAtual.current;
-      if (alvo && alvo.scrollLeft !== scrollLeft) {
-        alvo.scrollLeft = scrollLeft;
+      if (scrollSinteticaRafRef.current !== null) {
+        cancelAnimationFrame(scrollSinteticaRafRef.current);
       }
+      scrollSinteticaRafRef.current = requestAnimationFrame(() => {
+        scrollSinteticaRafRef.current = null;
+        const alvo = origem === 'atual' ? refScrollSinteticaAno.current : refScrollSinteticaAtual.current;
+        if (alvo && alvo.scrollLeft !== scrollLeft) {
+          alvo.scrollLeft = scrollLeft;
+        }
+      });
     };
   }
   useEffect(() => {
