@@ -2014,7 +2014,7 @@ export default function DREPage() {
                   return (
                     <td
                       key={`${prefixo}-${item.codigo}-${coluna.key}-${index}`}
-                      className={`px-3 py-2 text-right ${percentualLucro && valor !== null ? valor >= 0 ? 'text-green-600' : 'text-red-600' : coluna.tipo === 'av' ? 'text-gray-500' : negativo ? 'text-red-600' : valor && valor > 0 ? 'text-gray-800' : 'text-gray-400'}`}
+                      className={`px-3 py-2 text-right whitespace-nowrap ${percentualLucro && valor !== null ? valor >= 0 ? 'text-green-600' : 'text-red-600' : coluna.tipo === 'av' ? 'text-gray-500' : negativo ? 'text-red-600' : valor && valor > 0 ? 'text-gray-800' : 'text-gray-400'}`}
                     >
                       {formatarColunaSintetica(item, coluna)}
                     </td>
@@ -2031,7 +2031,7 @@ export default function DREPage() {
                 return (
                   <td
                     key={`${prefixo}-total-${coluna.key}-${index}`}
-                    className={`px-3 py-3 text-right ${percentualLucro && valor !== null ? valor >= 0 ? 'text-green-600' : 'text-red-600' : coluna.tipo === 'av' ? 'text-gray-600' : negativo ? 'text-red-600' : valor && valor > 0 ? 'text-gray-800' : 'text-gray-400'}`}
+                    className={`px-3 py-3 text-right whitespace-nowrap ${percentualLucro && valor !== null ? valor >= 0 ? 'text-green-600' : 'text-red-600' : coluna.tipo === 'av' ? 'text-gray-600' : negativo ? 'text-red-600' : valor && valor > 0 ? 'text-gray-800' : 'text-gray-400'}`}
                   >
                     {formatarColunaSintetica(totais, coluna)}
                   </td>
@@ -2818,7 +2818,7 @@ export default function DREPage() {
                       return (
                         <td
                           key={`${item.codigo}-${coluna.key}-${index}`}
-                          className={`px-3 py-2 text-right ${percentualLucro && valor !== null ? valor >= 0 ? 'text-green-600' : 'text-red-600' : coluna.tipo === 'av' ? 'text-gray-500' : negativo ? 'text-red-600' : valor && valor > 0 ? 'text-gray-800' : 'text-gray-400'}`}
+                          className={`px-3 py-2 text-right whitespace-nowrap ${percentualLucro && valor !== null ? valor >= 0 ? 'text-green-600' : 'text-red-600' : coluna.tipo === 'av' ? 'text-gray-500' : negativo ? 'text-red-600' : valor && valor > 0 ? 'text-gray-800' : 'text-gray-400'}`}
                         >
                           {formatarColunaSintetica(item, coluna)}
                         </td>
@@ -2835,7 +2835,7 @@ export default function DREPage() {
                     return (
                       <td
                         key={`total-${coluna.key}-${index}`}
-                        className={`px-3 py-3 text-right ${percentualLucro && valor !== null ? valor >= 0 ? 'text-green-600' : 'text-red-600' : coluna.tipo === 'av' ? 'text-gray-600' : negativo ? 'text-red-600' : valor && valor > 0 ? 'text-gray-800' : 'text-gray-400'}`}
+                        className={`px-3 py-3 text-right whitespace-nowrap ${percentualLucro && valor !== null ? valor >= 0 ? 'text-green-600' : 'text-red-600' : coluna.tipo === 'av' ? 'text-gray-600' : negativo ? 'text-red-600' : valor && valor > 0 ? 'text-gray-800' : 'text-gray-400'}`}
                       >
                         {formatarColunaSintetica(totaisSinteticos, coluna)}
                       </td>
