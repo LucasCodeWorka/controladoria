@@ -3144,7 +3144,7 @@ def get_dre_unificada_duplicatas(
 # classificada errado. Isso e so um indicio estatistico (moda por
 # fornecedor), nao uma certeza - precisa de revisao humana.
 AUDITORIA_MIN_DUPLICATAS = 10
-AUDITORIA_LIMIAR_DOMINANCIA_PCT = 85
+AUDITORIA_LIMIAR_DOMINANCIA_PCT = 51
 
 
 def _criar_tabela_auditoria_validado():
