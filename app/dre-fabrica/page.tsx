@@ -28,6 +28,7 @@ import {
   Eye,
   EyeOff,
   Sparkles,
+  ShoppingCart,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 
@@ -1807,6 +1808,32 @@ export default function DREPage() {
   const despesasPessoalAnoAnterior = totalAnoAnteriorConta('08.04');
   const despesasVendasAnoAnterior = totalAnoAnteriorConta('08.10');
 
+  // Lojas de Fortaleza/CE (demais lojas em dadosSinteticos sao de fora do Ceara).
+  // Codigo 120 (Ecommerce Angelica) tem card proprio, mesmo sendo tipo 'loja'.
+  const CCUSTOS_LOJAS_CEARA = new Set(['2', '3', '4', '5', '6', '7', '8', '19', '21', '22']);
+  const CODIGO_ECOMMERCE_SINTETICO = '120';
+
+  const itemFabricaSintetico = dadosSinteticos.find((item) => item.tipo === 'fabrica');
+  const itensCearaSintetico = dadosSinteticos.filter(
+    (item) => item.tipo === 'loja' && CCUSTOS_LOJAS_CEARA.has(item.codigo)
+  );
+  const itensForaCearaSintetico = dadosSinteticos.filter(
+    (item) => item.tipo === 'loja' && item.codigo !== CODIGO_ECOMMERCE_SINTETICO && !CCUSTOS_LOJAS_CEARA.has(item.codigo)
+  );
+  const itemEcommerceSintetico = dadosSinteticos.find((item) => item.codigo === CODIGO_ECOMMERCE_SINTETICO);
+
+  const lucroLiquidoFabricaSintetico = itemFabricaSintetico?.lucroLiquido || 0;
+  const receitaLiquidaFabricaSintetico = itemFabricaSintetico?.receitaLiquida || 0;
+
+  const lucroLiquidoCearaSintetico = itensCearaSintetico.reduce((acc, item) => acc + (item.lucroLiquido || 0), 0);
+  const receitaLiquidaCearaSintetico = itensCearaSintetico.reduce((acc, item) => acc + (item.receitaLiquida || 0), 0);
+
+  const lucroLiquidoForaCearaSintetico = itensForaCearaSintetico.reduce((acc, item) => acc + (item.lucroLiquido || 0), 0);
+  const receitaLiquidaForaCearaSintetico = itensForaCearaSintetico.reduce((acc, item) => acc + (item.receitaLiquida || 0), 0);
+
+  const lucroLiquidoEcommerceSintetico = itemEcommerceSintetico?.lucroLiquido || 0;
+  const receitaLiquidaEcommerceSintetico = itemEcommerceSintetico?.receitaLiquida || 0;
+
   function renderizarLinhaAnoAnterior(anterior: number) {
     return (
       <p className="text-xs text-black font-medium mt-0.5">
@@ -2762,6 +2789,52 @@ export default function DREPage() {
         )}
         {!loading && consultaExecutada && (
         <>
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+          <div className="bg-white rounded-lg shadow p-3 border-l-4 border-blue-500">
+            <div className="flex items-center gap-2 text-black text-xs font-medium">
+              <Factory className="w-4 h-4" />
+              Lucro Líquido - Fábrica
+            </div>
+            <p className="text-lg font-bold mt-1 text-black">{formatarValor(lucroLiquidoFabricaSintetico)}</p>
+            <p className="text-xs text-black font-medium mt-0.5">Receita Líquida: {formatarValor(receitaLiquidaFabricaSintetico)}</p>
+            <p className="text-xs text-black font-medium">
+              {receitaLiquidaFabricaSintetico !== 0 ? `${((lucroLiquidoFabricaSintetico / receitaLiquidaFabricaSintetico) * 100).toFixed(2)}% da Receita` : '-'}
+            </p>
+          </div>
+          <div className="bg-white rounded-lg shadow p-3 border-l-4 border-green-500">
+            <div className="flex items-center gap-2 text-black text-xs font-medium">
+              <Store className="w-4 h-4" />
+              Lucro Líquido - Lojas Ceará
+            </div>
+            <p className="text-lg font-bold mt-1 text-black">{formatarValor(lucroLiquidoCearaSintetico)}</p>
+            <p className="text-xs text-black font-medium mt-0.5">Receita Líquida: {formatarValor(receitaLiquidaCearaSintetico)}</p>
+            <p className="text-xs text-black font-medium">
+              {receitaLiquidaCearaSintetico !== 0 ? `${((lucroLiquidoCearaSintetico / receitaLiquidaCearaSintetico) * 100).toFixed(2)}% da Receita` : '-'}
+            </p>
+          </div>
+          <div className="bg-white rounded-lg shadow p-3 border-l-4 border-orange-500">
+            <div className="flex items-center gap-2 text-black text-xs font-medium">
+              <Store className="w-4 h-4" />
+              Lucro Líquido - Lojas Fora do Ceará
+            </div>
+            <p className="text-lg font-bold mt-1 text-black">{formatarValor(lucroLiquidoForaCearaSintetico)}</p>
+            <p className="text-xs text-black font-medium mt-0.5">Receita Líquida: {formatarValor(receitaLiquidaForaCearaSintetico)}</p>
+            <p className="text-xs text-black font-medium">
+              {receitaLiquidaForaCearaSintetico !== 0 ? `${((lucroLiquidoForaCearaSintetico / receitaLiquidaForaCearaSintetico) * 100).toFixed(2)}% da Receita` : '-'}
+            </p>
+          </div>
+          <div className="bg-white rounded-lg shadow p-3 border-l-4 border-purple-500">
+            <div className="flex items-center gap-2 text-black text-xs font-medium">
+              <ShoppingCart className="w-4 h-4" />
+              Lucro Líquido - Ecommerce
+            </div>
+            <p className="text-lg font-bold mt-1 text-black">{formatarValor(lucroLiquidoEcommerceSintetico)}</p>
+            <p className="text-xs text-black font-medium mt-0.5">Receita Líquida: {formatarValor(receitaLiquidaEcommerceSintetico)}</p>
+            <p className="text-xs text-black font-medium">
+              {receitaLiquidaEcommerceSintetico !== 0 ? `${((lucroLiquidoEcommerceSintetico / receitaLiquidaEcommerceSintetico) * 100).toFixed(2)}% da Receita` : '-'}
+            </p>
+          </div>
+        </div>
         <div className="bg-white rounded-lg shadow-lg overflow-hidden">
           <div className="p-4 border-b border-gray-200 bg-green-50">
             <div className="flex items-center justify-between flex-wrap gap-4">
