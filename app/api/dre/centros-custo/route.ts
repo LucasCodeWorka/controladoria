@@ -6,6 +6,7 @@ export async function GET(request: NextRequest) {
   try {
     const response = await fetch(`${PYTHON_API_URL}/api/dre/centros-custo`, {
       method: 'GET',
+      cache: 'no-store',
       headers: {
         'Content-Type': 'application/json',
       },

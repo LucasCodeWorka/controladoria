@@ -8,6 +8,7 @@ export async function GET(request: NextRequest) {
   try {
     const response = await fetch(`${PYTHON_API_URL}/api/classificacao-despesas-dre`, {
       method: 'GET',
+      cache: 'no-store',
       headers: {
         'Content-Type': 'application/json',
       },

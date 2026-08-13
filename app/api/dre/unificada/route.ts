@@ -16,6 +16,7 @@ export async function GET(request: NextRequest) {
       `${PYTHON_API_URL}/api/dre/unificada?${params.toString()}`,
       {
         method: 'GET',
+        cache: 'no-store',
         headers: {
           'Content-Type': 'application/json',
         },
