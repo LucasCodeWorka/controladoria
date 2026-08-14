@@ -106,6 +106,15 @@ export const PLANO_CONTAS_DRE_FABRICA: ContaDRE[] = [
           { codigo: '04.02.02', nome: 'CUSTO MERCADORIAS VENDIDAS', nivel: 3, tipo: 'conta' },
         ],
       },
+      {
+        codigo: '04.03',
+        nome: 'FRETE COMPRAS',
+        nivel: 2,
+        tipo: 'grupo',
+        filhos: [
+          { codigo: '04.03.01', nome: 'FRETE COMPRAS', nivel: 3, tipo: 'conta' },
+        ],
+      },
     ],
   },
   {
