@@ -3145,6 +3145,7 @@ def get_dre_unificada_duplicatas(
 # fornecedor), nao uma certeza - precisa de revisao humana.
 AUDITORIA_MIN_DUPLICATAS = 10
 AUDITORIA_LIMIAR_DOMINANCIA_PCT = 51
+AUDITORIA_DATA_INICIO_HISTORICO = '2024-01-01'
 
 
 def _criar_tabela_auditoria_validado():
@@ -3236,10 +3237,11 @@ def get_auditoria_fornecedor_despesa(
             JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
             WHERE d.cd_fornecedor = %s
               AND d.tp_situacao = 'N'
+              AND d.dt_emissao >= %s
             GROUP BY d.cd_despesaitem, i.ds_despesaitem
             ORDER BY quantidade DESC
         """
-        rows = execute_query(query, (cdFornecedor,)) or []
+        rows = execute_query(query, (cdFornecedor, AUDITORIA_DATA_INICIO_HISTORICO)) or []
         total = sum(r['quantidade'] for r in rows)
 
         if total == 0:
@@ -3339,6 +3341,7 @@ def get_auditoria_alertas(
                 FROM vr_fcp_despduplicatai d
                 JOIN fornecedores_periodo fp ON fp.cd_fornecedor = d.cd_fornecedor
                 WHERE d.tp_situacao = 'N'
+                  AND d.dt_emissao >= %s
                 GROUP BY d.cd_fornecedor, d.cd_despesaitem
             ),
             fornecedor_total AS (
@@ -3375,6 +3378,7 @@ def get_auditoria_alertas(
         """
         params = [
             dataInicio, dataFim,
+            AUDITORIA_DATA_INICIO_HISTORICO,
             AUDITORIA_MIN_DUPLICATAS, AUDITORIA_LIMIAR_DOMINANCIA_PCT,
             dataInicio, dataFim,
         ]
