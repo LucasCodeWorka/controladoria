@@ -488,7 +488,7 @@ export default function DFCPage() {
           const podeClicar = clicavel && valorPeriodo !== 0;
           return (
             <React.Fragment key={periodo.key}>
-              <td className={`px-2 py-2 border-b border-gray-200 text-right text-sm ${valorPeriodo < 0 ? 'text-red-600' : ''}`}>
+              <td className={`px-2 py-2 border-b border-gray-200 text-right text-sm whitespace-nowrap ${valorPeriodo < 0 ? 'text-red-600' : ''}`}>
                 {podeClicar ? (
                   <button
                     onClick={() => abrirDuplicatas(codigo, nome, periodo.key, periodo.label)}
@@ -501,16 +501,16 @@ export default function DFCPage() {
                   formatarValor(valorPeriodo)
                 )}
               </td>
-              <td className={`px-2 py-2 border-b border-gray-200 text-right text-xs bg-gray-50 ${valorPeriodo < 0 ? 'text-red-500' : 'text-gray-500'}`}>
+              <td className={`px-2 py-2 border-b border-gray-200 text-right text-xs bg-gray-50 whitespace-nowrap ${valorPeriodo < 0 ? 'text-red-500' : 'text-gray-500'}`}>
                 {calcularAVPeriodo(valorPeriodo, periodo.key)}
               </td>
             </React.Fragment>
           );
         })}
-        <td className={`px-3 py-2 border-b border-gray-200 text-right text-sm font-bold ${corTextoTotal || (total < 0 ? 'text-red-600' : '')}`}>
+        <td className={`px-3 py-2 border-b border-gray-200 text-right text-sm font-bold whitespace-nowrap ${corTextoTotal || (total < 0 ? 'text-red-600' : '')}`}>
           {formatarValor(total)}
         </td>
-        <td className={`px-3 py-2 border-b border-gray-200 text-right text-sm ${total < 0 ? 'text-red-500' : 'text-gray-600'}`}>
+        <td className={`px-3 py-2 border-b border-gray-200 text-right text-sm whitespace-nowrap ${total < 0 ? 'text-red-500' : 'text-gray-600'}`}>
           {calcularAV(total)}
         </td>
       </tr>
@@ -534,7 +534,7 @@ export default function DFCPage() {
           const podeClicar = valorPeriodo !== 0;
           return (
             <React.Fragment key={periodo.key}>
-              <td className={`px-2 py-1.5 border-b border-gray-100 text-right text-xs ${valorPeriodo < 0 ? 'text-red-500' : ''}`}>
+              <td className={`px-2 py-1.5 border-b border-gray-100 text-right text-xs whitespace-nowrap ${valorPeriodo < 0 ? 'text-red-500' : ''}`}>
                 {podeClicar ? (
                   <button
                     onClick={() => abrirDuplicatas(subgrupoCodigo, item.descricao, periodo.key, periodo.label, item.cdDespesaitem)}
@@ -547,16 +547,16 @@ export default function DFCPage() {
                   formatarValor(valorPeriodo)
                 )}
               </td>
-              <td className={`px-2 py-1.5 border-b border-gray-100 text-right text-[11px] bg-gray-50 ${valorPeriodo < 0 ? 'text-red-400' : 'text-gray-400'}`}>
+              <td className={`px-2 py-1.5 border-b border-gray-100 text-right text-[11px] bg-gray-50 whitespace-nowrap ${valorPeriodo < 0 ? 'text-red-400' : 'text-gray-400'}`}>
                 {calcularAVPeriodo(valorPeriodo, periodo.key)}
               </td>
             </React.Fragment>
           );
         })}
-        <td className={`px-3 py-1.5 border-b border-gray-100 text-right text-xs font-semibold ${total < 0 ? 'text-red-500' : ''}`}>
+        <td className={`px-3 py-1.5 border-b border-gray-100 text-right text-xs font-semibold whitespace-nowrap ${total < 0 ? 'text-red-500' : ''}`}>
           {formatarValor(total)}
         </td>
-        <td className={`px-3 py-1.5 border-b border-gray-100 text-right text-[11px] ${total < 0 ? 'text-red-400' : 'text-gray-400'}`}>
+        <td className={`px-3 py-1.5 border-b border-gray-100 text-right text-[11px] whitespace-nowrap ${total < 0 ? 'text-red-400' : 'text-gray-400'}`}>
           {calcularAV(total)}
         </td>
       </tr>
@@ -590,19 +590,19 @@ export default function DFCPage() {
           const valorPeriodo = valorConta(grupo.codigo, periodo.key);
           return (
             <React.Fragment key={periodo.key}>
-              <td className={`px-2 py-2 border-b border-gray-200 text-right text-sm font-bold ${valorPeriodo < 0 ? 'text-red-600' : ''}`}>
+              <td className={`px-2 py-2 border-b border-gray-200 text-right text-sm font-bold whitespace-nowrap ${valorPeriodo < 0 ? 'text-red-600' : ''}`}>
                 {formatarValor(valorPeriodo)}
               </td>
-              <td className={`px-2 py-2 border-b border-gray-200 text-right text-xs bg-purple-50 ${valorPeriodo < 0 ? 'text-red-500' : 'text-gray-500'}`}>
+              <td className={`px-2 py-2 border-b border-gray-200 text-right text-xs bg-purple-50 whitespace-nowrap ${valorPeriodo < 0 ? 'text-red-500' : 'text-gray-500'}`}>
                 {calcularAVPeriodo(valorPeriodo, periodo.key)}
               </td>
             </React.Fragment>
           );
         })}
-        <td className={`px-3 py-2 border-b border-gray-200 text-right text-sm font-bold ${total < 0 ? 'text-red-600' : ''}`}>
+        <td className={`px-3 py-2 border-b border-gray-200 text-right text-sm font-bold whitespace-nowrap ${total < 0 ? 'text-red-600' : ''}`}>
           {formatarValor(total)}
         </td>
-        <td className={`px-3 py-2 border-b border-gray-200 text-right text-sm ${total < 0 ? 'text-red-500' : 'text-gray-600'}`}>
+        <td className={`px-3 py-2 border-b border-gray-200 text-right text-sm whitespace-nowrap ${total < 0 ? 'text-red-500' : 'text-gray-600'}`}>
           {calcularAV(total)}
         </td>
       </tr>
@@ -648,19 +648,19 @@ export default function DFCPage() {
                 const totalPeriodo = itens.reduce((acc, item) => acc + valorConta(item.codigo, periodo.key), 0);
                 return (
                   <React.Fragment key={periodo.key}>
-                    <td className={`px-2 py-1.5 border-b border-gray-200 bg-gray-50 text-right text-xs font-bold ${totalPeriodo < 0 ? 'text-red-600' : 'text-gray-700'}`}>
+                    <td className={`px-2 py-1.5 border-b border-gray-200 bg-gray-50 text-right text-xs font-bold whitespace-nowrap ${totalPeriodo < 0 ? 'text-red-600' : 'text-gray-700'}`}>
                       {formatarValor(totalPeriodo)}
                     </td>
-                    <td className={`px-2 py-1.5 border-b border-gray-200 bg-gray-50 text-right text-[11px] ${totalPeriodo < 0 ? 'text-red-500' : 'text-gray-500'}`}>
+                    <td className={`px-2 py-1.5 border-b border-gray-200 bg-gray-50 text-right text-[11px] whitespace-nowrap ${totalPeriodo < 0 ? 'text-red-500' : 'text-gray-500'}`}>
                       {calcularAVPeriodo(totalPeriodo, periodo.key)}
                     </td>
                   </React.Fragment>
                 );
               })}
-              <td className={`px-3 py-1.5 border-b border-gray-200 bg-gray-50 text-right text-xs font-bold ${totalGeral < 0 ? 'text-red-600' : 'text-gray-700'}`}>
+              <td className={`px-3 py-1.5 border-b border-gray-200 bg-gray-50 text-right text-xs font-bold whitespace-nowrap ${totalGeral < 0 ? 'text-red-600' : 'text-gray-700'}`}>
                 {formatarValor(totalGeral)}
               </td>
-              <td className={`px-3 py-1.5 border-b border-gray-200 bg-gray-50 text-right text-[11px] ${totalGeral < 0 ? 'text-red-500' : 'text-gray-500'}`}>
+              <td className={`px-3 py-1.5 border-b border-gray-200 bg-gray-50 text-right text-[11px] whitespace-nowrap ${totalGeral < 0 ? 'text-red-500' : 'text-gray-500'}`}>
                 {calcularAV(totalGeral)}
               </td>
             </tr>
@@ -704,19 +704,19 @@ export default function DFCPage() {
           const valorPeriodo = valorConta(grupo.codigo, periodo.key);
           return (
             <React.Fragment key={periodo.key}>
-              <td className={`px-2 py-2 border-b border-gray-200 text-right text-sm font-bold ${valorPeriodo < 0 ? 'text-red-600' : ''}`}>
+              <td className={`px-2 py-2 border-b border-gray-200 text-right text-sm font-bold whitespace-nowrap ${valorPeriodo < 0 ? 'text-red-600' : ''}`}>
                 {formatarValor(valorPeriodo)}
               </td>
-              <td className={`px-2 py-2 border-b border-gray-200 text-right text-xs bg-green-50 ${valorPeriodo < 0 ? 'text-red-500' : 'text-gray-500'}`}>
+              <td className={`px-2 py-2 border-b border-gray-200 text-right text-xs bg-green-50 whitespace-nowrap ${valorPeriodo < 0 ? 'text-red-500' : 'text-gray-500'}`}>
                 {calcularAVPeriodo(valorPeriodo, periodo.key)}
               </td>
             </React.Fragment>
           );
         })}
-        <td className={`px-3 py-2 border-b border-gray-200 text-right text-sm font-bold ${total < 0 ? 'text-red-600' : ''}`}>
+        <td className={`px-3 py-2 border-b border-gray-200 text-right text-sm font-bold whitespace-nowrap ${total < 0 ? 'text-red-600' : ''}`}>
           {formatarValor(total)}
         </td>
-        <td className={`px-3 py-2 border-b border-gray-200 text-right text-sm ${total < 0 ? 'text-red-500' : 'text-gray-600'}`}>
+        <td className={`px-3 py-2 border-b border-gray-200 text-right text-sm whitespace-nowrap ${total < 0 ? 'text-red-500' : 'text-gray-600'}`}>
           {calcularAV(total)}
         </td>
       </tr>
