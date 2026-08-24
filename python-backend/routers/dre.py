@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from database import execute_query, execute_insert
 import services
 import unicodedata
+import calendar
 from plano_contas_dfc import (
     PLANO_CONTAS_DFC,
     PLANO_RECEITA_DFC,
@@ -23,6 +24,173 @@ def _somar_dias_uteis(data, dias: int):
         if data.weekday() < 5:  # 0=segunda ... 4=sexta
             restante -= 1
     return data
+
+
+# ============================================================================
+# PRAZO MEDIO DE ESTOCAGEM (PME)
+# ============================================================================
+# Estoque medio do ultimo mes do filtro (saldo do 1o dia + saldo do ultimo
+# dia do mes, dividido por 2) sobre o faturamento bruto do mesmo mes (sempre
+# TODAS as lojas, independente do filtro de loja/fabrica selecionado na
+# tela), multiplicado pelos dias do mes.
+#
+# A consulta de estoque (valor de mercado de cada produto em uma data) e
+# muito pesada (~20-70s por data, sem indice adequado em prd_prdsaldo) -
+# por isso o resultado fica em cache por data, evitando reprocessar toda
+# vez que a tela do DFC carrega.
+
+def _criar_tabela_estoque_cache():
+    execute_insert("""
+        CREATE TABLE IF NOT EXISTS dfc_estoque_cache (
+            dt_referencia DATE PRIMARY KEY,
+            valor_estoque NUMERIC,
+            dt_calculado TIMESTAMP DEFAULT NOW()
+        )
+    """)
+
+
+def _buscar_estoque_total(data_referencia: str) -> float:
+    _criar_tabela_estoque_cache()
+    try:
+        cache = execute_query(
+            "SELECT valor_estoque FROM dfc_estoque_cache WHERE dt_referencia = %s",
+            (data_referencia,)
+        )
+        if cache:
+            return float(cache[0]['valor_estoque'] or 0)
+    except Exception as e:
+        print(f"[PME] Aviso ao ler cache de estoque: {e}")
+
+    query = """
+        WITH saldo_final AS (
+            SELECT DISTINCT ON (ps.cd_produto)
+                   ps.cd_produto,
+                   ps.dt_saldo,
+                   ps.qt_saldo
+            FROM public.prd_prdsaldo ps
+            WHERE ps.cd_saldo = '1'
+              AND ps.dt_saldo <= %s
+            ORDER BY ps.cd_produto, ps.dt_saldo DESC
+        ),
+        base AS (
+            SELECT
+                p.cd_produto,
+                s.qt_saldo,
+                COALESCE(public.f_prd_valor_produto2('1', '1', 'P', '1', p.cd_produto, %s), 0) AS vl_produto
+            FROM saldo_final s
+            JOIN VR_PRD_PRDS p ON p.cd_produto = s.cd_produto
+            JOIN public.prd_produtoclas pc ON pc.cd_produto = p.cd_produto AND pc.cd_tipoclas = 20
+            JOIN public.prd_classificacao c ON c.cd_classificacao = pc.cd_classificacao AND c.cd_tipoclas = pc.cd_tipoclas
+            WHERE s.qt_saldo > 0
+              AND TRIM(c.ds_classificacao) IS NOT NULL
+        )
+        SELECT COALESCE(SUM(qt_saldo * vl_produto), 0) AS valor_total_estoque
+        FROM base
+    """
+    rows = execute_query(query, (data_referencia, data_referencia))
+    valor = float(rows[0]['valor_total_estoque'] or 0) if rows else 0.0
+
+    try:
+        execute_insert("""
+            INSERT INTO dfc_estoque_cache (dt_referencia, valor_estoque, dt_calculado)
+            VALUES (%s, %s, CURRENT_TIMESTAMP)
+            ON CONFLICT (dt_referencia) DO UPDATE SET
+                valor_estoque = EXCLUDED.valor_estoque,
+                dt_calculado = CURRENT_TIMESTAMP
+        """, (data_referencia, valor))
+    except Exception as e:
+        print(f"[PME] Aviso ao gravar cache de estoque: {e}")
+
+    return valor
+
+
+def _calcular_faturamento_bruto_periodo(data_inicio: str, data_fim: str, empresas_filtro: list) -> float:
+    """Faturamento bruto (mesma logica/fontes da Receita Operacional do DFC:
+    vr_fcr_faturai por tipo de documento, excluindo devolucoes) para um
+    periodo e conjunto de empresas especificos - usado pelo PME."""
+    if not empresas_filtro:
+        return 0.0
+    empresa_placeholders = ",".join(["%s"] * len(empresas_filtro))
+    total = 0.0
+
+    for tipos in RECEBIMENTOS_TIPOS_DOCUMENTO.values():
+        query = f"""
+            SELECT COALESCE(SUM(f.vl_pago), 0) as valor
+            FROM vr_fcr_faturai f
+            WHERE f.dt_baixa >= %s AND f.dt_baixa <= %s
+              AND f.tp_situacao = '1'
+              AND f.tp_documento = %s
+              AND f.cd_empresa IN ({empresa_placeholders})
+        """
+        for tp in tipos.get('soma', []):
+            rows = execute_query(query, (data_inicio, data_fim, tp, *empresas_filtro))
+            total += float(rows[0]['valor'] or 0) if rows else 0.0
+        for tp in tipos.get('subtrai', []):
+            rows = execute_query(query, (data_inicio, data_fim, tp, *empresas_filtro))
+            total -= float(rows[0]['valor'] or 0) if rows else 0.0
+
+    data_inicio_dt = datetime.strptime(data_inicio, '%Y-%m-%d')
+    data_inicio_buffer = (data_inicio_dt - timedelta(days=10)).strftime('%Y-%m-%d')
+
+    for cfg in RECEBIMENTOS_DATA_CONSTRUIDA.values():
+        where_extra = ""
+        params_extra = []
+        if cfg.get('tp_cobranca') is not None:
+            where_extra = "AND f.tp_cobranca = %s"
+            params_extra = [cfg['tp_cobranca']]
+        query_construida = f"""
+            SELECT f.dt_emissao, f.vl_fatura
+            FROM vr_fcr_faturai f
+            WHERE f.tp_situacao = '1'
+              AND f.tp_documento = %s
+              {where_extra}
+              AND f.cd_empresa IN ({empresa_placeholders})
+              AND f.dt_emissao >= %s
+              AND f.dt_emissao <= %s
+        """
+        rows_construida = execute_query(
+            query_construida,
+            (cfg['tp_documento'], *params_extra, *empresas_filtro, data_inicio_buffer, data_fim)
+        )
+        data_fim_dt = datetime.strptime(data_fim, '%Y-%m-%d')
+        for row in rows_construida or []:
+            dt_emissao = row['dt_emissao']
+            if not dt_emissao:
+                continue
+            dt_construida = _somar_dias_uteis(dt_emissao, cfg['dias_uteis'])
+            if dt_construida < data_inicio_dt or dt_construida > data_fim_dt:
+                continue
+            total += float(row['vl_fatura'] or 0)
+
+    return total
+
+
+def _calcular_prazo_medio_estocagem(dataFim: str) -> Optional[float]:
+    """PME = estoque medio do ultimo mes do filtro / faturamento bruto do
+    mesmo mes (todas as lojas) * dias do mes."""
+    try:
+        data_fim_dt = datetime.strptime(dataFim, '%Y-%m-%d')
+        ano, mes = data_fim_dt.year, data_fim_dt.month
+        ultimo_dia_num = calendar.monthrange(ano, mes)[1]
+        primeiro_dia_mes = f"{ano:04d}-{mes:02d}-01"
+        ultimo_dia_mes = f"{ano:04d}-{mes:02d}-{ultimo_dia_num:02d}"
+
+        estoque_primeiro = _buscar_estoque_total(primeiro_dia_mes)
+        estoque_ultimo = _buscar_estoque_total(ultimo_dia_mes)
+        estoque_medio = (estoque_primeiro + estoque_ultimo) / 2
+
+        empresas_todas_lojas = [e for e in ([1] + list(CCUSTOS_LOJAS.keys())) if e not in EMPRESAS_EXCLUIDAS]
+        faturamento_mes = _calcular_faturamento_bruto_periodo(primeiro_dia_mes, ultimo_dia_mes, empresas_todas_lojas)
+
+        if faturamento_mes <= 0:
+            return None
+
+        return (estoque_medio / faturamento_mes) * ultimo_dia_num
+    except Exception as e:
+        print(f"[PME] Erro ao calcular prazo medio de estocagem: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
 
 router = APIRouter()
 
@@ -1458,6 +1626,7 @@ def _calcular_valores_dfc(dataInicio: str, dataFim: str, filtro: str):
             for scodigo, acc in pmr_por_subgrupo.items()
             if acc['valor'] > 0
         }
+        prazo_medio_estocagem = _calcular_prazo_medio_estocagem(dataFim)
 
         return {
             "periodos": periodos_response,
@@ -1473,6 +1642,7 @@ def _calcular_valores_dfc(dataInicio: str, dataFim: str, filtro: str):
                 "prazoMedioRecebimento": prazo_medio_recebimento,
                 "prazoMedioPagamento": prazo_medio_pagamento,
                 "prazoMedioRecebimentoPorSubgrupo": prazo_medio_recebimento_por_subgrupo,
+                "prazoMedioEstocagem": prazo_medio_estocagem,
                 "dataInicio": dataInicio,
                 "dataFim": dataFim,
                 "dataConsulta": datetime.now().isoformat()

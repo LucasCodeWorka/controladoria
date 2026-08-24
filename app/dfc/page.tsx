@@ -12,6 +12,7 @@ import {
   ChevronsUp,
   DollarSign,
   HelpCircle,
+  Package,
   RefreshCw,
   TrendingDown,
   TrendingUp,
@@ -130,6 +131,7 @@ export default function DFCPage() {
   const [naoClassificados, setNaoClassificados] = useState(0);
   const [prazoMedioRecebimento, setPrazoMedioRecebimento] = useState<number | null>(null);
   const [prazoMedioPagamento, setPrazoMedioPagamento] = useState<number | null>(null);
+  const [prazoMedioEstocagem, setPrazoMedioEstocagem] = useState<number | null>(null);
   const [prazoMedioRecebimentoPorSubgrupo, setPrazoMedioRecebimentoPorSubgrupo] = useState<Record<string, number>>({});
   const [gruposExpandidos, setGruposExpandidos] = useState<Set<string>>(new Set(['REC', 'OP', 'INV', 'FIN']));
   const [subgruposExpandidos, setSubgruposExpandidos] = useState<Set<string>>(new Set());
@@ -276,6 +278,7 @@ export default function DFCPage() {
         setPrazoMedioRecebimento(m.prazoMedioRecebimento ?? null);
         setPrazoMedioPagamento(m.prazoMedioPagamento ?? null);
         setPrazoMedioRecebimentoPorSubgrupo(m.prazoMedioRecebimentoPorSubgrupo || {});
+        setPrazoMedioEstocagem(m.prazoMedioEstocagem ?? null);
       }
 
       if (data.periodos) setPeriodos(data.periodos);
@@ -459,6 +462,8 @@ export default function DFCPage() {
 
   const saldoFinal = checkpointsSaldo.length > 0 ? checkpointsSaldo[checkpointsSaldo.length - 1].valores : saldoBase;
   const saldoCaixa = saldoFinal.total || 0;
+  const checkpointOP = checkpointsSaldo.find((c) => c.codigo === 'SALDO_APOS_OP');
+  const saldoAposOperacionalCard = checkpointOP ? checkpointOP.valores.total || 0 : null;
 
   const gruposPorAno = useMemo(() => {
     const anos: { ano: string; qtd: number }[] = [];
@@ -822,7 +827,7 @@ export default function DFCPage() {
       </div>
 
       {consultaExecutada && (
-        <div className="grid grid-cols-2 md:grid-cols-2 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
           <div className="bg-white rounded-lg shadow p-3 border-l-4 border-cyan-500">
             <div className="flex items-center gap-2 text-black text-xs font-medium">
               <ArrowDownToLine className="w-4 h-4" />
@@ -841,11 +846,21 @@ export default function DFCPage() {
               {prazoMedioPagamento !== null ? `${prazoMedioPagamento.toFixed(1)} dias` : '-'}
             </p>
           </div>
+          <div className="bg-white rounded-lg shadow p-3 border-l-4 border-indigo-500">
+            <div className="flex items-center gap-2 text-black text-xs font-medium">
+              <Package className="w-4 h-4" />
+              Prazo Médio de Estocagem
+              <TooltipAjuda texto="Estoque médio (1º dia + último dia do último mês do filtro, dividido por 2) sobre o faturamento bruto do mesmo mês (todas as lojas), multiplicado pelos dias do mês." />
+            </div>
+            <p className="text-lg font-bold mt-1 text-black">
+              {prazoMedioEstocagem !== null ? `${prazoMedioEstocagem.toFixed(1)} dias` : '-'}
+            </p>
+          </div>
         </div>
       )}
 
       {consultaExecutada && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
           <div className="bg-white rounded-lg shadow p-3 border-l-4 border-blue-500">
             <div className="flex items-center gap-2 text-black text-xs font-medium">
               <DollarSign className="w-4 h-4" />
@@ -860,6 +875,17 @@ export default function DFCPage() {
             </div>
             <p className="text-lg font-bold mt-1 text-black">{formatarValor(totalOperacional)}</p>
           </div>
+          {saldoAposOperacionalCard !== null && (
+            <div className={`bg-white rounded-lg shadow p-3 border-l-4 ${saldoAposOperacionalCard >= 0 ? 'border-teal-500' : 'border-red-500'}`}>
+              <div className="flex items-center gap-2 text-black text-xs font-medium">
+                {saldoAposOperacionalCard >= 0 ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
+                Saldo de Caixa (após operacional)
+              </div>
+              <p className={`text-lg font-bold mt-1 ${saldoAposOperacionalCard >= 0 ? 'text-teal-600' : 'text-red-600'}`}>
+                {formatarValor(saldoAposOperacionalCard)}
+              </p>
+            </div>
+          )}
           <div className="bg-white rounded-lg shadow p-3 border-l-4 border-yellow-500">
             <div className="flex items-center gap-2 text-black text-xs font-medium">
               <TrendingDown className="w-4 h-4" />
