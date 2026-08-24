@@ -1207,8 +1207,13 @@ def _calcular_valores_dfc(dataInicio: str, dataFim: str, filtro: str):
         # cada duplicata paga no periodo, ponderada pelo valor.
         pmp_acc = {'dias': 0.0, 'valor': 0.0}
         # Prazo Medio de Recebimento (PMR): mesma logica, do lado da receita
-        # (vr_fcr_faturai) - preenchido mais abaixo.
+        # (vr_fcr_faturai) - preenchido mais abaixo. pmr_por_subgrupo guarda
+        # o mesmo calculo quebrado por tipo de documento (REC.01, REC.02...).
         pmr_acc = {'dias': 0.0, 'valor': 0.0}
+        pmr_por_subgrupo = {}
+
+        def _pmr_subgrupo(scodigo):
+            return pmr_por_subgrupo.setdefault(scodigo, {'dias': 0.0, 'valor': 0.0})
 
         def _add_valor(codigo, periodo, valor):
             if codigo not in valores_por_conta:
@@ -1323,7 +1328,7 @@ def _calcular_valores_dfc(dataInicio: str, dataFim: str, filtro: str):
             # tp_documento em 'soma' e subtrai os em 'subtrai' (ex: dinheiro
             # menos troco). A consultoria vai mandando os demais tipos aos
             # poucos - o que ainda nao tiver mapeado simplesmente nao aparece.
-            def _somar_tp_documento(tp_documento: int, sinal: int, destino: dict):
+            def _somar_tp_documento(tp_documento: int, sinal: int, destino: dict, scodigo_pmr: str):
                 query_faturai = f"""
                     SELECT f.dt_baixa, f.dt_emissao, SUM(f.vl_pago) as valor
                     FROM vr_fcr_faturai f
@@ -1352,13 +1357,16 @@ def _calcular_valores_dfc(dataInicio: str, dataFim: str, filtro: str):
                         if dias >= 0:
                             pmr_acc['dias'] += dias * valor_bruto
                             pmr_acc['valor'] += valor_bruto
+                            pmr_sub = _pmr_subgrupo(scodigo_pmr)
+                            pmr_sub['dias'] += dias * valor_bruto
+                            pmr_sub['valor'] += valor_bruto
 
             for scodigo, tipos in RECEBIMENTOS_TIPOS_DOCUMENTO.items():
                 valores_subgrupo = _init_valores_periodo(periodos)
                 for tp in tipos.get('soma', []):
-                    _somar_tp_documento(tp, 1, valores_subgrupo)
+                    _somar_tp_documento(tp, 1, valores_subgrupo, scodigo)
                 for tp in tipos.get('subtrai', []):
-                    _somar_tp_documento(tp, -1, valores_subgrupo)
+                    _somar_tp_documento(tp, -1, valores_subgrupo, scodigo)
                 valores_por_conta[scodigo] = valores_subgrupo
 
             # RECEBIMENTOS com data de entrada no caixa CONSTRUIDA (ex: cartao
@@ -1407,6 +1415,9 @@ def _calcular_valores_dfc(dataInicio: str, dataFim: str, filtro: str):
                     if dias >= 0:
                         pmr_acc['dias'] += dias * valor
                         pmr_acc['valor'] += valor
+                        pmr_sub = _pmr_subgrupo(scodigo)
+                        pmr_sub['dias'] += dias * valor
+                        pmr_sub['valor'] += valor
                 valores_por_conta[scodigo] = valores_subgrupo
 
         valores_por_conta[CODIGO_DEVOLUCOES_RECEITA] = devolucoes_brutas
@@ -1442,6 +1453,11 @@ def _calcular_valores_dfc(dataInicio: str, dataFim: str, filtro: str):
 
         prazo_medio_pagamento = (pmp_acc['dias'] / pmp_acc['valor']) if pmp_acc['valor'] > 0 else None
         prazo_medio_recebimento = (pmr_acc['dias'] / pmr_acc['valor']) if pmr_acc['valor'] > 0 else None
+        prazo_medio_recebimento_por_subgrupo = {
+            scodigo: (acc['dias'] / acc['valor'])
+            for scodigo, acc in pmr_por_subgrupo.items()
+            if acc['valor'] > 0
+        }
 
         return {
             "periodos": periodos_response,
@@ -1456,6 +1472,7 @@ def _calcular_valores_dfc(dataInicio: str, dataFim: str, filtro: str):
                 "naoClassificados": nao_classificados,
                 "prazoMedioRecebimento": prazo_medio_recebimento,
                 "prazoMedioPagamento": prazo_medio_pagamento,
+                "prazoMedioRecebimentoPorSubgrupo": prazo_medio_recebimento_por_subgrupo,
                 "dataInicio": dataInicio,
                 "dataFim": dataFim,
                 "dataConsulta": datetime.now().isoformat()

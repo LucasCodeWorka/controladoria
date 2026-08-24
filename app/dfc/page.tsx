@@ -89,6 +89,7 @@ export default function DFCPage() {
   const [naoClassificados, setNaoClassificados] = useState(0);
   const [prazoMedioRecebimento, setPrazoMedioRecebimento] = useState<number | null>(null);
   const [prazoMedioPagamento, setPrazoMedioPagamento] = useState<number | null>(null);
+  const [prazoMedioRecebimentoPorSubgrupo, setPrazoMedioRecebimentoPorSubgrupo] = useState<Record<string, number>>({});
   const [gruposExpandidos, setGruposExpandidos] = useState<Set<string>>(new Set(['REC', 'OP', 'INV', 'FIN']));
   const [subgruposExpandidos, setSubgruposExpandidos] = useState<Set<string>>(new Set());
   const [statusCarregamento, setStatusCarregamento] = useState<string | null>(null);
@@ -233,6 +234,7 @@ export default function DFCPage() {
         setNaoClassificados(m.naoClassificados || 0);
         setPrazoMedioRecebimento(m.prazoMedioRecebimento ?? null);
         setPrazoMedioPagamento(m.prazoMedioPagamento ?? null);
+        setPrazoMedioRecebimentoPorSubgrupo(m.prazoMedioRecebimentoPorSubgrupo || {});
       }
 
       if (data.periodos) setPeriodos(data.periodos);
@@ -458,9 +460,10 @@ export default function DFCPage() {
       expandido?: boolean;
       onToggle?: () => void;
       valoresOverride?: Record<string, number>;
+      tooltip?: string;
     } = {}
   ) {
-    const { bold, corFundo, clicavel, corTextoTotal, expandivel, expandido, onToggle, valoresOverride } = opcoes;
+    const { bold, corFundo, clicavel, corTextoTotal, expandivel, expandido, onToggle, valoresOverride, tooltip } = opcoes;
     const valorDe = (periodoKey?: string) => {
       if (valoresOverride) return (periodoKey ? valoresOverride[periodoKey] : valoresOverride.total) || 0;
       return valorConta(codigo, periodoKey);
@@ -480,7 +483,9 @@ export default function DFCPage() {
               <div className="w-4" />
             )}
             <span className="font-mono text-xs text-gray-500">{codigo}</span>
-            <span className={`text-sm ${bold ? 'font-bold' : ''}`}>{nome}</span>
+            <span className={`text-sm ${bold ? 'font-bold' : ''} ${tooltip ? 'underline decoration-dotted decoration-gray-400 cursor-help' : ''}`} title={tooltip}>
+              {nome}
+            </span>
           </div>
         </td>
         {periodos.map((periodo) => {
@@ -724,7 +729,9 @@ export default function DFCPage() {
 
     if (expandido) {
       for (const sub of grupo.subgrupos) {
-        linhas.push(renderizarLinhaValores(sub.codigo, nomesCustomizados[sub.codigo] ?? sub.nome, 1, {}));
+        const prazoMedio = prazoMedioRecebimentoPorSubgrupo[sub.codigo];
+        const tooltip = prazoMedio !== undefined ? `Prazo médio de recebimento: ${prazoMedio.toFixed(1)} dias` : undefined;
+        linhas.push(renderizarLinhaValores(sub.codigo, nomesCustomizados[sub.codigo] ?? sub.nome, 1, { tooltip }));
       }
     }
 
