@@ -218,6 +218,18 @@ EMPRESAS_EXCLUIDAS = [50, 100, 110, 9, 11, 12, 13, 16, 18]
 # Centros de custo das lojas ATIVAS (exclui lojas encerradas: 9, 11, 12, 13, 16, 18)
 CCUSTOS_LOJAS_ATIVOS = [2, 3, 4, 5, 6, 7, 8, 10, 14, 15, 17, 19, 20, 21, 22, 120]
 
+# Duplicatas de despesa que nao devem compor nenhum painel da DRE ou do DFC.
+# Cada item e um par (cd_fornecedor, cd_despesaitem) a ignorar nas consultas.
+DUPLICATAS_EXCLUIDAS_DRE_DFC = [(224131, 25)]
+
+# Fragmento SQL a adicionar em toda consulta a vr_fcp_despduplicatai (alias "d")
+# que alimenta paineis de DRE/DFC. Os parametros correspondentes (fornecedor, despesa)
+# devem ser adicionados ao final da tupla de params da respectiva query.
+FILTRO_DUPLICATAS_EXCLUIDAS_SQL = " AND ".join(
+    "NOT (d.cd_fornecedor = %s AND d.cd_despesaitem = %s)" for _ in DUPLICATAS_EXCLUIDAS_DRE_DFC
+)
+PARAMS_DUPLICATAS_EXCLUIDAS = tuple(v for par in DUPLICATAS_EXCLUIDAS_DRE_DFC for v in par)
+
 
 def _normalizar_texto(value: Optional[str]) -> str:
     if not value:
@@ -482,10 +494,11 @@ def get_dre_fabrica(
               AND d.tp_situacao = 'N'
               AND d.cd_ccusto IN ({ccusto_placeholders})
               AND d.cd_ccusto NOT IN ({ccusto_excluidos_placeholders})
+              AND {FILTRO_DUPLICATAS_EXCLUIDAS_SQL}
             ORDER BY d.dt_emissao
         """
 
-        despesas = execute_query(query_despesas, (dataInicio, dataFim, *CCUSTOS_FABRICA, *CCUSTOS_EXCLUIDOS_FABRICA))
+        despesas = execute_query(query_despesas, (dataInicio, dataFim, *CCUSTOS_FABRICA, *CCUSTOS_EXCLUIDOS_FABRICA, *PARAMS_DUPLICATAS_EXCLUIDAS))
         print(f"[DRE FABRICA] Total de despesas: {len(despesas)}")
 
         # Buscar classificacoes do banco de dados
@@ -716,9 +729,10 @@ def get_dre_fabrica_por_ccusto(
               AND d.tp_situacao = 'N'
               AND d.cd_ccusto IN ({ccusto_placeholders})
               AND d.cd_ccusto NOT IN ({ccusto_excluidos_placeholders})
+              AND {FILTRO_DUPLICATAS_EXCLUIDAS_SQL}
         """
 
-        despesas = execute_query(query_despesas, (dataInicio, dataFim, *CCUSTOS_FABRICA, *CCUSTOS_EXCLUIDOS_FABRICA))
+        despesas = execute_query(query_despesas, (dataInicio, dataFim, *CCUSTOS_FABRICA, *CCUSTOS_EXCLUIDOS_FABRICA, *PARAMS_DUPLICATAS_EXCLUIDAS))
         print(f"[DRE-FAB-CCUSTO] Total de despesas: {len(despesas)}")
 
         # Buscar classificações do banco
@@ -931,8 +945,9 @@ def get_dre_por_empresa(
               AND d.tp_situacao = 'N'
               AND d.cd_ccusto IN ({",".join(["%s"] * len(ccustos_dre))})
               AND d.cd_ccusto NOT IN ({",".join(["%s"] * len(CCUSTOS_EXCLUIDOS_FABRICA))})
+              AND {FILTRO_DUPLICATAS_EXCLUIDAS_SQL}
         """
-        despesas = execute_query(query_despesas, (dataInicio, dataFim, *ccustos_dre, *CCUSTOS_EXCLUIDOS_FABRICA))
+        despesas = execute_query(query_despesas, (dataInicio, dataFim, *ccustos_dre, *CCUSTOS_EXCLUIDOS_FABRICA, *PARAMS_DUPLICATAS_EXCLUIDAS))
         print(f"[DRE-EMP] Total de despesas: {len(despesas)}")
 
         # Buscar classificações do banco
@@ -1350,8 +1365,9 @@ def _calcular_valores_dfc(dataInicio: str, dataFim: str, filtro: str):
               AND d.tp_situacao = 'N'
               AND d.cd_ccusto IN ({ccusto_placeholders})
               AND d.cd_ccusto NOT IN ({",".join(["%s"] * len(CCUSTOS_EXCLUIDOS_FABRICA))})
+              AND {FILTRO_DUPLICATAS_EXCLUIDAS_SQL}
         """
-        despesas = execute_query(query_despesas, (dataInicio, dataFim, *ccustos, *CCUSTOS_EXCLUIDOS_FABRICA))
+        despesas = execute_query(query_despesas, (dataInicio, dataFim, *ccustos, *CCUSTOS_EXCLUIDOS_FABRICA, *PARAMS_DUPLICATAS_EXCLUIDAS))
         print(f"[DFC] Total de despesas: {len(despesas)}")
 
         classificacoes_dfc_db = {}
@@ -1757,10 +1773,11 @@ def _calcular_valores_unificada(
               AND d.tp_situacao = 'N'
               AND d.cd_ccusto IN ({ccusto_placeholders})
               AND d.cd_ccusto NOT IN ({",".join(["%s"] * len(CCUSTOS_EXCLUIDOS_FABRICA))})
+              AND {FILTRO_DUPLICATAS_EXCLUIDAS_SQL}
             ORDER BY d.{campo_data_despesa}
         """
 
-        despesas = execute_query(query_despesas, (dataInicio, dataFim, *ccustos, *CCUSTOS_EXCLUIDOS_FABRICA))
+        despesas = execute_query(query_despesas, (dataInicio, dataFim, *ccustos, *CCUSTOS_EXCLUIDOS_FABRICA, *PARAMS_DUPLICATAS_EXCLUIDAS))
         print(f"[DRE/DFC UNIFICADA] Total de despesas: {len(despesas)}")
 
         # Buscar classificacoes do banco de dados
@@ -2264,6 +2281,7 @@ def _buscar_duplicatas_dfc(conta: str, periodo: str, filtro: str, despesa_item: 
             params.extend(itens_conta)
         params.extend(ccustos)
         params.extend(CCUSTOS_EXCLUIDOS_FABRICA)
+        params.extend(PARAMS_DUPLICATAS_EXCLUIDAS)
 
         query = f"""
             SELECT
@@ -2289,6 +2307,7 @@ def _buscar_duplicatas_dfc(conta: str, periodo: str, filtro: str, despesa_item: 
               AND d.cd_ccusto IN ({ccusto_placeholders})
               AND d.cd_ccusto NOT IN ({ccusto_excluidos_placeholders})
               AND d.tp_situacao = 'N'
+              AND {FILTRO_DUPLICATAS_EXCLUIDAS_SQL}
             ORDER BY d.dt_baixa DESC
         """
 
@@ -2430,6 +2449,7 @@ def _buscar_duplicatas_unificada(conta: str, periodo: str, filtro: str, campo_da
 
         params.extend(ccustos)
         params.extend(CCUSTOS_EXCLUIDOS_FABRICA)
+        params.extend(PARAMS_DUPLICATAS_EXCLUIDAS)
 
         ccusto_excluidos_placeholders = ",".join(["%s"] * len(CCUSTOS_EXCLUIDOS_FABRICA))
 
@@ -2457,6 +2477,7 @@ def _buscar_duplicatas_unificada(conta: str, periodo: str, filtro: str, campo_da
               AND d.cd_ccusto IN ({ccusto_placeholders})
               AND d.cd_ccusto NOT IN ({ccusto_excluidos_placeholders})
               AND d.tp_situacao = 'N'
+              AND {FILTRO_DUPLICATAS_EXCLUIDAS_SQL}
             ORDER BY d.{campo_data_despesa} DESC
         """
 
@@ -3116,11 +3137,12 @@ def get_dre_unificada_sintetico(
                   AND d.tp_situacao = 'N'
                   AND d.cd_ccusto IN ({ccusto_despesa_placeholders})
                   AND d.cd_ccusto NOT IN ({",".join(["%s"] * len(CCUSTOS_EXCLUIDOS_FABRICA))})
+                  AND {FILTRO_DUPLICATAS_EXCLUIDAS_SQL}
                 GROUP BY DATE_TRUNC('month', d.dt_emissao), d.cd_ccusto, d.cd_despesaitem, i.ds_despesaitem
             """
             despesas_janelas = execute_query(
                 query_despesas_janelas,
-                (data_inicio_minimo, data_fim_janela_exclusivo, *ccustos_despesas, *CCUSTOS_EXCLUIDOS_FABRICA)
+                (data_inicio_minimo, data_fim_janela_exclusivo, *ccustos_despesas, *CCUSTOS_EXCLUIDOS_FABRICA, *PARAMS_DUPLICATAS_EXCLUIDAS)
             )
             for row in despesas_janelas or []:
                 dt = row.get('mes')
@@ -3270,9 +3292,10 @@ def get_dre_unificada_sintetico(
                   AND d.tp_situacao = 'N'
                   AND d.cd_ccusto IN ({ccusto_placeholders})
                   AND d.cd_ccusto NOT IN ({",".join(["%s"] * len(CCUSTOS_EXCLUIDOS_FABRICA))})
+                  AND {FILTRO_DUPLICATAS_EXCLUIDAS_SQL}
                 GROUP BY d.cd_despesaitem, i.ds_despesaitem
             """
-            despesas = execute_query(query_despesas, (dataInicio, data_fim_exclusivo, *ccustos, *CCUSTOS_EXCLUIDOS_FABRICA))
+            despesas = execute_query(query_despesas, (dataInicio, data_fim_exclusivo, *ccustos, *CCUSTOS_EXCLUIDOS_FABRICA, *PARAMS_DUPLICATAS_EXCLUIDAS))
 
             despesas_operacionais = 0
             deducoes_dre = 0
@@ -3591,9 +3614,10 @@ def get_duplicatas_por_empresa(
                   AND d.tp_situacao = 'N'
                   {filtro_ccusto_sql}
                   AND d.cd_empresa NOT IN ({placeholders_emp_excluidas})
+                  AND {FILTRO_DUPLICATAS_EXCLUIDAS_SQL}
                 ORDER BY d.dt_emissao
             """
-            despesas = execute_query(query, (dataInicio, dataFim, *params_ccusto, *EMPRESAS_EXCLUIDAS))
+            despesas = execute_query(query, (dataInicio, dataFim, *params_ccusto, *EMPRESAS_EXCLUIDAS, *PARAMS_DUPLICATAS_EXCLUIDAS))
         else:
             # Buscar apenas os itens identificados
             placeholders_itens = ','.join(['%s'] * len(itens))
@@ -3621,9 +3645,10 @@ def get_duplicatas_por_empresa(
                   {filtro_ccusto_sql}
                   AND d.cd_empresa NOT IN ({placeholders_emp_excluidas})
                   AND d.cd_despesaitem IN ({placeholders_itens})
+                  AND {FILTRO_DUPLICATAS_EXCLUIDAS_SQL}
                 ORDER BY d.dt_emissao
             """
-            despesas = execute_query(query, (dataInicio, dataFim, *params_ccusto, *EMPRESAS_EXCLUIDAS, *itens))
+            despesas = execute_query(query, (dataInicio, dataFim, *params_ccusto, *EMPRESAS_EXCLUIDAS, *itens, *PARAMS_DUPLICATAS_EXCLUIDAS))
 
         # Filtrar e processar duplicatas
         duplicatas = []
