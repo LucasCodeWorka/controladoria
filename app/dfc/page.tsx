@@ -10,6 +10,7 @@ import {
   ChevronsDown,
   ChevronsUp,
   DollarSign,
+  HelpCircle,
   RefreshCw,
   TrendingDown,
   TrendingUp,
@@ -483,9 +484,15 @@ export default function DFCPage() {
               <div className="w-4" />
             )}
             <span className="font-mono text-xs text-gray-500">{codigo}</span>
-            <span className={`text-sm ${bold ? 'font-bold' : ''} ${tooltip ? 'underline decoration-dotted decoration-gray-400 cursor-help' : ''}`} title={tooltip}>
-              {nome}
-            </span>
+            <span className={`text-sm ${bold ? 'font-bold' : ''}`}>{nome}</span>
+            {tooltip && (
+              <span className="group relative inline-flex text-gray-400 hover:text-gray-600">
+                <HelpCircle className="w-3.5 h-3.5" strokeWidth={2.5} />
+                <span className="pointer-events-none absolute left-0 top-full z-50 mt-1 hidden w-max max-w-xs whitespace-normal rounded bg-gray-900 px-2 py-1.5 text-left text-xs font-normal leading-snug text-white shadow-lg group-hover:block">
+                  {tooltip}
+                </span>
+              </span>
+            )}
           </div>
         </td>
         {periodos.map((periodo) => {
