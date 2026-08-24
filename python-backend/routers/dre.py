@@ -70,6 +70,7 @@ def _buscar_estoque_total(data_referencia: str) -> float:
             FROM public.prd_prdsaldo ps
             WHERE ps.cd_saldo = '1'
               AND ps.dt_saldo <= %s
+              AND ps.cd_produto <= 1000000
             ORDER BY ps.cd_produto, ps.dt_saldo DESC
         ),
         base AS (
