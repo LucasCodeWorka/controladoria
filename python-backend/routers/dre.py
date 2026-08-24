@@ -1071,6 +1071,60 @@ def get_dfc_plano_contas():
     return {"grupos": PLANO_CONTAS_DFC, "gruposReceita": PLANO_RECEITA_DFC}
 
 
+def _criar_tabela_grupos_ocultos_dfc():
+    execute_insert("""
+        CREATE TABLE IF NOT EXISTS plano_contas_dfc_grupos_ocultos (
+            codigo TEXT PRIMARY KEY,
+            usuario_alteracao TEXT,
+            dt_atualizacao TIMESTAMP DEFAULT NOW()
+        )
+    """)
+
+
+@router.get("/api/dfc/grupos-ocultos")
+def get_dfc_grupos_ocultos():
+    """Lista os codigos de GRUPO (OP, INV, FIN, REC) que o usuario escondeu
+    da tela do DFC. Ausencia da lista = visivel (padrao)."""
+    try:
+        _criar_tabela_grupos_ocultos_dfc()
+        rows = execute_query("SELECT codigo FROM plano_contas_dfc_grupos_ocultos", ())
+        return {"ocultos": [r['codigo'] for r in rows or []]}
+    except Exception as e:
+        print(f"[ERROR] Erro ao listar grupos ocultos do DFC: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/api/dfc/grupos-ocultos")
+def salvar_dfc_grupo_oculto(data: dict):
+    """Marca ou desmarca um GRUPO como oculto na tela do DFC."""
+    try:
+        codigo = (data.get('codigo') or '').strip()
+        oculto = bool(data.get('oculto'))
+        usuario = data.get('usuario', 'sistema')
+
+        if not codigo:
+            raise HTTPException(status_code=400, detail="codigo e obrigatorio")
+
+        _criar_tabela_grupos_ocultos_dfc()
+        if oculto:
+            execute_insert("""
+                INSERT INTO plano_contas_dfc_grupos_ocultos (codigo, usuario_alteracao, dt_atualizacao)
+                VALUES (%s, %s, CURRENT_TIMESTAMP)
+                ON CONFLICT (codigo) DO UPDATE SET
+                    usuario_alteracao = EXCLUDED.usuario_alteracao,
+                    dt_atualizacao = CURRENT_TIMESTAMP
+            """, (codigo, usuario))
+        else:
+            execute_insert("DELETE FROM plano_contas_dfc_grupos_ocultos WHERE codigo = %s", (codigo,))
+
+        return {"success": True, "codigo": codigo, "oculto": oculto}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[ERROR] Erro ao salvar grupo oculto do DFC: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 def _calcular_valores_dfc(dataInicio: str, dataFim: str, filtro: str):
     try:
         print(f"[INFO] Buscando DFC (plano proprio): {dataInicio} ate {dataFim}, filtro={filtro}")

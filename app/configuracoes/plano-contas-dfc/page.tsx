@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { ChevronRight, ChevronDown, Search, Save, RefreshCw, Wallet, X, ArrowUp, ArrowDown, Pencil } from 'lucide-react';
+import { ChevronRight, ChevronDown, Search, Save, RefreshCw, Wallet, X, ArrowUp, ArrowDown, Pencil, Eye, EyeOff } from 'lucide-react';
 
 interface SubgrupoDFC {
   codigo: string;
@@ -37,6 +37,7 @@ export default function ConfigDFCPage() {
   const [nomeEditando, setNomeEditando] = useState<string | null>(null);
   const [nomeEditandoValor, setNomeEditandoValor] = useState('');
   const [tiposCusto, setTiposCusto] = useState<Record<string, 'fixo' | 'variavel'>>({});
+  const [gruposOcultos, setGruposOcultos] = useState<Set<string>>(new Set());
   const [busca, setBusca] = useState('');
   const [apenasSemClassificacao, setApenasSemClassificacao] = useState(false);
   const [pendentes, setPendentes] = useState<Record<number, string>>({});
@@ -61,6 +62,7 @@ export default function ConfigDFCPage() {
     carregarPlanoContas();
     carregarNomesCustomizados();
     carregarTiposCusto();
+    carregarGruposOcultos();
   }, []);
 
   async function carregar() {
@@ -122,6 +124,36 @@ export default function ConfigDFCPage() {
       });
     } catch (error) {
       console.error('Erro ao salvar tipo de custo do plano de contas:', error);
+    }
+  }
+
+  async function carregarGruposOcultos() {
+    try {
+      const response = await fetch('/api/dfc/grupos-ocultos', { cache: 'no-store' });
+      const data = await response.json();
+      setGruposOcultos(new Set(data.ocultos || []));
+    } catch (error) {
+      console.error('Erro ao buscar grupos ocultos do DFC:', error);
+    }
+  }
+
+  async function alternarVisibilidadeGrupo(codigo: string) {
+    const ocultoAtual = gruposOcultos.has(codigo);
+    const novoOculto = !ocultoAtual;
+    setGruposOcultos((prev) => {
+      const novo = new Set(prev);
+      if (novoOculto) novo.add(codigo);
+      else novo.delete(codigo);
+      return novo;
+    });
+    try {
+      await fetch('/api/dfc/grupos-ocultos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ codigo, oculto: novoOculto, usuario: 'config_plano_contas_dfc' }),
+      });
+    } catch (error) {
+      console.error('Erro ao salvar visibilidade do grupo:', error);
     }
   }
 
@@ -548,8 +580,9 @@ export default function ConfigDFCPage() {
                 const expandido = gruposExpandidos.has(grupo.codigo);
                 const corGrupo = CORES_GRUPO[grupo.codigo] || 'bg-gray-50 border-gray-200';
                 const nomeGrupoExibido = nomesCustomizados[grupo.codigo] ?? grupo.nome;
+                const oculto = gruposOcultos.has(grupo.codigo);
                 return (
-                  <div key={grupo.codigo} className="mb-2">
+                  <div key={grupo.codigo} className={`mb-2 ${oculto ? 'opacity-50' : ''}`}>
                     <div
                       className={`group flex items-center gap-2 p-2 rounded-md border font-bold cursor-pointer hover:opacity-80 ${corGrupo}`}
                       onClick={() => toggleExpansaoGrupo(grupo.codigo)}
@@ -593,6 +626,16 @@ export default function ConfigDFCPage() {
                       <span className="text-[11px] bg-white px-1.5 py-0.5 rounded shrink-0">
                         {despesasNoGrupo(grupo)} itens
                       </span>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          alternarVisibilidadeGrupo(grupo.codigo);
+                        }}
+                        title={oculto ? 'Mostrar este grupo na tela do DFC' : 'Ocultar este grupo da tela do DFC'}
+                        className={`p-1 rounded shrink-0 ${oculto ? 'bg-red-100 text-red-600 hover:bg-red-200' : 'bg-white/70 text-slate-500 hover:bg-white'}`}
+                      >
+                        {oculto ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                      </button>
                     </div>
 
                     {expandido && (
@@ -665,8 +708,9 @@ export default function ConfigDFCPage() {
                   const expandido = gruposExpandidos.has(grupo.codigo);
                   const corGrupo = CORES_GRUPO[grupo.codigo] || 'bg-gray-50 border-gray-200';
                   const nomeGrupoExibido = nomesCustomizados[grupo.codigo] ?? grupo.nome;
+                  const oculto = gruposOcultos.has(grupo.codigo);
                   return (
-                    <div key={grupo.codigo} className="mb-2">
+                    <div key={grupo.codigo} className={`mb-2 ${oculto ? 'opacity-50' : ''}`}>
                       <div
                         className={`group flex items-center gap-2 p-2 rounded-md border font-bold cursor-pointer hover:opacity-80 ${corGrupo}`}
                         onClick={() => toggleExpansaoGrupo(grupo.codigo)}
@@ -707,6 +751,16 @@ export default function ConfigDFCPage() {
                             </button>
                           </span>
                         )}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            alternarVisibilidadeGrupo(grupo.codigo);
+                          }}
+                          title={oculto ? 'Mostrar este grupo na tela do DFC' : 'Ocultar este grupo da tela do DFC'}
+                          className={`p-1 rounded shrink-0 ${oculto ? 'bg-red-100 text-red-600 hover:bg-red-200' : 'bg-white/70 text-slate-500 hover:bg-white'}`}
+                        >
+                          {oculto ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                        </button>
                       </div>
 
                       {expandido && (

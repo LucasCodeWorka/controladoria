@@ -85,6 +85,7 @@ export default function DFCPage() {
   const [despesasPorSubgrupo, setDespesasPorSubgrupo] = useState<DespesasPorSubgrupo>({});
   const [nomesCustomizados, setNomesCustomizados] = useState<Record<string, string>>({});
   const [tiposCusto, setTiposCusto] = useState<Record<string, 'fixo' | 'variavel'>>({});
+  const [gruposOcultos, setGruposOcultos] = useState<Set<string>>(new Set());
   const [naoClassificados, setNaoClassificados] = useState(0);
   const [prazoMedioRecebimento, setPrazoMedioRecebimento] = useState<number | null>(null);
   const [prazoMedioPagamento, setPrazoMedioPagamento] = useState<number | null>(null);
@@ -192,6 +193,19 @@ export default function DFCPage() {
       }
     }
     carregarTiposCusto();
+  }, []);
+
+  useEffect(() => {
+    async function carregarGruposOcultos() {
+      try {
+        const response = await fetch('/api/dfc/grupos-ocultos', { cache: 'no-store' });
+        const data = await response.json();
+        setGruposOcultos(new Set(data.ocultos || []));
+      } catch (error) {
+        console.error('Erro ao buscar grupos ocultos do DFC:', error);
+      }
+    }
+    carregarGruposOcultos();
   }, []);
 
   async function buscarDados() {
@@ -990,8 +1004,8 @@ export default function DFCPage() {
                 </tr>
               </thead>
               <tbody>
-                {gruposReceita.map((grupo) => renderizarGrupoReceita(grupo))}
-                {grupos.map((grupo) => (
+                {gruposReceita.filter((grupo) => !gruposOcultos.has(grupo.codigo)).map((grupo) => renderizarGrupoReceita(grupo))}
+                {grupos.filter((grupo) => !gruposOcultos.has(grupo.codigo)).map((grupo) => (
                   <React.Fragment key={`wrap-${grupo.codigo}`}>
                     {renderizarGrupo(grupo)}
                     {grupo.codigo === 'OP' && naoClassificados > 0 &&
