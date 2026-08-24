@@ -1,7 +1,6 @@
 import type { Metadata } from 'next'
 import './globals.css'
 import { AuthProvider } from './contexts/AuthContext'
-import { CacheProvider } from './contexts/CacheContext'
 import LayoutWrapper from './components/LayoutWrapper'
 import { Inter, Lato } from 'next/font/google'
 
@@ -32,9 +31,7 @@ export default function RootLayout({
     <html lang="pt-BR" className={`${inter.variable} ${lato.variable}`}>
       <body className={inter.className}>
         <AuthProvider>
-          <CacheProvider>
-            <LayoutWrapper>{children}</LayoutWrapper>
-          </CacheProvider>
+          <LayoutWrapper>{children}</LayoutWrapper>
         </AuthProvider>
       </body>
     </html>

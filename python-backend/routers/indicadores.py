@@ -557,45 +557,6 @@ def _calcular_quebra_pedidos(ref_month: date) -> dict:
 
 # ─── Endpoints tempo real ─────────────────────────────────────────────────────
 
-@router.get("/api/indicadores/giro-lojas")
-def get_giro_estoque_lojas():
-    return _calcular_giro_lojas(date.today().replace(day=1))
-
-
-@router.get("/api/indicadores/giro-mp")
-def get_giro_mp():
-    return _calcular_giro_mp(date.today().replace(day=1))
-
-
-@router.get("/api/indicadores/giro-fabrica")
-def get_giro_fabrica():
-    return _calcular_giro_fabrica(date.today().replace(day=1))
-
-
-@router.get("/api/indicadores/faturamento-fabrica")
-def get_faturamento_fabrica():
-    return _calcular_faturamento_fabrica(date.today().replace(day=1))
-
-
-@router.get("/api/indicadores/faturamento-ecommerce")
-def get_faturamento_ecommerce():
-    return _calcular_faturamento_ecommerce(date.today().replace(day=1))
-
-
-@router.get("/api/indicadores/quebra-pedidos")
-def get_quebra_pedidos():
-    return _calcular_quebra_pedidos(date.today().replace(day=1))
-
-
-@router.get("/api/indicadores/vendas-volume-varejo")
-def get_vendas_volume_varejo():
-    return _calcular_vendas_volume_varejo(date.today().replace(day=1))
-
-
-@router.get("/api/indicadores/ecommerce-ads")
-def get_ecommerce_ads():
-    return _calcular_ecommerce_ads(date.today().replace(day=1))
-
 
 # ─── CMV % (Custo Mercadoria Vendida / Receita Liquida) ───────────────────────
 
@@ -662,11 +623,6 @@ def _calcular_cmv_pct(ref_month: date) -> dict:
         "receita_liquida": receita_liquida,
         "cmv_pct": cmv_pct,
     }
-
-
-@router.get("/api/indicadores/cmv-pct")
-def get_cmv_pct():
-    return _calcular_cmv_pct(date.today().replace(day=1))
 
 
 # ─── Lucro Liquido % (12 meses) ───────────────────────────────────────────────
@@ -834,11 +790,6 @@ def _calcular_lucro_liq_pct(ref_month: date) -> dict:
     }
 
 
-@router.get("/api/indicadores/lucro-liq-pct")
-def get_lucro_liq_pct():
-    return _calcular_lucro_liq_pct(date.today().replace(day=1))
-
-
 # ─── Sobra de MP (Materia Prima) ──────────────────────────────────────────────
 
 def _calcular_sobra_mp(ref_month: date) -> dict:
@@ -952,11 +903,6 @@ def _calcular_sobra_mp(ref_month: date) -> dict:
         }
 
 
-@router.get("/api/indicadores/sobra-mp")
-def get_sobra_mp():
-    return _calcular_sobra_mp(date.today().replace(day=1))
-
-
 # ─── Cache histórico ──────────────────────────────────────────────────────────
 
 _INDICADORES_FNS = [
@@ -1050,34 +996,3 @@ def get_historico():
     return {"meses": list(por_mes.values())}
 
 
-@router.post("/api/indicadores/cache/forcar/{indicador}")
-def forcar_indicador(indicador: str):
-    """Forca atualizacao de um indicador especifico para o mes atual"""
-    _criar_tabela_historico()
-
-    # Encontrar a funcao do indicador
-    fn = None
-    for nome, func in _INDICADORES_FNS:
-        if nome == indicador:
-            fn = func
-            break
-
-    if fn is None:
-        return {"erro": f"Indicador '{indicador}' nao encontrado", "disponiveis": [n for n, _ in _INDICADORES_FNS]}
-
-    ref_month = date.today().replace(day=1)
-    mes_str = ref_month.isoformat()
-
-    try:
-        dados = fn(ref_month)
-        execute_insert("""
-            INSERT INTO indicadores_historico (mes, indicador, dados, atualizado_em)
-            VALUES (%s, %s, %s::jsonb, NOW())
-            ON CONFLICT (mes, indicador) DO UPDATE
-            SET dados = EXCLUDED.dados, atualizado_em = NOW()
-        """, (mes_str, indicador, json.dumps(dados)))
-
-        return {"status": "ok", "indicador": indicador, "mes": mes_str, "dados": dados}
-    except Exception as e:
-        import traceback
-        return {"status": "erro", "erro": str(e), "traceback": traceback.format_exc()}

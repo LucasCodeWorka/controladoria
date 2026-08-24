@@ -44,82 +44,115 @@ def get_connection_pool():
 
     return connection_pool
 
+def _conexao_morta(e: Exception) -> bool:
+    """
+    Detecta se a excecao indica que a conexao em si morreu (fechada pelo
+    servidor remoto por timeout de ociosidade, queda de rede, etc.), em vez
+    de um erro normal de query (sintaxe, constraint, etc.). Nesses casos a
+    conexao NAO pode voltar pro pool - senao o pool fica entregando uma
+    conexao morta pra proxima chamada, e qualquer endpoint pode ser atingido
+    de forma aleatoria e intermitente.
+    """
+    if isinstance(e, (psycopg2.InterfaceError, psycopg2.OperationalError)):
+        return True
+    return 'connection already closed' in str(e).lower() or 'server closed the connection' in str(e).lower()
+
+
 def execute_query(query: str, params: tuple = None) -> List[Dict[str, Any]]:
-    """Executa query e retorna resultados como lista de dicts"""
+    """Executa query e retorna resultados como lista de dicts. Se a conexao
+    obtida do pool estiver morta, descarta e tenta uma vez com uma nova."""
     pool = get_connection_pool()
-    conn = None
 
-    try:
-        conn = pool.getconn()
-        cursor = conn.cursor()
+    for tentativa in range(2):
+        conn = None
+        conexao_devolvida = False
+        try:
+            conn = pool.getconn()
+            cursor = conn.cursor()
 
-        print(f"[QUERY] Executing: {query[:100]}...")
-        if params and len(params) > 0:
-            print(f"[PARAMS] {params}")
-            cursor.execute(query, params)
-        else:
-            cursor.execute(query)
+            print(f"[QUERY] Executing: {query[:100]}...")
+            if params and len(params) > 0:
+                print(f"[PARAMS] {params}")
+                cursor.execute(query, params)
+            else:
+                cursor.execute(query)
 
-        # Pegar nomes das colunas
-        columns = [desc[0] for desc in cursor.description] if cursor.description else []
+            # Pegar nomes das colunas
+            columns = [desc[0] for desc in cursor.description] if cursor.description else []
 
-        # Converter resultados em lista de dicts
-        results = []
-        for row in cursor.fetchall():
-            results.append(dict(zip(columns, row)))
-
-        print(f"[OK] Query executed successfully. Rows: {len(results)}")
-
-        cursor.close()
-        return results
-
-    except Exception as e:
-        print(f"[ERROR] Query execution failed: {e}")
-        raise
-    finally:
-        if conn:
-            pool.putconn(conn)
-
-def execute_insert(query: str, params: tuple = None) -> List[Dict[str, Any]]:
-    """Executa INSERT/UPDATE e faz commit"""
-    pool = get_connection_pool()
-    conn = None
-
-    try:
-        conn = pool.getconn()
-        cursor = conn.cursor()
-
-        print(f"[INSERT] Executing: {query[:100]}...")
-        if params and len(params) > 0:
-            print(f"[PARAMS] {params}")
-            cursor.execute(query, params)
-        else:
-            cursor.execute(query)
-
-        conn.commit()  # Fazer commit
-
-        # Pegar nomes das colunas se houver resultado (ex: RETURNING)
-        columns = [desc[0] for desc in cursor.description] if cursor.description else []
-
-        # Converter resultados em lista de dicts
-        results = []
-        if columns:
+            # Converter resultados em lista de dicts
+            results = []
             for row in cursor.fetchall():
                 results.append(dict(zip(columns, row)))
 
-        print(f"[OK] Insert executed successfully. Rows affected: {cursor.rowcount}")
+            print(f"[OK] Query executed successfully. Rows: {len(results)}")
 
-        cursor.close()
-        return results
-
-    except Exception as e:
-        if conn:
-            conn.rollback()
-        print(f"[ERROR] Insert execution failed: {e}")
-        raise
-    finally:
-        if conn:
+            cursor.close()
             pool.putconn(conn)
+            conexao_devolvida = True
+            return results
+
+        except Exception as e:
+            print(f"[ERROR] Query execution failed: {e}")
+            if conn and not conexao_devolvida:
+                pool.putconn(conn, close=_conexao_morta(e))
+                conexao_devolvida = True
+            if _conexao_morta(e) and tentativa == 0:
+                print("[QUERY] Conexao morta detectada, tentando novamente com nova conexao...")
+                continue
+            raise
+
+def execute_insert(query: str, params: tuple = None) -> List[Dict[str, Any]]:
+    """Executa INSERT/UPDATE e faz commit. Se a conexao obtida do pool
+    estiver morta, descarta e tenta uma vez com uma nova."""
+    pool = get_connection_pool()
+
+    for tentativa in range(2):
+        conn = None
+        conexao_devolvida = False
+        try:
+            conn = pool.getconn()
+            cursor = conn.cursor()
+
+            print(f"[INSERT] Executing: {query[:100]}...")
+            if params and len(params) > 0:
+                print(f"[PARAMS] {params}")
+                cursor.execute(query, params)
+            else:
+                cursor.execute(query)
+
+            conn.commit()  # Fazer commit
+
+            # Pegar nomes das colunas se houver resultado (ex: RETURNING)
+            columns = [desc[0] for desc in cursor.description] if cursor.description else []
+
+            # Converter resultados em lista de dicts
+            results = []
+            if columns:
+                for row in cursor.fetchall():
+                    results.append(dict(zip(columns, row)))
+
+            print(f"[OK] Insert executed successfully. Rows affected: {cursor.rowcount}")
+
+            cursor.close()
+            pool.putconn(conn)
+            conexao_devolvida = True
+            return results
+
+        except Exception as e:
+            if conn and not _conexao_morta(e):
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+            print(f"[ERROR] Insert execution failed: {e}")
+            if conn and not conexao_devolvida:
+                pool.putconn(conn, close=_conexao_morta(e))
+                conexao_devolvida = True
+            if _conexao_morta(e) and tentativa == 0:
+                print("[INSERT] Conexao morta detectada, tentando novamente com nova conexao...")
+                continue
+            raise
 
 def close_all_connections():
     """Fecha todas as conexões do pool"""

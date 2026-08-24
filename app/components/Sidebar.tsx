@@ -14,6 +14,7 @@ import {
   ClipboardList,
   BarChart3,
   Factory,
+  Wallet,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -36,6 +37,11 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
       href: '/dre-fabrica',
       icon: Factory,
     },
+    {
+      name: 'DFC',
+      href: '/dfc',
+      icon: Wallet,
+    },
   ];
 
   const menuConfigItems = [
@@ -43,6 +49,11 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
       name: 'Config DRE',
       href: '/configuracoes/plano-contas-dre',
       icon: ClipboardList,
+    },
+    {
+      name: 'Config DFC',
+      href: '/configuracoes/plano-contas-dfc',
+      icon: Wallet,
     },
   ];
 

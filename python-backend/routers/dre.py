@@ -4,6 +4,25 @@ from datetime import datetime, timedelta
 from database import execute_query, execute_insert
 import services
 import unicodedata
+from plano_contas_dfc import (
+    PLANO_CONTAS_DFC,
+    PLANO_RECEITA_DFC,
+    RECEBIMENTOS_TIPOS_DOCUMENTO,
+    RECEBIMENTOS_DATA_CONSTRUIDA,
+    CODIGO_DEVOLUCOES_RECEITA,
+    subgrupos_validos,
+    grupo_de_subgrupo,
+)
+
+
+def _somar_dias_uteis(data, dias: int):
+    """Soma N dias UTEIS (pula sabado/domingo) a uma data."""
+    restante = dias
+    while restante > 0:
+        data = data + timedelta(days=1)
+        if data.weekday() < 5:  # 0=segunda ... 4=sexta
+            restante -= 1
+    return data
 
 router = APIRouter()
 
@@ -70,6 +89,51 @@ def _classificar_conta_dre(cd_despesaitem, descricao_despesa, classificacoes_db)
     if conta:
         return conta
 
+    return 'NAO_CLASSIFICADO'
+
+
+def _criar_tabela_classificacao_dfc():
+    execute_insert("""
+        CREATE TABLE IF NOT EXISTS classificacao_despesas_dfc (
+            cd_despesaitem INTEGER PRIMARY KEY,
+            ds_despesaitem TEXT,
+            conta_dfc TEXT NOT NULL,
+            usuario_alteracao TEXT,
+            dt_atualizacao TIMESTAMP DEFAULT NOW()
+        )
+    """)
+
+
+def _classificar_conta_dfc(cd_despesaitem, descricao_despesa, classificacoes_dfc_db, classificacoes_dre_db):
+    """
+    Classifica uma despesa em uma conta do DFC (regime de caixa).
+
+    O DFC tem uma tabela de classificacao PROPRIA (classificacao_despesas_dfc),
+    usada so para os casos em que o DFC precisa divergir da DRE (ex: custo de
+    mercadoria vendida = despesas reais de compra de materia-prima pagas, em
+    vez do calculo sintetico que a DRE usa). Qualquer despesa sem override
+    especifico do DFC cai automaticamente na MESMA classificacao da DRE - o
+    DFC nunca perde o que ja esta correto na DRE, so sobrescreve o que for
+    configurado explicitamente.
+    """
+    conta_dfc = classificacoes_dfc_db.get(cd_despesaitem)
+    if conta_dfc:
+        return conta_dfc
+
+    return _classificar_conta_dre(cd_despesaitem, descricao_despesa, classificacoes_dre_db)
+
+
+def _classificar_subgrupo_dfc(cd_despesaitem, classificacoes_dfc_db):
+    """
+    Classifica uma despesa em um SUBGRUPO do plano de contas proprio do DFC
+    (ver plano_contas_dfc.py: GRUPO > SUBGRUPO, estrutura definida pela
+    consultoria contabil externa). Diferente de _classificar_conta_dfc, essa
+    arvore e INDEPENDENTE da DRE - nao tem fallback para classificacao_despesas_dre,
+    pois o DFC agora tem seu proprio plano de contas.
+    """
+    conta_dfc = classificacoes_dfc_db.get(cd_despesaitem)
+    if conta_dfc and conta_dfc in subgrupos_validos():
+        return conta_dfc
     return 'NAO_CLASSIFICADO'
 
 
@@ -162,295 +226,6 @@ def _calcular_totalizadores(valores_por_conta, periodos):
     return valores_por_conta
 
 
-@router.get("/api/dre")
-def get_dre(
-    dataInicio: str = Query("2026-01-01", description="Data inicial (YYYY-MM-DD)"),
-    dataFim: str = Query("2026-12-31", description="Data final (YYYY-MM-DD)"),
-    empresas: Optional[str] = Query(None, description="IDs de empresa separados por vírgula (ex: 1,120,11)")
-):
-    """
-    Retorna dados da DRE agrupados por conta e período mensal
-
-    Args:
-        dataInicio: Data inicial no formato YYYY-MM-DD
-        dataFim: Data final no formato YYYY-MM-DD
-
-    Returns:
-        JSON com dados da DRE estruturados
-    """
-    try:
-        print(f"[INFO] Buscando DRE: {dataInicio} até {dataFim}, empresas={empresas}")
-        import calendar
-
-        # Gerar períodos mensais
-        periodos = services.gerar_periodos(dataInicio, dataFim)
-
-        # Parsear filtro de empresas (se informado)
-        empresas_ids = None
-        if empresas:
-            try:
-                empresas_ids = [int(e.strip()) for e in empresas.split(',') if e.strip()]
-            except ValueError:
-                raise HTTPException(status_code=400, detail="Parametro 'empresas' invalido. Use IDs separados por virgula.")
-            if not empresas_ids:
-                raise HTTPException(status_code=400, detail="Parametro 'empresas' invalido. Informe pelo menos um ID.")
-
-        # Buscar TODAS as despesas do período por DATA DE EMISSÃO
-        # Filtro por cd_ccusto (centros de custo válidos), excluindo 50, 100, 110
-        # Monta lista de ccustos válidos: fábrica + lojas + ecommerce + diretoria
-        ccustos_dre_analitico = CCUSTOS_FABRICA + list(CCUSTOS_LOJAS.keys()) + CCUSTOS_ECOMMERCE + [515]
-
-        # Filtro de empresa específica (se informado) - filtra por cd_ccusto
-        empresa_desp_filter = ""
-        empresa_desp_params = []
-        if empresas_ids:
-            empresa_desp_placeholders = ",".join(["%s"] * len(empresas_ids))
-            empresa_desp_filter = f" AND d.cd_ccusto IN ({empresa_desp_placeholders})"
-            empresa_desp_params = empresas_ids
-
-        query_despesas = f"""
-            SELECT
-                d.cd_despesaitem,
-                i.ds_despesaitem as descricao_despesa,
-                d.dt_emissao as dt_emissao,
-                ABS(d.vl_rateio) as valor
-            FROM vr_fcp_despduplicatai d
-            JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
-            WHERE d.dt_emissao >= %s
-              AND d.dt_emissao <= %s
-              AND d.tp_situacao = 'N'
-              AND d.cd_ccusto IN ({",".join(["%s"] * len(ccustos_dre_analitico))})
-              AND d.cd_ccusto NOT IN ({",".join(["%s"] * len(CCUSTOS_EXCLUIDOS_FABRICA))})
-              {empresa_desp_filter}
-            ORDER BY d.dt_emissao
-        """
-
-        despesas = execute_query(query_despesas, (dataInicio, dataFim, *ccustos_dre_analitico, *CCUSTOS_EXCLUIDOS_FABRICA, *empresa_desp_params))
-        print(f"[DRE] Total de despesas: {len(despesas)}")
-
-        # Buscar classificações do banco de dados (prioridade) e depois usar mapeamento fixo como fallback
-        classificacoes_db = {}
-        try:
-            rows = execute_query("SELECT cd_despesaitem, ds_despesaitem, conta_dre FROM classificacao_despesas_dre", ())
-            for row in rows or []:
-                cd = row.get('cd_despesaitem')
-                ds = row.get('ds_despesaitem')
-                conta_dre = row.get('conta_dre', '')
-                if cd and conta_dre:
-                    # Extrair apenas o código (ex: "08.01.02" de "08.01.02 ALUGUEL MINIMO")
-                    codigo = conta_dre.split(' ')[0] if ' ' in conta_dre else conta_dre
-                    classificacoes_db[cd] = codigo
-            print(f"[DRE] Classificações carregadas do banco: {len(classificacoes_db)}")
-        except Exception as e:
-            print(f"[DRE] Aviso: não foi possível carregar classificações do banco: {e}")
-
-        # Agrupar despesas por conta_dre e período
-        valores_por_conta = {}
-        nao_classificados = 0
-
-        for d in despesas:
-            cd_despesaitem = d['cd_despesaitem']
-            descricao_despesa = d.get('descricao_despesa')
-            conta = _classificar_conta_dre(cd_despesaitem, descricao_despesa, classificacoes_db)
-            valor = -abs(float(d['valor'] or 0))
-            dt_emissao = d['dt_emissao']
-
-            if conta == 'NAO_CLASSIFICADO':
-                nao_classificados += 1
-
-            # Pular despesas excluidas (ex: MERC P/ REVENDA)
-            if conta == 'EXCLUIDO':
-                continue
-
-            # Determinar período (YYYY-MM)
-            if dt_emissao:
-                periodo = dt_emissao.strftime('%Y-%m')
-            else:
-                continue
-
-            # Só considerar se o período estiver na lista
-            if periodo not in periodos:
-                continue
-
-            if conta not in valores_por_conta:
-                valores_por_conta[conta] = {'total': 0}
-                for p in periodos:
-                    valores_por_conta[conta][p] = 0
-
-            valores_por_conta[conta][periodo] += valor
-            valores_por_conta[conta]['total'] += valor
-
-        # Log das contas encontradas
-        print(f"[DRE] Contas com valores: {list(valores_por_conta.keys())}")
-        print(f"[DRE] Despesas nao classificadas: {nao_classificados}")
-
-        # Buscar VENDAS e DEVOLUCOES por transacao (Receita Bruta e Deducoes)
-        empresa_filter_sql = ""
-        empresa_params = []
-        if empresas_ids:
-            placeholders = ",".join(["%s"] * len(empresas_ids))
-            empresa_filter_sql = f" AND t.cd_empresa IN ({placeholders})"
-            empresa_params = empresas_ids
-
-        # Filtro para EXCLUIR empresas específicas (CORPO SEXY, CAIRO BENEVIDES, CB EMPREENDIMENTOS)
-        exclusao_vendas_placeholders = ",".join(["%s"] * len(EMPRESAS_EXCLUIDAS))
-        exclusao_filter_sql = f" AND t.cd_empresa NOT IN ({exclusao_vendas_placeholders})"
-
-        base_where_common = f"""
-            t.dt_transacao >= %s
-            AND t.dt_transacao <= %s
-            AND t.tp_situacao = 4
-            {empresa_filter_sql}
-            {exclusao_filter_sql}
-        """
-
-        query_vendas = f"""
-            SELECT
-                t.dt_transacao as dt_transacao,
-                t.vl_transacao as valor
-            FROM vr_tra_transacao t
-            WHERE
-                {base_where_common}
-                AND t.tp_modalidade IN ('4')
-                AND t.tp_operacao = 'S'
-            ORDER BY t.dt_transacao
-        """
-
-        query_devolucoes = f"""
-            SELECT
-                t.dt_transacao as dt_transacao,
-                t.vl_transacao as valor
-            FROM vr_tra_transacao t
-            WHERE
-                {base_where_common}
-                AND t.tp_modalidade IN ('3')
-                AND t.tp_operacao = 'E'
-            ORDER BY t.dt_transacao
-        """
-
-        params = [dataInicio, dataFim] + empresa_params + list(EMPRESAS_EXCLUIDAS)
-        vendas = execute_query(query_vendas, tuple(params))
-        devolucoes = execute_query(query_devolucoes, tuple(params))
-        print(f"[DRE] Total de vendas (transacoes): {len(vendas)}")
-        print(f"[DRE] Total de devolucoes (transacoes): {len(devolucoes)}")
-
-        # Agrupar por periodo (YYYY-MM)
-        receita_bruta = _init_valores_periodo(periodos)
-        devolucoes_brutas = _init_valores_periodo(periodos)
-
-        for v in vendas:
-            valor = float(v['valor'] or 0)
-            dt_transacao = v['dt_transacao']
-            if not dt_transacao:
-                continue
-            periodo = dt_transacao.strftime('%Y-%m')
-            if periodo in periodos:
-                receita_bruta[periodo] += valor
-                receita_bruta['total'] += valor
-
-        for d in devolucoes:
-            valor = -abs(float(d['valor'] or 0))
-            dt_transacao = d['dt_transacao']
-            if not dt_transacao:
-                continue
-            periodo = dt_transacao.strftime('%Y-%m')
-            if periodo in periodos:
-                devolucoes_brutas[periodo] += valor
-                devolucoes_brutas['total'] += valor
-
-        # Adicionar receita bruta e devolucoes nas contas DRE
-        def _merge_conta(codigo: str, valores: dict):
-            if codigo not in valores_por_conta:
-                valores_por_conta[codigo] = valores
-                return
-            for p in periodos:
-                valores_por_conta[codigo][p] = valores_por_conta[codigo].get(p, 0) + valores.get(p, 0)
-            valores_por_conta[codigo]['total'] = valores_por_conta[codigo].get('total', 0) + valores.get('total', 0)
-
-        _merge_conta('01.01.02', receita_bruta)
-        _merge_conta('02.01.03', devolucoes_brutas)
-
-        # CMV por período → conta 04.02.02 (CUSTO MERCADORIAS VENDIDAS)
-        # Filtro de empresa específica para CMV (se informado)
-        cmv_empresa_filter = ""
-        cmv_empresa_params = []
-        if empresas_ids:
-            cmv_empresa_placeholders = ",".join(["%s"] * len(empresas_ids))
-            cmv_empresa_filter = f" AND idcentrodecusto IN ({cmv_empresa_placeholders})"
-            cmv_empresa_params = empresas_ids
-
-        cmv_loja_raw = execute_query(f"""
-            SELECT DATE_TRUNC('month', data) AS mes, ABS(SUM(valor)) AS cmv
-            FROM mv_cmv_loja_v2
-            WHERE data >= %s AND data <= %s
-              {cmv_empresa_filter}
-            GROUP BY DATE_TRUNC('month', data)
-        """, (dataInicio, dataFim, *cmv_empresa_params))
-
-        # Filtro de empresa específica para CMV fábrica (coluna diferente: idcentrocusto)
-        cmv_fab_empresa_filter = ""
-        cmv_fab_empresa_params = []
-        if empresas_ids:
-            cmv_fab_empresa_placeholders = ",".join(["%s"] * len(empresas_ids))
-            cmv_fab_empresa_filter = f" AND idcentrocusto IN ({cmv_fab_empresa_placeholders})"
-            cmv_fab_empresa_params = empresas_ids
-
-        cmv_fab_raw = execute_query(f"""
-            SELECT DATE_TRUNC('month', data) AS mes, ABS(COALESCE(SUM(valor), 0)) AS cmv
-            FROM mv_cmv_fab
-            WHERE data >= %s AND data <= %s
-              {cmv_fab_empresa_filter}
-            GROUP BY DATE_TRUNC('month', data)
-        """, (dataInicio, dataFim, *cmv_fab_empresa_params))
-
-        cmv_valores = _init_valores_periodo(periodos)
-        for r in (cmv_loja_raw or []) + (cmv_fab_raw or []):
-            p = r['mes'].strftime('%Y-%m')
-            if p in periodos:
-                v = -abs(float(r['cmv'] or 0))
-                cmv_valores[p] += v
-                cmv_valores['total'] += v
-
-        _merge_conta('04.02.02', cmv_valores)
-        valores_por_conta = _somar_hierarquia(valores_por_conta, periodos)
-        valores_por_conta = _calcular_totalizadores(valores_por_conta, periodos)
-        print(f"[DRE] CMV total: {cmv_valores['total']:.2f}")
-
-        # Montar resposta
-        response = {
-            "periodos": [
-                {
-                    "key": p,
-                    "label": services.formatar_label_periodo(p)
-                }
-                for p in periodos
-            ],
-            "valores": valores_por_conta,
-            "metadata": {
-                "totalDespesas": len(despesas),
-                "naoClassificadas": nao_classificados,
-                "totalVendasItens": len(vendas),
-                "totalDevolucoesItens": len(devolucoes),
-                "dataInicio": dataInicio,
-                "dataFim": dataFim,
-                "empresas": empresas_ids,
-                "dataConsulta": datetime.now().isoformat()
-            }
-        }
-
-        print(f"[OK] DRE gerado com sucesso.")
-        return response
-
-    except Exception as e:
-        print(f"[ERROR] Erro ao processar DRE: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(
-            status_code=500,
-            detail=f"Erro ao buscar dados da DRE: {str(e)}"
-        )
-
-
 # ============================================================================
 # CENTROS DE CUSTO DA FABRICA
 # ============================================================================
@@ -495,7 +270,6 @@ def _buscar_empresas_lojas():
     """
     rows = execute_query(query, ('%LOJAS%', '%LOJA %'))
     return [r['cd_empresa'] for r in rows], {r['cd_empresa']: r['nome'] for r in rows}
-
 
 
 @router.get("/api/dre/fabrica")
@@ -732,637 +506,6 @@ def get_dre_fabrica(
         )
 
 
-@router.get("/api/dre/lojas")
-def get_dre_lojas(
-    dataInicio: str = Query("2026-01-01", description="Data inicial (YYYY-MM-DD)"),
-    dataFim: str = Query("2026-12-31", description="Data final (YYYY-MM-DD)")
-):
-    """
-    Retorna dados da DRE LOJAS agrupados por conta e periodo mensal.
-    Filtra apenas centros de custo e empresas que tem LOJAS no nome.
-    """
-    try:
-        print(f"[INFO] Buscando DRE LOJAS: {dataInicio} ate {dataFim}")
-
-        # Buscar centros de custo e empresas de lojas dinamicamente
-        ccustos_lojas, nomes_ccustos = _buscar_ccustos_lojas()
-        empresas_lojas, nomes_empresas = _buscar_empresas_lojas()
-
-        if not ccustos_lojas:
-            print("[DRE LOJAS] Nenhum centro de custo de lojas encontrado!")
-            return {
-                "periodos": [],
-                "valores": {},
-                "metadata": {
-                    "erro": "Nenhum centro de custo com 'LOJAS' no nome encontrado",
-                    "dataInicio": dataInicio,
-                    "dataFim": dataFim
-                }
-            }
-
-        print(f"[DRE LOJAS] Centros de custo encontrados: {ccustos_lojas}")
-        print(f"[DRE LOJAS] Empresas encontradas: {empresas_lojas}")
-
-        # Gerar periodos mensais
-        periodos = services.gerar_periodos(dataInicio, dataFim)
-
-        # Placeholders para filtros
-        ccusto_placeholders = ",".join(["%s"] * len(ccustos_lojas))
-        empresa_placeholders = ",".join(["%s"] * len(empresas_lojas)) if empresas_lojas else "0"
-
-        # =========================================================================
-        # DESPESAS - filtrar por centro de custo de lojas
-        # =========================================================================
-        query_despesas = f"""
-            SELECT
-                d.cd_despesaitem,
-                i.ds_despesaitem as descricao_despesa,
-                d.dt_emissao as dt_emissao,
-                ABS(d.vl_rateio) as valor
-            FROM vr_fcp_despduplicatai d
-            JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
-            WHERE d.dt_emissao >= %s
-              AND d.dt_emissao <= %s
-              AND d.tp_situacao = 'N'
-              AND d.cd_ccusto IN ({ccusto_placeholders})
-            ORDER BY d.dt_emissao
-        """
-
-        despesas = execute_query(query_despesas, (dataInicio, dataFim, *ccustos_lojas))
-        print(f"[DRE LOJAS] Total de despesas: {len(despesas)}")
-
-        # Buscar classificacoes do banco de dados
-        classificacoes_db = {}
-        try:
-            rows = execute_query("SELECT cd_despesaitem, ds_despesaitem, conta_dre FROM classificacao_despesas_dre", ())
-            for row in rows or []:
-                cd = row.get('cd_despesaitem')
-                ds = row.get('ds_despesaitem')
-                conta_dre = row.get('conta_dre', '')
-                if cd and conta_dre:
-                    codigo = conta_dre.split(' ')[0] if ' ' in conta_dre else conta_dre
-                    classificacoes_db[cd] = codigo
-        except Exception as e:
-            print(f"[DRE LOJAS] Aviso: nao foi possivel carregar classificacoes: {e}")
-
-        # Agrupar despesas por conta_dre e periodo
-        valores_por_conta = {}
-        nao_classificados = 0
-
-        for d in despesas:
-            cd_despesaitem = d['cd_despesaitem']
-            descricao_despesa = d.get('descricao_despesa')
-            conta = _classificar_conta_dre(cd_despesaitem, descricao_despesa, classificacoes_db)
-            valor = -abs(float(d['valor'] or 0))
-            dt_emissao = d['dt_emissao']
-
-            if conta == 'NAO_CLASSIFICADO':
-                nao_classificados += 1
-
-            # Pular despesas excluidas (ex: MERC P/ REVENDA)
-            if conta == 'EXCLUIDO':
-                continue
-
-            if dt_emissao:
-                periodo = dt_emissao.strftime('%Y-%m')
-            else:
-                continue
-
-            if periodo not in periodos:
-                continue
-
-            if conta not in valores_por_conta:
-                valores_por_conta[conta] = {'total': 0}
-                for p in periodos:
-                    valores_por_conta[conta][p] = 0
-
-            valores_por_conta[conta][periodo] += valor
-            valores_por_conta[conta]['total'] += valor
-
-        print(f"[DRE LOJAS] Despesas nao classificadas: {nao_classificados}")
-
-        # =========================================================================
-        # VENDAS - filtrar por empresas de lojas
-        # =========================================================================
-        receita_bruta = _init_valores_periodo(periodos)
-        devolucoes_brutas = _init_valores_periodo(periodos)
-
-        if empresas_lojas:
-            query_vendas = f"""
-                SELECT
-                    t.dt_transacao as dt_transacao,
-                    t.vl_transacao as valor
-                FROM vr_tra_transacao t
-                WHERE t.dt_transacao >= %s
-                  AND t.dt_transacao <= %s
-                  AND t.tp_situacao = 4
-                  AND t.cd_empresa IN ({empresa_placeholders})
-                  AND t.tp_modalidade IN ('4')
-                  AND t.tp_operacao = 'S'
-                ORDER BY t.dt_transacao
-            """
-
-            query_devolucoes = f"""
-                SELECT
-                    t.dt_transacao as dt_transacao,
-                    t.vl_transacao as valor
-                FROM vr_tra_transacao t
-                WHERE t.dt_transacao >= %s
-                  AND t.dt_transacao <= %s
-                  AND t.tp_situacao = 4
-                  AND t.cd_empresa IN ({empresa_placeholders})
-                  AND t.tp_modalidade IN ('3')
-                  AND t.tp_operacao = 'E'
-                ORDER BY t.dt_transacao
-            """
-
-            vendas = execute_query(query_vendas, (dataInicio, dataFim, *empresas_lojas))
-            devolucoes = execute_query(query_devolucoes, (dataInicio, dataFim, *empresas_lojas))
-            print(f"[DRE LOJAS] Total de vendas: {len(vendas)}")
-            print(f"[DRE LOJAS] Total de devolucoes: {len(devolucoes)}")
-
-            for v in vendas:
-                valor = float(v['valor'] or 0)
-                dt_transacao = v['dt_transacao']
-                if not dt_transacao:
-                    continue
-                periodo = dt_transacao.strftime('%Y-%m')
-                if periodo in periodos:
-                    receita_bruta[periodo] += valor
-                    receita_bruta['total'] += valor
-
-            for d in devolucoes:
-                valor = -abs(float(d['valor'] or 0))
-                dt_transacao = d['dt_transacao']
-                if not dt_transacao:
-                    continue
-                periodo = dt_transacao.strftime('%Y-%m')
-                if periodo in periodos:
-                    devolucoes_brutas[periodo] += valor
-                    devolucoes_brutas['total'] += valor
-
-        # Funcao auxiliar para merge de contas
-        def _merge_conta(codigo: str, valores: dict):
-            if codigo not in valores_por_conta:
-                valores_por_conta[codigo] = valores
-                return
-            for p in periodos:
-                valores_por_conta[codigo][p] = valores_por_conta[codigo].get(p, 0) + valores.get(p, 0)
-            valores_por_conta[codigo]['total'] = valores_por_conta[codigo].get('total', 0) + valores.get('total', 0)
-
-        _merge_conta('01.01.02', receita_bruta)
-        _merge_conta('02.01.03', devolucoes_brutas)
-
-        # =========================================================================
-        # CMV - mv_cmv_loja_v2 para lojas
-        # =========================================================================
-        cmv_loja_raw = execute_query("""
-            SELECT DATE_TRUNC('month', data) AS mes, ABS(COALESCE(SUM(valor), 0)) AS cmv
-            FROM mv_cmv_loja_v2
-            WHERE data >= %s AND data <= %s
-            GROUP BY DATE_TRUNC('month', data)
-        """, (dataInicio, dataFim))
-
-        cmv_valores = _init_valores_periodo(periodos)
-        for r in (cmv_loja_raw or []):
-            p = r['mes'].strftime('%Y-%m')
-            if p in periodos:
-                v = -abs(float(r['cmv'] or 0))
-                cmv_valores[p] += v
-                cmv_valores['total'] += v
-
-        _merge_conta('04.02.02', cmv_valores)
-        valores_por_conta = _somar_hierarquia(valores_por_conta, periodos)
-        print(f"[DRE LOJAS] CMV total: {cmv_valores['total']:.2f}")
-
-        # Montar resposta
-        response = {
-            "periodos": [
-                {
-                    "key": p,
-                    "label": services.formatar_label_periodo(p)
-                }
-                for p in periodos
-            ],
-            "valores": valores_por_conta,
-            "metadata": {
-                "totalDespesas": len(despesas),
-                "naoClassificadas": nao_classificados,
-                "totalVendasItens": len(vendas) if empresas_lojas else 0,
-                "totalDevolucoesItens": len(devolucoes) if empresas_lojas else 0,
-                "dataInicio": dataInicio,
-                "dataFim": dataFim,
-                "filtroLojas": {
-                    "empresas": empresas_lojas,
-                    "centrosCusto": ccustos_lojas,
-                    "nomesCCustos": nomes_ccustos
-                },
-                "dataConsulta": datetime.now().isoformat()
-            }
-        }
-
-        print(f"[OK] DRE LOJAS gerado com sucesso.")
-        return response
-
-    except Exception as e:
-        print(f"[ERROR] Erro ao processar DRE LOJAS: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(
-            status_code=500,
-            detail=f"Erro ao buscar dados da DRE LOJAS: {str(e)}"
-        )
-
-
-@router.get("/api/dre/lojas/duplicatas")
-def get_dre_lojas_duplicatas(
-    conta: str = Query(..., description="Conta DRE (ex: 08.04.02)"),
-    periodo: str = Query(..., description="Periodo YYYY-MM")
-):
-    """
-    Retorna duplicatas relacionadas a uma conta DRE das LOJAS em um periodo mensal.
-    """
-    try:
-        import calendar
-
-        if len(periodo) != 7 or '-' not in periodo:
-            raise HTTPException(status_code=400, detail="Periodo invalido. Use YYYY-MM.")
-
-        ano, mes = periodo.split('-')
-        primeiro_dia = f"{periodo}-01"
-        ultimo_dia = calendar.monthrange(int(ano), int(mes))[1]
-        data_fim = f"{periodo}-{ultimo_dia:02d}"
-
-        # Buscar centros de custo de lojas
-        ccustos_lojas, _ = _buscar_ccustos_lojas()
-
-        if not ccustos_lojas:
-            return {
-                "duplicatas": [],
-                "total": 0,
-                "conta": conta,
-                "periodo": periodo,
-                "filtroLojas": True
-            }
-
-        # Carregar classificacoes do banco
-        classificacoes_db = {}
-        try:
-            rows = execute_query("SELECT cd_despesaitem, conta_dre FROM classificacao_despesas_dre", ())
-            for row in rows or []:
-                cd = row.get('cd_despesaitem')
-                conta_dre = row.get('conta_dre', '')
-                if cd and conta_dre:
-                    codigo = conta_dre.split(' ')[0] if ' ' in conta_dre else conta_dre
-                    classificacoes_db[cd] = codigo
-        except Exception:
-            pass
-
-        # Resolver cd_despesaitem associados a conta (APENAS do banco)
-        conta_prefixo = f"{conta}."
-        itens = [
-            cd for cd, c in classificacoes_db.items()
-            if c == conta or c.startswith(conta_prefixo)
-        ]
-
-        if not itens:
-            return {
-                "duplicatas": [],
-                "total": 0,
-                "conta": conta,
-                "periodo": periodo,
-                "filtroLojas": True
-            }
-
-        placeholders_itens = ','.join(['%s'] * len(itens))
-        placeholders_ccusto = ','.join(['%s'] * len(ccustos_lojas))
-
-        query = f"""
-            SELECT
-                d.nr_duplicata as nr_duplicata,
-                i.ds_despesaitem as ds_despesaitem,
-                d.dt_emissao as dt_emissao,
-                d.dt_vencimento as dt_vencimento,
-                ABS(d.vl_rateio) as vl_rateio,
-                d.cd_despesaitem,
-                d.cd_fornecedor as cd_fornecedor,
-                d.cd_ccusto,
-                COALESCE(p.nm_pessoa, pf.nm_pessoa, 'N/A') as nm_fornecedor,
-                CASE WHEN p.nm_fantasia IS NULL OR TRIM(p.nm_fantasia) = '' OR p.nm_fantasia ~ '^\*+$' THEN COALESCE(p.nm_pessoa, pf.nm_pessoa, 'N/A') ELSE p.nm_fantasia END as nm_fantasia
-            FROM vr_fcp_despduplicatai d
-            JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
-            LEFT JOIN vr_pes_pessoa p ON p.cd_pessoa = d.cd_fornecedor
-            LEFT JOIN vr_pes_pesfisica pf ON pf.cd_pessoa = d.cd_fornecedor
-            WHERE d.dt_emissao >= %s
-              AND d.dt_emissao <= %s
-              AND d.tp_situacao = 'N'
-              AND d.cd_despesaitem IN ({placeholders_itens})
-              AND d.cd_ccusto IN ({placeholders_ccusto})
-            ORDER BY d.dt_emissao
-        """
-
-        params = [primeiro_dia, data_fim, *itens, *ccustos_lojas]
-        duplicatas = execute_query(query, tuple(params))
-
-        total = sum(float(d.get('vl_rateio') or 0) for d in duplicatas)
-
-        return {
-            "duplicatas": duplicatas,
-            "total": total,
-            "conta": conta,
-            "periodo": periodo,
-            "filtroLojas": {
-                "centrosCusto": ccustos_lojas
-            }
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"[ERROR] Erro ao buscar duplicatas DRE LOJAS: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(
-            status_code=500,
-            detail=f"Erro ao buscar duplicatas da DRE LOJAS: {str(e)}"
-        )
-
-
-@router.get("/api/dre/fabrica/duplicatas")
-def get_dre_fabrica_duplicatas(
-    conta: str = Query(..., description="Conta DRE (ex: 08.04.02)"),
-    periodo: str = Query(..., description="Periodo YYYY-MM")
-):
-    """
-    Retorna duplicatas relacionadas a uma conta DRE da FABRICA em um periodo mensal.
-    Filtra apenas centros de custo da fabrica.
-    """
-    try:
-        import calendar
-
-        if len(periodo) != 7 or '-' not in periodo:
-            raise HTTPException(status_code=400, detail="Periodo invalido. Use YYYY-MM.")
-
-        ano, mes = periodo.split('-')
-        primeiro_dia = f"{periodo}-01"
-        ultimo_dia = calendar.monthrange(int(ano), int(mes))[1]
-        data_fim = f"{periodo}-{ultimo_dia:02d}"
-
-        # Carregar classificacoes do banco
-        classificacoes_db = {}
-        try:
-            rows = execute_query("SELECT cd_despesaitem, ds_despesaitem, conta_dre FROM classificacao_despesas_dre", ())
-            for row in rows or []:
-                cd = row.get('cd_despesaitem')
-                ds = row.get('ds_despesaitem')
-                conta_dre = row.get('conta_dre', '')
-                if cd and conta_dre:
-                    codigo = conta_dre.split(' ')[0] if ' ' in conta_dre else conta_dre
-                    classificacoes_db[cd] = codigo
-        except Exception:
-            pass
-
-        # Resolver cd_despesaitem associados a conta (APENAS do banco)
-        conta_prefixo = f"{conta}."
-        itens = [
-            cd for cd, c in classificacoes_db.items()
-            if c == conta or c.startswith(conta_prefixo)
-        ]
-
-        if not itens:
-            return {
-                "duplicatas": [],
-                "total": 0,
-                "conta": conta,
-                "periodo": periodo,
-                "filtroFabrica": True
-            }
-
-        placeholders_itens = ','.join(['%s'] * len(itens))
-        placeholders_ccusto = ','.join(['%s'] * len(CCUSTOS_FABRICA))
-        placeholders_ccusto_excluidos = ','.join(['%s'] * len(CCUSTOS_EXCLUIDOS_FABRICA))
-
-        # Query usando a mesma tabela do endpoint principal (vr_fcp_despduplicatai)
-        # para manter consistencia e evitar duplicatas
-        query = f"""
-            SELECT
-                d.nr_duplicata as nr_duplicata,
-                i.ds_despesaitem as ds_despesaitem,
-                d.dt_emissao as dt_emissao,
-                d.dt_vencimento as dt_vencimento,
-                ABS(d.vl_rateio) as vl_rateio,
-                d.cd_despesaitem,
-                d.cd_fornecedor as cd_fornecedor,
-                d.cd_ccusto,
-                COALESCE(p.nm_pessoa, pf.nm_pessoa, 'N/A') as nm_fornecedor,
-                CASE WHEN p.nm_fantasia IS NULL OR TRIM(p.nm_fantasia) = '' OR p.nm_fantasia ~ '^\*+$' THEN COALESCE(p.nm_pessoa, pf.nm_pessoa, 'N/A') ELSE p.nm_fantasia END as nm_fantasia
-            FROM vr_fcp_despduplicatai d
-            JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
-            LEFT JOIN vr_pes_pessoa p ON p.cd_pessoa = d.cd_fornecedor
-            LEFT JOIN vr_pes_pesfisica pf ON pf.cd_pessoa = d.cd_fornecedor
-            WHERE d.dt_emissao >= %s
-              AND d.dt_emissao <= %s
-              AND d.tp_situacao = 'N'
-              AND d.cd_despesaitem IN ({placeholders_itens})
-              AND d.cd_ccusto IN ({placeholders_ccusto})
-              AND d.cd_ccusto NOT IN ({placeholders_ccusto_excluidos})
-            ORDER BY d.dt_emissao
-        """
-
-        params = [primeiro_dia, data_fim, *itens, *CCUSTOS_FABRICA, *CCUSTOS_EXCLUIDOS_FABRICA]
-        duplicatas = execute_query(query, tuple(params))
-
-        total = sum(float(d.get('vl_rateio') or 0) for d in duplicatas)
-
-        return {
-            "duplicatas": duplicatas,
-            "total": total,
-            "conta": conta,
-            "periodo": periodo,
-            "filtroFabrica": {
-                "centrosCusto": CCUSTOS_FABRICA
-            }
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"[ERROR] Erro ao buscar duplicatas DRE FABRICA: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(
-            status_code=500,
-            detail=f"Erro ao buscar duplicatas da DRE FABRICA: {str(e)}"
-        )
-
-
-@router.get("/api/dre/fabrica/sintetico")
-def get_dre_fabrica_sintetico(
-    dataInicio: str = Query("2026-01-01", description="Data inicial (YYYY-MM-DD)"),
-    dataFim: str = Query("2026-12-31", description="Data final (YYYY-MM-DD)")
-):
-    """
-    Retorna visão sintética da DRE FABRICA com métricas principais por centro de custo.
-    Métricas: Receita Líquida, CMV, Despesas Operacionais, Lucro Líquido, Margem %
-    """
-    try:
-        print(f"[INFO] Buscando DRE FABRICA Sintético: {dataInicio} até {dataFim}")
-
-        # Buscar nomes dos centros de custo
-        query_ccustos = """
-            SELECT cd_ccusto, ds_ccusto
-            FROM vr_gec_ccusto
-        """
-        ccustos_raw = execute_query(query_ccustos, ())
-        nomes_ccustos = {r['cd_ccusto']: r['ds_ccusto'] for r in ccustos_raw}
-
-        # Placeholders
-        ccusto_placeholders = ",".join(["%s"] * len(CCUSTOS_FABRICA))
-        ccusto_excluidos_placeholders = ",".join(["%s"] * len(CCUSTOS_EXCLUIDOS_FABRICA))
-        empresa_placeholders = ",".join(["%s"] * len(EMPRESAS_FABRICA))
-
-        # Buscar vendas por empresa (Receita Bruta) - empresas da fábrica
-        query_vendas = f"""
-            SELECT
-                t.cd_empresa,
-                SUM(t.vl_transacao) as receita_bruta
-            FROM vr_tra_transacao t
-            WHERE t.dt_transacao >= %s
-              AND t.dt_transacao <= %s
-              AND t.tp_situacao = 4
-              AND t.tp_modalidade IN ('4')
-              AND t.tp_operacao = 'S'
-              AND t.cd_empresa IN ({empresa_placeholders})
-            GROUP BY t.cd_empresa
-        """
-        vendas = execute_query(query_vendas, (dataInicio, dataFim, *EMPRESAS_FABRICA))
-        receita_total = sum(float(r['receita_bruta'] or 0) for r in vendas)
-
-        # Buscar devoluções por empresa
-        query_devolucoes = f"""
-            SELECT
-                t.cd_empresa,
-                SUM(t.vl_transacao) as devolucoes
-            FROM vr_tra_transacao t
-            WHERE t.dt_transacao >= %s
-              AND t.dt_transacao <= %s
-              AND t.tp_situacao = 4
-              AND t.tp_modalidade IN ('3')
-              AND t.tp_operacao = 'E'
-              AND t.cd_empresa IN ({empresa_placeholders})
-            GROUP BY t.cd_empresa
-        """
-        devolucoes = execute_query(query_devolucoes, (dataInicio, dataFim, *EMPRESAS_FABRICA))
-        devolucoes_total = sum(float(r['devolucoes'] or 0) for r in devolucoes)
-
-        # Buscar CMV da fábrica
-        cmv_fab_raw = execute_query("""
-            SELECT ABS(COALESCE(SUM(valor), 0)) AS cmv
-            FROM mv_cmv_fab
-            WHERE data >= %s AND data <= %s
-        """, (dataInicio, dataFim))
-        cmv_total = float(cmv_fab_raw[0]['cmv'] or 0) if cmv_fab_raw else 0
-
-        # Buscar despesas por centro de custo da fábrica
-        query_despesas = f"""
-            SELECT
-                d.cd_ccusto,
-                d.cd_despesaitem,
-                i.ds_despesaitem as descricao_despesa,
-                ABS(d.vl_rateio) as valor
-            FROM vr_fcp_despduplicatai d
-            JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
-            WHERE d.dt_emissao >= %s
-              AND d.dt_emissao <= %s
-              AND d.tp_situacao = 'N'
-              AND d.cd_ccusto IN ({ccusto_placeholders})
-              AND d.cd_ccusto NOT IN ({ccusto_excluidos_placeholders})
-        """
-        despesas_raw = execute_query(query_despesas, (dataInicio, dataFim, *CCUSTOS_FABRICA, *CCUSTOS_EXCLUIDOS_FABRICA))
-
-        # Carregar classificações do banco
-        classificacoes_db = {}
-        try:
-            rows_cls = execute_query("SELECT cd_despesaitem, ds_despesaitem, conta_dre FROM classificacao_despesas_dre", ())
-            for row in rows_cls or []:
-                cd = row.get('cd_despesaitem')
-                ds = row.get('ds_despesaitem')
-                conta_dre = row.get('conta_dre', '')
-                if cd and conta_dre:
-                    codigo = conta_dre.split(' ')[0] if ' ' in conta_dre else conta_dre
-                    classificacoes_db[cd] = codigo
-        except Exception:
-            pass
-
-        # Somar despesas operacionais (08.xx) por centro de custo
-        despesas_por_ccusto = {}
-        for d in despesas_raw:
-            conta = _classificar_conta_dre(
-                d['cd_despesaitem'], d.get('descricao_despesa'),
-                classificacoes_db
-            )
-            # Só contar como despesa operacional contas 08.xx
-            if not conta.startswith('08.'):
-                continue
-            cd_ccusto = d['cd_ccusto']
-            despesas_por_ccusto[cd_ccusto] = despesas_por_ccusto.get(cd_ccusto, 0) + float(d['valor'] or 0)
-
-        # Calcular totais
-        despesas_op_total = sum(despesas_por_ccusto.values())
-        receita_liquida = receita_total - devolucoes_total
-        lucro_bruto = receita_liquida - cmv_total
-        lucro_liquido = lucro_bruto - despesas_op_total
-        margem = (lucro_liquido / receita_liquida * 100) if receita_liquida > 0 else 0
-
-        # Montar resultado por centro de custo
-        resultados = []
-        for cd_ccusto in sorted(despesas_por_ccusto.keys()):
-            desp = despesas_por_ccusto.get(cd_ccusto, 0)
-            resultados.append({
-                "cd_ccusto": cd_ccusto,
-                "nome": nomes_ccustos.get(cd_ccusto, f"Centro de Custo {cd_ccusto}"),
-                "despesas_operacionais": desp
-            })
-
-        totais = {
-            "receita_bruta": receita_total,
-            "devolucoes": devolucoes_total,
-            "receita_liquida": receita_liquida,
-            "cmv": cmv_total,
-            "lucro_bruto": lucro_bruto,
-            "despesas_operacionais": despesas_op_total,
-            "lucro_liquido": lucro_liquido,
-            "margem_percentual": round(margem, 2)
-        }
-
-        response = {
-            "centros_custo": resultados,
-            "totais": totais,
-            "metadata": {
-                "totalCentrosCusto": len(resultados),
-                "dataInicio": dataInicio,
-                "dataFim": dataFim,
-                "filtroFabrica": {
-                    "empresas": EMPRESAS_FABRICA,
-                    "centrosCusto": CCUSTOS_FABRICA
-                },
-                "dataConsulta": datetime.now().isoformat()
-            }
-        }
-
-        print(f"[OK] DRE FABRICA Sintético gerado com {len(resultados)} centros de custo.")
-        return response
-
-    except Exception as e:
-        print(f"[ERROR] Erro ao processar DRE FABRICA Sintético: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(
-            status_code=500,
-            detail=f"Erro ao buscar DRE FABRICA sintético: {str(e)}"
-        )
-
-
 @router.get("/api/dre/fabrica/por-ccusto")
 def get_dre_fabrica_por_ccusto(
     dataInicio: str = Query("2026-01-01", description="Data inicial (YYYY-MM-DD)"),
@@ -1544,358 +687,6 @@ def get_dre_fabrica_por_ccusto(
         raise HTTPException(
             status_code=500,
             detail=f"Erro ao buscar DRE FABRICA por centro de custo: {str(e)}"
-        )
-
-
-@router.get("/api/planejado")
-def get_planejado(
-    dataInicio: str = Query("2026-01-01", description="Data inicial (YYYY-MM-DD)"),
-    dataFim: str = Query("2026-12-31", description="Data final (YYYY-MM-DD)"),
-    conta: Optional[str] = Query(None, description="Conta DRE (ex: 03)"),
-    grupo: Optional[str] = Query(None, description="Grupo (ex: Lojas)")
-):
-    """
-    Retorna valores planejados agregados por mês.
-    """
-    try:
-        periodos = services.gerar_periodos(dataInicio, dataFim)
-
-        where = "data >= %s AND data <= %s"
-        params = [dataInicio, dataFim]
-
-        if conta:
-            where += " AND conta_dre = %s"
-            params.append(conta)
-
-        if grupo:
-            where += " AND grupo = %s"
-            params.append(grupo)
-
-        query = f"""
-            SELECT
-                date_trunc('month', data) as mes,
-                conta_dre,
-                grupo,
-                SUM(valor) as valor
-            FROM planejado_dre
-            WHERE {where}
-            GROUP BY 1, 2, 3
-            ORDER BY 1, 2, 3
-        """
-
-        rows = execute_query(query, tuple(params))
-
-        valores = {}
-        for r in rows:
-            conta_dre = r['conta_dre']
-            mes = r['mes']
-            valor = float(r['valor'] or 0)
-
-            if conta_dre not in valores:
-                valores[conta_dre] = {'total': 0}
-                for p in periodos:
-                    valores[conta_dre][p] = 0
-
-            if mes:
-                periodo = mes.strftime('%Y-%m')
-                if periodo in periodos:
-                    valores[conta_dre][periodo] += valor
-                    valores[conta_dre]['total'] += valor
-
-        return {
-            "periodos": [
-                {
-                    "key": p,
-                    "label": services.formatar_label_periodo(p)
-                }
-                for p in periodos
-            ],
-            "valores": valores,
-            "metadata": {
-                "dataInicio": dataInicio,
-                "dataFim": dataFim,
-                "conta": conta,
-                "grupo": grupo,
-                "dataConsulta": datetime.now().isoformat()
-            }
-        }
-
-    except Exception as e:
-        print(f"[ERROR] Erro ao buscar dados planejados: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(
-            status_code=500,
-            detail=f"Erro ao buscar dados planejados: {str(e)}"
-        )
-
-
-@router.get("/api/dre/totais")
-def get_dre_totais(
-    dataInicio: str = Query("2026-01-01", description="Data inicial (YYYY-MM-DD)"),
-    dataFim: str = Query("2026-12-31", description="Data final (YYYY-MM-DD)"),
-    empresas: Optional[str] = Query(None, description="IDs de empresa separados por vírgula")
-):
-    """
-    Retorna totais agregados por grupo de despesa para cálculo do Lucro Líquido.
-    Agrupa as contas DRE por prefixo (08.01, 08.02, ..., 10.03, 13.01) e soma os valores.
-    """
-    try:
-        periodos = services.gerar_periodos(dataInicio, dataFim)
-
-        # Buscar despesas por DATA DE EMISSÃO direto da tabela
-        # EXCLUINDO empresas específicas (CORPO SEXY, CAIRO BENEVIDES, CB EMPREENDIMENTOS)
-        exclusao_totais_placeholders = ",".join(["%s"] * len(EMPRESAS_EXCLUIDAS))
-        query_despesas = f"""
-            SELECT
-                d.cd_despesaitem,
-                i.ds_despesaitem as descricao_despesa,
-                d.dt_emissao as dt_emissao,
-                ABS(d.vl_rateio) as valor
-            FROM vr_fcp_despduplicatai d
-            JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
-            WHERE d.dt_emissao >= %s
-              AND d.dt_emissao <= %s
-              AND d.tp_situacao = 'N'
-              AND d.cd_empresa NOT IN ({exclusao_totais_placeholders})
-            ORDER BY d.dt_emissao
-        """
-
-        despesas = execute_query(query_despesas, (dataInicio, dataFim, *EMPRESAS_EXCLUIDAS))
-
-        classificacoes_db = {}
-        try:
-            rows = execute_query("SELECT cd_despesaitem, ds_despesaitem, conta_dre FROM classificacao_despesas_dre", ())
-            for row in rows or []:
-                cd = row.get('cd_despesaitem')
-                ds = row.get('ds_despesaitem')
-                conta_dre = row.get('conta_dre', '')
-                if cd and conta_dre:
-                    codigo = conta_dre.split(' ')[0] if ' ' in conta_dre else conta_dre
-                    classificacoes_db[cd] = codigo
-        except Exception:
-            pass
-
-        GRUPOS = {
-            "08.01": "Ocupação",
-            "08.02": "Administrativas",
-            "08.03": "Manutenção",
-            "08.04": "Pessoal",
-            "08.05": "Marketing",
-            "08.10": "Vendas",
-            "08.11": "Crédito e Cobrança",
-            "08.12": "Veículos",
-            "10.03": "Financeiras",
-            "13.01": "Tributárias (IRPJ + CSLL)",
-        }
-
-        GRUPOS_OPERACIONAIS = {"08.01","08.02","08.03","08.04","08.05","08.10","08.11","08.12"}
-        GRUPOS_FINANCEIRAS  = {"10.03"}
-        GRUPOS_TRIBUTARIAS  = {"13.01"}
-
-        def _novo_grupo(label):
-            g = {"label": label, "total": 0}
-            for p in periodos:
-                g[p] = 0
-            return g
-
-        totais = {k: _novo_grupo(v) for k, v in GRUPOS.items()}
-
-        for d in despesas:
-            cd = d["cd_despesaitem"]
-            conta = _classificar_conta_dre(cd, d.get("descricao_despesa"), classificacoes_db)
-            if not conta:
-                continue
-            grupo = ".".join(conta.split(".")[:2])
-            if grupo not in totais:
-                continue
-            valor = float(d["valor"] or 0)
-            dt = d["dt_emissao"]
-            if not dt:
-                continue
-            periodo = dt.strftime("%Y-%m")
-            if periodo not in periodos:
-                continue
-            totais[grupo]["total"] += valor
-            totais[grupo][periodo] += valor
-
-        def _subtotal(keys):
-            sub = {"total": 0}
-            for p in periodos:
-                sub[p] = 0
-            for k in keys:
-                if k in totais:
-                    sub["total"] += totais[k]["total"]
-                    for p in periodos:
-                        sub[p] += totais[k].get(p, 0)
-            return sub
-
-        subtotal_operacional = _subtotal(GRUPOS_OPERACIONAIS)
-        subtotal_financeiras = _subtotal(GRUPOS_FINANCEIRAS)
-        subtotal_tributarias = _subtotal(GRUPOS_TRIBUTARIAS)
-
-        total_abatimentos = {"total": 0}
-        for p in periodos:
-            total_abatimentos[p] = 0
-        for p in periodos:
-            total_abatimentos[p] = (
-                subtotal_operacional.get(p, 0) +
-                subtotal_financeiras.get(p, 0) +
-                subtotal_tributarias.get(p, 0)
-            )
-        total_abatimentos["total"] = (
-            subtotal_operacional["total"] +
-            subtotal_financeiras["total"] +
-            subtotal_tributarias["total"]
-        )
-
-        return {
-            "periodos": [{"key": p, "label": services.formatar_label_periodo(p)} for p in periodos],
-            "despesas_operacionais": {
-                **{k: totais[k] for k in GRUPOS_OPERACIONAIS},
-                "subtotal": subtotal_operacional,
-            },
-            "despesas_financeiras": {
-                **{k: totais[k] for k in GRUPOS_FINANCEIRAS},
-                "subtotal": subtotal_financeiras,
-            },
-            "tributarias": {
-                **{k: totais[k] for k in GRUPOS_TRIBUTARIAS},
-                "subtotal": subtotal_tributarias,
-            },
-            "total_abatimentos": total_abatimentos,
-            "metadata": {
-                "dataInicio": dataInicio,
-                "dataFim": dataFim,
-                "dataConsulta": datetime.now().isoformat(),
-            },
-        }
-
-    except Exception as e:
-        print(f"[ERROR] /api/dre/totais: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Erro ao calcular totais DRE: {str(e)}")
-
-
-@router.get("/api/dre/duplicatas")
-def get_dre_duplicatas(
-    conta: str = Query(..., description="Conta DRE (ex: 08.02.05)"),
-    periodo: str = Query(..., description="Período YYYY-MM")
-):
-    """
-    Retorna duplicatas relacionadas a uma conta DRE em um período mensal.
-    Usa classificações do banco de dados.
-    """
-    try:
-        import calendar
-
-        if len(periodo) != 7 or '-' not in periodo:
-            raise HTTPException(status_code=400, detail="Período inválido. Use YYYY-MM.")
-
-        ano, mes = periodo.split('-')
-        primeiro_dia = f"{periodo}-01"
-        ultimo_dia = calendar.monthrange(int(ano), int(mes))[1]
-        data_fim = f"{periodo}-{ultimo_dia:02d}"
-
-        # Carregar classificações do banco
-        classificacoes_db = {}
-        try:
-            rows = execute_query("SELECT cd_despesaitem, conta_dre FROM classificacao_despesas_dre", ())
-            for row in rows or []:
-                cd = row.get('cd_despesaitem')
-                conta_dre = row.get('conta_dre', '')
-                if cd and conta_dre:
-                    codigo = conta_dre.split(' ')[0] if ' ' in conta_dre else conta_dre
-                    classificacoes_db[cd] = codigo
-        except Exception:
-            pass
-
-        # Resolver cd_despesaitem associados à conta (APENAS do banco)
-        conta_prefixo = f"{conta}."
-        itens = [
-            cd for cd, c in classificacoes_db.items()
-            if c == conta or c.startswith(conta_prefixo)
-        ]
-
-        if not itens:
-            return {
-                "duplicatas": [],
-                "total": 0,
-                "conta": conta,
-                "periodo": periodo
-            }
-
-        placeholders = ','.join(['%s'] * len(itens))
-        query_emissao = f"""
-            SELECT
-                faturaduplicata as nr_duplicata,
-                descricao_despesa as ds_despesaitem,
-                dt_emissao as dt_emissao,
-                ABS(valor) as vl_rateio,
-                cd_despesaitem,
-                idfornecedorcliente as cd_fornecedor,
-                origem_tabela,
-                tipo_documento,
-                COALESCE(p.nm_pessoa, pf.nm_pessoa, 'N/A') as nm_fornecedor,
-                CASE WHEN p.nm_fantasia IS NULL OR TRIM(p.nm_fantasia) = '' OR p.nm_fantasia ~ '^\*+$' THEN COALESCE(p.nm_pessoa, pf.nm_pessoa, 'N/A') ELSE p.nm_fantasia END as nm_fantasia
-            FROM vw_fluxo_pagamentos
-            LEFT JOIN vr_pes_pessoa p ON p.cd_pessoa = idfornecedorcliente
-            LEFT JOIN vr_pes_pesfisica pf ON pf.cd_pessoa = idfornecedorcliente
-            WHERE dt_emissao >= %s
-              AND dt_emissao <= %s
-              AND cd_despesaitem IN ({placeholders})
-            ORDER BY dt_emissao
-        """
-
-        query_fallback = f"""
-            SELECT
-                faturaduplicata as nr_duplicata,
-                descricao_despesa as ds_despesaitem,
-                dtvencimento as dt_emissao,
-                ABS(valor) as vl_rateio,
-                cd_despesaitem,
-                idfornecedorcliente as cd_fornecedor,
-                origem_tabela,
-                tipo_documento,
-                COALESCE(p.nm_pessoa, pf.nm_pessoa, 'N/A') as nm_fornecedor,
-                CASE WHEN p.nm_fantasia IS NULL OR TRIM(p.nm_fantasia) = '' OR p.nm_fantasia ~ '^\*+$' THEN COALESCE(p.nm_pessoa, pf.nm_pessoa, 'N/A') ELSE p.nm_fantasia END as nm_fantasia
-            FROM vw_fluxo_pagamentos
-            LEFT JOIN vr_pes_pessoa p ON p.cd_pessoa = idfornecedorcliente
-            LEFT JOIN vr_pes_pesfisica pf ON pf.cd_pessoa = idfornecedorcliente
-            WHERE dtvencimento >= %s
-              AND dtvencimento <= %s
-              AND cd_despesaitem IN ({placeholders})
-            ORDER BY dtvencimento
-        """
-
-        params = [primeiro_dia, data_fim, *itens]
-        duplicatas = _execute_query_with_date_fallback(
-            execute_query,
-            query_emissao,
-            query_fallback,
-            tuple(params),
-            "vw_fluxo_pagamentos"
-        )
-
-        total = sum(float(d.get('vl_rateio') or 0) for d in duplicatas)
-
-        return {
-            "duplicatas": duplicatas,
-            "total": total,
-            "conta": conta,
-            "periodo": periodo
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"[ERROR] Erro ao buscar duplicatas DRE: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(
-            status_code=500,
-            detail=f"Erro ao buscar duplicatas da DRE: {str(e)}"
         )
 
 
@@ -2182,266 +973,6 @@ def get_dre_por_empresa(
         )
 
 
-@router.get("/api/dre/sintetico")
-def get_dre_sintetico(
-    dataInicio: str = Query("2026-01-01", description="Data inicial (YYYY-MM-DD)"),
-    dataFim: str = Query("2026-12-31", description="Data final (YYYY-MM-DD)"),
-    lojas: Optional[str] = Query(None, description="Codigos das lojas separados por virgula (ex: 2,3,4)")
-):
-    """
-    Retorna visão sintética da DRE com métricas principais por empresa.
-    Métricas: Receita Líquida, CMV, Despesas Operacionais, Lucro Líquido, Margem %
-    """
-    try:
-        print(f"[INFO] Buscando DRE Sintético: {dataInicio} até {dataFim}, lojas={lojas}")
-
-        data_fim_exclusivo = (datetime.strptime(dataFim, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
-
-        lojas_ids = None
-        if lojas:
-            try:
-                lojas_ids = [int(loja.strip()) for loja in lojas.split(",") if loja.strip()]
-            except ValueError:
-                raise HTTPException(status_code=400, detail="Parametro 'lojas' invalido. Use IDs separados por virgula.")
-
-            lojas_ids = [loja for loja in lojas_ids if loja in CCUSTOS_LOJAS and loja not in EMPRESAS_EXCLUIDAS]
-            if not lojas_ids:
-                raise HTTPException(status_code=400, detail="Nenhuma loja valida selecionada.")
-
-        # Buscar nomes das empresas
-        query_empresas = """
-            SELECT e.cd_empresa, COALESCE(p.nm_fantasia, p.nm_pessoa, 'Empresa ' || e.cd_empresa::text) AS nome
-            FROM vr_ger_empresa e
-            LEFT JOIN vr_pes_pessoa p ON p.cd_pessoa = e.cd_pessoa
-        """
-        empresas_raw = execute_query(query_empresas, ())
-        nomes_empresas = {r['cd_empresa']: r['nome'] for r in empresas_raw}
-
-        # EXCLUINDO empresas específicas (CORPO SEXY, CAIRO BENEVIDES, CB EMPREENDIMENTOS)
-        exclusao_sint_placeholders = ",".join(["%s"] * len(EMPRESAS_EXCLUIDAS))
-
-        # Buscar vendas por empresa (Receita Bruta)
-        query_vendas = f"""
-            SELECT
-                t.cd_empresa,
-                SUM(t.vl_transacao) as receita_bruta
-            FROM vr_tra_transacao t
-            WHERE t.dt_transacao >= %s
-              AND t.dt_transacao < %s
-              AND t.tp_situacao = 4
-              AND t.tp_modalidade IN ('4')
-              AND t.tp_operacao = 'S'
-              AND t.cd_empresa NOT IN ({exclusao_sint_placeholders})
-              {"AND t.cd_empresa IN (" + ",".join(["%s"] * len(lojas_ids)) + ")" if lojas_ids else ""}
-            GROUP BY t.cd_empresa
-        """
-        vendas = execute_query(query_vendas, (dataInicio, data_fim_exclusivo, *EMPRESAS_EXCLUIDAS, *(lojas_ids or [])))
-        receita_por_empresa = {r['cd_empresa']: float(r['receita_bruta'] or 0) for r in vendas}
-
-        # Buscar devoluções por empresa
-        query_devolucoes = f"""
-            SELECT
-                t.cd_empresa,
-                SUM(t.vl_transacao) as devolucoes
-            FROM vr_tra_transacao t
-            WHERE t.dt_transacao >= %s
-              AND t.dt_transacao < %s
-              AND t.tp_situacao = 4
-              AND t.tp_modalidade IN ('3')
-              AND t.tp_operacao = 'E'
-              AND t.cd_empresa NOT IN ({exclusao_sint_placeholders})
-              {"AND t.cd_empresa IN (" + ",".join(["%s"] * len(lojas_ids)) + ")" if lojas_ids else ""}
-            GROUP BY t.cd_empresa
-        """
-        devolucoes = execute_query(query_devolucoes, (dataInicio, data_fim_exclusivo, *EMPRESAS_EXCLUIDAS, *(lojas_ids or [])))
-        devolucoes_por_empresa = {r['cd_empresa']: float(r['devolucoes'] or 0) for r in devolucoes}
-
-        # Buscar CMV por empresa (lojas) - filtrado por lojas ativas para bater com DRE Unificada
-        # Exclui lojas encerradas (9, 11, 12, 13, 16, 18)
-        # CORRIGIDO: Agrupar por mes primeiro, aplicar ABS a cada mes, depois somar
-        # Isso garante que valores positivos e negativos em meses diferentes sejam tratados corretamente
-        ccustos_lojas_cmv = lojas_ids or CCUSTOS_LOJAS_ATIVOS
-        ccustos_lojas_placeholders = ",".join(["%s"] * len(ccustos_lojas_cmv))
-        cmv_loja_raw = execute_query(f"""
-            SELECT idcentrodecusto AS cd_empresa, DATE_TRUNC('month', data) AS mes, ABS(COALESCE(SUM(valor), 0)) AS cmv_mes
-            FROM mv_cmv_loja_v2
-            WHERE data >= %s AND data < %s
-              AND idcentrodecusto IN ({ccustos_lojas_placeholders})
-            GROUP BY idcentrodecusto, DATE_TRUNC('month', data)
-        """, (dataInicio, data_fim_exclusivo, *ccustos_lojas_cmv))
-        # Somar CMV por empresa (somando todos os meses)
-        cmv_por_empresa = {}
-        for r in cmv_loja_raw:
-            emp = r['cd_empresa']
-            cmv_mes = float(r['cmv_mes'] or 0)
-            cmv_por_empresa[emp] = cmv_por_empresa.get(emp, 0) + cmv_mes
-
-        if not lojas_ids:
-            # Buscar CMV fábrica - CORRIGIDO: agrupar por mes primeiro
-            cmv_fab_raw = execute_query("""
-                SELECT DATE_TRUNC('month', data) AS mes, ABS(COALESCE(SUM(valor), 0)) AS cmv_mes
-                FROM mv_cmv_fab
-                WHERE data >= %s AND data < %s
-                GROUP BY DATE_TRUNC('month', data)
-            """, (dataInicio, data_fim_exclusivo))
-            # Adicionar CMV fábrica ao centro de custo 1 (FABRICA) - somando todos os meses
-            cmv_fab_total = sum(float(r['cmv_mes'] or 0) for r in cmv_fab_raw)
-            if cmv_fab_total > 0:
-                cmv_por_empresa[1] = cmv_por_empresa.get(1, 0) + cmv_fab_total
-
-        # Buscar despesas por empresa — com cd_despesaitem para classificar
-        filtro_lojas_despesas = ""
-        params_lojas_despesas = []
-        campo_empresa_despesas = "d.cd_empresa"
-        if lojas_ids:
-            filtro_lojas_despesas = "AND d.cd_ccusto IN (" + ",".join(["%s"] * len(lojas_ids)) + ")"
-            params_lojas_despesas = lojas_ids
-            campo_empresa_despesas = "d.cd_ccusto"
-
-        query_despesas = f"""
-            SELECT
-                {campo_empresa_despesas} AS cd_empresa,
-                d.cd_despesaitem,
-                i.ds_despesaitem as descricao_despesa,
-                ABS(d.vl_rateio) as valor
-            FROM vr_fcp_despduplicatai d
-            JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
-            WHERE d.dt_emissao >= %s
-              AND d.dt_emissao < %s
-              AND d.tp_situacao = 'N'
-              AND d.cd_empresa NOT IN ({exclusao_sint_placeholders})
-              {filtro_lojas_despesas}
-        """
-        despesas_raw = execute_query(query_despesas, (dataInicio, data_fim_exclusivo, *EMPRESAS_EXCLUIDAS, *params_lojas_despesas))
-
-        # Carregar classificações do banco (mesma lógica da DRE analítica)
-        classificacoes_db = {}
-        try:
-            rows_cls = execute_query("SELECT cd_despesaitem, ds_despesaitem, conta_dre FROM classificacao_despesas_dre", ())
-            for row in rows_cls or []:
-                cd = row.get('cd_despesaitem')
-                ds = row.get('ds_despesaitem')
-                conta_dre = row.get('conta_dre', '')
-                if cd and conta_dre:
-                    codigo = conta_dre.split(' ')[0] if ' ' in conta_dre else conta_dre
-                    classificacoes_db[cd] = codigo
-        except Exception:
-            pass
-
-        # Somar despesas por categoria para cada empresa
-        despesas_por_empresa = {}        # 08.xx - Despesas Operacionais
-        custos_fixos_por_empresa = {}    # 06.xx - Custos Fixos
-        outras_despesas_por_empresa = {} # 10, 12, 13 - Resultados, Depreciação, Tributárias
-
-        for d in despesas_raw:
-            conta = _classificar_conta_dre(
-                d['cd_despesaitem'], d.get('descricao_despesa'),
-                classificacoes_db
-            )
-            cd_emp = d['cd_empresa']
-            valor = float(d['valor'] or 0)
-
-            if conta.startswith('08.'):
-                # Despesas Operacionais
-                despesas_por_empresa[cd_emp] = despesas_por_empresa.get(cd_emp, 0) + valor
-            elif conta.startswith('06.'):
-                # Custos Fixos (Gastos Gerais de Fabricação)
-                custos_fixos_por_empresa[cd_emp] = custos_fixos_por_empresa.get(cd_emp, 0) + valor
-            elif conta.startswith('10.') or conta.startswith('12.') or conta.startswith('13.'):
-                # Outras despesas (Resultados, Depreciação, Tributárias)
-                outras_despesas_por_empresa[cd_emp] = outras_despesas_por_empresa.get(cd_emp, 0) + valor
-
-        # Consolidar empresas (incluindo todas com qualquer tipo de custo)
-        todas_empresas = (
-            set(receita_por_empresa.keys()) |
-            set(cmv_por_empresa.keys()) |
-            set(despesas_por_empresa.keys()) |
-            set(custos_fixos_por_empresa.keys()) |
-            set(outras_despesas_por_empresa.keys())
-        )
-
-        resultados = []
-        totais = {
-            "receita_bruta": 0,
-            "devolucoes": 0,
-            "receita_liquida": 0,
-            "cmv": 0,
-            "custos_fixos": 0,
-            "lucro_bruto": 0,
-            "despesas_operacionais": 0,
-            "outras_despesas": 0,
-            "lucro_liquido": 0
-        }
-
-        for cd_emp in sorted(todas_empresas):
-            receita_bruta = receita_por_empresa.get(cd_emp, 0)
-            devolucoes_val = devolucoes_por_empresa.get(cd_emp, 0)
-            receita_liquida = receita_bruta - devolucoes_val
-            cmv = cmv_por_empresa.get(cd_emp, 0)
-            custos_fixos = custos_fixos_por_empresa.get(cd_emp, 0)
-            # Lucro bruto = Receita Líquida - CMV - Custos Fixos
-            lucro_bruto = receita_liquida - cmv - custos_fixos
-            despesas_op = despesas_por_empresa.get(cd_emp, 0)
-            outras_desp = outras_despesas_por_empresa.get(cd_emp, 0)
-            # Lucro líquido = Lucro Bruto - Despesas Operacionais - Outras Despesas
-            lucro_liquido = lucro_bruto - despesas_op - outras_desp
-            margem = (lucro_liquido / receita_liquida * 100) if receita_liquida > 0 else 0
-
-            resultados.append({
-                "cd_empresa": cd_emp,
-                "nome": CCUSTOS_LOJAS.get(cd_emp) or nomes_empresas.get(cd_emp, f"Empresa {cd_emp}"),
-                "receita_bruta": receita_bruta,
-                "devolucoes": devolucoes_val,
-                "receita_liquida": receita_liquida,
-                "cmv": cmv,
-                "custos_fixos": custos_fixos,
-                "lucro_bruto": lucro_bruto,
-                "despesas_operacionais": despesas_op,
-                "outras_despesas": outras_desp,
-                "lucro_liquido": lucro_liquido,
-                "margem_percentual": round(margem, 2)
-            })
-
-            totais["receita_bruta"] += receita_bruta
-            totais["devolucoes"] += devolucoes_val
-            totais["receita_liquida"] += receita_liquida
-            totais["cmv"] += cmv
-            totais["custos_fixos"] += custos_fixos
-            totais["lucro_bruto"] += lucro_bruto
-            totais["despesas_operacionais"] += despesas_op
-            totais["outras_despesas"] += outras_desp
-            totais["lucro_liquido"] += lucro_liquido
-
-        totais["margem_percentual"] = round(
-            (totais["lucro_liquido"] / totais["receita_liquida"] * 100) if totais["receita_liquida"] > 0 else 0,
-            2
-        )
-
-        response = {
-            "empresas": resultados,
-            "totais": totais,
-            "metadata": {
-                "totalEmpresas": len(resultados),
-                "dataInicio": dataInicio,
-                "dataFim": dataFim,
-                "lojasSelecionadas": lojas_ids or [],
-                "dataConsulta": datetime.now().isoformat()
-            }
-        }
-
-        print(f"[OK] DRE Sintético gerado com {len(resultados)} empresas.")
-        return response
-
-    except Exception as e:
-        print(f"[ERROR] Erro ao processar DRE Sintético: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(
-            status_code=500,
-            detail=f"Erro ao buscar DRE sintético: {str(e)}"
-        )
-
-
 # ============================================================================
 # CENTROS DE CUSTO - LISTA PARA DROPDOWN
 # ============================================================================
@@ -2515,8 +1046,387 @@ def get_dre_unificada(
     - fabrica: Apenas centros de custo da fabrica (1, 500-514)
     - [numero]: Centro de custo específico (ex: 2 para LIEBE MARAPONGA)
     """
+    return _calcular_valores_unificada(dataInicio, dataFim, filtro, campo_data_despesa='dt_emissao')
+
+
+@router.get("/api/dfc/unificada")
+def get_dfc_unificada(
+    dataInicio: str = Query("2026-01-01", description="Data inicial (YYYY-MM-DD)"),
+    dataFim: str = Query("2026-12-31", description="Data final (YYYY-MM-DD)"),
+    filtro: str = Query("consolidado", description="Filtro: 'consolidado', 'fabrica', ou codigo do centro de custo")
+):
+    """
+    DFC (regime de caixa) com plano de contas PROPRIO (GRUPO > SUBGRUPO,
+    definido pela consultoria contabil externa - ver plano_contas_dfc.py),
+    agrupando as despesas pela data de baixa (dt_baixa, pagamento efetivo).
+    Receita/devolucoes usam dt_transacao (nao regime de caixa), igual a DRE.
+    """
+    return _calcular_valores_dfc(dataInicio, dataFim, filtro)
+
+
+@router.get("/api/dfc/plano-contas")
+def get_dfc_plano_contas():
+    """Retorna a arvore GRUPO > SUBGRUPO do plano de contas do DFC (despesas)
+    e, separadamente, o grupo de RECEITA (entradas de caixa)."""
+    return {"grupos": PLANO_CONTAS_DFC, "gruposReceita": PLANO_RECEITA_DFC}
+
+
+def _calcular_valores_dfc(dataInicio: str, dataFim: str, filtro: str):
     try:
-        print(f"[INFO] Buscando DRE UNIFICADA: {dataInicio} ate {dataFim}, filtro={filtro}")
+        print(f"[INFO] Buscando DFC (plano proprio): {dataInicio} ate {dataFim}, filtro={filtro}")
+
+        if filtro == "consolidado":
+            ccustos = list(set(CCUSTOS_FABRICA + list(CCUSTOS_LOJAS.keys()) + CCUSTOS_ECOMMERCE + [515]))
+            nome_filtro = "CONSOLIDADO"
+            tipo_filtro = "consolidado"
+        elif filtro == "fabrica":
+            ccustos = CCUSTOS_FABRICA
+            nome_filtro = "FABRICA"
+            tipo_filtro = "fabrica"
+        elif "," in filtro:
+            try:
+                ccustos_selecionados = [int(item.strip()) for item in filtro.split(",") if item.strip()]
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"Filtro invalido: {filtro}")
+            ccustos_lojas = [cd for cd in ccustos_selecionados if cd in CCUSTOS_LOJAS]
+            if not ccustos_lojas:
+                raise HTTPException(status_code=400, detail="Nenhuma loja valida selecionada")
+            ccustos = ccustos_lojas
+            nome_filtro = f"{len(ccustos_lojas)} LOJAS"
+            tipo_filtro = "loja"
+        else:
+            try:
+                cd_ccusto = int(filtro)
+                if cd_ccusto in CCUSTOS_LOJAS:
+                    ccustos = [cd_ccusto]
+                    nome_filtro = CCUSTOS_LOJAS[cd_ccusto]
+                    tipo_filtro = "loja"
+                elif cd_ccusto in CCUSTOS_FABRICA:
+                    ccustos = [cd_ccusto]
+                    nome_filtro = f"FABRICA CC {cd_ccusto}"
+                    tipo_filtro = "fabrica"
+                else:
+                    raise HTTPException(status_code=400, detail=f"Centro de custo {cd_ccusto} nao encontrado")
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"Filtro invalido: {filtro}")
+
+        periodos = services.gerar_periodos(dataInicio, dataFim)
+        ccusto_placeholders = ",".join(["%s"] * len(ccustos))
+
+        query_despesas = f"""
+            SELECT
+                d.cd_despesaitem,
+                i.ds_despesaitem as descricao_despesa,
+                d.dt_baixa as dt_referencia,
+                d.dt_emissao as dt_emissao,
+                ABS(d.vl_rateio) as valor
+            FROM vr_fcp_despduplicatai d
+            JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
+            WHERE d.dt_baixa >= %s
+              AND d.dt_baixa <= %s
+              AND d.tp_situacao = 'N'
+              AND d.cd_ccusto IN ({ccusto_placeholders})
+              AND d.cd_ccusto NOT IN ({",".join(["%s"] * len(CCUSTOS_EXCLUIDOS_FABRICA))})
+        """
+        despesas = execute_query(query_despesas, (dataInicio, dataFim, *ccustos, *CCUSTOS_EXCLUIDOS_FABRICA))
+        print(f"[DFC] Total de despesas: {len(despesas)}")
+
+        classificacoes_dfc_db = {}
+        try:
+            _criar_tabela_classificacao_dfc()
+            rows_dfc = execute_query("SELECT cd_despesaitem, conta_dfc FROM classificacao_despesas_dfc", ())
+            for row in rows_dfc or []:
+                cd = row.get('cd_despesaitem')
+                conta_dfc = row.get('conta_dfc', '')
+                if cd and conta_dfc:
+                    classificacoes_dfc_db[cd] = conta_dfc
+        except Exception as e:
+            print(f"[DFC] Aviso: nao foi possivel carregar classificacoes: {e}")
+
+        valores_por_conta = {}
+        nao_classificados = 0
+
+        # Terceiro nivel (despesa individual) dentro de cada subgrupo/NAO_CLASSIFICADO
+        despesas_por_subgrupo = {}  # subgrupo -> {cd_despesaitem -> valores}
+
+        # Prazo Medio de Pagamento (PMP): media de (dt_baixa - dt_emissao) de
+        # cada duplicata paga no periodo, ponderada pelo valor.
+        pmp_acc = {'dias': 0.0, 'valor': 0.0}
+        # Prazo Medio de Recebimento (PMR): mesma logica, do lado da receita
+        # (vr_fcr_faturai) - preenchido mais abaixo.
+        pmr_acc = {'dias': 0.0, 'valor': 0.0}
+
+        def _add_valor(codigo, periodo, valor):
+            if codigo not in valores_por_conta:
+                valores_por_conta[codigo] = {'total': 0}
+                for p in periodos:
+                    valores_por_conta[codigo][p] = 0
+            valores_por_conta[codigo][periodo] += valor
+            valores_por_conta[codigo]['total'] += valor
+
+        def _add_valor_despesa(subgrupo, cd_despesaitem, descricao, periodo, valor):
+            grupo_despesas = despesas_por_subgrupo.setdefault(subgrupo, {})
+            if cd_despesaitem not in grupo_despesas:
+                item = {'cdDespesaitem': cd_despesaitem, 'descricao': descricao or '', 'total': 0}
+                for p in periodos:
+                    item[p] = 0
+                grupo_despesas[cd_despesaitem] = item
+            grupo_despesas[cd_despesaitem][periodo] += valor
+            grupo_despesas[cd_despesaitem]['total'] += valor
+
+        for d in despesas:
+            cd_despesaitem = d['cd_despesaitem']
+            descricao_despesa = d.get('descricao_despesa')
+            subgrupo = _classificar_subgrupo_dfc(cd_despesaitem, classificacoes_dfc_db)
+            valor = -abs(float(d['valor'] or 0))
+            dt_referencia = d['dt_referencia']
+            if not dt_referencia:
+                continue
+            periodo = dt_referencia.strftime('%Y-%m')
+            if periodo not in periodos:
+                continue
+
+            if subgrupo == 'NAO_CLASSIFICADO':
+                nao_classificados += 1
+
+            _add_valor(subgrupo, periodo, valor)
+            _add_valor_despesa(subgrupo, cd_despesaitem, descricao_despesa, periodo, valor)
+
+            dt_emissao_despesa = d.get('dt_emissao')
+            if dt_emissao_despesa:
+                dias = (dt_referencia - dt_emissao_despesa).days
+                if dias >= 0:
+                    peso = abs(valor)
+                    pmp_acc['dias'] += dias * peso
+                    pmp_acc['valor'] += peso
+
+        print(f"[DFC] Despesas nao classificadas: {nao_classificados}")
+
+        despesas_por_subgrupo_resp = {
+            subgrupo: list(itens.values()) for subgrupo, itens in despesas_por_subgrupo.items()
+        }
+
+        # Somar subgrupos -> grupo (OP / INV / FIN)
+        for grupo in PLANO_CONTAS_DFC:
+            gcodigo = grupo['codigo']
+            valores_por_conta[gcodigo] = {'total': 0}
+            for p in periodos:
+                valores_por_conta[gcodigo][p] = 0
+            for sub in grupo['subgrupos']:
+                scodigo = sub['codigo']
+                if scodigo not in valores_por_conta:
+                    continue
+                for p in periodos:
+                    valores_por_conta[gcodigo][p] += valores_por_conta[scodigo][p]
+                valores_por_conta[gcodigo]['total'] += valores_por_conta[scodigo]['total']
+
+        # DEVOLUCOES: mesma fonte/logica de sempre (vr_tra_transacao, dt_transacao)
+        devolucoes_brutas = _init_valores_periodo(periodos)
+
+        # Pre-inicializa os subgrupos de recebimento com zero - garante que
+        # existam em valores_por_conta mesmo se empresas_filtro ficar vazio.
+        for scodigo in RECEBIMENTOS_TIPOS_DOCUMENTO:
+            valores_por_conta[scodigo] = _init_valores_periodo(periodos)
+        for scodigo in RECEBIMENTOS_DATA_CONSTRUIDA:
+            valores_por_conta[scodigo] = _init_valores_periodo(periodos)
+
+        empresas_filtro = []
+        if tipo_filtro == "fabrica":
+            empresas_filtro = [1]
+        elif tipo_filtro == "loja":
+            empresas_filtro = [c for c in ccustos if c in CCUSTOS_LOJAS]
+        elif tipo_filtro == "consolidado":
+            empresas_filtro = [1] + [c for c in ccustos if c in CCUSTOS_LOJAS]
+        empresas_filtro = [e for e in set(empresas_filtro) if e not in EMPRESAS_EXCLUIDAS]
+
+        if empresas_filtro:
+            empresa_placeholders = ",".join(["%s"] * len(empresas_filtro))
+
+            query_devolucoes = f"""
+                SELECT t.dt_transacao, SUM(t.vl_transacao) as valor
+                FROM vr_tra_transacao t
+                WHERE t.dt_transacao >= %s AND t.dt_transacao <= %s
+                  AND t.tp_situacao = 4
+                  AND t.cd_empresa IN ({empresa_placeholders})
+                  AND t.tp_modalidade IN ('3')
+                  AND t.tp_operacao = 'E'
+                GROUP BY t.dt_transacao
+            """
+            devolucoes = execute_query(query_devolucoes, (dataInicio, dataFim, *empresas_filtro))
+            for dv in devolucoes:
+                dt_transacao = dv['dt_transacao']
+                if not dt_transacao:
+                    continue
+                periodo = dt_transacao.strftime('%Y-%m')
+                if periodo not in periodos:
+                    continue
+                valor = float(dv['valor'] or 0)
+                devolucoes_brutas[periodo] -= abs(valor)
+                devolucoes_brutas['total'] -= abs(valor)
+
+            # RECEBIMENTOS por tp_documento (vr_fcr_faturai, regime de caixa -
+            # dt_baixa). Cada subgrupo em RECEBIMENTOS_TIPOS_DOCUMENTO soma os
+            # tp_documento em 'soma' e subtrai os em 'subtrai' (ex: dinheiro
+            # menos troco). A consultoria vai mandando os demais tipos aos
+            # poucos - o que ainda nao tiver mapeado simplesmente nao aparece.
+            def _somar_tp_documento(tp_documento: int, sinal: int, destino: dict):
+                query_faturai = f"""
+                    SELECT f.dt_baixa, f.dt_emissao, SUM(f.vl_pago) as valor
+                    FROM vr_fcr_faturai f
+                    WHERE f.dt_baixa >= %s AND f.dt_baixa <= %s
+                      AND f.tp_situacao = '1'
+                      AND f.tp_documento = %s
+                      AND f.cd_empresa IN ({empresa_placeholders})
+                    GROUP BY f.dt_baixa, f.dt_emissao
+                """
+                rows_faturai = execute_query(query_faturai, (dataInicio, dataFim, tp_documento, *empresas_filtro))
+                for row in rows_faturai or []:
+                    dt_baixa = row['dt_baixa']
+                    if not dt_baixa:
+                        continue
+                    periodo = dt_baixa.strftime('%Y-%m')
+                    if periodo not in periodos:
+                        continue
+                    valor_bruto = float(row['valor'] or 0)
+                    valor = sinal * valor_bruto
+                    destino[periodo] += valor
+                    destino['total'] += valor
+
+                    dt_emissao = row['dt_emissao']
+                    if dt_emissao and sinal > 0:
+                        dias = (dt_baixa - dt_emissao).days
+                        if dias >= 0:
+                            pmr_acc['dias'] += dias * valor_bruto
+                            pmr_acc['valor'] += valor_bruto
+
+            for scodigo, tipos in RECEBIMENTOS_TIPOS_DOCUMENTO.items():
+                valores_subgrupo = _init_valores_periodo(periodos)
+                for tp in tipos.get('soma', []):
+                    _somar_tp_documento(tp, 1, valores_subgrupo)
+                for tp in tipos.get('subtrai', []):
+                    _somar_tp_documento(tp, -1, valores_subgrupo)
+                valores_por_conta[scodigo] = valores_subgrupo
+
+            # RECEBIMENTOS com data de entrada no caixa CONSTRUIDA (ex: cartao
+            # de credito - a dt_baixa nunca vem preenchida na fonte, entao a
+            # gente estima D+N dias uteis a partir da dt_emissao). Busca por
+            # dt_emissao com uma folga pra tras (pior caso: qui->seg = +4 dias
+            # corridos) e filtra pela data CONSTRUIDA depois, em Python.
+            data_inicio_dt = datetime.strptime(dataInicio, '%Y-%m-%d')
+            data_inicio_buffer = (data_inicio_dt - timedelta(days=10)).strftime('%Y-%m-%d')
+
+            for scodigo, cfg in RECEBIMENTOS_DATA_CONSTRUIDA.items():
+                valores_subgrupo = _init_valores_periodo(periodos)
+                where_extra = ""
+                params_extra = []
+                if cfg.get('tp_cobranca') is not None:
+                    where_extra = "AND f.tp_cobranca = %s"
+                    params_extra = [cfg['tp_cobranca']]
+
+                query_construida = f"""
+                    SELECT f.dt_emissao, f.vl_fatura
+                    FROM vr_fcr_faturai f
+                    WHERE f.tp_situacao = '1'
+                      AND f.tp_documento = %s
+                      {where_extra}
+                      AND f.cd_empresa IN ({empresa_placeholders})
+                      AND f.dt_emissao >= %s
+                      AND f.dt_emissao <= %s
+                """
+                rows_construida = execute_query(
+                    query_construida,
+                    (cfg['tp_documento'], *params_extra, *empresas_filtro, data_inicio_buffer, dataFim)
+                )
+                for row in rows_construida or []:
+                    dt_emissao = row['dt_emissao']
+                    if not dt_emissao:
+                        continue
+                    dt_construida = _somar_dias_uteis(dt_emissao, cfg['dias_uteis'])
+                    periodo = dt_construida.strftime('%Y-%m')
+                    if periodo not in periodos:
+                        continue
+                    valor = float(row['vl_fatura'] or 0)
+                    valores_subgrupo[periodo] += valor
+                    valores_subgrupo['total'] += valor
+
+                    dias = (dt_construida - dt_emissao).days
+                    if dias >= 0:
+                        pmr_acc['dias'] += dias * valor
+                        pmr_acc['valor'] += valor
+                valores_por_conta[scodigo] = valores_subgrupo
+
+        valores_por_conta[CODIGO_DEVOLUCOES_RECEITA] = devolucoes_brutas
+        for grupo_receita in PLANO_RECEITA_DFC:
+            gcodigo = grupo_receita['codigo']
+            valores_por_conta[gcodigo] = {'total': 0}
+            for p in periodos:
+                valores_por_conta[gcodigo][p] = 0
+            for sub in grupo_receita['subgrupos']:
+                scodigo = sub['codigo']
+                for p in periodos:
+                    valores_por_conta[gcodigo][p] += valores_por_conta[scodigo][p]
+                valores_por_conta[gcodigo]['total'] += valores_por_conta[scodigo]['total']
+
+        # SALDO = receita liquida (grupo REC) + soma dos grupos de despesa (ja
+        # negativos) + despesas ainda nao classificadas (tambem saida real de
+        # caixa - sem isso o saldo final nao reconciliava com o caixa real).
+        valores_nao_classificado = valores_por_conta.get('NAO_CLASSIFICADO', _init_valores_periodo(periodos))
+        saldo = _init_valores_periodo(periodos)
+        for p in periodos:
+            saldo[p] = (
+                valores_por_conta['REC'][p]
+                + valores_por_conta['OP'][p] + valores_por_conta['INV'][p] + valores_por_conta['FIN'][p]
+                + valores_nao_classificado[p]
+            )
+            saldo['total'] += saldo[p]
+        valores_por_conta['SALDO'] = saldo
+
+        periodos_response = [
+            {"key": p, "label": f"{p.split('-')[1]}/{p.split('-')[0][2:]}"}
+            for p in periodos
+        ]
+
+        prazo_medio_pagamento = (pmp_acc['dias'] / pmp_acc['valor']) if pmp_acc['valor'] > 0 else None
+        prazo_medio_recebimento = (pmr_acc['dias'] / pmr_acc['valor']) if pmr_acc['valor'] > 0 else None
+
+        return {
+            "periodos": periodos_response,
+            "valores": valores_por_conta,
+            "despesasPorSubgrupo": despesas_por_subgrupo_resp,
+            "metadata": {
+                "filtro": filtro,
+                "nomeFiltro": nome_filtro,
+                "tipoFiltro": tipo_filtro,
+                "centrosCusto": ccustos,
+                "empresas": empresas_filtro if empresas_filtro else [],
+                "naoClassificados": nao_classificados,
+                "prazoMedioRecebimento": prazo_medio_recebimento,
+                "prazoMedioPagamento": prazo_medio_pagamento,
+                "dataInicio": dataInicio,
+                "dataFim": dataFim,
+                "dataConsulta": datetime.now().isoformat()
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[ERROR] Erro ao processar DFC: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Erro ao buscar dados do DFC: {str(e)}")
+
+
+def _calcular_valores_unificada(
+    dataInicio: str,
+    dataFim: str,
+    filtro: str,
+    campo_data_despesa: str = 'dt_emissao',
+):
+    if campo_data_despesa not in ('dt_emissao', 'dt_baixa'):
+        raise HTTPException(status_code=400, detail=f"campo_data_despesa invalido: {campo_data_despesa}")
+
+    try:
+        print(f"[INFO] Buscando DRE/DFC UNIFICADA ({campo_data_despesa}): {dataInicio} ate {dataFim}, filtro={filtro}")
 
         # Determinar quais centros de custo usar
         if filtro == "consolidado":
@@ -2581,20 +1491,20 @@ def get_dre_unificada(
             SELECT
                 d.cd_despesaitem,
                 i.ds_despesaitem as descricao_despesa,
-                d.dt_emissao as dt_emissao,
+                d.{campo_data_despesa} as dt_referencia,
                 ABS(d.vl_rateio) as valor
             FROM vr_fcp_despduplicatai d
             JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
-            WHERE d.dt_emissao >= %s
-              AND d.dt_emissao <= %s
+            WHERE d.{campo_data_despesa} >= %s
+              AND d.{campo_data_despesa} <= %s
               AND d.tp_situacao = 'N'
               AND d.cd_ccusto IN ({ccusto_placeholders})
               AND d.cd_ccusto NOT IN ({",".join(["%s"] * len(CCUSTOS_EXCLUIDOS_FABRICA))})
-            ORDER BY d.dt_emissao
+            ORDER BY d.{campo_data_despesa}
         """
 
         despesas = execute_query(query_despesas, (dataInicio, dataFim, *ccustos, *CCUSTOS_EXCLUIDOS_FABRICA))
-        print(f"[DRE UNIFICADA] Total de despesas: {len(despesas)}")
+        print(f"[DRE/DFC UNIFICADA] Total de despesas: {len(despesas)}")
 
         # Buscar classificacoes do banco de dados
         classificacoes_db = {}
@@ -2610,6 +1520,24 @@ def get_dre_unificada(
         except Exception as e:
             print(f"[DRE UNIFICADA] Aviso: nao foi possivel carregar classificacoes: {e}")
 
+        # No DFC (regime de caixa), algumas despesas podem precisar de uma
+        # conta diferente da DRE (ex: custo de mercadoria vendida = despesas
+        # reais de compra de materia-prima pagas, em vez do calculo sintetico
+        # da DRE). Isso e um override pontual - o que nao estiver na tabela
+        # do DFC cai automaticamente na mesma classificacao da DRE.
+        classificacoes_dfc_db = {}
+        if campo_data_despesa == 'dt_baixa':
+            try:
+                _criar_tabela_classificacao_dfc()
+                rows_dfc = execute_query("SELECT cd_despesaitem, conta_dfc FROM classificacao_despesas_dfc", ())
+                for row in rows_dfc or []:
+                    cd = row.get('cd_despesaitem')
+                    conta_dfc = row.get('conta_dfc', '')
+                    if cd and conta_dfc:
+                        classificacoes_dfc_db[cd] = conta_dfc
+            except Exception as e:
+                print(f"[DFC UNIFICADA] Aviso: nao foi possivel carregar classificacoes do DFC: {e}")
+
         # Agrupar despesas por conta_dre e periodo
         valores_por_conta = {}
         nao_classificados = 0
@@ -2617,9 +1545,12 @@ def get_dre_unificada(
         for d in despesas:
             cd_despesaitem = d['cd_despesaitem']
             descricao_despesa = d.get('descricao_despesa')
-            conta = _classificar_conta_dre(cd_despesaitem, descricao_despesa, classificacoes_db)
+            if campo_data_despesa == 'dt_baixa':
+                conta = _classificar_conta_dfc(cd_despesaitem, descricao_despesa, classificacoes_dfc_db, classificacoes_db)
+            else:
+                conta = _classificar_conta_dre(cd_despesaitem, descricao_despesa, classificacoes_db)
             valor = -abs(float(d['valor'] or 0))
-            dt_emissao = d['dt_emissao']
+            dt_referencia = d['dt_referencia']
 
             if conta == 'NAO_CLASSIFICADO':
                 nao_classificados += 1
@@ -2628,8 +1559,8 @@ def get_dre_unificada(
             if conta == 'EXCLUIDO':
                 continue
 
-            if dt_emissao:
-                periodo = dt_emissao.strftime('%Y-%m')
+            if dt_referencia:
+                periodo = dt_referencia.strftime('%Y-%m')
             else:
                 continue
 
@@ -2792,10 +1723,15 @@ def get_dre_unificada(
         # =========================================================================
         # CMV - Custo de Mercadoria Vendida
         # =========================================================================
+        # No DFC (regime de caixa) o CMV NAO vem dessa materialized view (que e
+        # um calculo sintetico casado com a venda, sem relacao com pagamento
+        # real) - vem das despesas de compra de materia-prima classificadas via
+        # classificacao_despesas_dfc, igual as outras despesas do DFC. Por isso
+        # esse bloco inteiro so roda para a DRE (dt_emissao).
         cmv = _init_valores_periodo(periodos)
 
         # CMV Fabrica (mv_cmv_fab) - AGREGADO por mes
-        if usar_cmv_fab:
+        if usar_cmv_fab and campo_data_despesa == 'dt_emissao':
             try:
                 query_cmv_fab = """
                     SELECT DATE_TRUNC('month', data) AS mes, ABS(COALESCE(SUM(valor), 0)) AS cmv
@@ -2816,7 +1752,7 @@ def get_dre_unificada(
                 print(f"[DRE UNIFICADA] Erro ao buscar CMV fabrica: {e}")
 
         # CMV Lojas (mv_cmv_loja_v2) - AGREGADO por mes
-        if usar_cmv_loja:
+        if usar_cmv_loja and campo_data_despesa == 'dt_emissao':
             try:
                 ccustos_lojas_filtro = [c for c in ccustos if c in CCUSTOS_LOJAS]
                 if ccustos_lojas_filtro:
@@ -2844,7 +1780,8 @@ def get_dre_unificada(
             except Exception as e:
                 print(f"[DRE UNIFICADA] Erro ao buscar CMV lojas: {e}")
 
-        _merge_conta_unif('04.02.02', cmv)  # CUSTO MERCADORIAS VENDIDAS
+        if campo_data_despesa == 'dt_emissao':
+            _merge_conta_unif('04.02.02', cmv)  # CUSTO MERCADORIAS VENDIDAS (DRE - calculo sintetico)
 
         # Somar hierarquia
         valores_por_conta = _somar_hierarquia(valores_por_conta, periodos)
@@ -2994,8 +1931,166 @@ def get_dre_unificada_duplicatas(
     """
     Retorna duplicatas detalhadas para uma conta e periodo especificos da DRE Unificada.
     """
+    return _buscar_duplicatas_unificada(conta, periodo, filtro, campo_data_despesa='dt_emissao')
+
+
+@router.get("/api/dfc/unificada/duplicatas")
+def get_dfc_unificada_duplicatas(
+    conta: str = Query(..., description="Codigo do subgrupo/grupo DFC (ex: OP.01) ou NAO_CLASSIFICADO"),
+    periodo: str = Query(..., description="Periodo no formato YYYY-MM"),
+    filtro: str = Query("consolidado", description="Filtro: 'consolidado', 'fabrica', ou codigo do centro de custo"),
+    despesaItem: Optional[int] = Query(None, description="Restringe a uma despesa (cd_despesaitem) especifica dentro da conta")
+):
+    """
+    Duplicatas do DFC (plano de contas proprio GRUPO > SUBGRUPO). O periodo
+    se refere a data de baixa (pagamento efetivo) das duplicatas.
+    """
+    return _buscar_duplicatas_dfc(conta, periodo, filtro, despesa_item=despesaItem)
+
+
+def _buscar_duplicatas_dfc(conta: str, periodo: str, filtro: str, despesa_item: Optional[int] = None):
     try:
-        print(f"[INFO] Buscando duplicatas DRE UNIFICADA: conta={conta}, periodo={periodo}, filtro={filtro}")
+        print(f"[INFO] Buscando duplicatas DFC: conta={conta}, periodo={periodo}, filtro={filtro}, despesaItem={despesa_item}")
+
+        if filtro == "consolidado":
+            ccustos = CCUSTOS_FABRICA + list(CCUSTOS_LOJAS.keys())
+        elif filtro == "fabrica":
+            ccustos = CCUSTOS_FABRICA
+        else:
+            try:
+                cd_ccusto = int(filtro)
+                if cd_ccusto in CCUSTOS_LOJAS or cd_ccusto in CCUSTOS_FABRICA:
+                    ccustos = [cd_ccusto]
+                else:
+                    raise HTTPException(status_code=400, detail=f"Centro de custo {cd_ccusto} nao encontrado")
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"Filtro invalido: {filtro}")
+
+        ano, mes = periodo.split('-')
+        import calendar
+        primeiro_dia = f"{ano}-{mes}-01"
+        ultimo_dia = calendar.monthrange(int(ano), int(mes))[1]
+        data_fim = f"{ano}-{mes}-{ultimo_dia:02d}"
+
+        classificacoes_dfc_db = {}
+        try:
+            _criar_tabela_classificacao_dfc()
+            rows_dfc = execute_query("SELECT cd_despesaitem, conta_dfc FROM classificacao_despesas_dfc", ())
+            for row in rows_dfc or []:
+                cd = row.get('cd_despesaitem')
+                conta_dfc = row.get('conta_dfc', '')
+                if cd and conta_dfc:
+                    classificacoes_dfc_db[cd] = conta_dfc
+        except Exception as e:
+            print(f"[DFC DUPLICATAS] Aviso: nao foi possivel carregar classificacoes: {e}")
+
+        # Se a conta pedida for um GRUPO (ex: "OP"), qualquer subgrupo "OP.xx"
+        # tambem entra. Se for "NAO_CLASSIFICADO", pega quem nao tem override.
+        itens_conta = []
+        if conta == 'NAO_CLASSIFICADO':
+            itens_conta = None  # sem pre-filtro; classificado por post-check abaixo
+        else:
+            for cd_item, cd_conta in classificacoes_dfc_db.items():
+                if cd_conta == conta or cd_conta.startswith(conta + '.'):
+                    itens_conta.append(cd_item)
+            if not itens_conta:
+                return {"duplicatas": [], "total": 0, "conta": conta, "periodo": periodo}
+
+        ccusto_placeholders = ",".join(["%s"] * len(ccustos))
+        ccusto_excluidos_placeholders = ",".join(["%s"] * len(CCUSTOS_EXCLUIDOS_FABRICA))
+
+        params = [primeiro_dia, data_fim]
+        where_itens = ""
+        if itens_conta is not None:
+            itens_placeholders = ",".join(["%s"] * len(itens_conta))
+            where_itens = f"AND d.cd_despesaitem IN ({itens_placeholders})"
+            params.extend(itens_conta)
+        params.extend(ccustos)
+        params.extend(CCUSTOS_EXCLUIDOS_FABRICA)
+
+        query = f"""
+            SELECT
+                d.nr_duplicata,
+                d.cd_despesaitem,
+                i.ds_despesaitem as descricao,
+                d.dt_emissao,
+                d.dt_vencimento,
+                d.dt_baixa,
+                ABS(d.vl_rateio) as valor,
+                d.cd_ccusto,
+                cc.ds_ccusto as nome_ccusto,
+                d.cd_fornecedor,
+                CASE WHEN p.nm_fantasia IS NULL OR TRIM(p.nm_fantasia) = '' OR p.nm_fantasia ~ '^\\*+$' THEN COALESCE(p.nm_pessoa, pf.nm_pessoa, 'N/A') ELSE p.nm_fantasia END as nm_fornecedor
+            FROM vr_fcp_despduplicatai d
+            JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
+            LEFT JOIN vr_gec_ccusto cc ON cc.cd_ccusto = d.cd_ccusto
+            LEFT JOIN vr_pes_pessoa p ON p.cd_pessoa = d.cd_fornecedor
+            LEFT JOIN vr_pes_pesfisica pf ON pf.cd_pessoa = d.cd_fornecedor
+            WHERE d.dt_baixa >= %s
+              AND d.dt_baixa <= %s
+              {where_itens}
+              AND d.cd_ccusto IN ({ccusto_placeholders})
+              AND d.cd_ccusto NOT IN ({ccusto_excluidos_placeholders})
+              AND d.tp_situacao = 'N'
+            ORDER BY d.dt_baixa DESC
+        """
+
+        rows = execute_query(query, params)
+
+        duplicatas = []
+        total = 0
+        for row in (rows or []):
+            valor = float(row['valor'] or 0)
+            subgrupo = _classificar_subgrupo_dfc(row['cd_despesaitem'], classificacoes_dfc_db)
+
+            if conta == 'NAO_CLASSIFICADO':
+                if subgrupo != 'NAO_CLASSIFICADO':
+                    continue
+            elif subgrupo != conta and not subgrupo.startswith(conta + '.'):
+                continue
+
+            if despesa_item is not None and row['cd_despesaitem'] != despesa_item:
+                continue
+
+            total += valor
+            duplicatas.append({
+                "id": row['nr_duplicata'],
+                "nrDuplicata": row['nr_duplicata'],
+                "cdDespesaItem": row['cd_despesaitem'],
+                "descricao": row['descricao'] or '',
+                "dtEmissao": row['dt_emissao'].strftime('%Y-%m-%d') if row['dt_emissao'] else None,
+                "dtVencimento": row['dt_vencimento'].strftime('%Y-%m-%d') if row['dt_vencimento'] else None,
+                "dtBaixa": row['dt_baixa'].strftime('%Y-%m-%d') if row['dt_baixa'] else None,
+                "valor": valor,
+                "cdCCusto": row['cd_ccusto'],
+                "nomeCCusto": row['nome_ccusto'],
+                "cdFornecedor": row['cd_fornecedor'],
+                "nmFornecedor": row['nm_fornecedor']
+            })
+
+        return {
+            "duplicatas": duplicatas,
+            "total": total,
+            "conta": conta,
+            "periodo": periodo,
+            "filtro": filtro
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[ERROR] Erro ao buscar duplicatas DFC: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _buscar_duplicatas_unificada(conta: str, periodo: str, filtro: str, campo_data_despesa: str = 'dt_emissao'):
+    if campo_data_despesa not in ('dt_emissao', 'dt_baixa'):
+        raise HTTPException(status_code=400, detail=f"campo_data_despesa invalido: {campo_data_despesa}")
+
+    try:
+        print(f"[INFO] Buscando duplicatas DRE/DFC UNIFICADA ({campo_data_despesa}): conta={conta}, periodo={periodo}, filtro={filtro}")
 
         # Determinar quais centros de custo usar
         if filtro == "consolidado":
@@ -3033,11 +2128,35 @@ def get_dre_unificada_duplicatas(
         except Exception as e:
             print(f"[DRE UNIFICADA DUPLICATAS] Aviso: {e}")
 
+        # No DFC, algumas despesas podem estar classificadas so na tabela
+        # propria do DFC (ex: compras de materia-prima), sem equivalente na
+        # classificacao_despesas_dre - por isso o mapeamento conta->despesas
+        # tambem precisa considerar esse override quando estamos no DFC.
+        classificacoes_dfc_db = {}
+        if campo_data_despesa == 'dt_baixa':
+            try:
+                _criar_tabela_classificacao_dfc()
+                rows_dfc = execute_query("SELECT cd_despesaitem, conta_dfc FROM classificacao_despesas_dfc", ())
+                for row in rows_dfc or []:
+                    cd = row.get('cd_despesaitem')
+                    conta_dfc = row.get('conta_dfc', '')
+                    if cd and conta_dfc:
+                        classificacoes_dfc_db[cd] = conta_dfc
+            except Exception as e:
+                print(f"[DFC UNIFICADA DUPLICATAS] Aviso: nao foi possivel carregar classificacoes do DFC: {e}")
+
         # Encontrar cd_despesaitem que mapeiam para esta conta (APENAS do banco)
         itens_conta = []
-        for cd_item, cd_conta in classificacoes_db.items():
-            if cd_conta == conta or cd_conta.startswith(conta + '.'):
-                itens_conta.append(cd_item)
+        if campo_data_despesa == 'dt_baixa':
+            todos_itens = set(classificacoes_db.keys()) | set(classificacoes_dfc_db.keys())
+            for cd_item in todos_itens:
+                cd_conta = _classificar_conta_dfc(cd_item, None, classificacoes_dfc_db, classificacoes_db)
+                if cd_conta == conta or cd_conta.startswith(conta + '.'):
+                    itens_conta.append(cd_item)
+        else:
+            for cd_item, cd_conta in classificacoes_db.items():
+                if cd_conta == conta or cd_conta.startswith(conta + '.'):
+                    itens_conta.append(cd_item)
 
         # Se nao tem itens, retorna vazio
         if not itens_conta:
@@ -3064,6 +2183,7 @@ def get_dre_unificada_duplicatas(
                 i.ds_despesaitem as descricao,
                 d.dt_emissao,
                 d.dt_vencimento,
+                d.dt_baixa,
                 ABS(d.vl_rateio) as valor,
                 d.cd_ccusto,
                 cc.ds_ccusto as nome_ccusto,
@@ -3074,13 +2194,13 @@ def get_dre_unificada_duplicatas(
             LEFT JOIN vr_gec_ccusto cc ON cc.cd_ccusto = d.cd_ccusto
             LEFT JOIN vr_pes_pessoa p ON p.cd_pessoa = d.cd_fornecedor
             LEFT JOIN vr_pes_pesfisica pf ON pf.cd_pessoa = d.cd_fornecedor
-            WHERE d.dt_emissao >= %s
-              AND d.dt_emissao <= %s
+            WHERE d.{campo_data_despesa} >= %s
+              AND d.{campo_data_despesa} <= %s
               AND ({items_or_desc})
               AND d.cd_ccusto IN ({ccusto_placeholders})
               AND d.cd_ccusto NOT IN ({ccusto_excluidos_placeholders})
               AND d.tp_situacao = 'N'
-            ORDER BY d.dt_emissao DESC
+            ORDER BY d.{campo_data_despesa} DESC
         """
 
         rows = execute_query(query, params)
@@ -3092,11 +2212,19 @@ def get_dre_unificada_duplicatas(
             descricao = row['descricao'] or ''
 
             # Reclassificar pela descricao usando as mesmas regras da agregacao
-            conta_classificada = _classificar_conta_dre(
-                row['cd_despesaitem'],
-                descricao,
-                classificacoes_db
-            )
+            if campo_data_despesa == 'dt_baixa':
+                conta_classificada = _classificar_conta_dfc(
+                    row['cd_despesaitem'],
+                    descricao,
+                    classificacoes_dfc_db,
+                    classificacoes_db
+                )
+            else:
+                conta_classificada = _classificar_conta_dre(
+                    row['cd_despesaitem'],
+                    descricao,
+                    classificacoes_db
+                )
 
             # Verificar se este registro realmente pertence a conta solicitada
             if conta_classificada != conta and not conta_classificada.startswith(conta + '.'):
@@ -3111,6 +2239,7 @@ def get_dre_unificada_duplicatas(
                 "descricao": descricao,
                 "dtEmissao": row['dt_emissao'].strftime('%Y-%m-%d') if row['dt_emissao'] else None,
                 "dtVencimento": row['dt_vencimento'].strftime('%Y-%m-%d') if row['dt_vencimento'] else None,
+                "dtBaixa": row['dt_baixa'].strftime('%Y-%m-%d') if row['dt_baixa'] else None,
                 "valor": valor,
                 "cdCCusto": row['cd_ccusto'],
                 "nomeCCusto": row['nome_ccusto'],
@@ -4117,156 +3246,6 @@ def get_dre_unificada_sintetico(
 
     except Exception as e:
         print(f"[ERROR] Erro ao processar DRE SINTETICO: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/api/dre/unificada/por-loja")
-def get_dre_unificada_por_loja(
-    dataInicio: str = Query("2026-01-01", description="Data inicial (YYYY-MM-DD)"),
-    dataFim: str = Query("2026-12-31", description="Data final (YYYY-MM-DD)"),
-    lojas: str = Query("", description="Codigos das lojas separados por virgula (ex: 2,3,4). Vazio = todas")
-):
-    """
-    Retorna DRE completa lado a lado por loja.
-    Permite selecionar quais lojas comparar.
-    """
-    try:
-        print(f"[INFO] Buscando DRE POR LOJA: {dataInicio} ate {dataFim}, lojas={lojas}")
-
-        # Parsear lojas selecionadas
-        if lojas:
-            try:
-                lojas_selecionadas = [int(l.strip()) for l in lojas.split(',') if l.strip()]
-            except ValueError:
-                raise HTTPException(status_code=400, detail="Parametro 'lojas' invalido")
-        else:
-            # Todas as lojas
-            lojas_selecionadas = list(CCUSTOS_LOJAS.keys())
-
-        # Validar lojas
-        lojas_validas = [l for l in lojas_selecionadas if l in CCUSTOS_LOJAS]
-        if not lojas_validas:
-            raise HTTPException(status_code=400, detail="Nenhuma loja valida selecionada")
-
-        # Buscar classificacoes
-        classificacoes_db = {}
-        try:
-            rows = execute_query("SELECT cd_despesaitem, ds_despesaitem, conta_dre FROM classificacao_despesas_dre", ())
-            for row in rows or []:
-                cd = row.get('cd_despesaitem')
-                ds = row.get('ds_despesaitem')
-                conta_dre = row.get('conta_dre', '')
-                if cd and conta_dre:
-                    codigo = conta_dre.split(' ')[0] if ' ' in conta_dre else conta_dre
-                    classificacoes_db[cd] = codigo
-        except Exception as e:
-            print(f"[POR LOJA] Aviso: {e}")
-
-        # Estrutura de resultado por loja
-        resultado_por_loja = {}
-
-        for cd_loja in lojas_validas:
-            nome_loja = CCUSTOS_LOJAS[cd_loja]
-
-            # Despesas
-            query_despesas = """
-                SELECT
-                    d.cd_despesaitem,
-                    i.ds_despesaitem as descricao_despesa,
-                    SUM(ABS(d.vl_rateio)) as valor
-                FROM vr_fcp_despduplicatai d
-                JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
-                WHERE d.dt_emissao >= %s
-                  AND d.dt_emissao <= %s
-                  AND d.tp_situacao = 'N'
-                  AND d.cd_ccusto = %s
-                GROUP BY d.cd_despesaitem, i.ds_despesaitem
-            """
-            despesas = execute_query(query_despesas, (dataInicio, dataFim, cd_loja))
-
-            valores_conta = {}
-            for d in despesas:
-                cd_despesaitem = d['cd_despesaitem']
-                descricao_despesa = d.get('descricao_despesa')
-                conta = _classificar_conta_dre(cd_despesaitem, descricao_despesa, classificacoes_db)
-                valor = -float(d['valor'] or 0)
-
-                if conta not in valores_conta:
-                    valores_conta[conta] = 0
-                valores_conta[conta] += valor
-
-            # CMV
-            try:
-                query_cmv = """
-                    SELECT SUM(ABS(valor)) as total
-                    FROM mv_cmv_loja_v2
-                    WHERE data >= %s
-                      AND data <= %s
-                      AND idcentrodecusto = %s
-                """
-                result = execute_query(query_cmv, (dataInicio, dataFim, cd_loja))
-                if result and result[0]['total']:
-                    valores_conta['04'] = -abs(float(result[0]['total']))
-            except:
-                valores_conta['04'] = 0
-
-            # Vendas - usar cd_loja como cd_empresa (pois sao iguais para lojas)
-            # Vendas
-            query_vendas = """
-                SELECT SUM(t.vl_transacao) as valor
-                FROM vr_tra_transacao t
-                WHERE t.dt_transacao >= %s
-                  AND t.dt_transacao <= %s
-                  AND t.tp_situacao = 4
-                  AND t.cd_empresa = %s
-                  AND t.tp_modalidade IN ('4')
-                  AND t.tp_operacao = 'S'
-            """
-            result_vendas = execute_query(query_vendas, (dataInicio, dataFim, cd_loja))
-            if result_vendas and result_vendas[0]['valor']:
-                valores_conta['01'] = float(result_vendas[0]['valor'])
-
-            # Devolucoes
-            query_devolucoes = """
-                SELECT SUM(t.vl_transacao) as valor
-                FROM vr_tra_transacao t
-                WHERE t.dt_transacao >= %s
-                  AND t.dt_transacao <= %s
-                  AND t.tp_situacao = 4
-                  AND t.cd_empresa = %s
-                  AND t.tp_modalidade IN ('3')
-                  AND t.tp_operacao = 'E'
-            """
-            result_devolucoes = execute_query(query_devolucoes, (dataInicio, dataFim, cd_loja))
-            if result_devolucoes and result_devolucoes[0]['valor']:
-                valores_conta['02'] = -abs(float(result_devolucoes[0]['valor']))
-
-            resultado_por_loja[str(cd_loja)] = {
-                "codigo": cd_loja,
-                "nome": nome_loja,
-                "valores": valores_conta
-            }
-
-        return {
-            "lojas": resultado_por_loja,
-            "lojasDisponiveis": [
-                {"codigo": k, "nome": v} for k, v in sorted(CCUSTOS_LOJAS.items())
-            ],
-            "metadata": {
-                "lojasSelecionadas": lojas_validas,
-                "totalLojas": len(lojas_validas),
-                "dataInicio": dataInicio,
-                "dataFim": dataFim,
-                "dataConsulta": datetime.now().isoformat()
-            }
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"[ERROR] Erro ao processar DRE POR LOJA: {e}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))

@@ -9,9 +9,21 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const conta = searchParams.get('conta') || '';
     const periodo = searchParams.get('periodo') || '';
+    const filtro = searchParams.get('filtro') || 'consolidado';
+    const despesaItem = searchParams.get('despesaItem');
+
+    if (!conta || !periodo) {
+      return NextResponse.json(
+        { error: 'Parametros conta e periodo sao obrigatorios' },
+        { status: 400 }
+      );
+    }
+
+    const params = new URLSearchParams({ conta, periodo, filtro });
+    if (despesaItem) params.set('despesaItem', despesaItem);
 
     const response = await fetch(
-      `${PYTHON_API_URL}/api/dre/fabrica/duplicatas?conta=${encodeURIComponent(conta)}&periodo=${periodo}`,
+      `${PYTHON_API_URL}/api/dfc/unificada/duplicatas?${params.toString()}`,
       {
         method: 'GET',
         cache: 'no-store',
@@ -24,9 +36,9 @@ export async function GET(request: NextRequest) {
     const data = await response.json();
     return NextResponse.json(data, { status: response.status });
   } catch (error) {
-    console.error('Erro ao buscar duplicatas DRE Fabrica:', error);
+    console.error('Erro ao buscar duplicatas DFC Unificada:', error);
     return NextResponse.json(
-      { error: 'Erro ao buscar duplicatas da DRE Fabrica' },
+      { error: 'Erro ao buscar duplicatas' },
       { status: 500 }
     );
   }

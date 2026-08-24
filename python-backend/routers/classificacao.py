@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Query
+from fastapi import APIRouter, HTTPException
 from database import execute_query, execute_insert
 import unicodedata
 
@@ -889,107 +889,6 @@ def _executar_atualizacao_realizado():
         print(f"[DFC-CACHE] Erro na atualização: {e}")
 
 
-@router.get("/api/classificacao-despesas")
-def listar_classificacao_despesas():
-    """Lista todas as despesas com suas classificações"""
-    try:
-        query = """
-            SELECT
-                d.cd_despesaitem,
-                d.ds_despesaitem,
-                COALESCE(c.categoria, 'OPERACIONAIS') AS categoria,
-                c.dt_atualizacao,
-                c.usuario_alteracao
-            FROM vr_fcp_despesaitem d
-            LEFT JOIN classificacao_despesas c ON c.cd_despesaitem = d.cd_despesaitem
-            ORDER BY d.ds_despesaitem
-        """
-
-        resultado = execute_query(query)
-
-        return {
-            "success": True,
-            "data": resultado
-        }
-
-    except Exception as e:
-        print(f"[ERROR] Erro ao listar classificações: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/api/classificacao-despesas")
-def salvar_classificacao_despesas(data: dict, background_tasks: BackgroundTasks):
-    """Salva classificação de uma ou mais despesas"""
-    try:
-        classificacoes = data.get('classificacoes', [])
-        usuario = data.get('usuario', 'sistema')
-
-        if not classificacoes:
-            raise HTTPException(status_code=400, detail="Nenhuma classificação fornecida")
-
-        salvos = 0
-        for item in classificacoes:
-            cd_despesaitem = item.get('cd_despesaitem')
-            ds_despesaitem = item.get('ds_despesaitem', '')
-            categoria = item.get('categoria')
-
-            if not cd_despesaitem or not categoria:
-                continue
-
-            query = """
-                INSERT INTO classificacao_despesas
-                    (cd_despesaitem, ds_despesaitem, categoria, usuario_alteracao, dt_atualizacao)
-                VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
-                ON CONFLICT (cd_despesaitem)
-                DO UPDATE SET
-                    categoria = EXCLUDED.categoria,
-                    usuario_alteracao = EXCLUDED.usuario_alteracao,
-                    dt_atualizacao = CURRENT_TIMESTAMP
-            """
-
-            execute_insert(query, (cd_despesaitem, ds_despesaitem, categoria, usuario))
-            salvos += 1
-
-        # Atualiza cache do DFC realizado em background para refletir novas classificações
-        background_tasks.add_task(_executar_atualizacao_realizado)
-
-        return {
-            "success": True,
-            "salvos": salvos,
-            "message": f"{salvos} classificações salvas com sucesso"
-        }
-
-    except Exception as e:
-        print(f"[ERROR] Erro ao salvar classificações: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.delete("/api/classificacao-despesas")
-def deletar_classificacao_despesa(background_tasks: BackgroundTasks, cd_despesaitem: int = Query(...)):
-    """Remove classificação de uma despesa"""
-    try:
-        query = "DELETE FROM classificacao_despesas WHERE cd_despesaitem = %s"
-        execute_insert(query, (cd_despesaitem,))
-
-        # Atualiza cache do DFC realizado em background para refletir remoção
-        background_tasks.add_task(_executar_atualizacao_realizado)
-
-        return {
-            "success": True,
-            "message": "Classificação removida com sucesso"
-        }
-
-    except Exception as e:
-        print(f"[ERROR] Erro ao deletar classificação: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @router.get("/api/classificacao-despesas-dre")
 def listar_classificacao_despesas_dre():
     """Lista todas as despesas com suas classificações DRE"""
@@ -1085,192 +984,112 @@ def salvar_classificacao_despesas_dre(data: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/api/classificacao-despesas-dre/automatica")
-def classificar_despesas_dre_automatica(data: dict = None):
-    """
-    Classifica AUTOMATICAMENTE todas as despesas não classificadas
-    usando regras inteligentes baseadas no código e nome da despesa.
+# ============================================================================
+# CLASSIFICACAO DESPESAS DFC (regime de caixa)
+# ============================================================================
+# Tabela PROPRIA do DFC, independente da classificacao_despesas_dre. Uma
+# despesa so precisa de uma linha aqui se o DFC precisar classifica-la
+# diferente da DRE (ex: compras de materia-prima, que no DFC viram o "Custo
+# Mercadorias Vendidas" pago de verdade, em vez do calculo sintetico da DRE).
+# Tudo que nao tiver override aqui usa automaticamente a mesma classificacao
+# da DRE - ver _classificar_conta_dfc em routers/dre.py.
+# ============================================================================
 
-    Parâmetros opcionais (via body JSON):
-    - sobrescrever: bool - Se True, reclassifica mesmo as já classificadas (default: False)
-    - usuario: str - Nome do usuário (default: 'sistema_auto')
+def _criar_tabela_classificacao_dfc():
+    execute_insert("""
+        CREATE TABLE IF NOT EXISTS classificacao_despesas_dfc (
+            cd_despesaitem INTEGER PRIMARY KEY,
+            ds_despesaitem TEXT,
+            conta_dfc TEXT NOT NULL,
+            usuario_alteracao TEXT,
+            dt_atualizacao TIMESTAMP DEFAULT NOW()
+        )
+    """)
 
-    Retorna estatísticas detalhadas da classificação.
-    """
+
+@router.get("/api/classificacao-despesas-dfc")
+def listar_classificacao_despesas_dfc():
+    """Lista todas as despesas com a classificacao DFC (override) e, para
+    referencia, a classificacao DRE atual (o que o DFC usa quando nao tem
+    override proprio)."""
     try:
-        data = data or {}
-        sobrescrever = data.get('sobrescrever', False)
-        usuario = data.get('usuario', 'sistema_auto')
-
-        print(f"[AUTO-CLASSIFICACAO] Iniciando classificação automática DRE...")
-        print(f"[AUTO-CLASSIFICACAO] Sobrescrever existentes: {sobrescrever}")
-
-        # Buscar todas as despesas COM categoria do DFC
-        # NOTA: Matéria Prima é excluída pois é tratada separadamente no CMV
-        query_despesas = """
+        _criar_tabela_classificacao_dfc()
+        query = """
             SELECT
                 d.cd_despesaitem,
                 d.ds_despesaitem,
-                cdre.conta_dre as conta_atual,
-                COALESCE(cdfc.categoria, 'OPERACIONAIS') as categoria_dfc
+                c.conta_dfc,
+                c.dt_atualizacao,
+                c.usuario_alteracao,
+                COALESCE(cdre.conta_dre, 'NAO_CLASSIFICADO') AS conta_dre_atual
             FROM vr_fcp_despesaitem d
+            LEFT JOIN classificacao_despesas_dfc c ON c.cd_despesaitem = d.cd_despesaitem
             LEFT JOIN classificacao_despesas_dre cdre ON cdre.cd_despesaitem = d.cd_despesaitem
-            LEFT JOIN classificacao_despesas cdfc ON cdfc.cd_despesaitem = d.cd_despesaitem
             ORDER BY d.ds_despesaitem
         """
-        despesas = execute_query(query_despesas)
-
-        if not despesas:
-            return {
-                "success": True,
-                "message": "Nenhuma despesa encontrada",
-                "estatisticas": {
-                    "total": 0,
-                    "classificadas": 0,
-                    "ja_tinham": 0,
-                    "nao_classificadas": 0,
-                    "ignoradas_mp": 0
-                }
-            }
-
-        total = len(despesas)
-        classificadas = 0
-        ja_tinham = 0
-        nao_classificadas = 0
-        ignoradas_mp = 0
-        detalhes = []
-
-        for despesa in despesas:
-            cd = despesa['cd_despesaitem']
-            nome = despesa['ds_despesaitem'] or ''
-            conta_atual = despesa.get('conta_atual')
-            categoria_dfc = (despesa.get('categoria_dfc') or '').upper()
-
-            # IGNORAR Matéria Prima - tratado separadamente no CMV
-            if 'MATERIA' in categoria_dfc or 'PRIMA' in categoria_dfc or categoria_dfc == 'MATERIA_PRIMA':
-                ignoradas_mp += 1
-                continue
-
-            # Se já tem classificação e não é para sobrescrever, pula
-            if conta_atual and not sobrescrever:
-                ja_tinham += 1
-                continue
-
-            # Tenta classificar automaticamente
-            conta_nova = _classificar_despesa_automatica(cd, nome)
-
-            if conta_nova:
-                # Salvar no banco
-                query_insert = """
-                    INSERT INTO classificacao_despesas_dre
-                        (cd_despesaitem, ds_despesaitem, conta_dre, usuario_alteracao, dt_atualizacao)
-                    VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
-                    ON CONFLICT (cd_despesaitem)
-                    DO UPDATE SET
-                        conta_dre = EXCLUDED.conta_dre,
-                        usuario_alteracao = EXCLUDED.usuario_alteracao,
-                        dt_atualizacao = CURRENT_TIMESTAMP
-                """
-                execute_insert(query_insert, (cd, nome, conta_nova, usuario))
-                classificadas += 1
-                detalhes.append({
-                    "cd": cd,
-                    "nome": nome,
-                    "conta": conta_nova,
-                    "anterior": conta_atual
-                })
-            else:
-                nao_classificadas += 1
-
-        print(f"[AUTO-CLASSIFICACAO] Concluído!")
-        print(f"[AUTO-CLASSIFICACAO] Total: {total}, Classificadas: {classificadas}, Já tinham: {ja_tinham}, Não classificadas: {nao_classificadas}, Ignoradas (MP): {ignoradas_mp}")
-
-        return {
-            "success": True,
-            "message": f"Classificação automática concluída! {classificadas} despesas classificadas.",
-            "estatisticas": {
-                "total": total,
-                "classificadas": classificadas,
-                "ja_tinham": ja_tinham,
-                "nao_classificadas": nao_classificadas,
-                "ignoradas_mp": ignoradas_mp
-            },
-            "detalhes": detalhes[:50]  # Primeiros 50 para não sobrecarregar
-        }
-
+        resultado = execute_query(query)
+        return {"success": True, "data": resultado}
     except Exception as e:
-        print(f"[ERROR] Erro na classificação automática: {e}")
+        print(f"[ERROR] Erro ao listar classificações DFC: {e}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/api/classificacao-despesas-dre/preview")
-def preview_classificacao_automatica():
-    """
-    Mostra uma PRÉVIA de como as despesas seriam classificadas automaticamente,
-    SEM salvar no banco. Útil para revisar antes de aplicar.
-    """
+@router.post("/api/classificacao-despesas-dfc")
+def salvar_classificacao_despesas_dfc(data: dict):
+    """Salva classificacao DFC (override) de uma ou mais despesas. Enviar
+    conta_dfc vazio/NAO_CLASSIFICADO remove o override, voltando a despesa a
+    usar a mesma classificacao da DRE."""
     try:
-        print(f"[AUTO-CLASSIFICACAO] Gerando prévia...")
+        _criar_tabela_classificacao_dfc()
+        classificacoes = data.get('classificacoes', [])
+        usuario = data.get('usuario', 'sistema')
 
-        # Buscar todas as despesas não classificadas
-        query_despesas = """
-            SELECT
-                d.cd_despesaitem,
-                d.ds_despesaitem,
-                c.conta_dre as conta_atual
-            FROM vr_fcp_despesaitem d
-            LEFT JOIN classificacao_despesas_dre c ON c.cd_despesaitem = d.cd_despesaitem
-            ORDER BY d.ds_despesaitem
-        """
-        despesas = execute_query(query_despesas)
+        if not classificacoes:
+            raise HTTPException(status_code=400, detail="Nenhuma classificação fornecida")
 
-        if not despesas:
-            return {
-                "success": True,
-                "message": "Nenhuma despesa encontrada",
-                "preview": []
-            }
+        salvos = 0
+        removidos = 0
+        for item in classificacoes:
+            cd_despesaitem = item.get('cd_despesaitem')
+            ds_despesaitem = item.get('ds_despesaitem', '')
+            conta_dfc = item.get('conta_dfc')
 
-        preview = []
-        classificaveis = 0
-        nao_classificaveis = 0
+            if not cd_despesaitem:
+                continue
 
-        for despesa in despesas:
-            cd = despesa['cd_despesaitem']
-            nome = despesa['ds_despesaitem'] or ''
-            conta_atual = despesa.get('conta_atual')
+            if not conta_dfc or conta_dfc == 'NAO_CLASSIFICADO':
+                execute_insert(
+                    "DELETE FROM classificacao_despesas_dfc WHERE cd_despesaitem = %s",
+                    (cd_despesaitem,)
+                )
+                removidos += 1
+                continue
 
-            conta_sugerida = _classificar_despesa_automatica(cd, nome)
-
-            item = {
-                "cd_despesaitem": cd,
-                "ds_despesaitem": nome,
-                "conta_atual": conta_atual or 'NAO_CLASSIFICADO',
-                "conta_sugerida": conta_sugerida or 'NAO_CLASSIFICADO',
-                "mudanca": conta_sugerida and conta_sugerida != conta_atual
-            }
-            preview.append(item)
-
-            if conta_sugerida:
-                classificaveis += 1
-            else:
-                nao_classificaveis += 1
+            query = """
+                INSERT INTO classificacao_despesas_dfc
+                    (cd_despesaitem, ds_despesaitem, conta_dfc, usuario_alteracao, dt_atualizacao)
+                VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
+                ON CONFLICT (cd_despesaitem)
+                DO UPDATE SET
+                    conta_dfc = EXCLUDED.conta_dfc,
+                    usuario_alteracao = EXCLUDED.usuario_alteracao,
+                    dt_atualizacao = CURRENT_TIMESTAMP
+            """
+            execute_insert(query, (cd_despesaitem, ds_despesaitem, conta_dfc, usuario))
+            salvos += 1
 
         return {
             "success": True,
-            "message": f"Prévia gerada: {classificaveis} podem ser classificadas automaticamente",
-            "estatisticas": {
-                "total": len(despesas),
-                "classificaveis": classificaveis,
-                "nao_classificaveis": nao_classificaveis
-            },
-            "preview": preview
+            "salvos": salvos,
+            "removidos": removidos,
+            "message": f"{salvos} classificações DFC salvas com sucesso" + (f" ({removidos} removidas)" if removidos > 0 else "")
         }
-
+    except HTTPException:
+        raise
     except Exception as e:
-        print(f"[ERROR] Erro ao gerar prévia: {e}")
+        print(f"[ERROR] Erro ao salvar classificações DFC: {e}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
@@ -1583,139 +1402,6 @@ def sincronizar_classificacoes_com_oficial():
 
     except Exception as e:
         print(f"[ERROR] Erro na sincronização: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/api/classificacao-despesas-dre/comparar-impacto")
-def comparar_impacto_mapeamentos():
-    """
-    Compara os mapeamentos fixos do código (MAPEAMENTO_OFICIAL_DRE) com as
-    classificações salvas no banco de dados (classificacao_despesas_dre).
-
-    Retorna:
-    - Despesas que estão no banco mas não no mapeamento fixo
-    - Despesas que estão no mapeamento fixo mas não no banco
-    - Despesas com classificação diferente entre banco e mapeamento fixo
-    - Total de despesas que seriam afetadas se remover o mapeamento fixo
-    """
-    try:
-        # Buscar classificações do banco
-        query_banco = """
-            SELECT cd_despesaitem, ds_despesaitem, conta_dre
-            FROM classificacao_despesas_dre
-        """
-        classificacoes_banco = execute_query(query_banco)
-
-        # Criar mapa do banco
-        mapa_banco = {}
-        for c in classificacoes_banco or []:
-            cd = c['cd_despesaitem']
-            conta = c['conta_dre']
-            # Extrair só o código (ex: "08.02.10" de "08.02.10 CAGECE")
-            if conta and ' ' in conta:
-                conta = conta.split(' ')[0]
-            mapa_banco[cd] = {
-                'conta': conta,
-                'nome': c['ds_despesaitem']
-            }
-
-        # Buscar todas as despesas do sistema
-        query_despesas = """
-            SELECT cd_despesaitem, ds_despesaitem
-            FROM vr_fcp_despesaitem
-        """
-        todas_despesas = execute_query(query_despesas)
-
-        # Criar mapa de nomes
-        mapa_nomes = {}
-        for d in todas_despesas or []:
-            mapa_nomes[d['cd_despesaitem']] = d['ds_despesaitem']
-
-        # Análise
-        so_no_banco = []  # Está no banco mas não no mapeamento fixo
-        so_no_fixo = []   # Está no mapeamento fixo mas não no banco
-        divergentes = []  # Está em ambos mas com classificação diferente
-        iguais = []       # Está em ambos com mesma classificação
-
-        # Verificar cada item do mapeamento fixo
-        for cd, conta_fixa in MAPEAMENTO_OFICIAL_DRE.items():
-            nome = mapa_nomes.get(cd, f'Código {cd}')
-            if cd in mapa_banco:
-                conta_banco = mapa_banco[cd]['conta']
-                if conta_banco == conta_fixa:
-                    iguais.append({
-                        'cd_despesaitem': cd,
-                        'nome': nome,
-                        'conta': conta_fixa
-                    })
-                else:
-                    divergentes.append({
-                        'cd_despesaitem': cd,
-                        'nome': nome,
-                        'conta_banco': conta_banco,
-                        'conta_fixo': conta_fixa
-                    })
-            else:
-                so_no_fixo.append({
-                    'cd_despesaitem': cd,
-                    'nome': nome,
-                    'conta_fixo': conta_fixa
-                })
-
-        # Verificar itens que estão só no banco
-        for cd, info in mapa_banco.items():
-            if cd not in MAPEAMENTO_OFICIAL_DRE:
-                so_no_banco.append({
-                    'cd_despesaitem': cd,
-                    'nome': info['nome'],
-                    'conta_banco': info['conta']
-                })
-
-        # Calcular impacto - despesas usadas nos últimos 12 meses que cairiam em NAO_CLASSIFICADO
-        query_despesas_usadas = """
-            SELECT DISTINCT d.cd_despesaitem, i.ds_despesaitem
-            FROM vr_fcp_despduplicatai d
-            JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
-            WHERE d.dt_emissao >= CURRENT_DATE - INTERVAL '12 months'
-        """
-        despesas_usadas = execute_query(query_despesas_usadas)
-
-        despesas_sem_classificacao = []
-        for d in despesas_usadas or []:
-            cd = d['cd_despesaitem']
-            if cd not in mapa_banco:
-                # Não está no banco - seria NAO_CLASSIFICADO
-                conta_fixo = MAPEAMENTO_OFICIAL_DRE.get(cd)
-                despesas_sem_classificacao.append({
-                    'cd_despesaitem': cd,
-                    'nome': d['ds_despesaitem'],
-                    'conta_fixo': conta_fixo,
-                    'impacto': 'Cairia em NAO_CLASSIFICADO se remover mapeamento fixo' if conta_fixo else 'Já é NAO_CLASSIFICADO'
-                })
-
-        return {
-            "resumo": {
-                "total_no_banco": len(mapa_banco),
-                "total_no_fixo": len(MAPEAMENTO_OFICIAL_DRE),
-                "iguais": len(iguais),
-                "divergentes": len(divergentes),
-                "so_no_banco": len(so_no_banco),
-                "so_no_fixo": len(so_no_fixo),
-                "despesas_usadas_sem_classificacao_banco": len(despesas_sem_classificacao)
-            },
-            "impacto": {
-                "mensagem": f"Se remover o mapeamento fixo, {len(despesas_sem_classificacao)} despesas usadas nos últimos 12 meses ficariam como NAO_CLASSIFICADO",
-                "despesas_afetadas": despesas_sem_classificacao[:50]  # Primeiras 50
-            },
-            "divergentes": divergentes,
-            "so_no_banco": so_no_banco[:30],
-            "so_no_fixo": so_no_fixo[:30]
-        }
-
-    except Exception as e:
-        print(f"[ERROR] Erro ao comparar impacto: {e}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
