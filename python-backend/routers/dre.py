@@ -1373,8 +1373,13 @@ def _calcular_valores_dfc(dataInicio: str, dataFim: str, filtro: str):
         despesas_por_subgrupo = {}  # subgrupo -> {cd_despesaitem -> valores}
 
         # Prazo Medio de Pagamento (PMP): media de (dt_baixa - dt_emissao) de
-        # cada duplicata paga no periodo, ponderada pelo valor.
+        # cada duplicata paga no periodo, ponderada pelo valor. pmp_por_subgrupo
+        # guarda o mesmo calculo quebrado por subgrupo (OP.01, OP.02...).
         pmp_acc = {'dias': 0.0, 'valor': 0.0}
+        pmp_por_subgrupo = {}
+
+        def _pmp_subgrupo(scodigo):
+            return pmp_por_subgrupo.setdefault(scodigo, {'dias': 0.0, 'valor': 0.0})
         # Prazo Medio de Recebimento (PMR): mesma logica, do lado da receita
         # (vr_fcr_faturai) - preenchido mais abaixo. pmr_por_subgrupo guarda
         # o mesmo calculo quebrado por tipo de documento (REC.01, REC.02...).
@@ -1427,6 +1432,10 @@ def _calcular_valores_dfc(dataInicio: str, dataFim: str, filtro: str):
                     peso = abs(valor)
                     pmp_acc['dias'] += dias * peso
                     pmp_acc['valor'] += peso
+                    if subgrupo != 'NAO_CLASSIFICADO':
+                        pmp_sub = _pmp_subgrupo(subgrupo)
+                        pmp_sub['dias'] += dias * peso
+                        pmp_sub['valor'] += peso
 
         print(f"[DFC] Despesas nao classificadas: {nao_classificados}")
 
@@ -1627,6 +1636,11 @@ def _calcular_valores_dfc(dataInicio: str, dataFim: str, filtro: str):
             for scodigo, acc in pmr_por_subgrupo.items()
             if acc['valor'] > 0
         }
+        prazo_medio_pagamento_por_subgrupo = {
+            scodigo: (acc['dias'] / acc['valor'])
+            for scodigo, acc in pmp_por_subgrupo.items()
+            if acc['valor'] > 0
+        }
         prazo_medio_estocagem = _calcular_prazo_medio_estocagem(dataFim)
 
         return {
@@ -1643,6 +1657,7 @@ def _calcular_valores_dfc(dataInicio: str, dataFim: str, filtro: str):
                 "prazoMedioRecebimento": prazo_medio_recebimento,
                 "prazoMedioPagamento": prazo_medio_pagamento,
                 "prazoMedioRecebimentoPorSubgrupo": prazo_medio_recebimento_por_subgrupo,
+                "prazoMedioPagamentoPorSubgrupo": prazo_medio_pagamento_por_subgrupo,
                 "prazoMedioEstocagem": prazo_medio_estocagem,
                 "dataInicio": dataInicio,
                 "dataFim": dataFim,

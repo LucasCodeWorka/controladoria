@@ -3,7 +3,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
+  ArrowDown,
   ArrowDownToLine,
+  ArrowUp,
   ArrowUpFromLine,
   Calendar,
   ChevronDown,
@@ -134,6 +136,7 @@ export default function DFCPage() {
   const [prazoMedioPagamento, setPrazoMedioPagamento] = useState<number | null>(null);
   const [prazoMedioEstocagem, setPrazoMedioEstocagem] = useState<number | null>(null);
   const [prazoMedioRecebimentoPorSubgrupo, setPrazoMedioRecebimentoPorSubgrupo] = useState<Record<string, number>>({});
+  const [prazoMedioPagamentoPorSubgrupo, setPrazoMedioPagamentoPorSubgrupo] = useState<Record<string, number>>({});
   const [gruposExpandidos, setGruposExpandidos] = useState<Set<string>>(new Set(['REC', 'OP', 'INV', 'FIN']));
   const [subgruposExpandidos, setSubgruposExpandidos] = useState<Set<string>>(new Set());
   const [statusCarregamento, setStatusCarregamento] = useState<string | null>(null);
@@ -158,6 +161,10 @@ export default function DFCPage() {
     total: 0,
     loading: false,
   });
+  const [ordenacaoModal, setOrdenacaoModal] = useState<{
+    campo: keyof Duplicata;
+    direcao: 'asc' | 'desc';
+  } | null>(null);
 
   const primeiraRenderizacaoRef = React.useRef(true);
 
@@ -279,6 +286,7 @@ export default function DFCPage() {
         setPrazoMedioRecebimento(m.prazoMedioRecebimento ?? null);
         setPrazoMedioPagamento(m.prazoMedioPagamento ?? null);
         setPrazoMedioRecebimentoPorSubgrupo(m.prazoMedioRecebimentoPorSubgrupo || {});
+        setPrazoMedioPagamentoPorSubgrupo(m.prazoMedioPagamentoPorSubgrupo || {});
         setPrazoMedioEstocagem(m.prazoMedioEstocagem ?? null);
       }
 
@@ -336,6 +344,16 @@ export default function DFCPage() {
 
   function fecharModal() {
     setModalDuplicatas((prev) => ({ ...prev, aberto: false }));
+    setOrdenacaoModal(null);
+  }
+
+  function ordenarModalPor(campo: keyof Duplicata) {
+    setOrdenacaoModal((prev) => {
+      if (prev && prev.campo === campo) {
+        return { campo, direcao: prev.direcao === 'asc' ? 'desc' : 'asc' };
+      }
+      return { campo, direcao: 'asc' };
+    });
   }
 
   function toggleGrupo(codigo: string) {
@@ -420,6 +438,46 @@ export default function DFCPage() {
     return grupoRec.subgrupos
       .filter((s) => s.codigo !== 'REC.99')
       .reduce((acc, s) => acc + valorConta(s.codigo, periodoKey), 0);
+  }
+
+  const duplicatasOrdenadas = useMemo(() => {
+    if (!ordenacaoModal) return modalDuplicatas.duplicatas;
+    const { campo, direcao } = ordenacaoModal;
+    const fator = direcao === 'asc' ? 1 : -1;
+    return [...modalDuplicatas.duplicatas].sort((a, b) => {
+      const va = a[campo];
+      const vb = b[campo];
+      if (va == null && vb == null) return 0;
+      if (va == null) return 1;
+      if (vb == null) return -1;
+      if (typeof va === 'number' && typeof vb === 'number') {
+        return (va - vb) * fator;
+      }
+      return String(va).localeCompare(String(vb), 'pt-BR', { numeric: true }) * fator;
+    });
+  }, [modalDuplicatas.duplicatas, ordenacaoModal]);
+
+  function renderizarCabecalhoModal(
+    campo: keyof Duplicata,
+    label: string,
+    largura: string,
+    alinhamento: 'left' | 'right' = 'left'
+  ) {
+    const ativo = ordenacaoModal?.campo === campo;
+    const Icone = ativo && ordenacaoModal?.direcao === 'desc' ? ArrowDown : ArrowUp;
+    return (
+      <th
+        onClick={() => ordenarModalPor(campo)}
+        className={`px-4 py-3 border-b-2 border-gray-300 font-semibold text-gray-700 cursor-pointer select-none hover:bg-gray-200 ${largura} ${
+          alinhamento === 'right' ? 'text-right' : 'text-left'
+        }`}
+      >
+        <span className={`inline-flex items-center gap-1 ${alinhamento === 'right' ? 'flex-row-reverse' : ''}`}>
+          {label}
+          <Icone className={`w-3.5 h-3.5 ${ativo ? 'text-purple-600' : 'text-gray-300'}`} />
+        </span>
+      </th>
+    );
   }
 
   const receitaBruta = receitaBrutaValor();
@@ -669,12 +727,15 @@ export default function DFCPage() {
     const renderizarLinhaSubgrupo = (sub: SubgrupoDFC, nivelSub: number) => {
       const despesasDoSub = despesasPorSubgrupo[sub.codigo] || [];
       const subExpandido = subgruposExpandidos.has(sub.codigo);
+      const prazoMedio = prazoMedioPagamentoPorSubgrupo[sub.codigo];
+      const tooltip = prazoMedio !== undefined ? `Prazo médio de pagamento: ${prazoMedio.toFixed(1)} dias` : undefined;
       linhas.push(
         renderizarLinhaValores(sub.codigo, nomesCustomizados[sub.codigo] ?? sub.nome, nivelSub, {
           clicavel: true,
           expandivel: despesasDoSub.length > 0,
           expandido: subExpandido,
           onToggle: () => toggleSubgrupo(sub.codigo),
+          tooltip,
         })
       );
       if (subExpandido) {
@@ -1173,17 +1234,17 @@ export default function DFCPage() {
                   <table className="w-full table-fixed border-collapse text-sm">
                     <thead className="sticky top-0 z-10">
                       <tr className="bg-gray-100">
-                        <th className="px-4 py-3 text-left border-b-2 border-gray-300 font-semibold text-gray-700 w-24">Nr Duplicata</th>
-                        <th className="px-4 py-3 text-left border-b-2 border-gray-300 font-semibold text-gray-700 w-24">Data Baixa</th>
-                        <th className="px-4 py-3 text-left border-b-2 border-gray-300 font-semibold text-gray-700 w-32">Centro de Custo</th>
-                        <th className="px-4 py-3 text-left border-b-2 border-gray-300 font-semibold text-gray-700 w-20">Cód. Fornecedor</th>
-                        <th className="px-4 py-3 text-left border-b-2 border-gray-300 font-semibold text-gray-700 w-1/5">Fornecedor</th>
-                        <th className="px-4 py-3 text-left border-b-2 border-gray-300 font-semibold text-gray-700 w-1/5">Descricao</th>
-                        <th className="px-4 py-3 text-right border-b-2 border-gray-300 font-semibold text-gray-700 w-24">Valor</th>
+                        {renderizarCabecalhoModal('nrDuplicata', 'Nr Duplicata', 'w-24')}
+                        {renderizarCabecalhoModal('dtBaixa', 'Data Baixa', 'w-24')}
+                        {renderizarCabecalhoModal('nomeCCusto', 'Centro de Custo', 'w-32')}
+                        {renderizarCabecalhoModal('cdFornecedor', 'Cód. Fornecedor', 'w-20')}
+                        {renderizarCabecalhoModal('nmFornecedor', 'Fornecedor', 'w-1/5')}
+                        {renderizarCabecalhoModal('descricao', 'Descricao', 'w-1/5')}
+                        {renderizarCabecalhoModal('valor', 'Valor', 'w-24', 'right')}
                       </tr>
                     </thead>
                     <tbody>
-                      {modalDuplicatas.duplicatas.map((dup, idx) => (
+                      {duplicatasOrdenadas.map((dup, idx) => (
                         <tr key={idx} className="hover:bg-purple-50 border-b border-gray-100">
                           <td className="px-4 py-2.5 text-gray-600 font-mono text-xs">{dup.nrDuplicata || dup.id || '-'}</td>
                           <td className="px-4 py-2.5 text-gray-600">{formatarData(dup.dtBaixa)}</td>
