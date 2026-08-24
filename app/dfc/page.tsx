@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   ArrowDownToLine,
   ArrowUpFromLine,
@@ -62,6 +63,45 @@ interface DespesaValorItem {
 
 type ValoresPorConta = Record<string, Record<string, number>>;
 type DespesasPorSubgrupo = Record<string, DespesaValorItem[]>;
+
+// Tooltip renderizado via portal em document.body, posicionado pelas
+// coordenadas reais do icone na tela - assim nao fica preso/cortado pelo
+// overflow-auto da tabela (o que acontecia com um tooltip absolute comum
+// dentro de uma celula sticky).
+function TooltipAjuda({ texto }: { texto: string }) {
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const iconRef = React.useRef<HTMLSpanElement>(null);
+
+  function mostrar() {
+    const rect = iconRef.current?.getBoundingClientRect();
+    if (rect) setPos({ top: rect.bottom + 6, left: rect.left });
+  }
+
+  function esconder() {
+    setPos(null);
+  }
+
+  return (
+    <span
+      ref={iconRef}
+      className="inline-flex text-gray-400 hover:text-gray-600 cursor-help"
+      onMouseEnter={mostrar}
+      onMouseLeave={esconder}
+    >
+      <HelpCircle className="w-3.5 h-3.5" strokeWidth={2.5} />
+      {pos &&
+        createPortal(
+          <div
+            className="pointer-events-none fixed z-[9999] w-max max-w-xs whitespace-normal rounded bg-gray-900 px-2 py-1.5 text-left text-xs font-normal leading-snug text-white shadow-lg"
+            style={{ top: pos.top, left: pos.left }}
+          >
+            {texto}
+          </div>,
+          document.body
+        )}
+    </span>
+  );
+}
 
 export default function DFCPage() {
   const [loading, setLoading] = useState(false);
@@ -485,14 +525,7 @@ export default function DFCPage() {
             )}
             <span className="font-mono text-xs text-gray-500">{codigo}</span>
             <span className={`text-sm ${bold ? 'font-bold' : ''}`}>{nome}</span>
-            {tooltip && (
-              <span className="group relative inline-flex text-gray-400 hover:text-gray-600">
-                <HelpCircle className="w-3.5 h-3.5" strokeWidth={2.5} />
-                <span className="pointer-events-none absolute left-0 top-full z-50 mt-1 hidden w-max max-w-xs whitespace-normal rounded bg-gray-900 px-2 py-1.5 text-left text-xs font-normal leading-snug text-white shadow-lg group-hover:block">
-                  {tooltip}
-                </span>
-              </span>
-            )}
+            {tooltip && <TooltipAjuda texto={tooltip} />}
           </div>
         </td>
         {periodos.map((periodo) => {
