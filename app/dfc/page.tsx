@@ -235,30 +235,11 @@ export default function DFCPage() {
         setPrazoMedioPagamento(m.prazoMedioPagamento ?? null);
       }
 
-      const periodosAtuais: PeriodoDRE[] = data.periodos || periodos;
       if (data.periodos) setPeriodos(data.periodos);
 
-      const valoresAPI: ValoresPorConta = { ...(data.valores || {}) };
-      const somarContas = (codigos: string[]): Record<string, number> => {
-        const resultado: Record<string, number> = { total: 0 };
-        for (const p of periodosAtuais) resultado[p.key] = 0;
-        for (const codigo of codigos) {
-          const v = valoresAPI[codigo];
-          if (!v) continue;
-          resultado.total += v.total || 0;
-          for (const p of periodosAtuais) resultado[p.key] += v[p.key] || 0;
-        }
-        return resultado;
-      };
-      // Saldos intermediarios: nao classificado entra logo no primeiro
-      // checkpoint (operacional) pra manter o total corrido consistente ate
-      // o saldo final.
-      const saldoAposOperacional = somarContas(['REC', 'OP', 'NAO_CLASSIFICADO']);
-      valoresAPI['SALDO_APOS_OP'] = saldoAposOperacional;
-      const saldoAposInvestimentos = somarContas(['SALDO_APOS_OP', 'INV']);
-      valoresAPI['SALDO_APOS_INV'] = saldoAposInvestimentos;
-
-      setValores(valoresAPI);
+      // Os saldos de caixa (checkpoints e final) sao recalculados no cliente,
+      // reagindo aos grupos ocultos - ver useMemo `checkpointsSaldo` abaixo.
+      setValores(data.valores || {});
       setDespesasPorSubgrupo(data.despesasPorSubgrupo || {});
       setUltimaAtualizacao(new Date().toLocaleString('pt-BR'));
       setConsultaExecutada(true);
@@ -397,7 +378,44 @@ export default function DFCPage() {
   const receitaBruta = receitaBrutaValor();
   const totalOperacional = valorConta('OP');
   const totalInvestimentoFinanciamento = valorConta('INV') + valorConta('FIN');
-  const saldoCaixa = valorConta('SALDO');
+
+  // Saldo de caixa corrido: soma so os grupos VISIVEIS (grupo oculto na
+  // Config DFC nao entra na conta, nem na tela nem no calculo). Um checkpoint
+  // por grupo de despesa visivel, na ordem OP -> INV -> FIN; NAO_CLASSIFICADO
+  // entra junto do checkpoint de Operacional.
+  const { checkpointsSaldo, saldoBase } = useMemo(() => {
+    const passos: { codigo: string; nome: string; valores: Record<string, number> }[] = [];
+    const acumulado: Record<string, number> = { total: 0 };
+    for (const p of periodos) acumulado[p.key] = 0;
+
+    const somarEm = (codigo: string) => {
+      const v = valores[codigo];
+      if (!v) return;
+      acumulado.total += v.total || 0;
+      for (const p of periodos) acumulado[p.key] = (acumulado[p.key] || 0) + (v[p.key] || 0);
+    };
+
+    for (const g of gruposReceita) {
+      if (!gruposOcultos.has(g.codigo)) somarEm(g.codigo);
+    }
+    const base = { ...acumulado };
+
+    for (const g of grupos) {
+      if (gruposOcultos.has(g.codigo)) continue;
+      somarEm(g.codigo);
+      if (g.codigo === 'OP') somarEm('NAO_CLASSIFICADO');
+      passos.push({
+        codigo: `SALDO_APOS_${g.codigo}`,
+        nome: (nomesCustomizados[g.codigo] ?? g.nome).toLowerCase(),
+        valores: { ...acumulado },
+      });
+    }
+
+    return { checkpointsSaldo: passos, saldoBase: base };
+  }, [valores, grupos, gruposReceita, gruposOcultos, periodos, nomesCustomizados]);
+
+  const saldoFinal = checkpointsSaldo.length > 0 ? checkpointsSaldo[checkpointsSaldo.length - 1].valores : saldoBase;
+  const saldoCaixa = saldoFinal.total || 0;
 
   const gruposPorAno = useMemo(() => {
     const anos: { ano: string; qtd: number }[] = [];
@@ -439,10 +457,15 @@ export default function DFCPage() {
       expandivel?: boolean;
       expandido?: boolean;
       onToggle?: () => void;
+      valoresOverride?: Record<string, number>;
     } = {}
   ) {
-    const { bold, corFundo, clicavel, corTextoTotal, expandivel, expandido, onToggle } = opcoes;
-    const total = valorConta(codigo);
+    const { bold, corFundo, clicavel, corTextoTotal, expandivel, expandido, onToggle, valoresOverride } = opcoes;
+    const valorDe = (periodoKey?: string) => {
+      if (valoresOverride) return (periodoKey ? valoresOverride[periodoKey] : valoresOverride.total) || 0;
+      return valorConta(codigo, periodoKey);
+    };
+    const total = valorDe();
     return (
       <tr key={codigo} className={`${corFundo || 'bg-white'} hover:bg-gray-100 transition-colors`}>
         <td className="px-4 py-2 border-b border-gray-200 sticky left-0 bg-inherit z-10">
@@ -461,7 +484,7 @@ export default function DFCPage() {
           </div>
         </td>
         {periodos.map((periodo) => {
-          const valorPeriodo = valorConta(codigo, periodo.key);
+          const valorPeriodo = valorDe(periodo.key);
           const podeClicar = clicavel && valorPeriodo !== 0;
           return (
             <React.Fragment key={periodo.key}>
@@ -1005,29 +1028,22 @@ export default function DFCPage() {
               </thead>
               <tbody>
                 {gruposReceita.filter((grupo) => !gruposOcultos.has(grupo.codigo)).map((grupo) => renderizarGrupoReceita(grupo))}
-                {grupos.filter((grupo) => !gruposOcultos.has(grupo.codigo)).map((grupo) => (
-                  <React.Fragment key={`wrap-${grupo.codigo}`}>
-                    {renderizarGrupo(grupo)}
-                    {grupo.codigo === 'OP' && naoClassificados > 0 &&
-                      renderizarLinhaValores('NAO_CLASSIFICADO', 'NÃO CLASSIFICADO', 1, { clicavel: true })}
-                    {grupo.codigo === 'OP' &&
-                      renderizarLinhaValores('SALDO_APOS_OP', 'SALDO DE CAIXA (após operacional)', 0, {
-                        bold: true,
-                        corFundo: 'bg-blue-50',
-                        corTextoTotal: valorConta('SALDO_APOS_OP') >= 0 ? 'text-green-700' : 'text-red-700',
-                      })}
-                    {grupo.codigo === 'INV' &&
-                      renderizarLinhaValores('SALDO_APOS_INV', 'SALDO DE CAIXA (após investimentos)', 0, {
-                        bold: true,
-                        corFundo: 'bg-blue-50',
-                        corTextoTotal: valorConta('SALDO_APOS_INV') >= 0 ? 'text-green-700' : 'text-red-700',
-                      })}
-                  </React.Fragment>
-                ))}
-                {renderizarLinhaValores('SALDO', 'SALDO DE CAIXA (após financiamento)', 0, {
-                  bold: true,
-                  corFundo: 'bg-blue-50',
-                  corTextoTotal: saldoCaixa >= 0 ? 'text-green-700' : 'text-red-700',
+                {grupos.filter((grupo) => !gruposOcultos.has(grupo.codigo)).map((grupo) => {
+                  const checkpoint = checkpointsSaldo.find((c) => c.codigo === `SALDO_APOS_${grupo.codigo}`);
+                  return (
+                    <React.Fragment key={`wrap-${grupo.codigo}`}>
+                      {renderizarGrupo(grupo)}
+                      {grupo.codigo === 'OP' && naoClassificados > 0 &&
+                        renderizarLinhaValores('NAO_CLASSIFICADO', 'NÃO CLASSIFICADO', 1, { clicavel: true })}
+                      {checkpoint &&
+                        renderizarLinhaValores(checkpoint.codigo, `SALDO DE CAIXA (após ${checkpoint.nome})`, 0, {
+                          bold: true,
+                          corFundo: 'bg-blue-50',
+                          corTextoTotal: checkpoint.valores.total >= 0 ? 'text-green-700' : 'text-red-700',
+                          valoresOverride: checkpoint.valores,
+                        })}
+                    </React.Fragment>
+                  );
                 })}
               </tbody>
             </table>
