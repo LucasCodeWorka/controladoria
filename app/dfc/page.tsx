@@ -14,6 +14,7 @@ import {
   HelpCircle,
   Package,
   RefreshCw,
+  Repeat,
   TrendingDown,
   TrendingUp,
   Wallet,
@@ -465,6 +466,13 @@ export default function DFCPage() {
   const checkpointOP = checkpointsSaldo.find((c) => c.codigo === 'SALDO_APOS_OP');
   const saldoAposOperacionalCard = checkpointOP ? checkpointOP.valores.total || 0 : null;
 
+  // Ciclo Financeiro = PMR + PME - PMP (dias entre pagar o fornecedor e
+  // receber do cliente, passando pelo tempo em estoque).
+  const cicloFinanceiro =
+    prazoMedioRecebimento !== null && prazoMedioEstocagem !== null && prazoMedioPagamento !== null
+      ? prazoMedioRecebimento + prazoMedioEstocagem - prazoMedioPagamento
+      : null;
+
   const gruposPorAno = useMemo(() => {
     const anos: { ano: string; qtd: number }[] = [];
     for (const periodo of periodos) {
@@ -827,7 +835,7 @@ export default function DFCPage() {
       </div>
 
       {consultaExecutada && (
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <div className="bg-white rounded-lg shadow p-3 border-l-4 border-cyan-500">
             <div className="flex items-center gap-2 text-black text-xs font-medium">
               <ArrowDownToLine className="w-4 h-4" />
@@ -854,6 +862,16 @@ export default function DFCPage() {
             </div>
             <p className="text-lg font-bold mt-1 text-black">
               {prazoMedioEstocagem !== null ? `${prazoMedioEstocagem.toFixed(1)} dias` : '-'}
+            </p>
+          </div>
+          <div className={`bg-white rounded-lg shadow p-3 border-l-4 ${cicloFinanceiro !== null && cicloFinanceiro < 0 ? 'border-green-500' : 'border-violet-500'}`}>
+            <div className="flex items-center gap-2 text-black text-xs font-medium">
+              <Repeat className="w-4 h-4" />
+              Ciclo Financeiro
+              <TooltipAjuda texto="PMR + PME - PMP. Quantos dias, em média, a empresa financia a operação com capital próprio antes de recuperar o dinheiro em caixa." />
+            </div>
+            <p className={`text-lg font-bold mt-1 ${cicloFinanceiro !== null && cicloFinanceiro < 0 ? 'text-green-600' : 'text-black'}`}>
+              {cicloFinanceiro !== null ? `${cicloFinanceiro.toFixed(1)} dias` : '-'}
             </p>
           </div>
         </div>
