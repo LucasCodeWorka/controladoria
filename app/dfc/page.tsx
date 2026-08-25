@@ -126,15 +126,6 @@ const GRAFICO_MARGEM_DIREITA = 16;
 const GRAFICO_MARGEM_TOPO = 28;
 const GRAFICO_MARGEM_BAIXO = 46;
 
-// O grafico de barras (por centro de custo) usa geometria propria, maior:
-// os rotulos sao nomes de loja (bem mais longos que "MM/YY" do grafico de
-// linha) e ficam na vertical (rotate -90) pra nao se sobrepor entre colunas
-// vizinhas quando ha muitos centros de custo - por isso precisa de bem mais
-// espaco embaixo do que o grafico de linha.
-const GRAFICO_BARRAS_ALTURA = 360;
-const GRAFICO_BARRAS_MARGEM_TOPO = 28;
-const GRAFICO_BARRAS_MARGEM_BAIXO = 170;
-
 // Versao curta do valor pra caber como rotulo fixo no grafico (o valor
 // exato completo continua disponivel passando o mouse, via <title>).
 function formatarValorCompacto(valor: number): string {
@@ -208,54 +199,78 @@ function GraficoLinhaSaldo({ dados }: { dados: PontoGraficoSaldo[] }) {
   );
 }
 
+// Barras horizontais em vez de verticais: nomes de centro de custo (alguns
+// bem longos, ex "SALVADOR SHOPPING - BA") ficam legiveis na horizontal sem
+// precisar girar texto, e a altura do grafico cresce de forma previsivel
+// com a quantidade de centros de custo (uma linha por item), sem precisar
+// de uma margem gigante so pra caber rotulo.
 function GraficoBarrasSaldo({ dados }: { dados: PontoGraficoSaldo[] }) {
   if (dados.length === 0) {
-    return <div className="flex items-center justify-center h-56 text-sm text-gray-400">Sem dados para exibir.</div>;
+    return <div className="flex items-center justify-center h-40 text-sm text-gray-400">Sem dados para exibir.</div>;
   }
 
-  const areaLargura = GRAFICO_LARGURA - GRAFICO_MARGEM_ESQUERDA - GRAFICO_MARGEM_DIREITA;
-  const escalaY = escalaEixoY(dados, GRAFICO_BARRAS_ALTURA, GRAFICO_BARRAS_MARGEM_TOPO, GRAFICO_BARRAS_MARGEM_BAIXO);
-  const yZero = escalaY(0);
-  const passo = areaLargura / dados.length;
-  const larguraBarra = passo * 0.6;
-  const yRotulosNomes = GRAFICO_BARRAS_ALTURA - GRAFICO_BARRAS_MARGEM_BAIXO + 14;
+  const margemEsquerda = 170;
+  const margemDireita = 90;
+  const margemTopo = 12;
+  const margemBaixo = 12;
+  const alturaLinha = 26;
+  const altura = margemTopo + margemBaixo + dados.length * alturaLinha;
+  const areaLargura = GRAFICO_LARGURA - margemEsquerda - margemDireita;
+
+  // Transformacao raiz quadrada com sinal: comprime outliers (ex: a fabrica
+  // costuma ter um saldo ordens de grandeza maior que uma loja) sem
+  // esconder o sinal nem a ordem relativa. Sem isso, um valor bem maior que
+  // os demais deixa todas as outras barras praticamente invisiveis numa
+  // escala linear - so o rotulo continua mostrando o valor real exato.
+  const transformar = (v: number) => Math.sign(v) * Math.sqrt(Math.abs(v));
+  const valoresTransformados = dados.map((d) => transformar(d.valor));
+  const maxAbs = Math.max(1, ...valoresTransformados.map((v) => Math.abs(v)));
+  const maxima = Math.max(0, ...valoresTransformados) || maxAbs * 0.1;
+  const minima = Math.min(0, ...valoresTransformados) || -maxAbs * 0.1;
+  const escalaX = (valor: number) => margemEsquerda + ((transformar(valor) - minima) / (maxima - minima || 1)) * areaLargura;
+  const xZero = escalaX(0);
 
   return (
-    <svg viewBox={`0 0 ${GRAFICO_LARGURA} ${GRAFICO_BARRAS_ALTURA}`} className="w-full h-[360px]">
-      <line
-        x1={GRAFICO_MARGEM_ESQUERDA}
-        y1={yZero}
-        x2={GRAFICO_LARGURA - GRAFICO_MARGEM_DIREITA}
-        y2={yZero}
-        stroke="#d1d5db"
-        strokeDasharray="4 4"
-      />
-      <text x={GRAFICO_MARGEM_ESQUERDA - 8} y={yZero + 4} textAnchor="end" className="fill-gray-400 text-[10px]">
+    <svg viewBox={`0 0 ${GRAFICO_LARGURA} ${altura}`} className="w-full" style={{ height: `${altura}px` }}>
+      <line x1={xZero} y1={margemTopo} x2={xZero} y2={altura - margemBaixo} stroke="#d1d5db" strokeDasharray="4 4" />
+      <text x={xZero} y={margemTopo - 2} textAnchor="middle" className="fill-gray-400 text-[10px]">
         R$ 0
       </text>
       {dados.map((d, i) => {
-        const x = GRAFICO_MARGEM_ESQUERDA + passo * i + (passo - larguraBarra) / 2;
-        const yValor = escalaY(d.valor);
-        const yTopo = Math.min(yValor, yZero);
-        const altBarra = Math.max(Math.abs(yValor - yZero), 1);
-        const xCentro = x + larguraBarra / 2;
-        const yRotuloValor = d.valor >= 0 ? Math.max(yTopo - 6, GRAFICO_BARRAS_MARGEM_TOPO - 6) : yTopo + altBarra + 12;
+        const yCentro = margemTopo + i * alturaLinha + alturaLinha / 2;
+        const alturaBarra = alturaLinha * 0.62;
+        const xValor = escalaX(d.valor);
+        const xInicio = Math.min(xValor, xZero);
+        const larguraBarra = Math.max(Math.abs(xValor - xZero), 1.5);
+        const positivo = d.valor >= 0;
+        // Barra negativa muito longa (perto do maximo em modulo) chega perto
+        // da margem esquerda, onde ficam os nomes - nesse caso o rotulo de
+        // valor vai por DENTRO da barra (ha espaco de sobra) em vez de por
+        // fora, senao ele cairia em cima do nome do centro de custo.
+        const rotuloDentro = !positivo && xInicio - margemEsquerda < 55;
+        const xRotuloValor = positivo ? xInicio + larguraBarra + 6 : rotuloDentro ? xInicio + 6 : xInicio - 6;
         return (
           <g key={d.key}>
-            <rect x={x} y={yTopo} width={larguraBarra} height={altBarra} fill={d.valor >= 0 ? '#0d9488' : '#dc2626'} rx={2}>
+            <text x={margemEsquerda - 10} y={yCentro + 3.5} textAnchor="end" className="fill-gray-600 text-[10px]">
+              {d.label}
+            </text>
+            <rect
+              x={xInicio}
+              y={yCentro - alturaBarra / 2}
+              width={larguraBarra}
+              height={alturaBarra}
+              fill={positivo ? '#0d9488' : '#dc2626'}
+              rx={2}
+            >
               <title>{`${d.label}: ${formatarValor(d.valor)}`}</title>
             </rect>
-            <text x={xCentro} y={yRotuloValor} textAnchor="middle" className="fill-gray-700 text-[9px] font-semibold">
-              {formatarValorCompacto(d.valor)}
-            </text>
             <text
-              x={xCentro}
-              y={yRotulosNomes}
-              textAnchor="end"
-              transform={`rotate(-90 ${xCentro} ${yRotulosNomes})`}
-              className="fill-gray-500 text-[10px]"
+              x={xRotuloValor}
+              y={yCentro + 3.5}
+              textAnchor={positivo || rotuloDentro ? 'start' : 'end'}
+              className={`text-[10px] font-semibold ${rotuloDentro ? 'fill-white' : 'fill-gray-700'}`}
             >
-              {d.label}
+              {formatarValorCompacto(d.valor)}
             </text>
           </g>
         );
