@@ -230,6 +230,15 @@ FILTRO_DUPLICATAS_EXCLUIDAS_SQL = " AND ".join(
 )
 PARAMS_DUPLICATAS_EXCLUIDAS = tuple(v for par in DUPLICATAS_EXCLUIDAS_DRE_DFC for v in par)
 
+# Lancamentos manuais do DFC: despesas que nao existem na fonte do ERP mas o
+# usuario pediu para incluir manualmente em todo periodo consultado, como se
+# fossem uma despesa real classificada no subgrupo do DFC informado.
+# cd_despesaitem usa um codigo negativo pra nunca colidir com um codigo real
+# (que sempre vem do ERP como positivo).
+LANCAMENTOS_MANUAIS_DFC = [
+    {'subgrupo': 'OP.13', 'cd_despesaitem': -1, 'descricao': 'PROLABORE CAIRO', 'valor_mensal': 10469.93, 'ccusto': 1},
+]
+
 
 def _normalizar_texto(value: Optional[str]) -> str:
     if not value:
@@ -1469,6 +1478,17 @@ def _calcular_valores_dfc(dataInicio: str, dataFim: str, filtro: str):
 
         print(f"[DFC] Despesas nao classificadas: {nao_classificados}")
 
+        # Lancamentos manuais (ex: pro-labore nao registrado no ERP) - entram
+        # em todo periodo do range consultado, apenas se o ccusto do
+        # lancamento estiver dentro do filtro selecionado.
+        for lanc in LANCAMENTOS_MANUAIS_DFC:
+            if lanc['ccusto'] not in ccustos:
+                continue
+            valor_lanc = -abs(lanc['valor_mensal'])
+            for periodo in periodos:
+                _add_valor(lanc['subgrupo'], periodo, valor_lanc)
+                _add_valor_despesa(lanc['subgrupo'], lanc['cd_despesaitem'], lanc['descricao'], periodo, valor_lanc)
+
         despesas_por_subgrupo_resp = {
             subgrupo: list(itens.values()) for subgrupo, itens in despesas_por_subgrupo.items()
         }
@@ -1798,6 +1818,17 @@ def _calcular_dfc_por_centro_custo(dataInicio: str, dataFim: str):
                     peso = abs(valor)
                     pmp_acc['dias'] += dias * peso
                     pmp_acc['valor'] += peso
+
+        # Lancamentos manuais (ex: pro-labore nao registrado no ERP) - o
+        # valor mensal e multiplicado pela quantidade de meses do periodo
+        # consultado (essa visao nao quebra por mes, so total do periodo),
+        # pra reconciliar com o mesmo lancamento em _calcular_valores_dfc.
+        qtd_periodos_lanc = len(services.gerar_periodos(dataInicio, dataFim))
+        for lanc in LANCAMENTOS_MANUAIS_DFC:
+            empresa_key_lanc = _empresa_key_ccusto(lanc['ccusto'])
+            if empresa_key_lanc is None:
+                continue
+            _add_valor(lanc['subgrupo'], empresa_key_lanc, -abs(lanc['valor_mensal']) * qtd_periodos_lanc)
 
         # Somar subgrupos -> grupo (OP / INV / FIN)
         for grupo in PLANO_CONTAS_DFC:
