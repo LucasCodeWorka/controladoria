@@ -109,6 +109,131 @@ function TooltipAjuda({ texto }: { texto: string }) {
   );
 }
 
+interface PontoGraficoSaldo {
+  key: string;
+  label: string;
+  valor: number;
+}
+
+// Layout compartilhado pelos dois graficos: viewBox fixo em unidades
+// logicas (nao pixels), escalado de forma responsiva pelo `w-full` do SVG -
+// diferente da tabela, aqui nao precisamos de scroll horizontal, os pontos/
+// barras so ficam mais proximos uns dos outros quando ha muitas colunas.
+const GRAFICO_LARGURA = 900;
+const GRAFICO_ALTURA = 220;
+const GRAFICO_MARGEM_ESQUERDA = 64;
+const GRAFICO_MARGEM_DIREITA = 16;
+const GRAFICO_MARGEM_TOPO = 16;
+const GRAFICO_MARGEM_BAIXO = 46;
+
+function escalaEixoY(dados: PontoGraficoSaldo[]) {
+  const valores = dados.map((d) => d.valor);
+  const maxAbs = Math.max(1, ...valores.map((v) => Math.abs(v)));
+  const maxima = Math.max(0, ...valores) || maxAbs * 0.1;
+  const minima = Math.min(0, ...valores) || -maxAbs * 0.1;
+  const areaAltura = GRAFICO_ALTURA - GRAFICO_MARGEM_TOPO - GRAFICO_MARGEM_BAIXO;
+  return (valor: number) =>
+    GRAFICO_MARGEM_TOPO + areaAltura - ((valor - minima) / (maxima - minima || 1)) * areaAltura;
+}
+
+function GraficoLinhaSaldo({ dados }: { dados: PontoGraficoSaldo[] }) {
+  if (dados.length === 0) {
+    return <div className="flex items-center justify-center h-56 text-sm text-gray-400">Sem dados para exibir.</div>;
+  }
+
+  const areaLargura = GRAFICO_LARGURA - GRAFICO_MARGEM_ESQUERDA - GRAFICO_MARGEM_DIREITA;
+  const escalaY = escalaEixoY(dados);
+  const escalaX = (i: number) =>
+    GRAFICO_MARGEM_ESQUERDA + (dados.length === 1 ? areaLargura / 2 : (i / (dados.length - 1)) * areaLargura);
+  const yZero = escalaY(0);
+  const pontos = dados.map((d, i) => ({ ...d, x: escalaX(i), y: escalaY(d.valor) }));
+  const linha = pontos.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ');
+
+  return (
+    <svg viewBox={`0 0 ${GRAFICO_LARGURA} ${GRAFICO_ALTURA}`} className="w-full h-56">
+      <line
+        x1={GRAFICO_MARGEM_ESQUERDA}
+        y1={yZero}
+        x2={GRAFICO_LARGURA - GRAFICO_MARGEM_DIREITA}
+        y2={yZero}
+        stroke="#d1d5db"
+        strokeDasharray="4 4"
+      />
+      <text x={GRAFICO_MARGEM_ESQUERDA - 8} y={yZero + 4} textAnchor="end" className="fill-gray-400 text-[10px]">
+        R$ 0
+      </text>
+      <path d={linha} fill="none" stroke="#7c3aed" strokeWidth={2} />
+      {pontos.map((p) => (
+        <g key={p.key}>
+          <circle cx={p.x} cy={p.y} r={4} fill={p.valor >= 0 ? '#16a34a' : '#dc2626'}>
+            <title>{`${p.label}: ${formatarValor(p.valor)}`}</title>
+          </circle>
+          <text
+            x={p.x}
+            y={GRAFICO_ALTURA - GRAFICO_MARGEM_BAIXO + 14}
+            textAnchor="end"
+            transform={`rotate(-40 ${p.x} ${GRAFICO_ALTURA - GRAFICO_MARGEM_BAIXO + 14})`}
+            className="fill-gray-500 text-[10px]"
+          >
+            {p.label}
+          </text>
+        </g>
+      ))}
+    </svg>
+  );
+}
+
+function GraficoBarrasSaldo({ dados }: { dados: PontoGraficoSaldo[] }) {
+  if (dados.length === 0) {
+    return <div className="flex items-center justify-center h-56 text-sm text-gray-400">Sem dados para exibir.</div>;
+  }
+
+  const areaLargura = GRAFICO_LARGURA - GRAFICO_MARGEM_ESQUERDA - GRAFICO_MARGEM_DIREITA;
+  const escalaY = escalaEixoY(dados);
+  const yZero = escalaY(0);
+  const passo = areaLargura / dados.length;
+  const larguraBarra = passo * 0.6;
+
+  return (
+    <svg viewBox={`0 0 ${GRAFICO_LARGURA} ${GRAFICO_ALTURA}`} className="w-full h-56">
+      <line
+        x1={GRAFICO_MARGEM_ESQUERDA}
+        y1={yZero}
+        x2={GRAFICO_LARGURA - GRAFICO_MARGEM_DIREITA}
+        y2={yZero}
+        stroke="#d1d5db"
+        strokeDasharray="4 4"
+      />
+      <text x={GRAFICO_MARGEM_ESQUERDA - 8} y={yZero + 4} textAnchor="end" className="fill-gray-400 text-[10px]">
+        R$ 0
+      </text>
+      {dados.map((d, i) => {
+        const x = GRAFICO_MARGEM_ESQUERDA + passo * i + (passo - larguraBarra) / 2;
+        const yValor = escalaY(d.valor);
+        const yTopo = Math.min(yValor, yZero);
+        const altBarra = Math.max(Math.abs(yValor - yZero), 1);
+        const xCentro = x + larguraBarra / 2;
+        return (
+          <g key={d.key}>
+            <rect x={x} y={yTopo} width={larguraBarra} height={altBarra} fill={d.valor >= 0 ? '#0d9488' : '#dc2626'} rx={2}>
+              <title>{`${d.label}: ${formatarValor(d.valor)}`}</title>
+            </rect>
+            <text
+              x={xCentro}
+              y={GRAFICO_ALTURA - GRAFICO_MARGEM_BAIXO + 14}
+              textAnchor="end"
+              transform={`rotate(-40 ${xCentro} ${GRAFICO_ALTURA - GRAFICO_MARGEM_BAIXO + 14})`}
+              className="fill-gray-500 text-[10px]"
+            >
+              {d.label}
+            </text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
 export default function DFCPage() {
   const [loading, setLoading] = useState(false);
   const [consultaExecutada, setConsultaExecutada] = useState(false);
@@ -170,6 +295,28 @@ export default function DFCPage() {
   } | null>(null);
 
   const primeiraRenderizacaoRef = React.useRef(true);
+
+  // Barra de rolagem horizontal "espelho" no topo (acima do card de
+  // Periodo), sincronizada com o scroll real da tabela la embaixo - assim
+  // da pra rolar o DFC sem precisar descer ate a tabela primeiro.
+  const refScrollTopo = React.useRef<HTMLDivElement>(null);
+  const refScrollTabela = React.useRef<HTMLDivElement>(null);
+  const scrollRafRef = React.useRef<number | null>(null);
+  const scrollValorRef = React.useRef(0);
+
+  function sincronizarScrollTabela(origem: 'topo' | 'tabela') {
+    return (e: React.UIEvent<HTMLDivElement>) => {
+      scrollValorRef.current = e.currentTarget.scrollLeft;
+      if (scrollRafRef.current !== null) return;
+      scrollRafRef.current = requestAnimationFrame(() => {
+        scrollRafRef.current = null;
+        const alvo = origem === 'topo' ? refScrollTabela.current : refScrollTopo.current;
+        if (alvo && alvo.scrollLeft !== scrollValorRef.current) {
+          alvo.scrollLeft = scrollValorRef.current;
+        }
+      });
+    };
+  }
 
   useEffect(() => {
     try {
@@ -601,6 +748,15 @@ export default function DFCPage() {
   const saldoCaixa = saldoFinal.total || 0;
   const checkpointOP = checkpointsSaldo.find((c) => c.codigo === 'SALDO_APOS_OP');
   const saldoAposOperacionalCard = checkpointOP ? checkpointOP.valores.total || 0 : null;
+
+  // Mesmo dado (saldo de caixa apos operacional) por coluna - funciona tanto
+  // para meses (visao mensal, vira grafico de linha) quanto para centros de
+  // custo (visao por centro de custo, vira grafico de barra), ja que
+  // `periodos` guarda um ou outro dependendo da visao ativa.
+  const dadosGraficoSaldo = useMemo(
+    () => periodos.map((p) => ({ key: p.key, label: p.label, valor: checkpointOP?.valores[p.key] || 0 })),
+    [periodos, checkpointOP]
+  );
 
   // Ciclo Financeiro = PMR + PME - PMP (dias entre pagar o fornecedor e
   // receber do cliente, passando pelo tempo em estoque).
@@ -1070,6 +1226,34 @@ export default function DFCPage() {
         </div>
       )}
 
+      {consultaExecutada && (
+        <div className="bg-white rounded-lg shadow-md p-4">
+          <div className="flex items-center gap-2 mb-3">
+            {visaoDFC === 'mensal' ? <TrendingUp className="w-5 h-5 text-brand-primary" /> : <Factory className="w-5 h-5 text-brand-primary" />}
+            <h2 className="text-base font-semibold text-brand-dark">
+              {visaoDFC === 'mensal'
+                ? 'Evolução do Saldo de Caixa (após Operacional)'
+                : 'Saldo de Caixa (após Operacional) por Centro de Custo'}
+            </h2>
+          </div>
+          {visaoDFC === 'mensal' ? (
+            <GraficoLinhaSaldo dados={dadosGraficoSaldo} />
+          ) : (
+            <GraficoBarrasSaldo dados={dadosGraficoSaldo} />
+          )}
+        </div>
+      )}
+
+      {!loading && consultaExecutada && (
+        <div
+          ref={refScrollTopo}
+          onScroll={sincronizarScrollTabela('topo')}
+          className="overflow-x-auto overflow-y-hidden h-5 rounded-md bg-gray-100 border border-gray-200"
+        >
+          <div style={{ width: `${larguraTabelaDFC}px`, height: '1px' }} />
+        </div>
+      )}
+
       <div className="bg-white rounded-lg shadow-md p-4">
         <div className="flex items-center gap-2 mb-3">
           <Calendar className="w-5 h-5 text-brand-primary" />
@@ -1237,7 +1421,7 @@ export default function DFCPage() {
 
       {!loading && consultaExecutada && (
         <div className="bg-white rounded-lg shadow-lg overflow-hidden">
-          <div className="overflow-x-auto">
+          <div ref={refScrollTabela} onScroll={sincronizarScrollTabela('tabela')} className="overflow-x-auto">
             <table className="w-full border-collapse" style={{ minWidth: `${larguraTabelaDFC}px` }}>
               <thead>
                 <tr className="bg-gradient-to-r from-purple-600 to-purple-700">
