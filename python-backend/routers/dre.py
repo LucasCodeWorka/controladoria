@@ -240,6 +240,50 @@ LANCAMENTOS_MANUAIS_DFC = [
 ]
 
 
+def _buscar_credito_inadimplencia(data_inicio: str, data_fim: str, empresas_filtro: Optional[list] = None):
+    """
+    Conta 10.01.04 CREDITO INADIMPLENCIA da DRE: faturas (tp_documento=1,
+    tp_situacao='1') pagas com mais de 365 dias de atraso em relacao ao
+    vencimento (dt_baixa - dt_vencimento > 365 dias). Reconhecido no mes do
+    PAGAMENTO (dt_baixa), nao no mes de vencimento/emissao.
+
+    Retorna uma lista de linhas cruas {dt_baixa, cd_empresa, valor} ja
+    filtradas pela regra dos 365 dias, pra cada endpoint agregar por
+    periodo/empresa/total conforme a visao (mesmo padrao das linhas cruas
+    de PMR/PMP usadas no DFC).
+    """
+    empresa_where = ""
+    params = [data_inicio, data_fim]
+    if empresas_filtro:
+        empresa_where = f"AND f.cd_empresa IN ({','.join(['%s'] * len(empresas_filtro))})"
+        params.extend(empresas_filtro)
+
+    query = f"""
+        SELECT f.dt_baixa, f.dt_vencimento, f.cd_empresa, f.vl_pago
+        FROM vr_fcr_faturai f
+        WHERE f.dt_baixa >= %s AND f.dt_baixa <= %s
+          AND f.tp_documento = 1
+          AND f.tp_situacao = '1'
+          AND f.dt_vencimento IS NOT NULL
+          {empresa_where}
+    """
+    rows = execute_query(query, tuple(params))
+
+    resultado = []
+    for r in rows or []:
+        dt_baixa = r.get('dt_baixa')
+        dt_vencimento = r.get('dt_vencimento')
+        if not dt_baixa or not dt_vencimento:
+            continue
+        if (dt_baixa - dt_vencimento).days > 365:
+            resultado.append({
+                'dt_baixa': dt_baixa,
+                'cd_empresa': r.get('cd_empresa'),
+                'valor': float(r.get('vl_pago') or 0),
+            })
+    return resultado
+
+
 def _normalizar_texto(value: Optional[str]) -> str:
     if not value:
         return ""
@@ -827,6 +871,14 @@ def get_dre_fabrica_por_ccusto(
         cmv_total = float(cmv_fab_raw[0]['cmv'] or 0) if cmv_fab_raw else 0
         valores_por_conta['04.02.02'] = {'total': -abs(cmv_total)}
 
+        # CREDITO INADIMPLENCIA (10.01.04) - faturas pagas com mais de 365
+        # dias de atraso, reconhecidas no mes do pagamento. So no total (nao
+        # ha como atribuir a fatura a um ccusto interno especifico da fabrica).
+        credito_inadimplencia_total = sum(
+            linha['valor'] for linha in _buscar_credito_inadimplencia(dataInicio, dataFim, EMPRESAS_FABRICA)
+        )
+        valores_por_conta['10.01.04'] = {'total': credito_inadimplencia_total}
+
         # Somar hierarquia para cada centro de custo
         ccustos_list = sorted(ccustos_encontrados)
         for codigo, valores in list(valores_por_conta.items()):
@@ -1088,6 +1140,13 @@ def get_dre_por_empresa(
             print(f"[DRE-EMP] Erro ao buscar CMV fabrica: {e}")
 
         _merge_valores_empresa('04.02.02', cmv_valores)
+
+        # CREDITO INADIMPLENCIA (10.01.04) - faturas pagas com mais de 365
+        # dias de atraso, reconhecidas no mes do pagamento (dt_baixa), por
+        # empresa (cd_empresa da fatura = 1 para fabrica, ou o codigo do
+        # ccusto/empresa da loja).
+        for linha in _buscar_credito_inadimplencia(dataInicio, dataFim, empresas_dre):
+            _somar_valor_empresa('10.01.04', linha['cd_empresa'], linha['valor'])
 
         # =====================================================================
         # SOMAR HIERARQUIA - Mesma lógica da _somar_hierarquia
@@ -2259,6 +2318,20 @@ def _calcular_valores_unificada(
                 devolucoes_brutas[periodo] -= abs(valor)
                 devolucoes_brutas['total'] -= abs(valor)
 
+            # CREDITO INADIMPLENCIA (10.01.04) - faturas pagas com mais de
+            # 365 dias de atraso, reconhecidas no mes do PAGAMENTO
+            # (dt_baixa), independente do regime de data usado pro resto da
+            # DRE (dt_emissao das despesas).
+            credito_inadimplencia = _init_valores_periodo(periodos)
+            for linha in _buscar_credito_inadimplencia(dataInicio, dataFim, empresas_filtro):
+                periodo = linha['dt_baixa'].strftime('%Y-%m')
+                if periodo not in periodos:
+                    continue
+                credito_inadimplencia[periodo] += linha['valor']
+                credito_inadimplencia['total'] += linha['valor']
+        else:
+            credito_inadimplencia = _init_valores_periodo(periodos)
+
         # RECEITA DE FRETE (01.02.01) - repasse de frete cobrado do cliente,
         # via nota fiscal (vr_fis_nf), nao via vr_tra_transacao. Por enquanto
         # restrito ao e-commerce (cd_empfat = 120); so calculamos quando o
@@ -2305,6 +2378,7 @@ def _calcular_valores_unificada(
         _merge_conta_unif('01.01.02', receita_bruta)  # RECEITA VENDA MERCADORIAS
         _merge_conta_unif('02.01.03', devolucoes_brutas)  # DEVOLUCOES
         _merge_conta_unif('01.02.01', receita_frete)  # RECEITA DE FRETE (e-commerce)
+        _merge_conta_unif('10.01.04', credito_inadimplencia)  # CREDITO INADIMPLENCIA
 
         # =========================================================================
         # CMV - Custo de Mercadoria Vendida
