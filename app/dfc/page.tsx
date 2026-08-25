@@ -126,6 +126,15 @@ const GRAFICO_MARGEM_DIREITA = 16;
 const GRAFICO_MARGEM_TOPO = 28;
 const GRAFICO_MARGEM_BAIXO = 46;
 
+// O grafico de barras (por centro de custo) usa geometria propria, maior:
+// os rotulos sao nomes de loja (bem mais longos que "MM/YY" do grafico de
+// linha) e ficam na vertical (rotate -90) pra nao se sobrepor entre colunas
+// vizinhas quando ha muitos centros de custo - por isso precisa de bem mais
+// espaco embaixo do que o grafico de linha.
+const GRAFICO_BARRAS_ALTURA = 360;
+const GRAFICO_BARRAS_MARGEM_TOPO = 28;
+const GRAFICO_BARRAS_MARGEM_BAIXO = 170;
+
 // Versao curta do valor pra caber como rotulo fixo no grafico (o valor
 // exato completo continua disponivel passando o mouse, via <title>).
 function formatarValorCompacto(valor: number): string {
@@ -136,14 +145,13 @@ function formatarValorCompacto(valor: number): string {
   return `${sinal}R$ ${abs.toFixed(0)}`;
 }
 
-function escalaEixoY(dados: PontoGraficoSaldo[]) {
+function escalaEixoY(dados: PontoGraficoSaldo[], altura = GRAFICO_ALTURA, margemTopo = GRAFICO_MARGEM_TOPO, margemBaixo = GRAFICO_MARGEM_BAIXO) {
   const valores = dados.map((d) => d.valor);
   const maxAbs = Math.max(1, ...valores.map((v) => Math.abs(v)));
   const maxima = Math.max(0, ...valores) || maxAbs * 0.1;
   const minima = Math.min(0, ...valores) || -maxAbs * 0.1;
-  const areaAltura = GRAFICO_ALTURA - GRAFICO_MARGEM_TOPO - GRAFICO_MARGEM_BAIXO;
-  return (valor: number) =>
-    GRAFICO_MARGEM_TOPO + areaAltura - ((valor - minima) / (maxima - minima || 1)) * areaAltura;
+  const areaAltura = altura - margemTopo - margemBaixo;
+  return (valor: number) => margemTopo + areaAltura - ((valor - minima) / (maxima - minima || 1)) * areaAltura;
 }
 
 function GraficoLinhaSaldo({ dados }: { dados: PontoGraficoSaldo[] }) {
@@ -206,13 +214,14 @@ function GraficoBarrasSaldo({ dados }: { dados: PontoGraficoSaldo[] }) {
   }
 
   const areaLargura = GRAFICO_LARGURA - GRAFICO_MARGEM_ESQUERDA - GRAFICO_MARGEM_DIREITA;
-  const escalaY = escalaEixoY(dados);
+  const escalaY = escalaEixoY(dados, GRAFICO_BARRAS_ALTURA, GRAFICO_BARRAS_MARGEM_TOPO, GRAFICO_BARRAS_MARGEM_BAIXO);
   const yZero = escalaY(0);
   const passo = areaLargura / dados.length;
   const larguraBarra = passo * 0.6;
+  const yRotulosNomes = GRAFICO_BARRAS_ALTURA - GRAFICO_BARRAS_MARGEM_BAIXO + 14;
 
   return (
-    <svg viewBox={`0 0 ${GRAFICO_LARGURA} ${GRAFICO_ALTURA}`} className="w-full h-56">
+    <svg viewBox={`0 0 ${GRAFICO_LARGURA} ${GRAFICO_BARRAS_ALTURA}`} className="w-full h-[360px]">
       <line
         x1={GRAFICO_MARGEM_ESQUERDA}
         y1={yZero}
@@ -230,7 +239,7 @@ function GraficoBarrasSaldo({ dados }: { dados: PontoGraficoSaldo[] }) {
         const yTopo = Math.min(yValor, yZero);
         const altBarra = Math.max(Math.abs(yValor - yZero), 1);
         const xCentro = x + larguraBarra / 2;
-        const yRotuloValor = d.valor >= 0 ? Math.max(yTopo - 6, GRAFICO_MARGEM_TOPO - 6) : yTopo + altBarra + 12;
+        const yRotuloValor = d.valor >= 0 ? Math.max(yTopo - 6, GRAFICO_BARRAS_MARGEM_TOPO - 6) : yTopo + altBarra + 12;
         return (
           <g key={d.key}>
             <rect x={x} y={yTopo} width={larguraBarra} height={altBarra} fill={d.valor >= 0 ? '#0d9488' : '#dc2626'} rx={2}>
@@ -241,9 +250,9 @@ function GraficoBarrasSaldo({ dados }: { dados: PontoGraficoSaldo[] }) {
             </text>
             <text
               x={xCentro}
-              y={GRAFICO_ALTURA - GRAFICO_MARGEM_BAIXO + 14}
+              y={yRotulosNomes}
               textAnchor="end"
-              transform={`rotate(-40 ${xCentro} ${GRAFICO_ALTURA - GRAFICO_MARGEM_BAIXO + 14})`}
+              transform={`rotate(-90 ${xCentro} ${yRotulosNomes})`}
               className="fill-gray-500 text-[10px]"
             >
               {d.label}
