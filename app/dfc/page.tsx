@@ -620,6 +620,14 @@ export default function DFCPage() {
     return anos;
   }, [periodos]);
 
+  // Largura minima explicita da tabela principal, calculada a partir da
+  // quantidade de colunas (meses ou centros de custo). Sem isso, o table
+  // com w-full e table-layout auto simplesmente espreme as colunas pra
+  // caber no container em vez de ativar o scroll horizontal do wrapper
+  // overflow-x-auto - some com os ultimos meses quando o periodo e longo
+  // (ex: ano inteiro) e nao sobra nenhuma barra de rolagem pra ve-los.
+  const larguraTabelaDFC = 320 + periodos.length * 205 + 140 + 90;
+
   function calcularAV(valor: number): string {
     if (receitaBruta === 0) return '-';
     const receitaAbs = Math.abs(receitaBruta);
@@ -1230,7 +1238,7 @@ export default function DFCPage() {
       {!loading && consultaExecutada && (
         <div className="bg-white rounded-lg shadow-lg overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="w-full border-collapse">
+            <table className="w-full border-collapse" style={{ minWidth: `${larguraTabelaDFC}px` }}>
               <thead>
                 <tr className="bg-gradient-to-r from-purple-600 to-purple-700">
                   <th className="px-4 py-2 text-left text-sm font-bold text-white border-b border-purple-500 sticky left-0 bg-purple-600 z-20 min-w-[320px]">
