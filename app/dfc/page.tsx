@@ -123,8 +123,18 @@ const GRAFICO_LARGURA = 900;
 const GRAFICO_ALTURA = 220;
 const GRAFICO_MARGEM_ESQUERDA = 64;
 const GRAFICO_MARGEM_DIREITA = 16;
-const GRAFICO_MARGEM_TOPO = 16;
+const GRAFICO_MARGEM_TOPO = 28;
 const GRAFICO_MARGEM_BAIXO = 46;
+
+// Versao curta do valor pra caber como rotulo fixo no grafico (o valor
+// exato completo continua disponivel passando o mouse, via <title>).
+function formatarValorCompacto(valor: number): string {
+  const abs = Math.abs(valor);
+  const sinal = valor < 0 ? '-' : '';
+  if (abs >= 1_000_000) return `${sinal}R$ ${(abs / 1_000_000).toFixed(2)}M`;
+  if (abs >= 1_000) return `${sinal}R$ ${(abs / 1_000).toFixed(0)}K`;
+  return `${sinal}R$ ${abs.toFixed(0)}`;
+}
 
 function escalaEixoY(dados: PontoGraficoSaldo[]) {
   const valores = dados.map((d) => d.valor);
@@ -163,22 +173,29 @@ function GraficoLinhaSaldo({ dados }: { dados: PontoGraficoSaldo[] }) {
         R$ 0
       </text>
       <path d={linha} fill="none" stroke="#7c3aed" strokeWidth={2} />
-      {pontos.map((p) => (
-        <g key={p.key}>
-          <circle cx={p.x} cy={p.y} r={4} fill={p.valor >= 0 ? '#16a34a' : '#dc2626'}>
-            <title>{`${p.label}: ${formatarValor(p.valor)}`}</title>
-          </circle>
-          <text
-            x={p.x}
-            y={GRAFICO_ALTURA - GRAFICO_MARGEM_BAIXO + 14}
-            textAnchor="end"
-            transform={`rotate(-40 ${p.x} ${GRAFICO_ALTURA - GRAFICO_MARGEM_BAIXO + 14})`}
-            className="fill-gray-500 text-[10px]"
-          >
-            {p.label}
-          </text>
-        </g>
-      ))}
+      {pontos.map((p) => {
+        const acimaDoPonto = p.y - GRAFICO_MARGEM_TOPO > 12;
+        const yRotuloValor = acimaDoPonto ? p.y - 10 : p.y + 16;
+        return (
+          <g key={p.key}>
+            <circle cx={p.x} cy={p.y} r={4} fill={p.valor >= 0 ? '#16a34a' : '#dc2626'}>
+              <title>{`${p.label}: ${formatarValor(p.valor)}`}</title>
+            </circle>
+            <text x={p.x} y={yRotuloValor} textAnchor="middle" className="fill-gray-700 text-[9px] font-semibold">
+              {formatarValorCompacto(p.valor)}
+            </text>
+            <text
+              x={p.x}
+              y={GRAFICO_ALTURA - GRAFICO_MARGEM_BAIXO + 14}
+              textAnchor="end"
+              transform={`rotate(-40 ${p.x} ${GRAFICO_ALTURA - GRAFICO_MARGEM_BAIXO + 14})`}
+              className="fill-gray-500 text-[10px]"
+            >
+              {p.label}
+            </text>
+          </g>
+        );
+      })}
     </svg>
   );
 }
@@ -213,11 +230,15 @@ function GraficoBarrasSaldo({ dados }: { dados: PontoGraficoSaldo[] }) {
         const yTopo = Math.min(yValor, yZero);
         const altBarra = Math.max(Math.abs(yValor - yZero), 1);
         const xCentro = x + larguraBarra / 2;
+        const yRotuloValor = d.valor >= 0 ? Math.max(yTopo - 6, GRAFICO_MARGEM_TOPO - 6) : yTopo + altBarra + 12;
         return (
           <g key={d.key}>
             <rect x={x} y={yTopo} width={larguraBarra} height={altBarra} fill={d.valor >= 0 ? '#0d9488' : '#dc2626'} rx={2}>
               <title>{`${d.label}: ${formatarValor(d.valor)}`}</title>
             </rect>
+            <text x={xCentro} y={yRotuloValor} textAnchor="middle" className="fill-gray-700 text-[9px] font-semibold">
+              {formatarValorCompacto(d.valor)}
+            </text>
             <text
               x={xCentro}
               y={GRAFICO_ALTURA - GRAFICO_MARGEM_BAIXO + 14}
@@ -1244,16 +1265,6 @@ export default function DFCPage() {
         </div>
       )}
 
-      {!loading && consultaExecutada && (
-        <div
-          ref={refScrollTopo}
-          onScroll={sincronizarScrollTabela('topo')}
-          className="overflow-x-auto overflow-y-hidden h-5 rounded-md bg-gray-100 border border-gray-200"
-        >
-          <div style={{ width: `${larguraTabelaDFC}px`, height: '1px' }} />
-        </div>
-      )}
-
       <div className="bg-white rounded-lg shadow-md p-4">
         <div className="flex items-center gap-2 mb-3">
           <Calendar className="w-5 h-5 text-brand-primary" />
@@ -1421,6 +1432,13 @@ export default function DFCPage() {
 
       {!loading && consultaExecutada && (
         <div className="bg-white rounded-lg shadow-lg overflow-hidden">
+          <div
+            ref={refScrollTopo}
+            onScroll={sincronizarScrollTabela('topo')}
+            className="overflow-x-auto overflow-y-hidden h-4 bg-gray-100 border-b border-gray-200"
+          >
+            <div style={{ width: `${larguraTabelaDFC}px`, height: '1px' }} />
+          </div>
           <div ref={refScrollTabela} onScroll={sincronizarScrollTabela('tabela')} className="overflow-x-auto">
             <table className="w-full border-collapse" style={{ minWidth: `${larguraTabelaDFC}px` }}>
               <thead>
