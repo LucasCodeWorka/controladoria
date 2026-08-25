@@ -1709,7 +1709,8 @@ def _calcular_dfc_por_centro_custo(dataInicio: str, dataFim: str):
     serem meses, cada coluna e uma "entidade" - cada loja ativa individualmente,
     mais UMA coluna "FABRICA" agrupando todos os centros de custo internos da
     fabrica (1, 500-514). Valores sao o total do periodo inteiro (sem quebra
-    por mes). PMR/PMP/PME nao entram aqui - essa visao e so sobre os valores.
+    por mes). PMR/PMP/PME sao calculados de forma global (nao quebrados por
+    centro de custo) para manter os cards do topo sempre preenchidos.
     """
     try:
         print(f"[INFO] Buscando DFC por Centro de Custo: {dataInicio} ate {dataFim}")
@@ -1739,6 +1740,8 @@ def _calcular_dfc_por_centro_custo(dataInicio: str, dataFim: str):
             SELECT
                 d.cd_despesaitem,
                 d.cd_ccusto,
+                d.dt_baixa as dt_referencia,
+                d.dt_emissao as dt_emissao,
                 ABS(d.vl_rateio) as valor
             FROM vr_fcp_despduplicatai d
             WHERE d.dt_baixa >= %s
@@ -1775,11 +1778,26 @@ def _calcular_dfc_por_centro_custo(dataInicio: str, dataFim: str):
                 valores_por_conta[codigo][empresa_key] += valor
             valores_por_conta[codigo]['total'] += valor
 
+        # PMR/PMP globais (nao quebrados por centro de custo) - mesma logica
+        # de _calcular_valores_dfc, para os cards do topo continuarem
+        # preenchidos mesmo nessa visao.
+        pmp_acc = {'dias': 0.0, 'valor': 0.0}
+        pmr_acc = {'dias': 0.0, 'valor': 0.0}
+
         for d in despesas:
             subgrupo = _classificar_subgrupo_dfc(d['cd_despesaitem'], classificacoes_dfc_db)
             valor = -abs(float(d['valor'] or 0))
             empresa_key = _empresa_key_ccusto(d['cd_ccusto'])
             _add_valor(subgrupo, empresa_key, valor)
+
+            dt_referencia = d.get('dt_referencia')
+            dt_emissao_despesa = d.get('dt_emissao')
+            if dt_referencia and dt_emissao_despesa:
+                dias = (dt_referencia - dt_emissao_despesa).days
+                if dias >= 0:
+                    peso = abs(valor)
+                    pmp_acc['dias'] += dias * peso
+                    pmp_acc['valor'] += peso
 
         # Somar subgrupos -> grupo (OP / INV / FIN)
         for grupo in PLANO_CONTAS_DFC:
@@ -1827,22 +1845,31 @@ def _calcular_dfc_por_centro_custo(dataInicio: str, dataFim: str):
 
             def _somar_tp_documento(tp_documento: int, sinal: int, destino: dict):
                 query_faturai = f"""
-                    SELECT f.cd_empresa, SUM(f.vl_pago) as valor
+                    SELECT f.dt_baixa, f.dt_emissao, f.cd_empresa, SUM(f.vl_pago) as valor
                     FROM vr_fcr_faturai f
                     WHERE f.dt_baixa >= %s AND f.dt_baixa <= %s
                       AND f.tp_situacao = '1'
                       AND f.tp_documento = %s
                       AND f.cd_empresa IN ({empresa_placeholders})
-                    GROUP BY f.cd_empresa
+                    GROUP BY f.dt_baixa, f.dt_emissao, f.cd_empresa
                 """
                 rows_faturai = execute_query(query_faturai, (dataInicio, dataFim, tp_documento, *empresas_filtro))
                 for row in rows_faturai or []:
                     empresa_key = str(row['cd_empresa'])
                     if empresa_key not in entidade_keys:
                         continue
-                    valor = sinal * float(row['valor'] or 0)
+                    valor_bruto = float(row['valor'] or 0)
+                    valor = sinal * valor_bruto
                     destino[empresa_key] += valor
                     destino['total'] += valor
+
+                    dt_baixa = row['dt_baixa']
+                    dt_emissao = row['dt_emissao']
+                    if dt_baixa and dt_emissao and sinal > 0:
+                        dias = (dt_baixa - dt_emissao).days
+                        if dias >= 0:
+                            pmr_acc['dias'] += dias * valor_bruto
+                            pmr_acc['valor'] += valor_bruto
 
             for scodigo, tipos in RECEBIMENTOS_TIPOS_DOCUMENTO.items():
                 valores_subgrupo = _init_valores_periodo(entidade_keys)
@@ -1891,6 +1918,11 @@ def _calcular_dfc_por_centro_custo(dataInicio: str, dataFim: str):
                     valor = float(row['vl_fatura'] or 0)
                     valores_subgrupo[empresa_key] += valor
                     valores_subgrupo['total'] += valor
+
+                    dias = (dt_construida - dt_emissao).days
+                    if dias >= 0:
+                        pmr_acc['dias'] += dias * valor
+                        pmr_acc['valor'] += valor
                 valores_por_conta[scodigo] = valores_subgrupo
 
         valores_por_conta[CODIGO_DEVOLUCOES_RECEITA] = devolucoes_brutas
@@ -1914,11 +1946,18 @@ def _calcular_dfc_por_centro_custo(dataInicio: str, dataFim: str):
             saldo['total'] += saldo[k]
         valores_por_conta['SALDO'] = saldo
 
+        prazo_medio_pagamento = (pmp_acc['dias'] / pmp_acc['valor']) if pmp_acc['valor'] > 0 else None
+        prazo_medio_recebimento = (pmr_acc['dias'] / pmr_acc['valor']) if pmr_acc['valor'] > 0 else None
+        prazo_medio_estocagem = _calcular_prazo_medio_estocagem(dataFim)
+
         return {
             "centrosCusto": entidades,
             "valores": valores_por_conta,
             "metadata": {
                 "totalCentrosCusto": len(entidades),
+                "prazoMedioRecebimento": prazo_medio_recebimento,
+                "prazoMedioPagamento": prazo_medio_pagamento,
+                "prazoMedioEstocagem": prazo_medio_estocagem,
                 "dataInicio": dataInicio,
                 "dataFim": dataFim,
                 "dataConsulta": datetime.now().isoformat()

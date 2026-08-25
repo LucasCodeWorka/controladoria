@@ -340,11 +340,11 @@ export default function DFCPage() {
 
       setFiltroInfo(`POR CENTRO DE CUSTO | Centros de Custo: ${data.metadata?.totalCentrosCusto || 0}`);
       setNaoClassificados(0);
-      setPrazoMedioRecebimento(null);
-      setPrazoMedioPagamento(null);
+      setPrazoMedioRecebimento(data.metadata?.prazoMedioRecebimento ?? null);
+      setPrazoMedioPagamento(data.metadata?.prazoMedioPagamento ?? null);
       setPrazoMedioRecebimentoPorSubgrupo({});
       setPrazoMedioPagamentoPorSubgrupo({});
-      setPrazoMedioEstocagem(null);
+      setPrazoMedioEstocagem(data.metadata?.prazoMedioEstocagem ?? null);
 
       const colunas = (data.centrosCusto || []).map((c: { codigo: string; nome: string }) => ({
         key: c.codigo,
@@ -361,6 +361,27 @@ export default function DFCPage() {
     } finally {
       setLoading(false);
     }
+  }
+
+  // Trocar de visao (mensal <-> por centro de custo) limpa os dados
+  // exibidos - as colunas e os dados de cada visao sao incompativeis entre
+  // si, entao evita mostrar dado de uma visao com controles da outra.
+  // Usuario precisa clicar em Consultar de novo apos trocar.
+  function mudarVisao(nova: 'mensal' | 'centro-custo') {
+    if (nova === visaoDFC) return;
+    setVisaoDFC(nova);
+    setConsultaExecutada(false);
+    setPeriodos([]);
+    setValores({});
+    setDespesasPorSubgrupo({});
+    setPrazoMedioRecebimento(null);
+    setPrazoMedioPagamento(null);
+    setPrazoMedioEstocagem(null);
+    setPrazoMedioRecebimentoPorSubgrupo({});
+    setPrazoMedioPagamentoPorSubgrupo({});
+    setNaoClassificados(0);
+    setFiltroInfo('');
+    setStatusCarregamento(null);
   }
 
   async function abrirDuplicatas(
@@ -952,7 +973,7 @@ export default function DFCPage() {
         </div>
       </div>
 
-      {consultaExecutada && visaoDFC === 'mensal' && (
+      {consultaExecutada && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <div className="bg-white rounded-lg shadow p-3 border-l-4 border-cyan-500">
             <div className="flex items-center gap-2 text-black text-xs font-medium">
@@ -1049,7 +1070,7 @@ export default function DFCPage() {
 
         <div className="flex gap-2 mb-3 bg-gray-100 p-1 rounded-lg w-fit">
           <button
-            onClick={() => setVisaoDFC('mensal')}
+            onClick={() => mudarVisao('mensal')}
             className={`flex items-center gap-2 px-4 py-2 rounded-md transition-all ${
               visaoDFC === 'mensal' ? 'bg-blue-600 text-white shadow-md' : 'text-gray-600 hover:bg-gray-200'
             }`}
@@ -1058,7 +1079,7 @@ export default function DFCPage() {
             Mensal
           </button>
           <button
-            onClick={() => setVisaoDFC('centro-custo')}
+            onClick={() => mudarVisao('centro-custo')}
             className={`flex items-center gap-2 px-4 py-2 rounded-md transition-all ${
               visaoDFC === 'centro-custo' ? 'bg-orange-600 text-white shadow-md' : 'text-gray-600 hover:bg-gray-200'
             }`}
