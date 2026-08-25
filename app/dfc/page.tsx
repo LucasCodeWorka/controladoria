@@ -13,10 +13,12 @@ import {
   ChevronsDown,
   ChevronsUp,
   DollarSign,
+  Factory,
   HelpCircle,
   Package,
   RefreshCw,
   Repeat,
+  Table,
   TrendingDown,
   TrendingUp,
   Wallet,
@@ -110,6 +112,7 @@ function TooltipAjuda({ texto }: { texto: string }) {
 export default function DFCPage() {
   const [loading, setLoading] = useState(false);
   const [consultaExecutada, setConsultaExecutada] = useState(false);
+  const [visaoDFC, setVisaoDFC] = useState<'mensal' | 'centro-custo'>('mensal');
   const [filtro, setFiltro] = useState('consolidado');
   const [filtroAberto, setFiltroAberto] = useState(false);
   const [opcoesFiltro, setOpcoesFiltro] = useState<OpcaoFiltro[]>([]);
@@ -261,6 +264,10 @@ export default function DFCPage() {
   }, []);
 
   async function buscarDados() {
+    if (visaoDFC === 'centro-custo') {
+      await buscarDadosPorCentroCusto();
+      return;
+    }
     setLoading(true);
     setStatusCarregamento(null);
     try {
@@ -301,6 +308,56 @@ export default function DFCPage() {
     } catch (error) {
       console.error('Erro ao buscar dados do DFC:', error);
       setStatusCarregamento('Erro ao buscar dados do DFC. Tente novamente.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // Visao "Por Centro de Custo": mesma tabela/formatacao da visao mensal, so
+  // que reaproveitando os estados `periodos`/`valores` para guardar colunas de
+  // centro de custo em vez de meses (cada linha de renderizacao ja itera
+  // `periodos` de forma generica). Cada loja ativa vira uma coluna, e a
+  // fabrica (ccustos 1, 500-514, mais 49/515 agrupados) vira UMA coluna so -
+  // mesmo padrao da aba "Por Empresa" da DRE. PMR/PMP/PME nao se aplicam aqui.
+  async function buscarDadosPorCentroCusto() {
+    setLoading(true);
+    setStatusCarregamento(null);
+    try {
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 300000);
+      const params = new URLSearchParams({ dataInicio, dataFim });
+      const response = await fetch(`/api/dfc/por-centro-custo?${params.toString()}`, {
+        signal: controller.signal,
+        cache: 'no-store',
+      });
+      window.clearTimeout(timeout);
+      const data = await response.json();
+
+      if (data.error) {
+        setStatusCarregamento(`Erro do backend: ${data.error}`);
+        return;
+      }
+
+      setFiltroInfo(`POR CENTRO DE CUSTO | Centros de Custo: ${data.metadata?.totalCentrosCusto || 0}`);
+      setNaoClassificados(0);
+      setPrazoMedioRecebimento(null);
+      setPrazoMedioPagamento(null);
+      setPrazoMedioRecebimentoPorSubgrupo({});
+      setPrazoMedioPagamentoPorSubgrupo({});
+      setPrazoMedioEstocagem(null);
+
+      const colunas = (data.centrosCusto || []).map((c: { codigo: string; nome: string }) => ({
+        key: c.codigo,
+        label: c.nome,
+      }));
+      setPeriodos(colunas);
+      setValores(data.valores || {});
+      setDespesasPorSubgrupo({});
+      setUltimaAtualizacao(new Date().toLocaleString('pt-BR'));
+      setConsultaExecutada(true);
+    } catch (error) {
+      console.error('Erro ao buscar DFC por centro de custo:', error);
+      setStatusCarregamento('Erro ao buscar DFC por centro de custo. Tente novamente.');
     } finally {
       setLoading(false);
     }
@@ -731,7 +788,7 @@ export default function DFCPage() {
       const tooltip = prazoMedio !== undefined ? `Prazo médio de pagamento: ${prazoMedio.toFixed(1)} dias` : undefined;
       linhas.push(
         renderizarLinhaValores(sub.codigo, nomesCustomizados[sub.codigo] ?? sub.nome, nivelSub, {
-          clicavel: true,
+          clicavel: visaoDFC === 'mensal',
           expandivel: despesasDoSub.length > 0,
           expandido: subExpandido,
           onToggle: () => toggleSubgrupo(sub.codigo),
@@ -895,7 +952,7 @@ export default function DFCPage() {
         </div>
       </div>
 
-      {consultaExecutada && (
+      {consultaExecutada && visaoDFC === 'mensal' && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <div className="bg-white rounded-lg shadow p-3 border-l-4 border-cyan-500">
             <div className="flex items-center gap-2 text-black text-xs font-medium">
@@ -989,6 +1046,28 @@ export default function DFCPage() {
           <Calendar className="w-5 h-5 text-brand-primary" />
           <h2 className="text-base font-semibold text-brand-dark">Período</h2>
         </div>
+
+        <div className="flex gap-2 mb-3 bg-gray-100 p-1 rounded-lg w-fit">
+          <button
+            onClick={() => setVisaoDFC('mensal')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-md transition-all ${
+              visaoDFC === 'mensal' ? 'bg-blue-600 text-white shadow-md' : 'text-gray-600 hover:bg-gray-200'
+            }`}
+          >
+            <Table className="w-4 h-4" />
+            Mensal
+          </button>
+          <button
+            onClick={() => setVisaoDFC('centro-custo')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-md transition-all ${
+              visaoDFC === 'centro-custo' ? 'bg-orange-600 text-white shadow-md' : 'text-gray-600 hover:bg-gray-200'
+            }`}
+          >
+            <Factory className="w-4 h-4" />
+            Por Centro de Custo
+          </button>
+        </div>
+
         <div className="flex flex-wrap items-center gap-2">
           <input
             type="date"
@@ -1004,41 +1083,43 @@ export default function DFCPage() {
             className="px-3 py-2 border border-gray-300 rounded-md text-sm"
           />
 
-          <div className="relative">
-            <button
-              onClick={() => setFiltroAberto(!filtroAberto)}
-              className="px-3 py-2 border border-gray-300 rounded-md text-sm bg-white hover:bg-gray-50 min-w-[160px] text-left"
-            >
-              {filtroLabel}
-            </button>
-            {filtroAberto && (
-              <div className="absolute z-50 mt-1 w-64 max-h-80 overflow-auto rounded-md border border-gray-200 bg-white shadow-lg">
-                <button
-                  onClick={() => selecionarFiltroUnico('consolidado')}
-                  className={`block w-full text-left px-3 py-2 text-sm hover:bg-gray-100 ${filtro === 'consolidado' ? 'bg-blue-50 font-semibold' : ''}`}
-                >
-                  CONSOLIDADO (TODAS)
-                </button>
-                <button
-                  onClick={() => selecionarFiltroUnico('fabrica')}
-                  className={`block w-full text-left px-3 py-2 text-sm hover:bg-gray-100 ${filtro === 'fabrica' ? 'bg-blue-50 font-semibold' : ''}`}
-                >
-                  FABRICA
-                </button>
-                <div className="border-t border-gray-100 my-1" />
-                {opcoesLojas.map((opcao) => (
-                  <label key={opcao.valor} className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-gray-100 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={filtrosLojasSelecionados.includes(opcao.valor)}
-                      onChange={() => toggleFiltroLoja(opcao.valor)}
-                    />
-                    {opcao.label}
-                  </label>
-                ))}
-              </div>
-            )}
-          </div>
+          {visaoDFC === 'mensal' && (
+            <div className="relative">
+              <button
+                onClick={() => setFiltroAberto(!filtroAberto)}
+                className="px-3 py-2 border border-gray-300 rounded-md text-sm bg-white hover:bg-gray-50 min-w-[160px] text-left"
+              >
+                {filtroLabel}
+              </button>
+              {filtroAberto && (
+                <div className="absolute z-50 mt-1 w-64 max-h-80 overflow-auto rounded-md border border-gray-200 bg-white shadow-lg">
+                  <button
+                    onClick={() => selecionarFiltroUnico('consolidado')}
+                    className={`block w-full text-left px-3 py-2 text-sm hover:bg-gray-100 ${filtro === 'consolidado' ? 'bg-blue-50 font-semibold' : ''}`}
+                  >
+                    CONSOLIDADO (TODAS)
+                  </button>
+                  <button
+                    onClick={() => selecionarFiltroUnico('fabrica')}
+                    className={`block w-full text-left px-3 py-2 text-sm hover:bg-gray-100 ${filtro === 'fabrica' ? 'bg-blue-50 font-semibold' : ''}`}
+                  >
+                    FABRICA
+                  </button>
+                  <div className="border-t border-gray-100 my-1" />
+                  {opcoesLojas.map((opcao) => (
+                    <label key={opcao.valor} className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-gray-100 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={filtrosLojasSelecionados.includes(opcao.valor)}
+                        onChange={() => toggleFiltroLoja(opcao.valor)}
+                      />
+                      {opcao.label}
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           <button
             onClick={() => buscarDados()}
@@ -1134,7 +1215,11 @@ export default function DFCPage() {
                   <th className="px-4 py-2 text-left text-sm font-bold text-white border-b border-purple-500 sticky left-0 bg-purple-600 z-20 min-w-[320px]">
                     CONTA
                   </th>
-                  {gruposPorAno.length > 0 ? (
+                  {visaoDFC === 'centro-custo' ? (
+                    <th colSpan={periodos.length * 2} className="px-3 py-2 text-center text-sm font-bold text-white border-b border-purple-500">
+                      CENTROS DE CUSTO
+                    </th>
+                  ) : gruposPorAno.length > 0 ? (
                     gruposPorAno.map((grupo) => (
                       <th
                         key={grupo.ano}
@@ -1154,12 +1239,15 @@ export default function DFCPage() {
                 <tr className="bg-gray-100">
                   <th className="px-4 py-2 text-left text-xs font-semibold text-gray-600 border-b border-gray-300 sticky left-0 bg-gray-100 z-20" />
                   {periodos.map((periodo) => {
-                    const [, mes] = periodo.key.split('-');
-                    const meses = ['', 'JAN', 'FEV', 'MAR', 'ABR', 'MAI', 'JUN', 'JUL', 'AGO', 'SET', 'OUT', 'NOV', 'DEZ'];
-                    const nomeMes = meses[parseInt(mes, 10)] || mes;
+                    let rotulo = periodo.label;
+                    if (visaoDFC === 'mensal') {
+                      const [, mes] = periodo.key.split('-');
+                      const meses = ['', 'JAN', 'FEV', 'MAR', 'ABR', 'MAI', 'JUN', 'JUL', 'AGO', 'SET', 'OUT', 'NOV', 'DEZ'];
+                      rotulo = meses[parseInt(mes, 10)] || mes;
+                    }
                     return (
                       <th key={periodo.key} colSpan={2} className="px-2 py-2 text-center text-xs font-bold text-gray-700 border-b border-gray-300 bg-gray-50">
-                        {nomeMes}
+                        {rotulo}
                       </th>
                     );
                   })}

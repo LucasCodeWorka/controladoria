@@ -1248,6 +1248,20 @@ def get_dfc_unificada(
     return _calcular_valores_dfc(dataInicio, dataFim, filtro)
 
 
+@router.get("/api/dfc/por-centro-custo")
+def get_dfc_por_centro_custo(
+    dataInicio: str = Query("2026-01-01", description="Data inicial (YYYY-MM-DD)"),
+    dataFim: str = Query("2026-12-31", description="Data final (YYYY-MM-DD)")
+):
+    """
+    DFC agrupado por centro de custo: cada loja ativa e uma coluna, e todos os
+    centros de custo internos da fabrica (1, 500-514) sao somados em UMA unica
+    coluna "FABRICA" - mesmo padrao de agrupamento da aba "Por Empresa" da DRE.
+    Valores sao o total do periodo selecionado (sem quebra por mes).
+    """
+    return _calcular_dfc_por_centro_custo(dataInicio, dataFim)
+
+
 @router.get("/api/dfc/plano-contas")
 def get_dfc_plano_contas():
     """Retorna a arvore GRUPO > SUBGRUPO do plano de contas do DFC (despesas)
@@ -1687,6 +1701,234 @@ def _calcular_valores_dfc(dataInicio: str, dataFim: str, filtro: str):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Erro ao buscar dados do DFC: {str(e)}")
+
+
+def _calcular_dfc_por_centro_custo(dataInicio: str, dataFim: str):
+    """
+    Mesma logica de _calcular_valores_dfc, mas pivotada: em vez de colunas
+    serem meses, cada coluna e uma "entidade" - cada loja ativa individualmente,
+    mais UMA coluna "FABRICA" agrupando todos os centros de custo internos da
+    fabrica (1, 500-514). Valores sao o total do periodo inteiro (sem quebra
+    por mes). PMR/PMP/PME nao entram aqui - essa visao e so sobre os valores.
+    """
+    try:
+        print(f"[INFO] Buscando DFC por Centro de Custo: {dataInicio} ate {dataFim}")
+
+        entidades = [{"codigo": "1", "nome": "FABRICA"}] + [
+            {"codigo": str(cd), "nome": CCUSTOS_LOJAS[cd]} for cd in CCUSTOS_LOJAS_ATIVOS
+        ]
+        entidade_keys = [e["codigo"] for e in entidades]
+
+        def _empresa_key_ccusto(cd_ccusto):
+            # Mesma logica de agrupamento de _agrupar_ccusto_dre_por_empresa:
+            # 49 e 515 nao tem coluna propria - 49 cai no ecommerce (120) e
+            # 515 (diretoria) cai na fabrica (>120), igual a aba "Por Empresa" da DRE.
+            if cd_ccusto in CCUSTOS_ECOMMERCE:
+                return str(CCUSTO_ECOMMERCE_AGRUPADO)
+            if cd_ccusto == 1 or cd_ccusto > 120:
+                return "1"
+            if cd_ccusto in CCUSTOS_LOJAS_ATIVOS:
+                return str(cd_ccusto)
+            return None
+
+        ccustos_todos = list(set(CCUSTOS_FABRICA + list(CCUSTOS_LOJAS.keys()) + CCUSTOS_ECOMMERCE + [515]))
+        ccusto_placeholders = ",".join(["%s"] * len(ccustos_todos))
+        ccusto_excluidos_placeholders = ",".join(["%s"] * len(CCUSTOS_EXCLUIDOS_FABRICA))
+
+        query_despesas = f"""
+            SELECT
+                d.cd_despesaitem,
+                d.cd_ccusto,
+                ABS(d.vl_rateio) as valor
+            FROM vr_fcp_despduplicatai d
+            WHERE d.dt_baixa >= %s
+              AND d.dt_baixa <= %s
+              AND d.tp_situacao = 'N'
+              AND d.cd_ccusto IN ({ccusto_placeholders})
+              AND d.cd_ccusto NOT IN ({ccusto_excluidos_placeholders})
+              AND {FILTRO_DUPLICATAS_EXCLUIDAS_SQL}
+        """
+        despesas = execute_query(
+            query_despesas,
+            (dataInicio, dataFim, *ccustos_todos, *CCUSTOS_EXCLUIDOS_FABRICA, *PARAMS_DUPLICATAS_EXCLUIDAS)
+        )
+        print(f"[DFC-CCUSTO] Total de despesas: {len(despesas)}")
+
+        classificacoes_dfc_db = {}
+        try:
+            _criar_tabela_classificacao_dfc()
+            rows_dfc = execute_query("SELECT cd_despesaitem, conta_dfc FROM classificacao_despesas_dfc", ())
+            for row in rows_dfc or []:
+                cd = row.get('cd_despesaitem')
+                conta_dfc = row.get('conta_dfc', '')
+                if cd and conta_dfc:
+                    classificacoes_dfc_db[cd] = conta_dfc
+        except Exception as e:
+            print(f"[DFC-CCUSTO] Aviso: nao foi possivel carregar classificacoes: {e}")
+
+        valores_por_conta = {}
+
+        def _add_valor(codigo, empresa_key, valor):
+            if codigo not in valores_por_conta:
+                valores_por_conta[codigo] = _init_valores_periodo(entidade_keys)
+            if empresa_key in valores_por_conta[codigo]:
+                valores_por_conta[codigo][empresa_key] += valor
+            valores_por_conta[codigo]['total'] += valor
+
+        for d in despesas:
+            subgrupo = _classificar_subgrupo_dfc(d['cd_despesaitem'], classificacoes_dfc_db)
+            valor = -abs(float(d['valor'] or 0))
+            empresa_key = _empresa_key_ccusto(d['cd_ccusto'])
+            _add_valor(subgrupo, empresa_key, valor)
+
+        # Somar subgrupos -> grupo (OP / INV / FIN)
+        for grupo in PLANO_CONTAS_DFC:
+            gcodigo = grupo['codigo']
+            valores_por_conta[gcodigo] = _init_valores_periodo(entidade_keys)
+            for sub in grupo['subgrupos']:
+                scodigo = sub['codigo']
+                if scodigo not in valores_por_conta:
+                    continue
+                for k in entidade_keys:
+                    valores_por_conta[gcodigo][k] += valores_por_conta[scodigo][k]
+                valores_por_conta[gcodigo]['total'] += valores_por_conta[scodigo]['total']
+
+        # DEVOLUCOES e RECEBIMENTOS - mesma fonte/logica do DFC principal,
+        # so que agora quebrado por cd_empresa (1 = fabrica, ou codigo da loja)
+        # em vez de por periodo.
+        empresas_filtro = [e for e in (int(k) for k in entidade_keys) if e not in EMPRESAS_EXCLUIDAS]
+        empresa_placeholders = ",".join(["%s"] * len(empresas_filtro))
+
+        devolucoes_brutas = _init_valores_periodo(entidade_keys)
+        for scodigo in RECEBIMENTOS_TIPOS_DOCUMENTO:
+            valores_por_conta[scodigo] = _init_valores_periodo(entidade_keys)
+        for scodigo in RECEBIMENTOS_DATA_CONSTRUIDA:
+            valores_por_conta[scodigo] = _init_valores_periodo(entidade_keys)
+
+        if empresas_filtro:
+            query_devolucoes = f"""
+                SELECT t.cd_empresa, SUM(t.vl_transacao) as valor
+                FROM vr_tra_transacao t
+                WHERE t.dt_transacao >= %s AND t.dt_transacao <= %s
+                  AND t.tp_situacao = 4
+                  AND t.cd_empresa IN ({empresa_placeholders})
+                  AND t.tp_modalidade IN ('3')
+                  AND t.tp_operacao = 'E'
+                GROUP BY t.cd_empresa
+            """
+            devolucoes = execute_query(query_devolucoes, (dataInicio, dataFim, *empresas_filtro))
+            for dv in devolucoes or []:
+                empresa_key = str(dv['cd_empresa'])
+                if empresa_key not in entidade_keys:
+                    continue
+                valor = float(dv['valor'] or 0)
+                devolucoes_brutas[empresa_key] -= abs(valor)
+                devolucoes_brutas['total'] -= abs(valor)
+
+            def _somar_tp_documento(tp_documento: int, sinal: int, destino: dict):
+                query_faturai = f"""
+                    SELECT f.cd_empresa, SUM(f.vl_pago) as valor
+                    FROM vr_fcr_faturai f
+                    WHERE f.dt_baixa >= %s AND f.dt_baixa <= %s
+                      AND f.tp_situacao = '1'
+                      AND f.tp_documento = %s
+                      AND f.cd_empresa IN ({empresa_placeholders})
+                    GROUP BY f.cd_empresa
+                """
+                rows_faturai = execute_query(query_faturai, (dataInicio, dataFim, tp_documento, *empresas_filtro))
+                for row in rows_faturai or []:
+                    empresa_key = str(row['cd_empresa'])
+                    if empresa_key not in entidade_keys:
+                        continue
+                    valor = sinal * float(row['valor'] or 0)
+                    destino[empresa_key] += valor
+                    destino['total'] += valor
+
+            for scodigo, tipos in RECEBIMENTOS_TIPOS_DOCUMENTO.items():
+                valores_subgrupo = _init_valores_periodo(entidade_keys)
+                for tp in tipos.get('soma', []):
+                    _somar_tp_documento(tp, 1, valores_subgrupo)
+                for tp in tipos.get('subtrai', []):
+                    _somar_tp_documento(tp, -1, valores_subgrupo)
+                valores_por_conta[scodigo] = valores_subgrupo
+
+            data_inicio_dt = datetime.strptime(dataInicio, '%Y-%m-%d')
+            data_fim_dt = datetime.strptime(dataFim, '%Y-%m-%d')
+            data_inicio_buffer = (data_inicio_dt - timedelta(days=10)).strftime('%Y-%m-%d')
+
+            for scodigo, cfg in RECEBIMENTOS_DATA_CONSTRUIDA.items():
+                valores_subgrupo = _init_valores_periodo(entidade_keys)
+                where_extra = ""
+                params_extra = []
+                if cfg.get('tp_cobranca') is not None:
+                    where_extra = "AND f.tp_cobranca = %s"
+                    params_extra = [cfg['tp_cobranca']]
+
+                query_construida = f"""
+                    SELECT f.dt_emissao, f.cd_empresa, f.vl_fatura
+                    FROM vr_fcr_faturai f
+                    WHERE f.tp_situacao = '1'
+                      AND f.tp_documento = %s
+                      {where_extra}
+                      AND f.cd_empresa IN ({empresa_placeholders})
+                      AND f.dt_emissao >= %s
+                      AND f.dt_emissao <= %s
+                """
+                rows_construida = execute_query(
+                    query_construida,
+                    (cfg['tp_documento'], *params_extra, *empresas_filtro, data_inicio_buffer, dataFim)
+                )
+                for row in rows_construida or []:
+                    dt_emissao = row['dt_emissao']
+                    if not dt_emissao:
+                        continue
+                    dt_construida = _somar_dias_uteis(dt_emissao, cfg['dias_uteis'])
+                    if dt_construida < data_inicio_dt or dt_construida > data_fim_dt:
+                        continue
+                    empresa_key = str(row['cd_empresa'])
+                    if empresa_key not in entidade_keys:
+                        continue
+                    valor = float(row['vl_fatura'] or 0)
+                    valores_subgrupo[empresa_key] += valor
+                    valores_subgrupo['total'] += valor
+                valores_por_conta[scodigo] = valores_subgrupo
+
+        valores_por_conta[CODIGO_DEVOLUCOES_RECEITA] = devolucoes_brutas
+        for grupo_receita in PLANO_RECEITA_DFC:
+            gcodigo = grupo_receita['codigo']
+            valores_por_conta[gcodigo] = _init_valores_periodo(entidade_keys)
+            for sub in grupo_receita['subgrupos']:
+                scodigo = sub['codigo']
+                for k in entidade_keys:
+                    valores_por_conta[gcodigo][k] += valores_por_conta[scodigo][k]
+                valores_por_conta[gcodigo]['total'] += valores_por_conta[scodigo]['total']
+
+        valores_nao_classificado = valores_por_conta.get('NAO_CLASSIFICADO', _init_valores_periodo(entidade_keys))
+        saldo = _init_valores_periodo(entidade_keys)
+        for k in entidade_keys:
+            saldo[k] = (
+                valores_por_conta['REC'][k]
+                + valores_por_conta['OP'][k] + valores_por_conta['INV'][k] + valores_por_conta['FIN'][k]
+                + valores_nao_classificado[k]
+            )
+            saldo['total'] += saldo[k]
+        valores_por_conta['SALDO'] = saldo
+
+        return {
+            "centrosCusto": entidades,
+            "valores": valores_por_conta,
+            "metadata": {
+                "totalCentrosCusto": len(entidades),
+                "dataInicio": dataInicio,
+                "dataFim": dataFim,
+                "dataConsulta": datetime.now().isoformat()
+            }
+        }
+    except Exception as e:
+        print(f"[ERROR] Erro ao processar DFC por Centro de Custo: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Erro ao buscar DFC por centro de custo: {str(e)}")
 
 
 def _calcular_valores_unificada(
