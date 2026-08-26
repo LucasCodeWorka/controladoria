@@ -44,20 +44,34 @@ def _criar_tabela_estoque_cache():
         CREATE TABLE IF NOT EXISTS dfc_estoque_cache (
             dt_referencia DATE PRIMARY KEY,
             valor_estoque NUMERIC,
+            qt_estoque NUMERIC,
             dt_calculado TIMESTAMP DEFAULT NOW()
         )
     """)
+    # Migracao: banco pode ja ter a tabela de uma versao anterior do PME,
+    # que so guardava valor_estoque (sem quantidade).
+    try:
+        execute_insert("ALTER TABLE dfc_estoque_cache ADD COLUMN IF NOT EXISTS qt_estoque NUMERIC")
+    except Exception as e:
+        print(f"[PME] Aviso ao migrar cache de estoque: {e}")
 
 
-def _buscar_estoque_total(data_referencia: str) -> float:
+def _buscar_estoque_total(data_referencia: str) -> dict:
+    """Retorna {'valor': ..., 'quantidade': ...} do estoque total na data de
+    referencia. As duas metricas vem da MESMA query (a leitura de
+    prd_prdsaldo e cara - 20-70s sem cache), por isso sao calculadas e
+    cacheadas juntas mesmo o PME hoje so usando quantidade."""
     _criar_tabela_estoque_cache()
     try:
         cache = execute_query(
-            "SELECT valor_estoque FROM dfc_estoque_cache WHERE dt_referencia = %s",
+            "SELECT valor_estoque, qt_estoque FROM dfc_estoque_cache WHERE dt_referencia = %s AND qt_estoque IS NOT NULL",
             (data_referencia,)
         )
         if cache:
-            return float(cache[0]['valor_estoque'] or 0)
+            return {
+                'valor': float(cache[0]['valor_estoque'] or 0),
+                'quantidade': float(cache[0]['qt_estoque'] or 0),
+            }
     except Exception as e:
         print(f"[PME] Aviso ao ler cache de estoque: {e}")
 
@@ -85,90 +99,55 @@ def _buscar_estoque_total(data_referencia: str) -> float:
             WHERE s.qt_saldo > 0
               AND TRIM(c.ds_classificacao) IS NOT NULL
         )
-        SELECT COALESCE(SUM(qt_saldo * vl_produto), 0) AS valor_total_estoque
+        SELECT
+            COALESCE(SUM(qt_saldo * vl_produto), 0) AS valor_total_estoque,
+            COALESCE(SUM(qt_saldo), 0) AS qt_total_estoque
         FROM base
     """
     rows = execute_query(query, (data_referencia, data_referencia))
     valor = float(rows[0]['valor_total_estoque'] or 0) if rows else 0.0
+    quantidade = float(rows[0]['qt_total_estoque'] or 0) if rows else 0.0
 
     try:
         execute_insert("""
-            INSERT INTO dfc_estoque_cache (dt_referencia, valor_estoque, dt_calculado)
-            VALUES (%s, %s, CURRENT_TIMESTAMP)
+            INSERT INTO dfc_estoque_cache (dt_referencia, valor_estoque, qt_estoque, dt_calculado)
+            VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
             ON CONFLICT (dt_referencia) DO UPDATE SET
                 valor_estoque = EXCLUDED.valor_estoque,
+                qt_estoque = EXCLUDED.qt_estoque,
                 dt_calculado = CURRENT_TIMESTAMP
-        """, (data_referencia, valor))
+        """, (data_referencia, valor, quantidade))
     except Exception as e:
         print(f"[PME] Aviso ao gravar cache de estoque: {e}")
 
-    return valor
+    return {'valor': valor, 'quantidade': quantidade}
 
 
-def _calcular_faturamento_bruto_periodo(data_inicio: str, data_fim: str, empresas_filtro: list) -> float:
-    """Faturamento bruto (mesma logica/fontes da Receita Operacional do DFC:
-    vr_fcr_faturai por tipo de documento, excluindo devolucoes) para um
-    periodo e conjunto de empresas especificos - usado pelo PME."""
+def _calcular_quantidade_faturada_periodo(data_inicio: str, data_fim: str, empresas_filtro: list) -> float:
+    """Quantidade de itens vendidos (qt_solicitada de vr_tra_transacao - mesma
+    fonte/filtro da Receita Bruta da DRE, so que somando quantidade em vez de
+    vl_transacao) num periodo e conjunto de empresas - usado pelo PME."""
     if not empresas_filtro:
         return 0.0
     empresa_placeholders = ",".join(["%s"] * len(empresas_filtro))
-    total = 0.0
-
-    for tipos in RECEBIMENTOS_TIPOS_DOCUMENTO.values():
-        query = f"""
-            SELECT COALESCE(SUM(f.vl_pago), 0) as valor
-            FROM vr_fcr_faturai f
-            WHERE f.dt_baixa >= %s AND f.dt_baixa <= %s
-              AND f.tp_situacao = '1'
-              AND f.tp_documento = %s
-              AND f.cd_empresa IN ({empresa_placeholders})
-        """
-        for tp in tipos.get('soma', []):
-            rows = execute_query(query, (data_inicio, data_fim, tp, *empresas_filtro))
-            total += float(rows[0]['valor'] or 0) if rows else 0.0
-        for tp in tipos.get('subtrai', []):
-            rows = execute_query(query, (data_inicio, data_fim, tp, *empresas_filtro))
-            total -= float(rows[0]['valor'] or 0) if rows else 0.0
-
-    data_inicio_dt = datetime.strptime(data_inicio, '%Y-%m-%d')
-    data_inicio_buffer = (data_inicio_dt - timedelta(days=10)).strftime('%Y-%m-%d')
-
-    for cfg in RECEBIMENTOS_DATA_CONSTRUIDA.values():
-        where_extra = ""
-        params_extra = []
-        if cfg.get('tp_cobranca') is not None:
-            where_extra = "AND f.tp_cobranca = %s"
-            params_extra = [cfg['tp_cobranca']]
-        query_construida = f"""
-            SELECT f.dt_emissao, f.vl_fatura
-            FROM vr_fcr_faturai f
-            WHERE f.tp_situacao = '1'
-              AND f.tp_documento = %s
-              {where_extra}
-              AND f.cd_empresa IN ({empresa_placeholders})
-              AND f.dt_emissao >= %s
-              AND f.dt_emissao <= %s
-        """
-        rows_construida = execute_query(
-            query_construida,
-            (cfg['tp_documento'], *params_extra, *empresas_filtro, data_inicio_buffer, data_fim)
-        )
-        data_fim_dt = datetime.strptime(data_fim, '%Y-%m-%d')
-        for row in rows_construida or []:
-            dt_emissao = row['dt_emissao']
-            if not dt_emissao:
-                continue
-            dt_construida = _somar_dias_uteis(dt_emissao, cfg['dias_uteis'])
-            if dt_construida < data_inicio_dt or dt_construida > data_fim_dt:
-                continue
-            total += float(row['vl_fatura'] or 0)
-
-    return total
+    query = f"""
+        SELECT COALESCE(SUM(t.qt_solicitada), 0) as quantidade
+        FROM vr_tra_transacao t
+        WHERE t.dt_transacao >= %s
+          AND t.dt_transacao <= %s
+          AND t.tp_situacao = 4
+          AND t.cd_empresa IN ({empresa_placeholders})
+          AND t.tp_modalidade IN ('4')
+          AND t.tp_operacao = 'S'
+    """
+    rows = execute_query(query, (data_inicio, data_fim, *empresas_filtro))
+    return float(rows[0]['quantidade'] or 0) if rows else 0.0
 
 
 def _calcular_prazo_medio_estocagem(dataFim: str) -> Optional[float]:
-    """PME = estoque medio do ultimo mes do filtro / faturamento bruto do
-    mesmo mes (todas as lojas) * dias do mes."""
+    """PME = quantidade media em estoque do ultimo mes do filtro (1o dia +
+    ultimo dia, dividido por 2) / quantidade faturada no mesmo mes (todas as
+    lojas, vr_tra_transacao) * dias do mes."""
     try:
         data_fim_dt = datetime.strptime(dataFim, '%Y-%m-%d')
         ano, mes = data_fim_dt.year, data_fim_dt.month
@@ -176,17 +155,17 @@ def _calcular_prazo_medio_estocagem(dataFim: str) -> Optional[float]:
         primeiro_dia_mes = f"{ano:04d}-{mes:02d}-01"
         ultimo_dia_mes = f"{ano:04d}-{mes:02d}-{ultimo_dia_num:02d}"
 
-        estoque_primeiro = _buscar_estoque_total(primeiro_dia_mes)
-        estoque_ultimo = _buscar_estoque_total(ultimo_dia_mes)
-        estoque_medio = (estoque_primeiro + estoque_ultimo) / 2
+        qtd_estoque_primeiro = _buscar_estoque_total(primeiro_dia_mes)['quantidade']
+        qtd_estoque_ultimo = _buscar_estoque_total(ultimo_dia_mes)['quantidade']
+        qtd_estoque_medio = (qtd_estoque_primeiro + qtd_estoque_ultimo) / 2
 
         empresas_todas_lojas = [e for e in ([1] + list(CCUSTOS_LOJAS.keys())) if e not in EMPRESAS_EXCLUIDAS]
-        faturamento_mes = _calcular_faturamento_bruto_periodo(primeiro_dia_mes, ultimo_dia_mes, empresas_todas_lojas)
+        qtd_faturada_mes = _calcular_quantidade_faturada_periodo(primeiro_dia_mes, ultimo_dia_mes, empresas_todas_lojas)
 
-        if faturamento_mes <= 0:
+        if qtd_faturada_mes <= 0:
             return None
 
-        return (estoque_medio / faturamento_mes) * ultimo_dia_num
+        return (qtd_estoque_medio / qtd_faturada_mes) * ultimo_dia_num
     except Exception as e:
         print(f"[PME] Erro ao calcular prazo medio de estocagem: {e}")
         import traceback
@@ -238,6 +217,12 @@ PARAMS_DUPLICATAS_EXCLUIDAS = tuple(v for par in DUPLICATAS_EXCLUIDAS_DRE_DFC fo
 LANCAMENTOS_MANUAIS_DFC = [
     {'subgrupo': 'OP.14', 'cd_despesaitem': -1, 'descricao': 'PROLABORE CAIRO', 'valor_mensal': 10469.93, 'ccusto': 1},
 ]
+
+# Despesas que sao custo direto da antecipacao de recebiveis (juros pagos pra
+# antecipar e recompra dos titulos antecipados) - na visao "sem antecipacao"
+# do DFC essas linhas somem junto, ja que a antecipacao em si esta sendo
+# desconsiderada.
+DESPESAS_ZERADAS_SEM_ANTECIPACAO = {186, 541}  # JUROS S/ ANTECIPACAO, RECOMPRA DE TITULOS
 
 
 def _buscar_credito_inadimplencia(data_inicio: str, data_fim: str, empresas_filtro: Optional[list] = None):
@@ -1581,6 +1566,8 @@ def _calcular_valores_dfc(dataInicio: str, dataFim: str, filtro: str, sem_anteci
 
         for d in despesas:
             cd_despesaitem = d['cd_despesaitem']
+            if sem_antecipacao and cd_despesaitem in DESPESAS_ZERADAS_SEM_ANTECIPACAO:
+                continue
             descricao_despesa = d.get('descricao_despesa')
             subgrupo = _classificar_subgrupo_dfc(cd_despesaitem, classificacoes_dfc_db)
             valor = -abs(float(d['valor'] or 0))

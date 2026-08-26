@@ -1211,7 +1211,7 @@ export default function DFCPage() {
             <div className="flex items-center gap-2 text-black text-xs font-medium">
               <Package className="w-4 h-4" />
               Prazo Médio de Estocagem
-              <TooltipAjuda texto="Estoque médio (1º dia + último dia do último mês do filtro, dividido por 2) sobre o faturamento bruto do mesmo mês (todas as lojas), multiplicado pelos dias do mês." />
+              <TooltipAjuda texto="Quantidade média em estoque (1º dia + último dia do último mês do filtro, dividido por 2) sobre a quantidade faturada no mesmo mês (todas as lojas), multiplicado pelos dias do mês." />
             </div>
             <p className="text-lg font-bold mt-1 text-black">
               {prazoMedioEstocagem !== null ? `${prazoMedioEstocagem.toFixed(1)} dias` : '-'}
