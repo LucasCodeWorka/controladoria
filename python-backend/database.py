@@ -1,6 +1,7 @@
 import psycopg2
 from psycopg2 import pool
 import os
+import time
 from dotenv import load_dotenv
 from typing import List, Dict, Any
 from pathlib import Path
@@ -73,9 +74,12 @@ def execute_query(query: str, params: tuple = None) -> List[Dict[str, Any]]:
             print(f"[QUERY] Executing: {query[:100]}...")
             if params and len(params) > 0:
                 print(f"[PARAMS] {params}")
+                t0 = time.time()
                 cursor.execute(query, params)
             else:
+                t0 = time.time()
                 cursor.execute(query)
+            t_exec = time.time() - t0
 
             # Pegar nomes das colunas
             columns = [desc[0] for desc in cursor.description] if cursor.description else []
@@ -85,7 +89,7 @@ def execute_query(query: str, params: tuple = None) -> List[Dict[str, Any]]:
             for row in cursor.fetchall():
                 results.append(dict(zip(columns, row)))
 
-            print(f"[OK] Query executed successfully. Rows: {len(results)}")
+            print(f"[OK] Query executed successfully. Rows: {len(results)}. Tempo: {t_exec:.2f}s")
 
             cursor.close()
             pool.putconn(conn)

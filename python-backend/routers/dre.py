@@ -1671,31 +1671,100 @@ def _calcular_valores_dfc(dataInicio: str, dataFim: str, filtro: str, sem_anteci
                 devolucoes_brutas[periodo] -= abs(valor)
                 devolucoes_brutas['total'] -= abs(valor)
 
+            for scodigo in RECEBIMENTOS_TIPOS_DOCUMENTO:
+                valores_por_conta[scodigo] = _init_valores_periodo(periodos)
+
+            if sem_antecipacao:
+                # Fatura/boleto SEM antecipacao: uma fatura antecipada tem
+                # dt_baixa bem antes do dt_vencimento real (ex: vencimento
+                # 10/03/2026 baixada em 31/12/2025) - isso distorce o mes em
+                # que o caixa "deveria" ter entrado. Aqui so entram faturas
+                # JA baixadas (dt_baixa IS NOT NULL), mas alocadas no mes do
+                # VENCIMENTO original, nao no mes da baixa - desconsiderando
+                # o efeito da antecipacao. Restrito a tp_documento=1,
+                # nr_portador<999. Roda separado do resto (dt_vencimento em
+                # vez de dt_baixa como recorte de periodo).
+                query_fatura_sem_antecipacao = f"""
+                    SELECT f.dt_vencimento, f.dt_emissao, f.vl_pago
+                    FROM vr_fcr_faturai f
+                    WHERE f.dt_baixa IS NOT NULL
+                      AND f.tp_situacao = '1'
+                      AND f.tp_documento = 1
+                      AND f.nr_portador < 999
+                      AND f.cd_empresa IN ({empresa_placeholders})
+                      AND f.dt_vencimento >= %s
+                      AND f.dt_vencimento <= %s
+                """
+                rows_fatura = execute_query(
+                    query_fatura_sem_antecipacao, (*empresas_filtro, dataInicio, dataFim)
+                )
+                valores_subgrupo = valores_por_conta['REC.03']
+                for row in rows_fatura or []:
+                    dt_vencimento = row['dt_vencimento']
+                    if not dt_vencimento:
+                        continue
+                    periodo = dt_vencimento.strftime('%Y-%m')
+                    if periodo not in periodos:
+                        continue
+                    valor = float(row['vl_pago'] or 0)
+                    valores_subgrupo[periodo] += valor
+                    valores_subgrupo['total'] += valor
+
+                    dt_emissao = row['dt_emissao']
+                    if dt_emissao:
+                        dias = (dt_vencimento - dt_emissao).days
+                        if dias >= 0:
+                            pmr_acc['dias'] += dias * valor
+                            pmr_acc['valor'] += valor
+                            pmr_sub = _pmr_subgrupo('REC.03')
+                            pmr_sub['dias'] += dias * valor
+                            pmr_sub['valor'] += valor
+
             # RECEBIMENTOS por tp_documento (vr_fcr_faturai, regime de caixa -
             # dt_baixa). Cada subgrupo em RECEBIMENTOS_TIPOS_DOCUMENTO soma os
             # tp_documento em 'soma' e subtrai os em 'subtrai' (ex: dinheiro
             # menos troco). A consultoria vai mandando os demais tipos aos
             # poucos - o que ainda nao tiver mapeado simplesmente nao aparece.
-            def _somar_tp_documento(tp_documento: int, sinal: int, destino: dict, scodigo_pmr: str):
-                query_faturai = f"""
-                    SELECT f.dt_baixa, f.dt_emissao, SUM(f.vl_pago) as valor
+            # Todos os tp_documento pendentes vem de UMA SO consulta (em vez
+            # de uma por tipo) - vr_fcr_faturai e uma view cara de acessar
+            # (cada ida custa varios segundos fixos, quase independente da
+            # quantidade de linhas), entao menos idas ao banco = bem mais
+            # rapido, sem mudar nenhum resultado.
+            mapa_tp_documento = {}
+            for scodigo, tipos in RECEBIMENTOS_TIPOS_DOCUMENTO.items():
+                if scodigo == 'REC.03' and sem_antecipacao:
+                    continue
+                for tp in tipos.get('soma', []):
+                    mapa_tp_documento[tp] = (scodigo, 1)
+                for tp in tipos.get('subtrai', []):
+                    mapa_tp_documento[tp] = (scodigo, -1)
+
+            if mapa_tp_documento:
+                tp_documento_placeholders = ",".join(["%s"] * len(mapa_tp_documento))
+                query_tipo_documento = f"""
+                    SELECT f.dt_baixa, f.dt_emissao, f.tp_documento, SUM(f.vl_pago) as valor
                     FROM vr_fcr_faturai f
                     WHERE f.dt_baixa >= %s AND f.dt_baixa <= %s
                       AND f.tp_situacao = '1'
-                      AND f.tp_documento = %s
+                      AND f.tp_documento IN ({tp_documento_placeholders})
                       AND f.cd_empresa IN ({empresa_placeholders})
-                    GROUP BY f.dt_baixa, f.dt_emissao
+                    GROUP BY f.dt_baixa, f.dt_emissao, f.tp_documento
                 """
-                rows_faturai = execute_query(query_faturai, (dataInicio, dataFim, tp_documento, *empresas_filtro))
-                for row in rows_faturai or []:
+                rows_tipo_documento = execute_query(
+                    query_tipo_documento,
+                    (dataInicio, dataFim, *mapa_tp_documento.keys(), *empresas_filtro)
+                )
+                for row in rows_tipo_documento or []:
                     dt_baixa = row['dt_baixa']
                     if not dt_baixa:
                         continue
                     periodo = dt_baixa.strftime('%Y-%m')
                     if periodo not in periodos:
                         continue
+                    scodigo, sinal = mapa_tp_documento[row['tp_documento']]
                     valor_bruto = float(row['valor'] or 0)
                     valor = sinal * valor_bruto
+                    destino = valores_por_conta[scodigo]
                     destino[periodo] += valor
                     destino['total'] += valor
 
@@ -1705,64 +1774,9 @@ def _calcular_valores_dfc(dataInicio: str, dataFim: str, filtro: str, sem_anteci
                         if dias >= 0:
                             pmr_acc['dias'] += dias * valor_bruto
                             pmr_acc['valor'] += valor_bruto
-                            pmr_sub = _pmr_subgrupo(scodigo_pmr)
+                            pmr_sub = _pmr_subgrupo(scodigo)
                             pmr_sub['dias'] += dias * valor_bruto
                             pmr_sub['valor'] += valor_bruto
-
-            for scodigo, tipos in RECEBIMENTOS_TIPOS_DOCUMENTO.items():
-                valores_subgrupo = _init_valores_periodo(periodos)
-
-                if scodigo == 'REC.03' and sem_antecipacao:
-                    # Fatura/boleto SEM antecipacao: uma fatura antecipada
-                    # tem dt_baixa bem antes do dt_vencimento real (ex:
-                    # vencimento 10/03/2026 baixada em 31/12/2025) - isso
-                    # distorce o mes em que o caixa "deveria" ter entrado.
-                    # Aqui so entram faturas JA baixadas (dt_baixa IS NOT
-                    # NULL), mas alocadas no mes do VENCIMENTO original, nao
-                    # no mes da baixa - desconsiderando o efeito da
-                    # antecipacao. Restrito a tp_documento=1, nr_portador<999.
-                    query_fatura_sem_antecipacao = f"""
-                        SELECT f.dt_vencimento, f.dt_emissao, f.vl_pago
-                        FROM vr_fcr_faturai f
-                        WHERE f.dt_baixa IS NOT NULL
-                          AND f.tp_situacao = '1'
-                          AND f.tp_documento = 1
-                          AND f.nr_portador < 999
-                          AND f.cd_empresa IN ({empresa_placeholders})
-                          AND f.dt_vencimento >= %s
-                          AND f.dt_vencimento <= %s
-                    """
-                    rows_fatura = execute_query(
-                        query_fatura_sem_antecipacao, (*empresas_filtro, dataInicio, dataFim)
-                    )
-                    for row in rows_fatura or []:
-                        dt_vencimento = row['dt_vencimento']
-                        if not dt_vencimento:
-                            continue
-                        periodo = dt_vencimento.strftime('%Y-%m')
-                        if periodo not in periodos:
-                            continue
-                        valor = float(row['vl_pago'] or 0)
-                        valores_subgrupo[periodo] += valor
-                        valores_subgrupo['total'] += valor
-
-                        dt_emissao = row['dt_emissao']
-                        if dt_emissao:
-                            dias = (dt_vencimento - dt_emissao).days
-                            if dias >= 0:
-                                pmr_acc['dias'] += dias * valor
-                                pmr_acc['valor'] += valor
-                                pmr_sub = _pmr_subgrupo(scodigo)
-                                pmr_sub['dias'] += dias * valor
-                                pmr_sub['valor'] += valor
-                    valores_por_conta[scodigo] = valores_subgrupo
-                    continue
-
-                for tp in tipos.get('soma', []):
-                    _somar_tp_documento(tp, 1, valores_subgrupo, scodigo)
-                for tp in tipos.get('subtrai', []):
-                    _somar_tp_documento(tp, -1, valores_subgrupo, scodigo)
-                valores_por_conta[scodigo] = valores_subgrupo
 
             # RECEBIMENTOS com data de entrada no caixa CONSTRUIDA (ex: cartao
             # de credito - a dt_baixa nunca vem preenchida na fonte, entao a
@@ -2093,23 +2107,41 @@ def _calcular_dfc_por_centro_custo(dataInicio: str, dataFim: str):
                 devolucoes_brutas[empresa_key] -= abs(valor)
                 devolucoes_brutas['total'] -= abs(valor)
 
-            def _somar_tp_documento(tp_documento: int, sinal: int, destino: dict):
-                query_faturai = f"""
-                    SELECT f.dt_baixa, f.dt_emissao, f.cd_empresa, SUM(f.vl_pago) as valor
+            # Todos os tp_documento pendentes vem de UMA SO consulta (em vez
+            # de uma por tipo) - vr_fcr_faturai e uma view cara de acessar
+            # (custo quase fixo por ida ao banco, independente da quantidade
+            # de linhas), entao menos idas ao banco = bem mais rapido, sem
+            # mudar nenhum resultado.
+            mapa_tp_documento = {}
+            for scodigo, tipos in RECEBIMENTOS_TIPOS_DOCUMENTO.items():
+                for tp in tipos.get('soma', []):
+                    mapa_tp_documento[tp] = (scodigo, 1)
+                for tp in tipos.get('subtrai', []):
+                    mapa_tp_documento[tp] = (scodigo, -1)
+
+            if mapa_tp_documento:
+                tp_documento_placeholders = ",".join(["%s"] * len(mapa_tp_documento))
+                query_tipo_documento = f"""
+                    SELECT f.dt_baixa, f.dt_emissao, f.cd_empresa, f.tp_documento, SUM(f.vl_pago) as valor
                     FROM vr_fcr_faturai f
                     WHERE f.dt_baixa >= %s AND f.dt_baixa <= %s
                       AND f.tp_situacao = '1'
-                      AND f.tp_documento = %s
+                      AND f.tp_documento IN ({tp_documento_placeholders})
                       AND f.cd_empresa IN ({empresa_placeholders})
-                    GROUP BY f.dt_baixa, f.dt_emissao, f.cd_empresa
+                    GROUP BY f.dt_baixa, f.dt_emissao, f.cd_empresa, f.tp_documento
                 """
-                rows_faturai = execute_query(query_faturai, (dataInicio, dataFim, tp_documento, *empresas_filtro))
-                for row in rows_faturai or []:
+                rows_tipo_documento = execute_query(
+                    query_tipo_documento,
+                    (dataInicio, dataFim, *mapa_tp_documento.keys(), *empresas_filtro)
+                )
+                for row in rows_tipo_documento or []:
                     empresa_key = str(row['cd_empresa'])
                     if empresa_key not in entidade_keys:
                         continue
+                    scodigo, sinal = mapa_tp_documento[row['tp_documento']]
                     valor_bruto = float(row['valor'] or 0)
                     valor = sinal * valor_bruto
+                    destino = valores_por_conta[scodigo]
                     destino[empresa_key] += valor
                     destino['total'] += valor
 
@@ -2120,14 +2152,6 @@ def _calcular_dfc_por_centro_custo(dataInicio: str, dataFim: str):
                         if dias >= 0:
                             pmr_acc['dias'] += dias * valor_bruto
                             pmr_acc['valor'] += valor_bruto
-
-            for scodigo, tipos in RECEBIMENTOS_TIPOS_DOCUMENTO.items():
-                valores_subgrupo = _init_valores_periodo(entidade_keys)
-                for tp in tipos.get('soma', []):
-                    _somar_tp_documento(tp, 1, valores_subgrupo)
-                for tp in tipos.get('subtrai', []):
-                    _somar_tp_documento(tp, -1, valores_subgrupo)
-                valores_por_conta[scodigo] = valores_subgrupo
 
             data_inicio_dt = datetime.strptime(dataInicio, '%Y-%m-%d')
             data_fim_dt = datetime.strptime(dataFim, '%Y-%m-%d')
