@@ -10,7 +10,8 @@ export async function GET(request: NextRequest) {
     const dataInicio = searchParams.get('dataInicio') || '2026-01-01';
     const dataFim = searchParams.get('dataFim') || '2026-12-31';
     const filtro = searchParams.get('filtro') || 'consolidado';
-    const params = new URLSearchParams({ dataInicio, dataFim, filtro });
+    const semAntecipacao = searchParams.get('semAntecipacao') || 'false';
+    const params = new URLSearchParams({ dataInicio, dataFim, filtro, semAntecipacao });
 
     const response = await fetch(
       `${PYTHON_API_URL}/api/dfc/unificada?${params.toString()}`,

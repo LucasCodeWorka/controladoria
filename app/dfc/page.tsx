@@ -282,7 +282,7 @@ function GraficoBarrasSaldo({ dados }: { dados: PontoGraficoSaldo[] }) {
 export default function DFCPage() {
   const [loading, setLoading] = useState(false);
   const [consultaExecutada, setConsultaExecutada] = useState(false);
-  const [visaoDFC, setVisaoDFC] = useState<'mensal' | 'centro-custo'>('mensal');
+  const [visaoDFC, setVisaoDFC] = useState<'mensal' | 'centro-custo' | 'mensal-sem-antecipacao'>('mensal');
   const [filtro, setFiltro] = useState('consolidado');
   const [filtroAberto, setFiltroAberto] = useState(false);
   const [opcoesFiltro, setOpcoesFiltro] = useState<OpcaoFiltro[]>([]);
@@ -465,7 +465,12 @@ export default function DFCPage() {
     try {
       const controller = new AbortController();
       const timeout = window.setTimeout(() => controller.abort(), 300000);
-      const params = new URLSearchParams({ dataInicio, dataFim, filtro });
+      const params = new URLSearchParams({
+        dataInicio,
+        dataFim,
+        filtro,
+        semAntecipacao: String(visaoDFC === 'mensal-sem-antecipacao'),
+      });
       const response = await fetch(`/api/dfc/unificada?${params.toString()}`, {
         signal: controller.signal,
         cache: 'no-store',
@@ -559,7 +564,7 @@ export default function DFCPage() {
   // exibidos - as colunas e os dados de cada visao sao incompativeis entre
   // si, entao evita mostrar dado de uma visao com controles da outra.
   // Usuario precisa clicar em Consultar de novo apos trocar.
-  function mudarVisao(nova: 'mensal' | 'centro-custo') {
+  function mudarVisao(nova: 'mensal' | 'centro-custo' | 'mensal-sem-antecipacao') {
     if (nova === visaoDFC) return;
     setVisaoDFC(nova);
     setConsultaExecutada(false);
@@ -1018,7 +1023,7 @@ export default function DFCPage() {
       const tooltip = prazoMedio !== undefined ? `Prazo médio de pagamento: ${prazoMedio.toFixed(1)} dias` : undefined;
       linhas.push(
         renderizarLinhaValores(sub.codigo, nomesCustomizados[sub.codigo] ?? sub.nome, nivelSub, {
-          clicavel: visaoDFC === 'mensal',
+          clicavel: visaoDFC !== 'centro-custo',
           expandivel: despesasDoSub.length > 0,
           expandido: subExpandido,
           onToggle: () => toggleSubgrupo(sub.codigo),
@@ -1274,14 +1279,16 @@ export default function DFCPage() {
       {consultaExecutada && (
         <div className="bg-white rounded-lg shadow-md p-4">
           <div className="flex items-center gap-2 mb-3">
-            {visaoDFC === 'mensal' ? <TrendingUp className="w-5 h-5 text-brand-primary" /> : <Factory className="w-5 h-5 text-brand-primary" />}
+            {visaoDFC !== 'centro-custo' ? <TrendingUp className="w-5 h-5 text-brand-primary" /> : <Factory className="w-5 h-5 text-brand-primary" />}
             <h2 className="text-base font-semibold text-brand-dark">
-              {visaoDFC === 'mensal'
-                ? 'Evolução do Saldo de Caixa (após Operacional)'
-                : 'Saldo de Caixa (após Operacional) por Centro de Custo'}
+              {visaoDFC === 'centro-custo'
+                ? 'Saldo de Caixa (após Operacional) por Centro de Custo'
+                : visaoDFC === 'mensal-sem-antecipacao'
+                  ? 'Evolução do Saldo de Caixa (após Operacional) - Sem Antecipação de Cartão'
+                  : 'Evolução do Saldo de Caixa (após Operacional)'}
             </h2>
           </div>
-          {visaoDFC === 'mensal' ? (
+          {visaoDFC !== 'centro-custo' ? (
             <GraficoLinhaSaldo dados={dadosGraficoSaldo} />
           ) : (
             <GraficoBarrasSaldo dados={dadosGraficoSaldo} />
@@ -1314,6 +1321,16 @@ export default function DFCPage() {
             <Factory className="w-4 h-4" />
             Por Centro de Custo
           </button>
+          <button
+            onClick={() => mudarVisao('mensal-sem-antecipacao')}
+            title="Desconsidera antecipacao: cartao de credito por parcela (emissao + 30/60/90...) e faturas ja baixadas alocadas no mes do vencimento original, nao no mes da baixa"
+            className={`flex items-center gap-2 px-4 py-2 rounded-md transition-all ${
+              visaoDFC === 'mensal-sem-antecipacao' ? 'bg-teal-600 text-white shadow-md' : 'text-gray-600 hover:bg-gray-200'
+            }`}
+          >
+            <Table className="w-4 h-4" />
+            Mensal - Sem Antecipação
+          </button>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -1331,7 +1348,7 @@ export default function DFCPage() {
             className="px-3 py-2 border border-gray-300 rounded-md text-sm"
           />
 
-          {visaoDFC === 'mensal' && (
+          {visaoDFC !== 'centro-custo' && (
             <div className="relative">
               <button
                 onClick={() => setFiltroAberto(!filtroAberto)}
@@ -1495,7 +1512,7 @@ export default function DFCPage() {
                   <th className="px-4 py-2 text-left text-xs font-semibold text-gray-600 border-b border-gray-300 sticky left-0 bg-gray-100 z-20" />
                   {periodos.map((periodo) => {
                     let rotulo = periodo.label;
-                    if (visaoDFC === 'mensal') {
+                    if (visaoDFC !== 'centro-custo') {
                       const [, mes] = periodo.key.split('-');
                       const meses = ['', 'JAN', 'FEV', 'MAR', 'ABR', 'MAI', 'JUN', 'JUL', 'AGO', 'SET', 'OUT', 'NOV', 'DEZ'];
                       rotulo = meses[parseInt(mes, 10)] || mes;

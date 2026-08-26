@@ -1372,7 +1372,14 @@ def get_dre_unificada(
 def get_dfc_unificada(
     dataInicio: str = Query("2026-01-01", description="Data inicial (YYYY-MM-DD)"),
     dataFim: str = Query("2026-12-31", description="Data final (YYYY-MM-DD)"),
-    filtro: str = Query("consolidado", description="Filtro: 'consolidado', 'fabrica', ou codigo do centro de custo")
+    filtro: str = Query("consolidado", description="Filtro: 'consolidado', 'fabrica', ou codigo do centro de custo"),
+    semAntecipacao: bool = Query(
+        False,
+        description="Se true, desconsidera o efeito de antecipacao dos recebiveis: cartao de credito (REC.04) e "
+                    "reconhecido por parcela (emissao + 30*nr_parcela dias) em vez de emissao+2 dias uteis; faturas "
+                    "(REC.03, tp_documento=1, nr_portador<999) ja baixadas sao alocadas no mes do VENCIMENTO "
+                    "original, nao no mes da baixa (que pode vir antecipada)."
+    )
 ):
     """
     DFC (regime de caixa) com plano de contas PROPRIO (GRUPO > SUBGRUPO,
@@ -1380,7 +1387,7 @@ def get_dfc_unificada(
     agrupando as despesas pela data de baixa (dt_baixa, pagamento efetivo).
     Receita/devolucoes usam dt_transacao (nao regime de caixa), igual a DRE.
     """
-    return _calcular_valores_dfc(dataInicio, dataFim, filtro)
+    return _calcular_valores_dfc(dataInicio, dataFim, filtro, sem_antecipacao=semAntecipacao)
 
 
 @router.get("/api/dfc/por-centro-custo")
@@ -1458,7 +1465,7 @@ def salvar_dfc_grupo_oculto(data: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def _calcular_valores_dfc(dataInicio: str, dataFim: str, filtro: str):
+def _calcular_valores_dfc(dataInicio: str, dataFim: str, filtro: str, sem_antecipacao: bool = False):
     try:
         print(f"[INFO] Buscando DFC (plano proprio): {dataInicio} ate {dataFim}, filtro={filtro}")
 
@@ -1717,6 +1724,53 @@ def _calcular_valores_dfc(dataInicio: str, dataFim: str, filtro: str):
 
             for scodigo, tipos in RECEBIMENTOS_TIPOS_DOCUMENTO.items():
                 valores_subgrupo = _init_valores_periodo(periodos)
+
+                if scodigo == 'REC.03' and sem_antecipacao:
+                    # Fatura/boleto SEM antecipacao: uma fatura antecipada
+                    # tem dt_baixa bem antes do dt_vencimento real (ex:
+                    # vencimento 10/03/2026 baixada em 31/12/2025) - isso
+                    # distorce o mes em que o caixa "deveria" ter entrado.
+                    # Aqui so entram faturas JA baixadas (dt_baixa IS NOT
+                    # NULL), mas alocadas no mes do VENCIMENTO original, nao
+                    # no mes da baixa - desconsiderando o efeito da
+                    # antecipacao. Restrito a tp_documento=1, nr_portador<999.
+                    query_fatura_sem_antecipacao = f"""
+                        SELECT f.dt_vencimento, f.dt_emissao, f.vl_pago
+                        FROM vr_fcr_faturai f
+                        WHERE f.dt_baixa IS NOT NULL
+                          AND f.tp_situacao = '1'
+                          AND f.tp_documento = 1
+                          AND f.nr_portador < 999
+                          AND f.cd_empresa IN ({empresa_placeholders})
+                          AND f.dt_vencimento >= %s
+                          AND f.dt_vencimento <= %s
+                    """
+                    rows_fatura = execute_query(
+                        query_fatura_sem_antecipacao, (*empresas_filtro, dataInicio, dataFim)
+                    )
+                    for row in rows_fatura or []:
+                        dt_vencimento = row['dt_vencimento']
+                        if not dt_vencimento:
+                            continue
+                        periodo = dt_vencimento.strftime('%Y-%m')
+                        if periodo not in periodos:
+                            continue
+                        valor = float(row['vl_pago'] or 0)
+                        valores_subgrupo[periodo] += valor
+                        valores_subgrupo['total'] += valor
+
+                        dt_emissao = row['dt_emissao']
+                        if dt_emissao:
+                            dias = (dt_vencimento - dt_emissao).days
+                            if dias >= 0:
+                                pmr_acc['dias'] += dias * valor
+                                pmr_acc['valor'] += valor
+                                pmr_sub = _pmr_subgrupo(scodigo)
+                                pmr_sub['dias'] += dias * valor
+                                pmr_sub['valor'] += valor
+                    valores_por_conta[scodigo] = valores_subgrupo
+                    continue
+
                 for tp in tipos.get('soma', []):
                     _somar_tp_documento(tp, 1, valores_subgrupo, scodigo)
                 for tp in tipos.get('subtrai', []):
@@ -1731,8 +1785,60 @@ def _calcular_valores_dfc(dataInicio: str, dataFim: str, filtro: str):
             data_inicio_dt = datetime.strptime(dataInicio, '%Y-%m-%d')
             data_inicio_buffer = (data_inicio_dt - timedelta(days=10)).strftime('%Y-%m-%d')
 
+            # Buffer bem maior para o cartao de credito "sem antecipacao":
+            # cada parcela pode ficar ate 30*nr_parcelas dias depois da
+            # emissao (ja vimos parcelamento de ate 20x na base), entao a
+            # janela de busca por dt_emissao precisa olhar bem mais pra tras.
+            data_inicio_buffer_cartao = (data_inicio_dt - timedelta(days=630)).strftime('%Y-%m-%d')
+
             for scodigo, cfg in RECEBIMENTOS_DATA_CONSTRUIDA.items():
                 valores_subgrupo = _init_valores_periodo(periodos)
+
+                if scodigo == 'REC.04' and sem_antecipacao:
+                    # Cartao de credito SEM antecipacao: em vez de D+2 dias
+                    # uteis (liquidacao da adquirente, hoje tratado como
+                    # totalmente antecipado), cada parcela e reconhecida na
+                    # data em que o cliente efetivamente pagaria - emissao +
+                    # 30 dias corridos por numero da parcela (1a = +30, 2a =
+                    # +60, 3a = +90...). Mostra como seria o fluxo de caixa
+                    # se o recebivel nao fosse antecipado.
+                    query_sem_antecipacao = f"""
+                        SELECT f.dt_emissao, f.nr_parcela, f.vl_fatura
+                        FROM vr_fcr_faturai f
+                        WHERE f.tp_situacao = '1'
+                          AND f.tp_documento = %s
+                          AND f.tp_cobranca = %s
+                          AND f.cd_empresa IN ({empresa_placeholders})
+                          AND f.dt_emissao >= %s
+                          AND f.dt_emissao <= %s
+                    """
+                    rows_sem_antecipacao = execute_query(
+                        query_sem_antecipacao,
+                        (cfg['tp_documento'], cfg['tp_cobranca'], *empresas_filtro, data_inicio_buffer_cartao, dataFim)
+                    )
+                    for row in rows_sem_antecipacao or []:
+                        dt_emissao = row['dt_emissao']
+                        nr_parcela = row.get('nr_parcela')
+                        if not dt_emissao or not nr_parcela or nr_parcela < 1:
+                            continue
+                        dt_construida = dt_emissao + timedelta(days=30 * nr_parcela)
+                        periodo = dt_construida.strftime('%Y-%m')
+                        if periodo not in periodos:
+                            continue
+                        valor = float(row['vl_fatura'] or 0)
+                        valores_subgrupo[periodo] += valor
+                        valores_subgrupo['total'] += valor
+
+                        dias = (dt_construida - dt_emissao).days
+                        if dias >= 0:
+                            pmr_acc['dias'] += dias * valor
+                            pmr_acc['valor'] += valor
+                            pmr_sub = _pmr_subgrupo(scodigo)
+                            pmr_sub['dias'] += dias * valor
+                            pmr_sub['valor'] += valor
+                    valores_por_conta[scodigo] = valores_subgrupo
+                    continue
+
                 where_extra = ""
                 params_extra = []
                 if cfg.get('tp_cobranca') is not None:
