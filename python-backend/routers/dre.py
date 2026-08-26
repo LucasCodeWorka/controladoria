@@ -1369,7 +1369,10 @@ def get_dfc_unificada(
     """
     DFC (regime de caixa) com plano de contas PROPRIO (GRUPO > SUBGRUPO,
     definido pela consultoria contabil externa - ver plano_contas_dfc.py),
-    agrupando as despesas pela data de baixa (dt_baixa, pagamento efetivo).
+    agrupando as despesas pela data de liquidacao (dt_liq, pagamento
+    efetivo). Nao usa dt_baixa: em lancamentos retroativos, dt_baixa reflete
+    quando o registro foi processado no sistema, nao quando o dinheiro
+    realmente saiu - dt_liq e a data real do pagamento.
     Receita/devolucoes usam dt_transacao (nao regime de caixa), igual a DRE.
     """
     return _calcular_valores_dfc(dataInicio, dataFim, filtro, sem_antecipacao=semAntecipacao)
@@ -1496,13 +1499,13 @@ def _calcular_valores_dfc(dataInicio: str, dataFim: str, filtro: str, sem_anteci
             SELECT
                 d.cd_despesaitem,
                 i.ds_despesaitem as descricao_despesa,
-                d.dt_baixa as dt_referencia,
+                d.dt_liq as dt_referencia,
                 d.dt_emissao as dt_emissao,
                 ABS(d.vl_rateio) as valor
             FROM vr_fcp_despduplicatai d
             JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
-            WHERE d.dt_baixa >= %s
-              AND d.dt_baixa <= %s
+            WHERE d.dt_liq >= %s
+              AND d.dt_liq <= %s
               AND d.tp_situacao = 'N'
               AND d.cd_ccusto IN ({ccusto_placeholders})
               AND d.cd_ccusto NOT IN ({",".join(["%s"] * len(CCUSTOS_EXCLUIDOS_FABRICA))})
@@ -1993,12 +1996,12 @@ def _calcular_dfc_por_centro_custo(dataInicio: str, dataFim: str):
             SELECT
                 d.cd_despesaitem,
                 d.cd_ccusto,
-                d.dt_baixa as dt_referencia,
+                d.dt_liq as dt_referencia,
                 d.dt_emissao as dt_emissao,
                 ABS(d.vl_rateio) as valor
             FROM vr_fcp_despduplicatai d
-            WHERE d.dt_baixa >= %s
-              AND d.dt_baixa <= %s
+            WHERE d.dt_liq >= %s
+              AND d.dt_liq <= %s
               AND d.tp_situacao = 'N'
               AND d.cd_ccusto IN ({ccusto_placeholders})
               AND d.cd_ccusto NOT IN ({ccusto_excluidos_placeholders})
@@ -2874,7 +2877,7 @@ def _buscar_duplicatas_dfc(conta: str, periodo: str, filtro: str, despesa_item: 
                 i.ds_despesaitem as descricao,
                 d.dt_emissao,
                 d.dt_vencimento,
-                d.dt_baixa,
+                d.dt_liq as dt_baixa,
                 ABS(d.vl_rateio) as valor,
                 d.cd_ccusto,
                 cc.ds_ccusto as nome_ccusto,
@@ -2885,14 +2888,14 @@ def _buscar_duplicatas_dfc(conta: str, periodo: str, filtro: str, despesa_item: 
             LEFT JOIN vr_gec_ccusto cc ON cc.cd_ccusto = d.cd_ccusto
             LEFT JOIN vr_pes_pessoa p ON p.cd_pessoa = d.cd_fornecedor
             LEFT JOIN vr_pes_pesfisica pf ON pf.cd_pessoa = d.cd_fornecedor
-            WHERE d.dt_baixa >= %s
-              AND d.dt_baixa <= %s
+            WHERE d.dt_liq >= %s
+              AND d.dt_liq <= %s
               {where_itens}
               AND d.cd_ccusto IN ({ccusto_placeholders})
               AND d.cd_ccusto NOT IN ({ccusto_excluidos_placeholders})
               AND d.tp_situacao = 'N'
               AND {FILTRO_DUPLICATAS_EXCLUIDAS_SQL}
-            ORDER BY d.dt_baixa DESC
+            ORDER BY d.dt_liq DESC
         """
 
         rows = execute_query(query, params)
