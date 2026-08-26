@@ -236,7 +236,7 @@ PARAMS_DUPLICATAS_EXCLUIDAS = tuple(v for par in DUPLICATAS_EXCLUIDAS_DRE_DFC fo
 # cd_despesaitem usa um codigo negativo pra nunca colidir com um codigo real
 # (que sempre vem do ERP como positivo).
 LANCAMENTOS_MANUAIS_DFC = [
-    {'subgrupo': 'OP.13', 'cd_despesaitem': -1, 'descricao': 'PROLABORE CAIRO', 'valor_mensal': 10469.93, 'ccusto': 1},
+    {'subgrupo': 'OP.14', 'cd_despesaitem': -1, 'descricao': 'PROLABORE CAIRO', 'valor_mensal': 10469.93, 'ccusto': 1},
 ]
 
 
@@ -281,6 +281,61 @@ def _buscar_credito_inadimplencia(data_inicio: str, data_fim: str, empresas_filt
                 'cd_empresa': r.get('cd_empresa'),
                 'valor': float(r.get('vl_pago') or 0),
             })
+    return resultado
+
+
+def _buscar_debito_inadimplencia(data_inicio: str, data_fim: str, empresas_filtro: Optional[list] = None):
+    """
+    Conta 10.03.07 DEBITO INADIMPLENCIA da DRE: faturas (tp_documento=1,
+    tp_situacao='1', nr_portador<999) que COMPLETAM 365 dias de vencidas
+    (dt_vencimento + 365 dias) dentro do periodo consultado, e que AINDA
+    ESTAVAM EM ABERTO nesse momento (dt_baixa nulo, ou dt_baixa posterior a
+    essa data). Reconhece a perda no mes em que a fatura vira inadimplente,
+    mesmo que seja paga bem mais tarde - nesse caso a recuperacao aparece
+    em 10.01.04 CREDITO INADIMPLENCIA, no mes do pagamento. Por isso um mes
+    ja fechado deste relatorio nunca muda depois, mesmo que a fatura seja
+    paga posteriormente.
+    """
+    data_inicio_dt = datetime.strptime(data_inicio, '%Y-%m-%d')
+    data_fim_dt = datetime.strptime(data_fim, '%Y-%m-%d')
+    # dt_vencimento + 365 dias precisa cair no periodo consultado - filtra
+    # dt_vencimento num range mais estreito antes de trazer as linhas.
+    venc_inicio = (data_inicio_dt - timedelta(days=365)).strftime('%Y-%m-%d')
+    venc_fim = (data_fim_dt - timedelta(days=365)).strftime('%Y-%m-%d')
+
+    empresa_where = ""
+    params = [venc_inicio, venc_fim]
+    if empresas_filtro:
+        empresa_where = f"AND f.cd_empresa IN ({','.join(['%s'] * len(empresas_filtro))})"
+        params.extend(empresas_filtro)
+
+    query = f"""
+        SELECT f.dt_vencimento, f.dt_baixa, f.cd_empresa, f.vl_fatura
+        FROM vr_fcr_faturai f
+        WHERE f.dt_vencimento >= %s AND f.dt_vencimento <= %s
+          AND f.tp_documento = 1
+          AND f.tp_situacao = '1'
+          AND f.nr_portador < 999
+          {empresa_where}
+    """
+    rows = execute_query(query, tuple(params))
+
+    resultado = []
+    for r in rows or []:
+        dt_vencimento = r.get('dt_vencimento')
+        if not dt_vencimento:
+            continue
+        dt_limite = dt_vencimento + timedelta(days=365)
+        if dt_limite < data_inicio_dt or dt_limite > data_fim_dt:
+            continue
+        dt_baixa = r.get('dt_baixa')
+        if dt_baixa is not None and dt_baixa <= dt_limite:
+            continue
+        resultado.append({
+            'dt_limite': dt_limite,
+            'cd_empresa': r.get('cd_empresa'),
+            'valor': float(r.get('vl_fatura') or 0),
+        })
     return resultado
 
 
@@ -879,6 +934,13 @@ def get_dre_fabrica_por_ccusto(
         )
         valores_por_conta['10.01.04'] = {'total': credito_inadimplencia_total}
 
+        # DEBITO INADIMPLENCIA (10.03.07) - faturas que completaram 365 dias
+        # vencidas ainda em aberto, reconhecidas no mes em que completam.
+        debito_inadimplencia_total = -abs(sum(
+            linha['valor'] for linha in _buscar_debito_inadimplencia(dataInicio, dataFim, EMPRESAS_FABRICA)
+        ))
+        valores_por_conta['10.03.07'] = {'total': debito_inadimplencia_total}
+
         # Somar hierarquia para cada centro de custo
         ccustos_list = sorted(ccustos_encontrados)
         for codigo, valores in list(valores_por_conta.items()):
@@ -1147,6 +1209,11 @@ def get_dre_por_empresa(
         # ccusto/empresa da loja).
         for linha in _buscar_credito_inadimplencia(dataInicio, dataFim, empresas_dre):
             _somar_valor_empresa('10.01.04', linha['cd_empresa'], linha['valor'])
+
+        # DEBITO INADIMPLENCIA (10.03.07) - faturas que completaram 365 dias
+        # vencidas ainda em aberto, por empresa.
+        for linha in _buscar_debito_inadimplencia(dataInicio, dataFim, empresas_dre):
+            _somar_valor_empresa('10.03.07', linha['cd_empresa'], -abs(linha['valor']))
 
         # =====================================================================
         # SOMAR HIERARQUIA - Mesma lógica da _somar_hierarquia
@@ -2329,8 +2396,21 @@ def _calcular_valores_unificada(
                     continue
                 credito_inadimplencia[periodo] += linha['valor']
                 credito_inadimplencia['total'] += linha['valor']
+
+            # DEBITO INADIMPLENCIA (10.03.07) - faturas que completaram 365
+            # dias vencidas AINDA em aberto, reconhecidas no mes em que
+            # completam 365 dias (nao no mes de vencimento/emissao).
+            debito_inadimplencia = _init_valores_periodo(periodos)
+            for linha in _buscar_debito_inadimplencia(dataInicio, dataFim, empresas_filtro):
+                periodo = linha['dt_limite'].strftime('%Y-%m')
+                if periodo not in periodos:
+                    continue
+                valor = -abs(linha['valor'])
+                debito_inadimplencia[periodo] += valor
+                debito_inadimplencia['total'] += valor
         else:
             credito_inadimplencia = _init_valores_periodo(periodos)
+            debito_inadimplencia = _init_valores_periodo(periodos)
 
         # RECEITA DE FRETE (01.02.01) - repasse de frete cobrado do cliente,
         # via nota fiscal (vr_fis_nf), nao via vr_tra_transacao. Por enquanto
@@ -2379,6 +2459,7 @@ def _calcular_valores_unificada(
         _merge_conta_unif('02.01.03', devolucoes_brutas)  # DEVOLUCOES
         _merge_conta_unif('01.02.01', receita_frete)  # RECEITA DE FRETE (e-commerce)
         _merge_conta_unif('10.01.04', credito_inadimplencia)  # CREDITO INADIMPLENCIA
+        _merge_conta_unif('10.03.07', debito_inadimplencia)  # DEBITO INADIMPLENCIA
 
         # =========================================================================
         # CMV - Custo de Mercadoria Vendida
