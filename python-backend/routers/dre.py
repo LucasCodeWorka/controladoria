@@ -1392,6 +1392,20 @@ def get_dfc_por_centro_custo(
     return _calcular_dfc_por_centro_custo(dataInicio, dataFim)
 
 
+@router.get("/api/dre-dfc/comparativo-operacional")
+def get_dre_x_dfc_operacional(
+    dataInicio: str = Query("2026-01-01", description="Data inicial (YYYY-MM-DD)"),
+    dataFim: str = Query("2026-12-31", description="Data final (YYYY-MM-DD)"),
+    filtro: str = Query("consolidado", description="Filtro: 'consolidado', 'fabrica', ou codigo do centro de custo")
+):
+    """
+    Compara DRE (competencia) com DFC Operacional (caixa) - so o grupo
+    OP/REC do DFC, sem Investimentos/Financiamento (sem contrapartida na
+    DRE). Ve _calcular_dre_x_dfc_operacional para a logica completa.
+    """
+    return _calcular_dre_x_dfc_operacional(dataInicio, dataFim, filtro)
+
+
 @router.get("/api/dfc/plano-contas")
 def get_dfc_plano_contas():
     """Retorna a arvore GRUPO > SUBGRUPO do plano de contas do DFC (despesas)
@@ -2245,6 +2259,340 @@ def _calcular_dfc_por_centro_custo(dataInicio: str, dataFim: str):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Erro ao buscar DFC por centro de custo: {str(e)}")
+
+
+def _calcular_dre_x_dfc_operacional(dataInicio: str, dataFim: str, filtro: str):
+    """
+    Compara DRE (regime de competencia) com DFC Operacional (regime de
+    caixa) - so o grupo OP/REC do DFC, sem Investimentos/Financiamento (esses
+    nao tem contrapartida na DRE).
+
+    A ideia central: toda despesa classificada no DFC (cd_despesaitem) ja
+    carrega, na mesma linha, tanto dt_emissao (o que a DRE usa) quanto dt_liq
+    (o que o DFC usa) - e a MESMA classificacao de subgrupo serve pras duas
+    visoes (o DFC so tem override proprio quando precisa divergir da DRE, o
+    resto herda a classificacao DRE). Entao em vez de rodar duas consultas
+    e tentar casar por codigo de conta depois, a despesa e lida UMA VEZ e
+    jogada em duas "gavetas" (competencia = mes de dt_emissao, caixa = mes
+    de dt_liq) na mesma passada.
+
+    A receita ja nao tem essa sorte: a DRE calcula venda bruta a partir de
+    vr_tra_transacao (dt_transacao), o DFC calcula recebimento a partir de
+    vr_fcr_faturai (dt_baixa/data construida) - sao tabelas/eventos
+    diferentes, entao aqui sim rodamos duas consultas independentes.
+    """
+    try:
+        print(f"[INFO] Buscando DRE x DFC Operacional: {dataInicio} ate {dataFim}, filtro={filtro}")
+
+        if filtro == "consolidado":
+            ccustos = list(set(CCUSTOS_FABRICA + list(CCUSTOS_LOJAS.keys()) + CCUSTOS_ECOMMERCE + [515]))
+            nome_filtro = "CONSOLIDADO"
+            tipo_filtro = "consolidado"
+        elif filtro == "fabrica":
+            ccustos = CCUSTOS_FABRICA
+            nome_filtro = "FABRICA"
+            tipo_filtro = "fabrica"
+        elif "," in filtro:
+            try:
+                ccustos_selecionados = [int(item.strip()) for item in filtro.split(",") if item.strip()]
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"Filtro invalido: {filtro}")
+            ccustos_lojas = [cd for cd in ccustos_selecionados if cd in CCUSTOS_LOJAS]
+            if not ccustos_lojas:
+                raise HTTPException(status_code=400, detail="Nenhuma loja valida selecionada")
+            ccustos = ccustos_lojas
+            nome_filtro = f"{len(ccustos_lojas)} LOJAS"
+            tipo_filtro = "loja"
+        else:
+            try:
+                cd_ccusto = int(filtro)
+                if cd_ccusto in CCUSTOS_LOJAS:
+                    ccustos = [cd_ccusto]
+                    nome_filtro = CCUSTOS_LOJAS[cd_ccusto]
+                    tipo_filtro = "loja"
+                elif cd_ccusto in CCUSTOS_FABRICA:
+                    ccustos = [cd_ccusto]
+                    nome_filtro = f"FABRICA CC {cd_ccusto}"
+                    tipo_filtro = "fabrica"
+                else:
+                    raise HTTPException(status_code=400, detail=f"Centro de custo {cd_ccusto} nao encontrado")
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"Filtro invalido: {filtro}")
+
+        periodos = services.gerar_periodos(dataInicio, dataFim)
+        ccusto_placeholders = ",".join(["%s"] * len(ccustos))
+
+        empresas_filtro = []
+        if tipo_filtro == "fabrica":
+            empresas_filtro = [1]
+        elif tipo_filtro == "loja":
+            empresas_filtro = [c for c in ccustos if c in CCUSTOS_LOJAS]
+        elif tipo_filtro == "consolidado":
+            empresas_filtro = [1] + [c for c in ccustos if c in CCUSTOS_LOJAS]
+        empresas_filtro = [e for e in set(empresas_filtro) if e not in EMPRESAS_EXCLUIDAS]
+
+        classificacoes_dfc_db = {}
+        try:
+            _criar_tabela_classificacao_dfc()
+            rows_dfc = execute_query("SELECT cd_despesaitem, conta_dfc FROM classificacao_despesas_dfc", ())
+            for row in rows_dfc or []:
+                cd = row.get('cd_despesaitem')
+                conta_dfc = row.get('conta_dfc', '')
+                if cd and conta_dfc:
+                    classificacoes_dfc_db[cd] = conta_dfc
+        except Exception as e:
+            print(f"[DRE-X-DFC] Aviso: nao foi possivel carregar classificacoes: {e}")
+
+        # =====================================================================
+        # DESPESAS: uma unica consulta, bucketizada por dt_emissao (DRE) e
+        # por dt_liq (DFC) ao mesmo tempo, por subgrupo do OP.
+        # =====================================================================
+        competencia_despesa = {}
+        caixa_despesa = {}
+
+        def _add(destino, subgrupo, periodo, valor):
+            if subgrupo not in destino:
+                destino[subgrupo] = _init_valores_periodo(periodos)
+            destino[subgrupo][periodo] += valor
+            destino[subgrupo]['total'] += valor
+
+        query_despesas = f"""
+            SELECT d.cd_despesaitem, d.dt_emissao, d.dt_liq, ABS(d.vl_rateio) as valor
+            FROM vr_fcp_despduplicatai d
+            WHERE d.tp_situacao = 'N'
+              AND d.cd_ccusto IN ({ccusto_placeholders})
+              AND d.cd_ccusto NOT IN ({",".join(["%s"] * len(CCUSTOS_EXCLUIDOS_FABRICA))})
+              AND {FILTRO_DUPLICATAS_EXCLUIDAS_SQL}
+              AND (
+                    (d.dt_emissao >= %s AND d.dt_emissao <= %s)
+                 OR (d.dt_liq >= %s AND d.dt_liq <= %s)
+              )
+        """
+        despesas = execute_query(
+            query_despesas,
+            (*ccustos, *CCUSTOS_EXCLUIDOS_FABRICA, *PARAMS_DUPLICATAS_EXCLUIDAS,
+             dataInicio, dataFim, dataInicio, dataFim)
+        )
+        print(f"[DRE-X-DFC] Total de despesas: {len(despesas)}")
+
+        for d in despesas:
+            subgrupo = _classificar_subgrupo_dfc(d['cd_despesaitem'], classificacoes_dfc_db)
+            valor = -abs(float(d['valor'] or 0))
+
+            dt_emissao = d.get('dt_emissao')
+            if dt_emissao:
+                periodo = dt_emissao.strftime('%Y-%m')
+                if periodo in periodos:
+                    _add(competencia_despesa, subgrupo, periodo, valor)
+
+            dt_liq = d.get('dt_liq')
+            if dt_liq:
+                periodo = dt_liq.strftime('%Y-%m')
+                if periodo in periodos:
+                    _add(caixa_despesa, subgrupo, periodo, valor)
+
+        # Lancamentos manuais (ex: pro-labore) - sem despesa real por tras,
+        # entao nao ha "emissao" separada da "baixa": entra igual nas duas
+        # gavetas, pra nao criar um descasamento artificial no resumo.
+        for lanc in LANCAMENTOS_MANUAIS_DFC:
+            if lanc['ccusto'] not in ccustos:
+                continue
+            valor_lanc = -abs(lanc['valor_mensal'])
+            for periodo in periodos:
+                _add(competencia_despesa, lanc['subgrupo'], periodo, valor_lanc)
+                _add(caixa_despesa, lanc['subgrupo'], periodo, valor_lanc)
+
+        # Grupo OP (soma dos subgrupos) nas duas visoes
+        op_competencia = _init_valores_periodo(periodos)
+        op_caixa = _init_valores_periodo(periodos)
+        subgrupos_op = {s['codigo'] for grupo in PLANO_CONTAS_DFC if grupo['codigo'] == 'OP' for s in grupo['subgrupos']}
+        for scodigo in subgrupos_op:
+            if scodigo in competencia_despesa:
+                for p in periodos:
+                    op_competencia[p] += competencia_despesa[scodigo][p]
+                op_competencia['total'] += competencia_despesa[scodigo]['total']
+            if scodigo in caixa_despesa:
+                for p in periodos:
+                    op_caixa[p] += caixa_despesa[scodigo][p]
+                op_caixa['total'] += caixa_despesa[scodigo]['total']
+
+        # =====================================================================
+        # RECEITA: duas fontes diferentes - vendas (DRE) x recebimentos (DFC).
+        # =====================================================================
+        receita_competencia = _init_valores_periodo(periodos)
+        receita_caixa = _init_valores_periodo(periodos)
+
+        if empresas_filtro:
+            empresa_placeholders = ",".join(["%s"] * len(empresas_filtro))
+
+            # --- Competencia (DRE): vendas brutas - devolucoes, por dt_transacao ---
+            query_vendas = f"""
+                SELECT t.dt_transacao, SUM(t.vl_transacao) as valor
+                FROM vr_tra_transacao t
+                WHERE t.dt_transacao >= %s AND t.dt_transacao <= %s
+                  AND t.tp_situacao = 4
+                  AND t.cd_empresa IN ({empresa_placeholders})
+                  AND t.tp_modalidade IN ('4')
+                  AND t.tp_operacao = 'S'
+                GROUP BY t.dt_transacao
+            """
+            for row in execute_query(query_vendas, (dataInicio, dataFim, *empresas_filtro)) or []:
+                dt_transacao = row['dt_transacao']
+                if not dt_transacao:
+                    continue
+                periodo = dt_transacao.strftime('%Y-%m')
+                if periodo not in periodos:
+                    continue
+                valor = float(row['valor'] or 0)
+                receita_competencia[periodo] += valor
+                receita_competencia['total'] += valor
+
+            query_devolucoes = f"""
+                SELECT t.dt_transacao, SUM(t.vl_transacao) as valor
+                FROM vr_tra_transacao t
+                WHERE t.dt_transacao >= %s AND t.dt_transacao <= %s
+                  AND t.tp_situacao = 4
+                  AND t.cd_empresa IN ({empresa_placeholders})
+                  AND t.tp_modalidade IN ('3')
+                  AND t.tp_operacao = 'E'
+                GROUP BY t.dt_transacao
+            """
+            devolucoes_rows = execute_query(query_devolucoes, (dataInicio, dataFim, *empresas_filtro)) or []
+            for row in devolucoes_rows:
+                dt_transacao = row['dt_transacao']
+                if not dt_transacao:
+                    continue
+                periodo = dt_transacao.strftime('%Y-%m')
+                if periodo not in periodos:
+                    continue
+                valor = abs(float(row['valor'] or 0))
+                receita_competencia[periodo] -= valor
+                receita_competencia['total'] -= valor
+                # Mesma fonte/data que a DRE usa - devolucao entra igual nas
+                # duas visoes (nao e um item que "descasa" prazo).
+                receita_caixa[periodo] -= valor
+                receita_caixa['total'] -= valor
+
+            # --- Caixa (DFC): recebimentos por tp_documento + cartao/pix ---
+            # tp_documento 3 (dinheiro) e 1 (fatura) somam; 9 (troco) subtrai
+            tp_sinal = {3: 1, 9: -1, 2: 1, 1: 1}
+            query_tipo_documento = f"""
+                SELECT f.dt_baixa, f.tp_documento, SUM(f.vl_pago) as valor
+                FROM vr_fcr_faturai f
+                WHERE f.dt_baixa >= %s AND f.dt_baixa <= %s
+                  AND f.tp_situacao = '1'
+                  AND f.tp_documento IN (3, 9, 2, 1)
+                  AND f.cd_empresa IN ({empresa_placeholders})
+                GROUP BY f.dt_baixa, f.tp_documento
+            """
+            for row in execute_query(query_tipo_documento, (dataInicio, dataFim, *empresas_filtro)) or []:
+                dt_baixa = row['dt_baixa']
+                if not dt_baixa:
+                    continue
+                periodo = dt_baixa.strftime('%Y-%m')
+                if periodo not in periodos:
+                    continue
+                sinal = tp_sinal.get(row['tp_documento'], 1)
+                valor = sinal * float(row['valor'] or 0)
+                receita_caixa[periodo] += valor
+                receita_caixa['total'] += valor
+
+            data_inicio_dt = datetime.strptime(dataInicio, '%Y-%m-%d')
+            data_fim_dt = datetime.strptime(dataFim, '%Y-%m-%d')
+            data_inicio_buffer = (data_inicio_dt - timedelta(days=10)).strftime('%Y-%m-%d')
+
+            for cfg in RECEBIMENTOS_DATA_CONSTRUIDA.values():
+                where_extra = ""
+                params_extra = []
+                if cfg.get('tp_cobranca') is not None:
+                    where_extra = "AND f.tp_cobranca = %s"
+                    params_extra = [cfg['tp_cobranca']]
+                query_construida = f"""
+                    SELECT f.dt_emissao, f.vl_fatura
+                    FROM vr_fcr_faturai f
+                    WHERE f.tp_situacao = '1'
+                      AND f.tp_documento = %s
+                      {where_extra}
+                      AND f.cd_empresa IN ({empresa_placeholders})
+                      AND f.dt_emissao >= %s
+                      AND f.dt_emissao <= %s
+                """
+                rows_construida = execute_query(
+                    query_construida,
+                    (cfg['tp_documento'], *params_extra, *empresas_filtro, data_inicio_buffer, dataFim)
+                )
+                for row in rows_construida or []:
+                    dt_emissao = row['dt_emissao']
+                    if not dt_emissao:
+                        continue
+                    dt_construida = _somar_dias_uteis(dt_emissao, cfg['dias_uteis'])
+                    if dt_construida < data_inicio_dt or dt_construida > data_fim_dt:
+                        continue
+                    periodo = dt_construida.strftime('%Y-%m')
+                    if periodo not in periodos:
+                        continue
+                    valor = float(row['vl_fatura'] or 0)
+                    receita_caixa[periodo] += valor
+                    receita_caixa['total'] += valor
+
+        # =====================================================================
+        # RESUMO EXECUTIVO (ponte): Resultado Operacional (DRE) -> ajustes de
+        # descasamento de prazo -> Fluxo de Caixa Operacional (DFC).
+        # =====================================================================
+        resultado_competencia = _init_valores_periodo(periodos)
+        resultado_caixa = _init_valores_periodo(periodos)
+        ajuste_despesa = _init_valores_periodo(periodos)
+        ajuste_receita = _init_valores_periodo(periodos)
+        for p in periodos + ['total']:
+            resultado_competencia[p] = receita_competencia[p] + op_competencia[p]
+            resultado_caixa[p] = receita_caixa[p] + op_caixa[p]
+            # Despesa e negativa: o que foi incorrido (competencia) menos o
+            # que foi pago (caixa) - positivo = pagou menos do que competiu
+            # esse periodo (sobrou caixa), negativo = pagou mais do que
+            # competiu (pagou coisa de outros periodos).
+            ajuste_despesa[p] = op_competencia[p] - op_caixa[p]
+            ajuste_receita[p] = receita_caixa[p] - receita_competencia[p]
+
+        periodos_response = [
+            {"key": p, "label": f"{p.split('-')[1]}/{p.split('-')[0][2:]}"}
+            for p in periodos
+        ]
+
+        despesas_resp = {}
+        for scodigo in subgrupos_op:
+            comp = competencia_despesa.get(scodigo, _init_valores_periodo(periodos))
+            cai = caixa_despesa.get(scodigo, _init_valores_periodo(periodos))
+            if comp['total'] == 0 and cai['total'] == 0:
+                continue
+            despesas_resp[scodigo] = {"competencia": comp, "caixa": cai}
+
+        return {
+            "periodos": periodos_response,
+            "despesas": despesas_resp,
+            "receita": {"competencia": receita_competencia, "caixa": receita_caixa},
+            "grupoOP": {"competencia": op_competencia, "caixa": op_caixa},
+            "resumo": {
+                "resultadoCompetencia": resultado_competencia,
+                "resultadoCaixa": resultado_caixa,
+                "ajusteDespesa": ajuste_despesa,
+                "ajusteReceita": ajuste_receita,
+            },
+            "metadata": {
+                "filtro": filtro,
+                "nomeFiltro": nome_filtro,
+                "tipoFiltro": tipo_filtro,
+                "dataInicio": dataInicio,
+                "dataFim": dataFim,
+                "dataConsulta": datetime.now().isoformat()
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[ERROR] Erro ao processar DRE x DFC Operacional: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Erro ao buscar comparativo DRE x DFC: {str(e)}")
 
 
 def _calcular_valores_unificada(

@@ -15,6 +15,7 @@ import {
   BarChart3,
   Factory,
   Wallet,
+  GitCompare,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -41,6 +42,11 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
       name: 'DFC',
       href: '/dfc',
       icon: Wallet,
+    },
+    {
+      name: 'DRE x DFC',
+      href: '/dre-dfc',
+      icon: GitCompare,
     },
   ];
 
