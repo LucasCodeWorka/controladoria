@@ -341,6 +341,13 @@ export default function DFCPage() {
 
   const primeiraRenderizacaoRef = React.useRef(true);
 
+  // Cache em memoria por parametros de consulta - trocar de periodo/filtro/
+  // visao e voltar (ex: analisar 2025, depois 2026, depois 2025 de novo) nao
+  // precisa esperar a consulta rodar de novo. "Consultar" usa o cache;
+  // "Atualizar" (icone) sempre ignora e busca de novo. Some ao recarregar a
+  // pagina.
+  const cacheDfcRef = React.useRef<Map<string, any>>(new Map());
+
   // Barra de rolagem horizontal "espelho" no topo (acima do card de
   // Periodo), sincronizada com o scroll real da tabela la embaixo - assim
   // da pra rolar o DFC sem precisar descer ate a tabela primeiro.
@@ -455,11 +462,49 @@ export default function DFCPage() {
     carregarGruposOcultos();
   }, []);
 
-  async function buscarDados() {
+  function aplicarDadosMensal(data: any) {
+    if (data.metadata) {
+      const m = data.metadata;
+      setFiltroInfo(`${m.nomeFiltro} | Centros de Custo: ${m.centrosCusto?.length || 0}`);
+      setNaoClassificados(m.naoClassificados || 0);
+      setPrazoMedioRecebimento(m.prazoMedioRecebimento ?? null);
+      setPrazoMedioPagamento(m.prazoMedioPagamento ?? null);
+      setPrazoMedioRecebimentoPorSubgrupo(m.prazoMedioRecebimentoPorSubgrupo || {});
+      setPrazoMedioPagamentoPorSubgrupo(m.prazoMedioPagamentoPorSubgrupo || {});
+      setPrazoMedioEstocagem(m.prazoMedioEstocagem ?? null);
+    }
+
+    if (data.periodos) setPeriodos(data.periodos);
+
+    // Os saldos de caixa (checkpoints e final) sao recalculados no cliente,
+    // reagindo aos grupos ocultos - ver useMemo `checkpointsSaldo` abaixo.
+    setValores(data.valores || {});
+    setDespesasPorSubgrupo(data.despesasPorSubgrupo || {});
+    setUltimaAtualizacao(new Date().toLocaleString('pt-BR'));
+    setConsultaExecutada(true);
+  }
+
+  async function buscarDados(forcar = false) {
     if (visaoDFC === 'centro-custo') {
-      await buscarDadosPorCentroCusto();
+      await buscarDadosPorCentroCusto(forcar);
       return;
     }
+
+    const chaveCache = JSON.stringify({
+      visao: visaoDFC,
+      dataInicio,
+      dataFim,
+      filtro,
+    });
+    if (!forcar) {
+      const emCache = cacheDfcRef.current.get(chaveCache);
+      if (emCache) {
+        aplicarDadosMensal(emCache);
+        setStatusCarregamento(null);
+        return;
+      }
+    }
+
     setLoading(true);
     setStatusCarregamento(null);
     try {
@@ -483,25 +528,8 @@ export default function DFCPage() {
         return;
       }
 
-      if (data.metadata) {
-        const m = data.metadata;
-        setFiltroInfo(`${m.nomeFiltro} | Centros de Custo: ${m.centrosCusto?.length || 0}`);
-        setNaoClassificados(m.naoClassificados || 0);
-        setPrazoMedioRecebimento(m.prazoMedioRecebimento ?? null);
-        setPrazoMedioPagamento(m.prazoMedioPagamento ?? null);
-        setPrazoMedioRecebimentoPorSubgrupo(m.prazoMedioRecebimentoPorSubgrupo || {});
-        setPrazoMedioPagamentoPorSubgrupo(m.prazoMedioPagamentoPorSubgrupo || {});
-        setPrazoMedioEstocagem(m.prazoMedioEstocagem ?? null);
-      }
-
-      if (data.periodos) setPeriodos(data.periodos);
-
-      // Os saldos de caixa (checkpoints e final) sao recalculados no cliente,
-      // reagindo aos grupos ocultos - ver useMemo `checkpointsSaldo` abaixo.
-      setValores(data.valores || {});
-      setDespesasPorSubgrupo(data.despesasPorSubgrupo || {});
-      setUltimaAtualizacao(new Date().toLocaleString('pt-BR'));
-      setConsultaExecutada(true);
+      cacheDfcRef.current.set(chaveCache, data);
+      aplicarDadosMensal(data);
     } catch (error) {
       console.error('Erro ao buscar dados do DFC:', error);
       setStatusCarregamento('Erro ao buscar dados do DFC. Tente novamente.');
@@ -516,7 +544,37 @@ export default function DFCPage() {
   // `periodos` de forma generica). Cada loja ativa vira uma coluna, e a
   // fabrica (ccustos 1, 500-514, mais 49/515 agrupados) vira UMA coluna so -
   // mesmo padrao da aba "Por Empresa" da DRE. PMR/PMP/PME nao se aplicam aqui.
-  async function buscarDadosPorCentroCusto() {
+  function aplicarDadosPorCentroCusto(data: any) {
+    setFiltroInfo(`POR CENTRO DE CUSTO | Centros de Custo: ${data.metadata?.totalCentrosCusto || 0}`);
+    setNaoClassificados(0);
+    setPrazoMedioRecebimento(data.metadata?.prazoMedioRecebimento ?? null);
+    setPrazoMedioPagamento(data.metadata?.prazoMedioPagamento ?? null);
+    setPrazoMedioRecebimentoPorSubgrupo({});
+    setPrazoMedioPagamentoPorSubgrupo({});
+    setPrazoMedioEstocagem(data.metadata?.prazoMedioEstocagem ?? null);
+
+    const colunas = (data.centrosCusto || []).map((c: { codigo: string; nome: string }) => ({
+      key: c.codigo,
+      label: c.nome,
+    }));
+    setPeriodos(colunas);
+    setValores(data.valores || {});
+    setDespesasPorSubgrupo({});
+    setUltimaAtualizacao(new Date().toLocaleString('pt-BR'));
+    setConsultaExecutada(true);
+  }
+
+  async function buscarDadosPorCentroCusto(forcar = false) {
+    const chaveCache = JSON.stringify({ visao: 'centro-custo', dataInicio, dataFim });
+    if (!forcar) {
+      const emCache = cacheDfcRef.current.get(chaveCache);
+      if (emCache) {
+        aplicarDadosPorCentroCusto(emCache);
+        setStatusCarregamento(null);
+        return;
+      }
+    }
+
     setLoading(true);
     setStatusCarregamento(null);
     try {
@@ -535,23 +593,8 @@ export default function DFCPage() {
         return;
       }
 
-      setFiltroInfo(`POR CENTRO DE CUSTO | Centros de Custo: ${data.metadata?.totalCentrosCusto || 0}`);
-      setNaoClassificados(0);
-      setPrazoMedioRecebimento(data.metadata?.prazoMedioRecebimento ?? null);
-      setPrazoMedioPagamento(data.metadata?.prazoMedioPagamento ?? null);
-      setPrazoMedioRecebimentoPorSubgrupo({});
-      setPrazoMedioPagamentoPorSubgrupo({});
-      setPrazoMedioEstocagem(data.metadata?.prazoMedioEstocagem ?? null);
-
-      const colunas = (data.centrosCusto || []).map((c: { codigo: string; nome: string }) => ({
-        key: c.codigo,
-        label: c.nome,
-      }));
-      setPeriodos(colunas);
-      setValores(data.valores || {});
-      setDespesasPorSubgrupo({});
-      setUltimaAtualizacao(new Date().toLocaleString('pt-BR'));
-      setConsultaExecutada(true);
+      cacheDfcRef.current.set(chaveCache, data);
+      aplicarDadosPorCentroCusto(data);
     } catch (error) {
       console.error('Erro ao buscar DFC por centro de custo:', error);
       setStatusCarregamento('Erro ao buscar DFC por centro de custo. Tente novamente.');
@@ -1395,9 +1438,9 @@ export default function DFCPage() {
             Consultar
           </button>
           <button
-            onClick={() => buscarDados()}
+            onClick={() => buscarDados(true)}
             disabled={loading}
-            title="Atualizar dados"
+            title="Atualizar dados (ignora o cache e busca de novo)"
             className="p-2 text-sm bg-gray-100 text-gray-600 rounded-md hover:bg-gray-200 transition-colors disabled:opacity-50"
           >
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
@@ -1419,6 +1462,15 @@ export default function DFCPage() {
           </button>
           <button onClick={definirAnoAtual} className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md transition-colors">
             Ano Atual
+          </button>
+          <button
+            onClick={() => {
+              setDataInicio('2025-01-01');
+              setDataFim('2025-12-31');
+            }}
+            className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md transition-colors"
+          >
+            2025
           </button>
 
           {consultaExecutada && (

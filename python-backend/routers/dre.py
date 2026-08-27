@@ -2389,11 +2389,20 @@ def _calcular_dre_x_dfc_operacional(dataInicio: str, dataFim: str, filtro: str):
             subgrupo = _classificar_subgrupo_dfc(cd_despesaitem, classificacoes_dfc_db)
             valor = -abs(float(d['valor'] or 0))
 
-            dt_emissao = d.get('dt_emissao')
-            if dt_emissao:
-                periodo = dt_emissao.strftime('%Y-%m')
-                if periodo in periodos:
-                    _add(competencia_despesa, subgrupo, periodo, valor)
+            # OP.01 (Custos com Materia Prima) e um caso especial: no lado
+            # caixa isso e a duplicata de compra realmente paga (dt_liq,
+            # como o resto). Mas na competencia, a DRE NAO usa a data de
+            # emissao da compra pra CMV - usa um calculo sintetico casado
+            # com a VENDA (mv_cmv_fab/mv_cmv_loja_v2), sem nenhuma relacao
+            # com quando a materia-prima foi comprada. Por isso a competencia
+            # de OP.01 e preenchida a parte, depois deste loop - aqui so
+            # populamos o lado caixa pra esse subgrupo.
+            if subgrupo != 'OP.01':
+                dt_emissao = d.get('dt_emissao')
+                if dt_emissao:
+                    periodo = dt_emissao.strftime('%Y-%m')
+                    if periodo in periodos:
+                        _add(competencia_despesa, subgrupo, periodo, valor)
 
             # Lado caixa usa a base "sem antecipacao": juros e recompra de
             # titulos sao o custo direto de antecipar recebiveis - como o
@@ -2418,6 +2427,62 @@ def _calcular_dre_x_dfc_operacional(dataInicio: str, dataFim: str, filtro: str):
             for periodo in periodos:
                 _add(competencia_despesa, lanc['subgrupo'], periodo, valor_lanc)
                 _add(caixa_despesa, lanc['subgrupo'], periodo, valor_lanc)
+
+        # CMV (OP.01 na competencia): calculo sintetico da DRE, casado com a
+        # venda (mv_cmv_fab/mv_cmv_loja_v2) - mesma logica/fonte de
+        # _calcular_valores_unificada. Nao tem nenhuma relacao com dt_emissao
+        # de duplicata de compra, entao e calculado a parte do loop acima.
+        usar_cmv_fab = tipo_filtro in ('consolidado', 'fabrica')
+        usar_cmv_loja = tipo_filtro in ('consolidado', 'loja')
+        cmv_competencia = _init_valores_periodo(periodos)
+
+        if usar_cmv_fab:
+            try:
+                query_cmv_fab = """
+                    SELECT DATE_TRUNC('month', data) AS mes, ABS(COALESCE(SUM(valor), 0)) AS cmv
+                    FROM mv_cmv_fab
+                    WHERE data >= %s AND data <= %s
+                    GROUP BY DATE_TRUNC('month', data)
+                """
+                for c in execute_query(query_cmv_fab, (dataInicio, dataFim)) or []:
+                    dt = c['mes']
+                    if not dt:
+                        continue
+                    periodo = dt.strftime('%Y-%m')
+                    if periodo not in periodos:
+                        continue
+                    valor = -abs(float(c['cmv'] or 0))
+                    cmv_competencia[periodo] += valor
+                    cmv_competencia['total'] += valor
+            except Exception as e:
+                print(f"[DRE-X-DFC] Erro ao buscar CMV fabrica: {e}")
+
+        if usar_cmv_loja:
+            try:
+                ccustos_lojas_filtro = [c for c in ccustos if c in CCUSTOS_LOJAS]
+                if ccustos_lojas_filtro:
+                    ccusto_placeholders_loja = ",".join(["%s"] * len(ccustos_lojas_filtro))
+                    query_cmv_loja = f"""
+                        SELECT DATE_TRUNC('month', data) AS mes, ABS(COALESCE(SUM(valor), 0)) AS cmv
+                        FROM mv_cmv_loja_v2
+                        WHERE data >= %s AND data <= %s
+                          AND idcentrodecusto IN ({ccusto_placeholders_loja})
+                        GROUP BY DATE_TRUNC('month', data)
+                    """
+                    for c in execute_query(query_cmv_loja, (dataInicio, dataFim, *ccustos_lojas_filtro)) or []:
+                        dt = c['mes']
+                        if not dt:
+                            continue
+                        periodo = dt.strftime('%Y-%m')
+                        if periodo not in periodos:
+                            continue
+                        valor = -abs(float(c['cmv'] or 0))
+                        cmv_competencia[periodo] += valor
+                        cmv_competencia['total'] += valor
+            except Exception as e:
+                print(f"[DRE-X-DFC] Erro ao buscar CMV lojas: {e}")
+
+        competencia_despesa['OP.01'] = cmv_competencia
 
         # Grupo OP (soma dos subgrupos) nas duas visoes
         op_competencia = _init_valores_periodo(periodos)

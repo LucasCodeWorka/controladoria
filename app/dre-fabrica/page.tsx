@@ -395,6 +395,11 @@ export default function DREPage() {
   // restaurado do localStorage (useEffect acima) com os valores padrao.
   const primeiraRenderizacaoFiltroRef = useRef(true);
   const chavesAuditoriaSolicitadasRef = useRef<Set<string>>(new Set());
+  // Cache em memoria por aba/periodo/filtro - trocar de periodo e voltar
+  // (ex: analisar 2025, depois 2026, depois 2025 de novo) nao precisa
+  // esperar a consulta rodar de novo. "Consultar" usa o cache; "Atualizar"
+  // (icone) sempre ignora e busca de novo. Some ao recarregar a pagina.
+  const cacheDreRef = useRef<Map<string, any>>(new Map());
   const refScrollSinteticaAtual = useRef<HTMLDivElement>(null);
   const refScrollSinteticaAno = useRef<HTMLDivElement>(null);
 
@@ -1328,7 +1333,22 @@ export default function DREPage() {
     return linhas;
   }
 
-  async function buscarDados() {
+  async function buscarDados(forcar = false) {
+    const chaveCache = JSON.stringify({ tipoVisao, dataInicio, dataFim, filtro });
+    const buscarComCache = async (url: string): Promise<any> => {
+      if (!forcar) {
+        const emCache = cacheDreRef.current.get(chaveCache);
+        if (emCache) return emCache;
+      }
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 300000);
+      const response = await fetch(url, { signal: controller.signal, cache: 'no-store' });
+      window.clearTimeout(timeout);
+      const data = await response.json();
+      if (!data.error) cacheDreRef.current.set(chaveCache, data);
+      return data;
+    };
+
     setLoading(true);
     setStatusCarregamento(null);
 
@@ -1337,15 +1357,8 @@ export default function DREPage() {
         buscarAlertasAuditoria();
         buscarDadosAnoAnterior();
 
-        const controller = new AbortController();
-        const timeout = window.setTimeout(() => controller.abort(), 300000);
         const params = new URLSearchParams({ dataInicio, dataFim, filtro });
-        const response = await fetch(`/api/dre/unificada?${params.toString()}`, {
-          signal: controller.signal,
-          cache: 'no-store',
-        });
-        window.clearTimeout(timeout);
-        const data = await response.json();
+        const data = await buscarComCache(`/api/dre/unificada?${params.toString()}`);
 
         if (data.error) {
           setStatusCarregamento(`Erro do backend: ${data.error}`);
@@ -1425,14 +1438,7 @@ export default function DREPage() {
           filtro,
           t: String(Date.now()),
         });
-        const controller = new AbortController();
-        const timeout = window.setTimeout(() => controller.abort(), 300000);
-        const response = await fetch(`/api/dre/unificada/sintetico?${params.toString()}`, {
-          signal: controller.signal,
-          cache: 'no-store',
-        });
-        window.clearTimeout(timeout);
-        const data = await response.json();
+        const data = await buscarComCache(`/api/dre/unificada/sintetico?${params.toString()}`);
 
         if (data.error) {
           setStatusCarregamento(`Erro do backend: ${data.error}`);
@@ -1446,8 +1452,7 @@ export default function DREPage() {
 
         if (compararAnoAnteriorSintetico) buscarDadosSinteticoAno();
       } else if (tipoVisao === 'por-empresa') {
-        const response = await fetch(`/api/dre/por-empresa?dataInicio=${dataInicio}&dataFim=${dataFim}`);
-        const data = await response.json();
+        const data = await buscarComCache(`/api/dre/por-empresa?dataInicio=${dataInicio}&dataFim=${dataFim}`);
 
         if (data.error) {
           setStatusCarregamento(`Erro do backend: ${data.error}`);
@@ -1463,8 +1468,7 @@ export default function DREPage() {
         setUltimaAtualizacao(new Date().toLocaleString('pt-BR'));
         setConsultaExecutada(true);
       } else if (tipoVisao === 'por-ccusto') {
-        const response = await fetch(`/api/dre/fabrica/por-ccusto?dataInicio=${dataInicio}&dataFim=${dataFim}`);
-        const data = await response.json();
+        const data = await buscarComCache(`/api/dre/fabrica/por-ccusto?dataInicio=${dataInicio}&dataFim=${dataFim}`);
 
         if (data.error) {
           setStatusCarregamento(`Erro do backend: ${data.error}`);
@@ -2298,9 +2302,9 @@ export default function DREPage() {
             {loading ? 'Carregando...' : 'Consultar'}
           </button>
           <button
-            onClick={() => buscarDados()}
+            onClick={() => buscarDados(true)}
             disabled={loading}
-            title="Atualizar dados"
+            title="Atualizar dados (ignora o cache e busca de novo)"
             className="p-2 text-sm bg-gray-100 text-gray-600 rounded-md hover:bg-gray-200 transition-colors disabled:opacity-50"
           >
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
@@ -2351,6 +2355,15 @@ export default function DREPage() {
             className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md transition-colors"
           >
             Ano Atual
+          </button>
+          <button
+            onClick={() => {
+              setDataInicio('2025-01-01');
+              setDataFim('2025-12-31');
+            }}
+            className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md transition-colors"
+          >
+            2025
           </button>
         </div>
         {statusCarregamento && (

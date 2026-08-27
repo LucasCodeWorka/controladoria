@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ArrowRight,
   Calendar,
@@ -65,6 +65,10 @@ export default function DreXDfcPage() {
     return `${fimMesAnterior.getFullYear()}-${String(fimMesAnterior.getMonth() + 1).padStart(2, '0')}-${String(fimMesAnterior.getDate()).padStart(2, '0')}`;
   });
   const [dados, setDados] = useState<RespostaComparativo | null>(null);
+  // Cache em memoria por parametros de consulta - trocar de periodo e voltar
+  // (ex: analisar 2025, depois 2026, depois 2025 de novo) nao precisa
+  // esperar a consulta rodar de novo. Some ao recarregar a pagina.
+  const cacheRef = useRef<Map<string, RespostaComparativo>>(new Map());
 
   useEffect(() => {
     async function carregarFiltros() {
@@ -98,7 +102,18 @@ export default function DreXDfcPage() {
     carregarNomesSubgrupos();
   }, []);
 
-  async function buscarDados() {
+  async function buscarDados(forcar = false) {
+    const chaveCache = JSON.stringify({ dataInicio, dataFim, filtro });
+    if (!forcar) {
+      const emCache = cacheRef.current.get(chaveCache);
+      if (emCache) {
+        setDados(emCache);
+        setConsultaExecutada(true);
+        setStatusCarregamento(null);
+        return;
+      }
+    }
+
     setLoading(true);
     setStatusCarregamento(null);
     try {
@@ -117,6 +132,7 @@ export default function DreXDfcPage() {
         return;
       }
 
+      cacheRef.current.set(chaveCache, data);
       setDados(data);
       setConsultaExecutada(true);
     } catch (error) {
@@ -365,6 +381,14 @@ export default function DreXDfcPage() {
             {loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : null}
             Consultar
           </button>
+          <button
+            onClick={() => buscarDados(true)}
+            disabled={loading}
+            title="Atualizar dados (ignora o cache e busca de novo)"
+            className="p-2 text-sm bg-gray-100 text-gray-600 rounded-md hover:bg-gray-200 transition-colors disabled:opacity-50"
+          >
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+          </button>
           <button onClick={definirMesAnterior} className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md transition-colors">
             Mês Anterior
           </button>
@@ -376,6 +400,15 @@ export default function DreXDfcPage() {
           </button>
           <button onClick={() => definirUltimosMeses(6)} className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md transition-colors">
             Últimos 6 Meses
+          </button>
+          <button
+            onClick={() => {
+              setDataInicio('2025-01-01');
+              setDataFim('2025-12-31');
+            }}
+            className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md transition-colors"
+          >
+            2025
           </button>
         </div>
 
