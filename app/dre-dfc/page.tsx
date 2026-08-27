@@ -237,7 +237,8 @@ export default function DreXDfcPage() {
             <h1 className="text-2xl font-bold text-brand-dark">DRE x DFC — Competência x Caixa</h1>
             <p className="text-sm text-gray-500">
               Compara o resultado operacional pelo regime de competência (DRE, data de emissão) com o fluxo de caixa
-              operacional (DFC, data de liquidação/recebimento) — só o grupo Operacional, sem Investimentos/Financiamento.
+              operacional (DFC, base <strong>sem antecipação</strong> — fatura pelo vencimento original, cartão de
+              crédito por parcela) — só o grupo Operacional, sem Investimentos/Financiamento.
             </p>
           </div>
         </div>
