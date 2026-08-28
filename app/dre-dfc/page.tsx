@@ -38,6 +38,7 @@ interface RespostaComparativo {
     resultadoCaixa: ValoresPeriodo;
     ajusteDespesa: ValoresPeriodo;
     ajusteReceita: ValoresPeriodo;
+    ajusteOutros: ValoresPeriodo;
   };
   metadata: {
     nomeFiltro: string;
@@ -235,6 +236,7 @@ export default function DreXDfcPage() {
   const resultadoCaixaTotal = resumo ? celula(resumo.resultadoCaixa) : 0;
   const ajusteReceitaTotal = resumo ? celula(resumo.ajusteReceita) : 0;
   const ajusteDespesaTotal = resumo ? celula(resumo.ajusteDespesa) : 0;
+  const ajusteOutrosTotal = resumo ? celula(resumo.ajusteOutros) : 0;
 
   const linhasDespesas = dados
     ? Object.entries(dados.despesas).sort(
@@ -252,9 +254,11 @@ export default function DreXDfcPage() {
           <div>
             <h1 className="text-2xl font-bold text-brand-dark">DRE x DFC — Competência x Caixa</h1>
             <p className="text-sm text-gray-500">
-              Compara o resultado operacional pelo regime de competência (DRE, data de emissão) com o fluxo de caixa
-              operacional (DFC, base <strong>sem antecipação</strong> — fatura pelo vencimento original, cartão de
-              crédito por parcela) — só o grupo Operacional, sem Investimentos/Financiamento.
+              Compara o Lucro Líquido da DRE (regime de competência) com o Saldo de Caixa Operacional do DFC (regime de
+              caixa, base <strong>sem antecipação</strong> — fatura pelo vencimento original, cartão de crédito por
+              parcela). Os dois números no resumo batem exatamente com o que aparece nas telas separadas da DRE e do
+              DFC — no DFC, com o card &quot;Saldo de Caixa (após Operacional)&quot;, que exclui Investimentos e
+              Financiamento.
             </p>
           </div>
         </div>
@@ -265,10 +269,11 @@ export default function DreXDfcPage() {
           <h2 className="text-base font-semibold text-brand-dark mb-4">Resumo executivo — a ponte entre resultado e caixa</h2>
           <div className="flex flex-wrap items-stretch gap-3">
             <div className="flex-1 min-w-[180px] bg-blue-50 rounded-lg p-4 border-l-4 border-blue-500">
-              <p className="text-xs font-medium text-blue-800">Resultado Operacional (DRE)</p>
+              <p className="text-xs font-medium text-blue-800">Lucro Líquido (DRE)</p>
               <p className={`text-xl font-bold mt-1 ${resultadoCompetenciaTotal < 0 ? 'text-red-600' : 'text-blue-900'}`}>
                 {formatarValor(resultadoCompetenciaTotal)}
               </p>
+              <p className="text-[11px] text-gray-400 mt-1">igual à tela da DRE Analítica</p>
             </div>
             <div className="flex items-center justify-center px-1 text-gray-400">
               <ArrowRight className="w-5 h-5" />
@@ -279,7 +284,7 @@ export default function DreXDfcPage() {
                 {ajusteReceitaTotal >= 0 ? '+' : ''}
                 {formatarValor(ajusteReceitaTotal)}
               </p>
-              <p className="text-[11px] text-gray-400 mt-1">recebido − vendido no período</p>
+              <p className="text-[11px] text-gray-400 mt-1">recebido − vendido no período (só Operacional)</p>
             </div>
             <div className="flex items-center justify-center px-1 text-gray-400">
               <ArrowRight className="w-5 h-5" />
@@ -290,21 +295,38 @@ export default function DreXDfcPage() {
                 {-ajusteDespesaTotal >= 0 ? '+' : ''}
                 {formatarValor(-ajusteDespesaTotal)}
               </p>
-              <p className="text-[11px] text-gray-400 mt-1">pago − incorrido no período</p>
+              <p className="text-[11px] text-gray-400 mt-1">pago − incorrido no período (só Operacional)</p>
+            </div>
+            <div className="flex items-center justify-center px-1 text-gray-400">
+              <ArrowRight className="w-5 h-5" />
+            </div>
+            <div className="flex-1 min-w-[180px] bg-gray-50 rounded-lg p-4 border-l-4 border-gray-400">
+              <p className="text-xs font-medium text-gray-600">Outros ajustes</p>
+              <p className={`text-xl font-bold mt-1 ${ajusteOutrosTotal < 0 ? 'text-red-600' : 'text-green-600'}`}>
+                {ajusteOutrosTotal >= 0 ? '+' : ''}
+                {formatarValor(ajusteOutrosTotal)}
+              </p>
+              <p className="text-[11px] text-gray-400 mt-1">financeiro, não operacional, tributos e resíduo</p>
             </div>
             <div className="flex items-center justify-center px-1 text-gray-400">
               <ArrowRight className="w-5 h-5" />
             </div>
             <div className="flex-1 min-w-[180px] bg-teal-50 rounded-lg p-4 border-l-4 border-teal-500">
-              <p className="text-xs font-medium text-teal-800">Fluxo de Caixa Operacional (DFC)</p>
+              <p className="text-xs font-medium text-teal-800">Saldo de Caixa Operacional (DFC)</p>
               <p className={`text-xl font-bold mt-1 ${resultadoCaixaTotal < 0 ? 'text-red-600' : 'text-teal-900'}`}>
                 {formatarValor(resultadoCaixaTotal)}
+              </p>
+              <p className="text-[11px] text-gray-400 mt-1">
+                igual ao card &quot;Saldo de Caixa (após Operacional)&quot; da aba &quot;Mensal - Sem Antecipação&quot;
               </p>
             </div>
           </div>
           <p className="text-xs text-gray-400 mt-3">
-            Resultado (DRE) + ajuste de receita − ajuste de despesa = Caixa (DFC). Ajustes positivos = caixa favorecido
-            (recebeu/pagou menos do que competiu no período); negativos = caixa desfavorecido.
+            Lucro Líquido (DRE) + ajuste de receita − ajuste de despesa + outros ajustes = Saldo de Caixa Operacional
+            (DFC). Os ajustes de prazo cobrem só o grupo Operacional; &quot;Outros ajustes&quot; fecha a ponte com tudo
+            que fica de fora dele (receitas/despesas financeiras, não operacionais, tributos sobre o lucro) mais
+            qualquer resíduo de classificação. Investimentos e Financiamento (empréstimos, aportes, amortização de
+            dívida) ficam fora dos dois lados, propositalmente — não têm correspondente na DRE.
           </p>
         </div>
       )}
@@ -476,7 +498,14 @@ export default function DreXDfcPage() {
                   corFundo: 'bg-green-50',
                 })}
                 {linhasDespesas.map(([codigo, valores]) =>
-                  renderizarLinha(`${codigo} ${nomesSubgrupos[codigo] || ''}`, valores.competencia, valores.caixa)
+                  codigo === 'NAO_CLASSIFICADO'
+                    ? renderizarLinha(
+                        'SEM CLASSIFICAÇÃO NA DRE (fica fora do Resultado Competência)',
+                        valores.competencia,
+                        valores.caixa,
+                        { corFundo: 'bg-amber-50' }
+                      )
+                    : renderizarLinha(`${codigo} ${nomesSubgrupos[codigo] || ''}`, valores.competencia, valores.caixa)
                 )}
                 {renderizarLinha('TOTAL DESPESAS OPERACIONAIS', dados.grupoOP.competencia, dados.grupoOP.caixa, {
                   bold: true,

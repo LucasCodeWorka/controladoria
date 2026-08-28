@@ -2350,7 +2350,23 @@ def _calcular_dre_x_dfc_operacional(dataInicio: str, dataFim: str, filtro: str):
                 if cd and conta_dfc:
                     classificacoes_dfc_db[cd] = conta_dfc
         except Exception as e:
-            print(f"[DRE-X-DFC] Aviso: nao foi possivel carregar classificacoes: {e}")
+            print(f"[DRE-X-DFC] Aviso: nao foi possivel carregar classificacoes DFC: {e}")
+
+        # Classificacao REAL da DRE - usada so pra saber se a despesa existe
+        # de verdade na DRE (senao ela nunca aparece na Lucro Liquido da DRE,
+        # so fica pendurada em NAO_CLASSIFICADO e some dos totais). Sem isso,
+        # o "Resultado Competencia" contaria despesa que a DRE nunca contou.
+        classificacoes_dre_db = {}
+        try:
+            rows_dre = execute_query("SELECT cd_despesaitem, ds_despesaitem, conta_dre FROM classificacao_despesas_dre", ())
+            for row in rows_dre or []:
+                cd = row.get('cd_despesaitem')
+                conta_dre = row.get('conta_dre', '')
+                if cd and conta_dre:
+                    codigo = conta_dre.split(' ')[0] if ' ' in conta_dre else conta_dre
+                    classificacoes_dre_db[cd] = codigo
+        except Exception as e:
+            print(f"[DRE-X-DFC] Aviso: nao foi possivel carregar classificacoes DRE: {e}")
 
         # =====================================================================
         # DESPESAS: uma unica consulta, bucketizada por dt_emissao (DRE) e
@@ -2366,8 +2382,9 @@ def _calcular_dre_x_dfc_operacional(dataInicio: str, dataFim: str, filtro: str):
             destino[subgrupo]['total'] += valor
 
         query_despesas = f"""
-            SELECT d.cd_despesaitem, d.dt_emissao, d.dt_liq, ABS(d.vl_rateio) as valor
+            SELECT d.cd_despesaitem, i.ds_despesaitem as descricao_despesa, d.dt_emissao, d.dt_liq, ABS(d.vl_rateio) as valor
             FROM vr_fcp_despduplicatai d
+            JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
             WHERE d.tp_situacao = 'N'
               AND d.cd_ccusto IN ({ccusto_placeholders})
               AND d.cd_ccusto NOT IN ({",".join(["%s"] * len(CCUSTOS_EXCLUIDOS_FABRICA))})
@@ -2386,6 +2403,7 @@ def _calcular_dre_x_dfc_operacional(dataInicio: str, dataFim: str, filtro: str):
 
         for d in despesas:
             cd_despesaitem = d['cd_despesaitem']
+            descricao_despesa = d.get('descricao_despesa')
             subgrupo = _classificar_subgrupo_dfc(cd_despesaitem, classificacoes_dfc_db)
             valor = -abs(float(d['valor'] or 0))
 
@@ -2398,11 +2416,19 @@ def _calcular_dre_x_dfc_operacional(dataInicio: str, dataFim: str, filtro: str):
             # de OP.01 e preenchida a parte, depois deste loop - aqui so
             # populamos o lado caixa pra esse subgrupo.
             if subgrupo != 'OP.01':
+                # A despesa so entra na competencia se REALMENTE existir na
+                # classificacao da DRE - senao ela nunca aparece no Lucro
+                # Liquido oficial da DRE (fica presa em NAO_CLASSIFICADO e
+                # some dos totais, ver _somar_hierarquia). Sem esse cheque,
+                # o Resultado Competencia contava despesa que a DRE nunca
+                # contou (ja achamos R$26,5 milhoes so em 2025).
+                conta_dre_real = _classificar_conta_dre(cd_despesaitem, descricao_despesa, classificacoes_dre_db)
+                subgrupo_competencia = subgrupo if conta_dre_real not in ('NAO_CLASSIFICADO', 'EXCLUIDO') else 'NAO_CLASSIFICADO'
                 dt_emissao = d.get('dt_emissao')
                 if dt_emissao:
                     periodo = dt_emissao.strftime('%Y-%m')
                     if periodo in periodos:
-                        _add(competencia_despesa, subgrupo, periodo, valor)
+                        _add(competencia_despesa, subgrupo_competencia, periodo, valor)
 
             # Lado caixa usa a base "sem antecipacao": juros e recompra de
             # titulos sao o custo direto de antecipar recebiveis - como o
@@ -2682,22 +2708,55 @@ def _calcular_dre_x_dfc_operacional(dataInicio: str, dataFim: str, filtro: str):
                     receita_caixa['total'] += valor
 
         # =====================================================================
-        # RESUMO EXECUTIVO (ponte): Resultado Operacional (DRE) -> ajustes de
-        # descasamento de prazo -> Fluxo de Caixa Operacional (DFC).
-        # =====================================================================
-        resultado_competencia = _init_valores_periodo(periodos)
+        # RESUMO EXECUTIVO (ponte): Resultado (DRE) -> ajustes -> Caixa (DFC).
+        #
+        # O "Resultado Competencia" e o "Resultado Caixa" do resumo tem que
+        # ser EXATAMENTE o mesmo numero que aparece nas telas separadas da
+        # DRE e do DFC - senao o usuario ve um numero diferente do que ja
+        # conhece e desconfia (com razao) do comparativo. Por isso, em vez
+        # de montar esses dois totais a partir da bucketizacao de despesas
+        # feita acima (que so cobre o grupo Operacional e pode divergir do
+        # Lucro Liquido real - ele inclui Receitas Financeiras, Receitas Nao
+        # Operacionais e Despesas Tributarias que essa bucketizacao nao
+        # cobre), eles vem DIRETO das mesmas funcoes que alimentam as telas
+        # oficiais: _calcular_valores_unificada (DRE Analitica, Lucro
+        # Liquido = conta '14') e _calcular_valores_dfc com sem_antecipacao
+        # (aba "Mensal - Sem Antecipacao" do DFC, card "Saldo de Caixa (apos
+        # Operacional)" = REC + OP + NAO_CLASSIFICADO). NAO e o 'SALDO' geral
+        # dessa mesma tela - esse inclui INVESTIMENTOS e FINANCIAMENTO
+        # (emprestimo, aporte, amortizacao de divida), que nao tem
+        # correspondente na DRE e nao faz parte do escopo "DFC Operacional"
+        # deste comparativo.
+        dre_real = _calcular_valores_unificada(dataInicio, dataFim, filtro, campo_data_despesa='dt_emissao')
+        resultado_competencia = dre_real['valores'].get('14', _init_valores_periodo(periodos))
+
+        dfc_real = _calcular_valores_dfc(dataInicio, dataFim, filtro, sem_antecipacao=True)
+        dfc_rec = dfc_real['valores'].get('REC', _init_valores_periodo(periodos))
+        dfc_op = dfc_real['valores'].get('OP', _init_valores_periodo(periodos))
+        dfc_nao_classificado = dfc_real['valores'].get('NAO_CLASSIFICADO', _init_valores_periodo(periodos))
         resultado_caixa = _init_valores_periodo(periodos)
+        for p in periodos + ['total']:
+            resultado_caixa[p] = dfc_rec[p] + dfc_op[p] + dfc_nao_classificado[p]
+
+        # Ajuste de descasamento de prazo (receita/despesa), so do recorte
+        # Operacional - continua util pro detalhamento por subgrupo abaixo.
         ajuste_despesa = _init_valores_periodo(periodos)
         ajuste_receita = _init_valores_periodo(periodos)
         for p in periodos + ['total']:
-            resultado_competencia[p] = receita_competencia[p] + op_competencia[p]
-            resultado_caixa[p] = receita_caixa[p] + op_caixa[p]
             # Despesa e negativa: o que foi incorrido (competencia) menos o
             # que foi pago (caixa) - positivo = pagou menos do que competiu
             # esse periodo (sobrou caixa), negativo = pagou mais do que
             # competiu (pagou coisa de outros periodos).
             ajuste_despesa[p] = op_competencia[p] - op_caixa[p]
             ajuste_receita[p] = receita_caixa[p] - receita_competencia[p]
+
+        # Ajuste "outros": tudo que fica fora do recorte Operacional (juros e
+        # receitas financeiras, receitas nao operacionais, tributos sobre o
+        # lucro) mais qualquer diferenca residual de classificacao - e o que
+        # falta pra ponte fechar exatamente com os totais reais da DRE/DFC.
+        ajuste_outros = _init_valores_periodo(periodos)
+        for p in periodos + ['total']:
+            ajuste_outros[p] = (resultado_caixa[p] - resultado_competencia[p]) - (ajuste_receita[p] - ajuste_despesa[p])
 
         periodos_response = [
             {"key": p, "label": f"{p.split('-')[1]}/{p.split('-')[0][2:]}"}
@@ -2712,6 +2771,18 @@ def _calcular_dre_x_dfc_operacional(dataInicio: str, dataFim: str, filtro: str):
                 continue
             despesas_resp[scodigo] = {"competencia": comp, "caixa": cai}
 
+        # Linha informativa: despesa que tem classificacao no DFC (por isso
+        # entra normal no lado caixa, dentro do subgrupo dela) mas NAO
+        # existe na classificacao da DRE - fica de fora do Resultado
+        # Competencia (igual a DRE de verdade faz), mas aparece aqui pra
+        # mostrar o tamanho do buraco de classificacao.
+        nao_classificado_comp = competencia_despesa.get('NAO_CLASSIFICADO')
+        if nao_classificado_comp and nao_classificado_comp['total'] != 0:
+            despesas_resp['NAO_CLASSIFICADO'] = {
+                "competencia": nao_classificado_comp,
+                "caixa": caixa_despesa.get('NAO_CLASSIFICADO', _init_valores_periodo(periodos)),
+            }
+
         return {
             "periodos": periodos_response,
             "despesas": despesas_resp,
@@ -2722,6 +2793,7 @@ def _calcular_dre_x_dfc_operacional(dataInicio: str, dataFim: str, filtro: str):
                 "resultadoCaixa": resultado_caixa,
                 "ajusteDespesa": ajuste_despesa,
                 "ajusteReceita": ajuste_receita,
+                "ajusteOutros": ajuste_outros,
             },
             "metadata": {
                 "filtro": filtro,
