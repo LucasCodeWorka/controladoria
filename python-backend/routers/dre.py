@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, Query
 from typing import Optional
 from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor
 from database import execute_query, execute_insert
 import services
 import unicodedata
@@ -2293,6 +2294,23 @@ def _calcular_dre_x_dfc_operacional(dataInicio: str, dataFim: str, filtro: str):
     try:
         print(f"[INFO] Buscando DRE x DFC Operacional: {dataInicio} ate {dataFim}, filtro={filtro}")
 
+        # Os totais "oficiais" (resultado_competencia/resultado_caixa, usados
+        # no resumo executivo mais abaixo) vem de duas funcoes pesadas e
+        # totalmente independentes do resto deste calculo (elas resolvem seu
+        # proprio filtro/ccustos internamente a partir so de dataInicio/
+        # dataFim/filtro). Disparadas aqui em threads, elas rodam em paralelo
+        # com o bloco de bucketing logo abaixo em vez de depois dele -
+        # sem isso, um periodo de 1 ano soma o tempo das 3 (DRE completa +
+        # DFC completa + bucketing detalhado) e passa facil dos 5 minutos de
+        # timeout do frontend.
+        executor = ThreadPoolExecutor(max_workers=2)
+        future_dre_real = executor.submit(
+            _calcular_valores_unificada, dataInicio, dataFim, filtro, campo_data_despesa='dt_emissao'
+        )
+        future_dfc_real = executor.submit(
+            _calcular_valores_dfc, dataInicio, dataFim, filtro, sem_antecipacao=True
+        )
+
         if filtro == "consolidado":
             ccustos = list(set(CCUSTOS_FABRICA + list(CCUSTOS_LOJAS.keys()) + CCUSTOS_ECOMMERCE + [515]))
             nome_filtro = "CONSOLIDADO"
@@ -2727,10 +2745,14 @@ def _calcular_dre_x_dfc_operacional(dataInicio: str, dataFim: str, filtro: str):
         # (emprestimo, aporte, amortizacao de divida), que nao tem
         # correspondente na DRE e nao faz parte do escopo "DFC Operacional"
         # deste comparativo.
-        dre_real = _calcular_valores_unificada(dataInicio, dataFim, filtro, campo_data_despesa='dt_emissao')
-        resultado_competencia = dre_real['valores'].get('14', _init_valores_periodo(periodos))
+        # Ja disparadas em thread la no inicio da funcao - so espera o
+        # resultado aqui (ate esse ponto o bloco de bucketing acima ja
+        # rodou, entao a espera e curta ou nenhuma).
+        dre_real = future_dre_real.result()
+        dfc_real = future_dfc_real.result()
+        executor.shutdown(wait=False)
 
-        dfc_real = _calcular_valores_dfc(dataInicio, dataFim, filtro, sem_antecipacao=True)
+        resultado_competencia = dre_real['valores'].get('14', _init_valores_periodo(periodos))
         dfc_rec = dfc_real['valores'].get('REC', _init_valores_periodo(periodos))
         dfc_op = dfc_real['valores'].get('OP', _init_valores_periodo(periodos))
         dfc_nao_classificado = dfc_real['valores'].get('NAO_CLASSIFICADO', _init_valores_periodo(periodos))
@@ -2805,8 +2827,12 @@ def _calcular_dre_x_dfc_operacional(dataInicio: str, dataFim: str, filtro: str):
             }
         }
     except HTTPException:
+        if 'executor' in locals():
+            executor.shutdown(wait=False, cancel_futures=True)
         raise
     except Exception as e:
+        if 'executor' in locals():
+            executor.shutdown(wait=False, cancel_futures=True)
         print(f"[ERROR] Erro ao processar DRE x DFC Operacional: {e}")
         import traceback
         traceback.print_exc()

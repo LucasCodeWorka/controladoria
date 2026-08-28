@@ -118,8 +118,12 @@ export default function DreXDfcPage() {
     setLoading(true);
     setStatusCarregamento(null);
     try {
+      // Um ano inteiro em "consolidado" roda duas passadas completas (DRE +
+      // DFC) em paralelo com o detalhamento por subgrupo - mesmo assim pode
+      // passar de alguns minutos. 900s de folga pra nao abortar uma consulta
+      // que so esta demorando, e nao travada.
       const controller = new AbortController();
-      const timeout = window.setTimeout(() => controller.abort(), 300000);
+      const timeout = window.setTimeout(() => controller.abort(), 900000);
       const params = new URLSearchParams({ dataInicio, dataFim, filtro });
       const response = await fetch(`/api/dre-dfc/comparativo-operacional?${params.toString()}`, {
         signal: controller.signal,
@@ -138,7 +142,12 @@ export default function DreXDfcPage() {
       setConsultaExecutada(true);
     } catch (error) {
       console.error('Erro ao buscar comparativo DRE x DFC:', error);
-      setStatusCarregamento('Erro ao buscar o comparativo. Tente novamente.');
+      const abortou = error instanceof DOMException && error.name === 'AbortError';
+      setStatusCarregamento(
+        abortou
+          ? 'A consulta demorou demais e foi cancelada (período muito longo). Tente um intervalo menor ou tente novamente.'
+          : 'Erro ao buscar o comparativo. Tente novamente.'
+      );
     } finally {
       setLoading(false);
     }
