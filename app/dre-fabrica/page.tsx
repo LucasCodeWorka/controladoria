@@ -1162,12 +1162,12 @@ export default function DREPage() {
             <React.Fragment key={periodo.key}>
               {compararAnoAnterior && (
                 <>
-                  <td className={`px-2 py-2 border-b border-gray-200 text-right text-sm bg-gray-100 ${
+                  <td className={`px-2 py-2 border-b border-gray-200 text-right text-sm ${selecionada ? 'bg-yellow-200' : 'bg-gray-100'} ${
                     valorAnoAnteriorPeriodo < 0 ? 'text-red-500' : 'text-gray-600'
                   }`}>
                     {formatarValor(valorAnoAnteriorPeriodo)}
                   </td>
-                  <td className={`px-2 py-2 border-b border-gray-200 text-right text-xs bg-gray-100 ${
+                  <td className={`px-2 py-2 border-b border-gray-200 text-right text-xs ${selecionada ? 'bg-yellow-200' : 'bg-gray-100'} ${
                     valorAnoAnteriorPeriodo < 0 ? 'text-red-400' : 'text-gray-400'
                   }`}>
                     {calcularAVAnoAnterior(valorAnoAnteriorPeriodo, periodoAnoAnteriorKey)}
@@ -1230,7 +1230,7 @@ export default function DREPage() {
                   )}
                 </span>
               </td>
-              <td className={`px-2 py-2 border-b border-gray-200 text-right text-xs bg-gray-50 ${
+              <td className={`px-2 py-2 border-b border-gray-200 text-right text-xs ${selecionada ? 'bg-yellow-200' : 'bg-gray-50'} ${
                 valorPeriodo < 0 ? 'text-red-500' : 'text-gray-500'
               }`}>
                 {calcularAVPeriodo(valorPeriodo, periodo.key)}
