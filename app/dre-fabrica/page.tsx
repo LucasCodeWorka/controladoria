@@ -290,6 +290,10 @@ export default function DREPage() {
   const [contasExpandidas, setContasExpandidas] = useState<Set<string>>(
     new Set(['01', '02', '04', '06', '08', '10', '13', '16', '17', '18', '19'])
   );
+  // Linha da DRE clicada pelo usuario pra marcar "estou analisando essa" -
+  // so destaque visual (amarelo), nao afeta nenhum calculo. Uma por vez;
+  // clicar de novo na mesma linha desmarca.
+  const [linhaSelecionadaDRE, setLinhaSelecionadaDRE] = useState<string | null>(null);
   const [mostrarExtras, setMostrarExtras] = useState(false); // Controla visibilidade de 15, 16, 17, 18, 19
   const [despesaFiltroSelecionada, setDespesaFiltroSelecionada] = useState('');
   const [despesaBusca, setDespesaBusca] = useState('');
@@ -1114,13 +1118,24 @@ export default function DREPage() {
       !isResultado &&
       ['04', '06', '08', '10', '13'].some((prefixo) => conta.codigo.startsWith(prefixo));
 
+    const selecionada = linhaSelecionadaDRE === conta.codigo;
+
     linhas.push(
-      <tr key={conta.codigo} className={`${corLinha} hover:bg-gray-100 transition-colors`}>
+      <tr
+        key={conta.codigo}
+        onClick={() => setLinhaSelecionadaDRE(selecionada ? null : conta.codigo)}
+        className={`cursor-pointer transition-colors ${
+          selecionada ? 'bg-yellow-200 ring-2 ring-inset ring-yellow-400' : `${corLinha} hover:bg-gray-100`
+        }`}
+      >
         <td className="px-4 py-2 border-b border-gray-200 sticky left-0 bg-inherit z-10">
           <div
             className="flex items-center gap-2 cursor-pointer"
             style={{ paddingLeft: `${nivel * 16}px` }}
-            onClick={() => temFilhos && toggleExpansao(conta.codigo)}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (temFilhos) toggleExpansao(conta.codigo);
+            }}
           >
             {temFilhos ? (
               expandida ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />
@@ -1201,7 +1216,10 @@ export default function DREPage() {
                   )}
                   {podeClicar ? (
                     <button
-                      onClick={() => abrirDuplicatas(conta.codigo, nomesCustomizados[conta.codigo] ?? conta.nome, periodo.key, periodo.label)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        abrirDuplicatas(conta.codigo, nomesCustomizados[conta.codigo] ?? conta.nome, periodo.key, periodo.label);
+                      }}
                       className="hover:underline hover:text-blue-600 cursor-pointer"
                       title="Clique para ver duplicatas"
                     >
@@ -1512,6 +1530,7 @@ export default function DREPage() {
     setTotaisSinteticosAno({});
     setDadosPorEmpresa(null);
     setDadosPorCCusto(null);
+    setLinhaSelecionadaDRE(null);
   }, [filtro, tipoVisao, dataInicio, dataFim]);
 
   const receitaLiquida = dadosDRE.find((conta) => conta.codigo === '03')?.total || 0;
