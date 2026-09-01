@@ -4423,6 +4423,7 @@ def get_dre_unificada_sintetico(
         totais = {
             "receitaLiquida": 0,
             "cmv": 0,
+            "cmvCalculado": 0,
             "custosFixos": 0,
             "margemContribuicao": 0,
             "lucroOperacionalBruto": 0,
@@ -4656,6 +4657,7 @@ def get_dre_unificada_sintetico(
 
             totais["receitaLiquida"] += receita_liquida
             totais["cmv"] += custos_variaveis
+            totais["cmvCalculado"] += cmv
             totais["custosFixos"] += custos_fixos
             totais["margemContribuicao"] += margem_contribuicao
             totais["lucroOperacionalBruto"] += lucro_operacional_bruto

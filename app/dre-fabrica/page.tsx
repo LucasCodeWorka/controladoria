@@ -116,6 +116,7 @@ interface ResumoLoja {
   devolucoes: number;
   receitaLiquida: number;
   cmv: number;
+  cmvCalculado: number;
   margemContribuicao: number;
   margemPct: number;
   despesasOperacionais: number;
@@ -1728,9 +1729,14 @@ export default function DREPage() {
       case 'impostosDiretosPct':
         return pctCampo('despesasTributarias');
       case 'cmv':
-        return valorCampo('cmv');
+        // So o Custo dos Produtos Vendidos (04.02 - CMV sintetico casado com a
+        // venda), nao o grupo 04 inteiro (que tambem inclui 04.01 Custos
+        // Impostos Diretos e 04.03 Frete Compras). O campo 'cmv' do backend
+        // tem o grupo inteiro (usado no calculo de Margem de Contribuicao) -
+        // 'cmvCalculado' e o valor isolado do 04.02.
+        return valorCampo('cmvCalculado');
       case 'cmvPct':
-        return pctCampo('cmv');
+        return pctCampo('cmvCalculado');
       case 'lucroOperBruto':
         return valorCampo('margemContribuicao');
       case 'lucroOperBrutoPct':
