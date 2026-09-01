@@ -349,6 +349,11 @@ export default function DREPage() {
   const [larguraColunaContas, setLarguraColunaContas] = useState(350);
   const [larguraColunaValor, setLarguraColunaValor] = useState(85);
   const [larguraColunaAV, setLarguraColunaAV] = useState(55);
+  // Ordenacao clicavel da tabela Visao Sintetica - Comparativo por Centro de
+  // Custo. 'loja' ordena pelo nome; qualquer outra chave e uma coluna de
+  // colunasSinteticas (valor ou %). Compartilhada entre a tabela do periodo
+  // atual e a do ano anterior, pra elas ficarem sempre na mesma ordem.
+  const [ordenacaoSintetica, setOrdenacaoSintetica] = useState<{ chave: string; direcao: 'asc' | 'desc' } | null>(null);
 
   // Carregar opcoes de filtro
   useEffect(() => {
@@ -1794,8 +1799,45 @@ export default function DREPage() {
     return nomesCurtos[normalizado] || normalizado.replace(/\s+-\s+[A-Z]{2}$/, '');
   }
 
+  function ordenarLinhasSintetica(dados: ResumoLoja[]): ResumoLoja[] {
+    if (!ordenacaoSintetica) return dados;
+    const { chave, direcao } = ordenacaoSintetica;
+    const sinal = direcao === 'asc' ? 1 : -1;
+    const copia = [...dados];
+    if (chave === 'loja') {
+      copia.sort((a, b) => normalizarNomeLojaSintetica(a.nome).localeCompare(normalizarNomeLojaSintetica(b.nome)) * sinal);
+      return copia;
+    }
+    const coluna = colunasSinteticas.find((c) => c.key === chave);
+    if (!coluna) return dados;
+    copia.sort((a, b) => {
+      const va = calcularColunaSintetica(a, coluna);
+      const vb = calcularColunaSintetica(b, coluna);
+      if (va === null && vb === null) return 0;
+      if (va === null) return 1;
+      if (vb === null) return -1;
+      return (va - vb) * sinal;
+    });
+    return copia;
+  }
+
+  function toggleOrdenacaoSintetica(chave: string) {
+    setOrdenacaoSintetica((atual) =>
+      atual?.chave === chave ? { chave, direcao: atual.direcao === 'desc' ? 'asc' : 'desc' } : { chave, direcao: 'desc' }
+    );
+  }
+
+  function renderSetaOrdenacaoSintetica(chave: string) {
+    if (ordenacaoSintetica?.chave !== chave) return null;
+    return ordenacaoSintetica.direcao === 'asc' ? (
+      <ArrowUp className="w-3 h-3 inline-block" strokeWidth={2.5} />
+    ) : (
+      <ArrowDown className="w-3 h-3 inline-block" strokeWidth={2.5} />
+    );
+  }
+
   function filtrarLinhasVisiveisSintetica(dados: ResumoLoja[]): ResumoLoja[] {
-    return dados.filter((item) => item.codigo !== 'outros');
+    return ordenarLinhasSintetica(dados.filter((item) => item.codigo !== 'outros'));
   }
 
   function renderTabelaSintetica(dados: ResumoLoja[], totais: Record<string, number>, prefixo: string) {
@@ -1822,13 +1864,22 @@ export default function DREPage() {
           </colgroup>
           <thead>
             <tr className="bg-gray-100">
-              <th className="px-4 py-3 text-left font-semibold border-b sticky left-0 bg-gray-100 z-10" style={{ width: `${larguraColunaContas}px`, minWidth: `${larguraColunaContas}px` }}>LOJA</th>
+              <th
+                className="px-4 py-3 text-left font-semibold border-b sticky left-0 bg-gray-100 z-10 cursor-pointer select-none hover:bg-gray-200"
+                style={{ width: `${larguraColunaContas}px`, minWidth: `${larguraColunaContas}px` }}
+                onClick={() => toggleOrdenacaoSintetica('loja')}
+              >
+                <span className="inline-flex items-center gap-1">LOJA {renderSetaOrdenacaoSintetica('loja')}</span>
+              </th>
               {colunasSinteticas.map((coluna, index) => (
                 <th
                   key={`${prefixo}-${coluna.key}-${index}`}
-                  className={`px-3 py-3 text-right font-semibold border-b ${coluna.tipo === 'av' ? 'text-gray-500' : ''}`}
+                  onClick={() => toggleOrdenacaoSintetica(coluna.key)}
+                  className={`px-3 py-3 text-right font-semibold border-b cursor-pointer select-none hover:bg-gray-200 ${coluna.tipo === 'av' ? 'text-gray-500' : ''}`}
                 >
-                  {coluna.label}
+                  <span className="inline-flex items-center gap-1 justify-end">
+                    {coluna.label} {renderSetaOrdenacaoSintetica(coluna.key)}
+                  </span>
                 </th>
               ))}
             </tr>
@@ -2707,13 +2758,22 @@ export default function DREPage() {
               </colgroup>
               <thead>
                 <tr className="bg-gray-100">
-                  <th className="px-4 py-3 text-left font-semibold border-b sticky left-0 bg-gray-100 z-10" style={{ width: `${larguraColunaContas}px`, minWidth: `${larguraColunaContas}px` }}>LOJA</th>
+                  <th
+                    className="px-4 py-3 text-left font-semibold border-b sticky left-0 bg-gray-100 z-10 cursor-pointer select-none hover:bg-gray-200"
+                    style={{ width: `${larguraColunaContas}px`, minWidth: `${larguraColunaContas}px` }}
+                    onClick={() => toggleOrdenacaoSintetica('loja')}
+                  >
+                    <span className="inline-flex items-center gap-1">LOJA {renderSetaOrdenacaoSintetica('loja')}</span>
+                  </th>
                   {colunasSinteticas.map((coluna, index) => (
                     <th
                       key={`${coluna.key}-${index}`}
-                      className={`px-3 py-3 text-right font-semibold border-b ${coluna.tipo === 'av' ? 'text-gray-500' : ''}`}
+                      onClick={() => toggleOrdenacaoSintetica(coluna.key)}
+                      className={`px-3 py-3 text-right font-semibold border-b cursor-pointer select-none hover:bg-gray-200 ${coluna.tipo === 'av' ? 'text-gray-500' : ''}`}
                     >
-                      {coluna.label}
+                      <span className="inline-flex items-center gap-1 justify-end">
+                        {coluna.label} {renderSetaOrdenacaoSintetica(coluna.key)}
+                      </span>
                     </th>
                   ))}
                 </tr>
