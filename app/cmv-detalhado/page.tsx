@@ -9,6 +9,16 @@ import {
   Loader2,
   RefreshCw,
 } from 'lucide-react';
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  LabelList,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
 
 import { formatarValor } from '../utils/formatters';
 
@@ -103,21 +113,25 @@ interface BarraDado {
   tooltip?: string;
 }
 
-// Degrau "redondo" de eixo (1/2/5/10 x uma potencia de 10) pra ter ticks tipo
-// 0/20/40/60/80%, nunca fracionados feios.
-function degrauRedondo(valorBruto: number): number {
-  if (valorBruto <= 0) return 1;
-  const magnitude = 10 ** Math.floor(Math.log10(valorBruto));
-  const residual = valorBruto / magnitude;
-  const residualRedondo = residual > 5 ? 10 : residual > 2 ? 5 : residual > 1 ? 2 : 1;
-  return residualRedondo * magnitude;
+interface PayloadTooltipBarra {
+  active?: boolean;
+  payload?: { payload: BarraDado }[];
 }
 
-// Grafico de barras responsivo: viewBox fixo + width 100% faz o SVG escalar
-// pra caber no container inteiro, sem nunca precisar de scroll horizontal -
-// a largura de cada barra e calculada a partir da quantidade de itens, nunca
-// de um pixel fixo. Tem eixo Y com grade (0/20/40...%) e rotulo sempre acima
-// da barra, com o nome/mes rotacionado embaixo so quando o espaco aperta.
+function TooltipBarra({ active, payload }: PayloadTooltipBarra) {
+  if (!active || !payload || payload.length === 0) return null;
+  const dado = payload[0].payload;
+  return (
+    <div className="bg-gray-900 text-white text-xs rounded px-2.5 py-1.5 shadow-lg max-w-xs">
+      {dado.tooltip || `${dado.label}: ${formatarPct(dado.valor)}`}
+    </div>
+  );
+}
+
+// Grafico de barras via Recharts (responsivo por padrao, ja com grade,
+// eixos e proporcao de barra/espacamento bem resolvidas - trocado de um SVG
+// desenhado a mao, que nunca ficava com a leveza de um grafico de dashboard
+// de verdade).
 function GraficoBarrasPercentual({
   dados,
   ariaLabel,
@@ -130,103 +144,51 @@ function GraficoBarrasPercentual({
   if (dados.length === 0) {
     return <p className="text-sm text-gray-400 py-8 text-center">Sem dado no período pra calcular o %.</p>;
   }
-  const margemEsquerda = 52;
-  const margemDireita = 12;
-  const margemTopo = 26;
-  const gap = 16;
-  const alturaMax = 190;
-  const larguraViewBox = 1000;
-  const larguraUtil = larguraViewBox - margemEsquerda - margemDireita;
-  const larguraMaxBarra = 72; // barra nunca fica gigante quando ha poucas categorias (ex: 1 mes)
-  const larguraBarra = Math.min(Math.max((larguraUtil - gap * (dados.length + 1)) / dados.length, 8), larguraMaxBarra);
-  const larguraGrupo = dados.length * larguraBarra + (dados.length + 1) * gap;
-  const offsetX = margemEsquerda + Math.max((larguraUtil - larguraGrupo) / 2, 0);
-
-  const maxValorReal = Math.max(...dados.map((d) => d.valor), 1);
-  const passo = degrauRedondo((maxValorReal * 1.15) / 4);
-  const qtdPassos = Math.ceil((maxValorReal * 1.15) / passo);
-  const maxEixo = passo * qtdPassos;
-  const ticks = Array.from({ length: qtdPassos + 1 }, (_, i) => passo * i);
-
-  const rotacionar = larguraBarra < 60;
-  const fonteRotulo = larguraBarra < 34 ? 9 : 12;
-  const fonteLabel = larguraBarra < 34 ? 8 : 10;
-  const alturaSvg = margemTopo + alturaMax + (rotacionar ? 90 : 60);
-  const yBase = margemTopo + alturaMax;
-  const yEixoX = yBase + 14;
   const temAviso = dados.some((d) => d.aviso);
-  const escalaY = (valor: number) => yBase - (valor / maxEixo) * alturaMax;
+  const muitasCategorias = dados.length > 8;
+  const dadosComLabel = dados.map((d) => ({ ...d, labelEixo: `${d.label}${d.aviso ? ' *' : ''}` }));
 
   return (
-    <div>
-      {/* height fixo (em px, nao so via viewBox) - sem isso o SVG cresce
-          junto com a largura do container (aspect ratio do viewBox), o que
-          deixava o grafico enorme em telas largas. width 100% continua
-          fluido; height fica sempre o mesmo, so as barras encolhem/esticam
-          na horizontal (com um teto de largura pra nao virar um bloco unico
-          quando ha so 1-2 categorias). */}
-      <svg
-        width="100%"
-        height={alturaSvg}
-        viewBox={`0 0 ${larguraViewBox} ${alturaSvg}`}
-        preserveAspectRatio="none"
-        className="font-sans"
-        style={{ maxHeight: alturaSvg }}
-        role="img"
-        aria-label={ariaLabel}
-      >
-        {ticks.map((tick) => {
-          const y = escalaY(tick);
-          return (
-            <g key={tick}>
-              <line
-                x1={margemEsquerda}
-                y1={y}
-                x2={larguraViewBox - margemDireita}
-                y2={y}
-                stroke="#e1e0d9"
-                strokeWidth={1}
-                strokeDasharray={tick === 0 ? undefined : '3,3'}
-              />
-              <text x={margemEsquerda - 8} y={y + 3.5} textAnchor="end" fontSize={10} fill="#898781">
-                {tick.toFixed(0)}%
-              </text>
-            </g>
-          );
-        })}
-        {dados.map((d, i) => {
-          const x = offsetX + gap + i * (larguraBarra + gap);
-          const y = escalaY(d.valor);
-          const h = Math.max(yBase - y, 2);
-          const xCentro = x + larguraBarra / 2;
-          return (
-            <g
-              key={d.chave}
-              onClick={onBarClick ? () => onBarClick(d.chave) : undefined}
-              className={onBarClick ? 'cursor-pointer' : undefined}
-            >
-              {d.tooltip && <title>{d.tooltip}</title>}
-              <text x={xCentro} y={y - 8} textAnchor="middle" fontSize={fonteRotulo} fontWeight={700} fill="#0b0b0b">
-                {formatarPct(d.valor)}
-              </text>
-              <rect x={x} y={yBase - h} width={larguraBarra} height={h} rx={4} fill={COR_BARRA} />
-              <text
-                x={xCentro}
-                y={yEixoX}
-                textAnchor={rotacionar ? 'end' : 'middle'}
-                fontSize={fonteLabel}
-                fill="#52514e"
-                transform={rotacionar ? `rotate(-35 ${xCentro} ${yEixoX})` : undefined}
-              >
-                {d.label}
-                {d.aviso ? ' *' : ''}
-              </text>
-            </g>
-          );
-        })}
-      </svg>
+    <div role="img" aria-label={ariaLabel}>
+      <ResponsiveContainer width="100%" height={muitasCategorias ? 300 : 240}>
+        <BarChart data={dadosComLabel} margin={{ top: 24, right: 8, left: 0, bottom: muitasCategorias ? 56 : 4 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#e1e0d9" vertical={false} />
+          <XAxis
+            dataKey="labelEixo"
+            tick={{ fontSize: 11, fill: '#52514e' }}
+            interval={0}
+            angle={muitasCategorias ? -35 : 0}
+            textAnchor={muitasCategorias ? 'end' : 'middle'}
+            axisLine={{ stroke: '#c3c2b7' }}
+            tickLine={false}
+          />
+          <YAxis
+            tickFormatter={(v: number) => `${v}%`}
+            tick={{ fontSize: 11, fill: '#898781' }}
+            axisLine={false}
+            tickLine={false}
+            width={40}
+          />
+          <Tooltip content={<TooltipBarra />} cursor={{ fill: 'rgba(11,11,11,0.04)' }} />
+          <Bar
+            dataKey="valor"
+            fill={COR_BARRA}
+            radius={[4, 4, 0, 0]}
+            maxBarSize={56}
+            onClick={onBarClick ? (data) => onBarClick((data as unknown as BarraDado).chave) : undefined}
+            cursor={onBarClick ? 'pointer' : undefined}
+          >
+            <LabelList
+              dataKey="valor"
+              position="top"
+              formatter={(v: React.ReactNode) => formatarPct(v as number)}
+              style={{ fontSize: 12, fontWeight: 700, fill: '#0b0b0b' }}
+            />
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
       {temAviso && (
-        <p className="text-[11px] text-amber-600 text-center -mt-2">* ainda faltam meses calcular no detalhe dessa loja</p>
+        <p className="text-[11px] text-amber-600 text-center mt-1">* ainda faltam meses calcular no detalhe dessa loja</p>
       )}
     </div>
   );
