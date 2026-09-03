@@ -123,12 +123,17 @@ function GraficoBarrasPercentual({
   const gap = 16;
   const alturaMax = 110;
   const larguraViewBox = 1000;
-  const larguraBarra = Math.max((larguraViewBox - gap * (dados.length + 1)) / dados.length, 8);
+  const larguraMaxBarra = 72; // barra nunca fica gigante quando ha poucas categorias (ex: 1 mes)
+  const larguraBarra = Math.min(Math.max((larguraViewBox - gap * (dados.length + 1)) / dados.length, 8), larguraMaxBarra);
+  const larguraGrupo = dados.length * larguraBarra + (dados.length + 1) * gap;
+  const offsetX = Math.max((larguraViewBox - larguraGrupo) / 2, 0);
   const maxValor = Math.max(...dados.map((d) => d.valor), 1);
+  const rotacionar = larguraBarra < 60;
   const fonteRotulo = larguraBarra < 34 ? 9 : 12;
   const fonteLabel = larguraBarra < 34 ? 8 : 10;
-  const alturaSvg = alturaMax + 90;
-  const yEixoX = 28 + alturaMax + 14;
+  const alturaSvg = alturaMax + (rotacionar ? 90 : 60);
+  const yBase = 28 + alturaMax;
+  const yEixoX = yBase + 14;
   const temAviso = dados.some((d) => d.aviso);
 
   return (
@@ -137,7 +142,8 @@ function GraficoBarrasPercentual({
           junto com a largura do container (aspect ratio do viewBox), o que
           deixava o grafico enorme em telas largas. width 100% continua
           fluido; height fica sempre o mesmo, so as barras encolhem/esticam
-          na horizontal. */}
+          na horizontal (com um teto de largura pra nao virar um bloco unico
+          quando ha so 1-2 categorias). */}
       <svg
         width="100%"
         height={alturaSvg}
@@ -148,10 +154,11 @@ function GraficoBarrasPercentual({
         role="img"
         aria-label={ariaLabel}
       >
+        <line x1={0} y1={yBase} x2={larguraViewBox} y2={yBase} stroke="#e1e0d9" strokeWidth={1} />
         {dados.map((d, i) => {
-          const x = gap + i * (larguraBarra + gap);
+          const x = offsetX + gap + i * (larguraBarra + gap);
           const h = Math.max((d.valor / maxValor) * alturaMax, 2);
-          const y = 28 + (alturaMax - h);
+          const y = yBase - h;
           const xCentro = x + larguraBarra / 2;
           return (
             <g
@@ -167,10 +174,10 @@ function GraficoBarrasPercentual({
               <text
                 x={xCentro}
                 y={yEixoX}
-                textAnchor="end"
+                textAnchor={rotacionar ? 'end' : 'middle'}
                 fontSize={fonteLabel}
                 fill="#52514e"
-                transform={`rotate(-35 ${xCentro} ${yEixoX})`}
+                transform={rotacionar ? `rotate(-35 ${xCentro} ${yEixoX})` : undefined}
               >
                 {d.label}
                 {d.aviso ? ' *' : ''}
