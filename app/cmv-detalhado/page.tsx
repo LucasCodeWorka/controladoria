@@ -38,6 +38,13 @@ interface Consolidado {
   cmvPercentual: number | null;
 }
 
+interface TotalMes {
+  anoMes: string;
+  valorTotal: number;
+  receita: number;
+  cmvPercentual: number | null;
+}
+
 interface TransacaoCmv {
   nrTransacao: number;
   dtTransacao: string | null;
@@ -71,60 +78,103 @@ function ultimoDiaMesAtual(): string {
   return `${ultimo.getFullYear()}-${String(ultimo.getMonth() + 1).padStart(2, '0')}-${String(ultimo.getDate()).padStart(2, '0')}`;
 }
 
+function labelMes(anoMes: string): string {
+  const [ano, mes] = anoMes.split('-');
+  const nomes = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+  return `${nomes[Number(mes) - 1]}/${ano.slice(2)}`;
+}
+
 function formatarPct(valor: number | null): string {
   if (valor === null) return '-';
-  return `${valor.toFixed(1)}%`;
+  // 2 casas decimais, igual ao %AV da tela da DRE (calcularAV) - sem isso,
+  // 29.97% (Iguatemi/ago) arredondava pra "30%" e parecia diferente do real.
+  return `${valor.toFixed(2)}%`;
 }
 
 function nomeCurto(nome: string): string {
   return nome.length > 12 ? `${nome.slice(0, 11)}…` : nome;
 }
 
-function GraficoCmvPorLoja({ dados }: { dados: TotalEmpresa[] }) {
-  const comDado = dados.filter((d) => d.cmvPercentual !== null);
-  if (comDado.length === 0) {
-    return <p className="text-sm text-gray-400 py-8 text-center">Sem receita no período pra calcular o %.</p>;
+interface BarraDado {
+  chave: string | number;
+  label: string;
+  valor: number;
+  aviso?: boolean;
+  tooltip?: string;
+}
+
+// Grafico de barras responsivo: viewBox fixo + width 100% faz o SVG escalar
+// pra caber no container inteiro, sem nunca precisar de scroll horizontal -
+// a largura de cada barra e calculada a partir da quantidade de itens, nunca
+// de um pixel fixo. Rotula sempre acima da barra (%), com o nome/mes
+// levemente rotacionado embaixo pra caber mais categorias sem se sobrepor.
+function GraficoBarrasPercentual({
+  dados,
+  ariaLabel,
+  onBarClick,
+}: {
+  dados: BarraDado[];
+  ariaLabel: string;
+  onBarClick?: (chave: string | number) => void;
+}) {
+  if (dados.length === 0) {
+    return <p className="text-sm text-gray-400 py-8 text-center">Sem dado no período pra calcular o %.</p>;
   }
-  const larguraBarra = 56;
-  const gap = 28;
-  const alturaMax = 200;
-  const maxValor = Math.max(...comDado.map((d) => d.cmvPercentual || 0), 1);
-  const largura = comDado.length * (larguraBarra + gap) + gap;
-  const alturaSvg = alturaMax + 90;
+  const gap = 16;
+  const alturaMax = 170;
+  const larguraViewBox = 1000;
+  const larguraBarra = Math.max((larguraViewBox - gap * (dados.length + 1)) / dados.length, 8);
+  const maxValor = Math.max(...dados.map((d) => d.valor), 1);
+  const fonteRotulo = larguraBarra < 34 ? 9 : 12;
+  const fonteLabel = larguraBarra < 34 ? 8 : 10;
+  const alturaSvg = alturaMax + 130;
+  const yEixoX = 28 + alturaMax + 14;
+  const temAviso = dados.some((d) => d.aviso);
 
   return (
-    <div className="overflow-x-auto">
-      <svg width={Math.max(largura, 640)} height={alturaSvg} className="font-sans" role="img" aria-label="CMV percentual por loja">
-        {comDado.map((d, i) => {
-          const pct = d.cmvPercentual || 0;
+    <div>
+      <svg
+        width="100%"
+        viewBox={`0 0 ${larguraViewBox} ${alturaSvg}`}
+        preserveAspectRatio="xMidYMid meet"
+        className="font-sans"
+        role="img"
+        aria-label={ariaLabel}
+      >
+        {dados.map((d, i) => {
           const x = gap + i * (larguraBarra + gap);
-          const h = Math.max((pct / maxValor) * alturaMax, 2);
+          const h = Math.max((d.valor / maxValor) * alturaMax, 2);
           const y = 28 + (alturaMax - h);
+          const xCentro = x + larguraBarra / 2;
           return (
-            <g key={d.cdEmpresa}>
-              <title>{`${d.nome}: ${formatarPct(pct)} (CMV ${formatarValor(-Math.abs(d.valorTotal))} / Receita ${formatarValor(d.receita)})`}</title>
-              <text x={x + larguraBarra / 2} y={y - 8} textAnchor="middle" fontSize="12" fontWeight={700} fill="#0b0b0b">
-                {formatarPct(pct)}
+            <g
+              key={d.chave}
+              onClick={onBarClick ? () => onBarClick(d.chave) : undefined}
+              className={onBarClick ? 'cursor-pointer' : undefined}
+            >
+              {d.tooltip && <title>{d.tooltip}</title>}
+              <text x={xCentro} y={y - 8} textAnchor="middle" fontSize={fonteRotulo} fontWeight={700} fill="#0b0b0b">
+                {formatarPct(d.valor)}
               </text>
               <rect x={x} y={y} width={larguraBarra} height={h} rx={4} fill={COR_BARRA} />
               <text
-                x={x + larguraBarra / 2}
-                y={28 + alturaMax + 18}
-                textAnchor="middle"
-                fontSize="10"
+                x={xCentro}
+                y={yEixoX}
+                textAnchor="end"
+                fontSize={fonteLabel}
                 fill="#52514e"
+                transform={`rotate(-35 ${xCentro} ${yEixoX})`}
               >
-                {nomeCurto(d.nome)}
+                {d.label}
+                {d.aviso ? ' *' : ''}
               </text>
-              {!d.detalhado && (
-                <text x={x + larguraBarra / 2} y={28 + alturaMax + 32} textAnchor="middle" fontSize="9" fill="#eda100">
-                  parcial
-                </text>
-              )}
             </g>
           );
         })}
       </svg>
+      {temAviso && (
+        <p className="text-[11px] text-amber-600 text-center -mt-2">* ainda faltam meses calcular no detalhe dessa loja</p>
+      )}
     </div>
   );
 }
@@ -164,6 +214,7 @@ export default function CmvDetalhadoPage() {
   const [consultaExecutada, setConsultaExecutada] = useState(false);
   const [totais, setTotais] = useState<TotalEmpresa[]>([]);
   const [consolidado, setConsolidado] = useState<Consolidado | null>(null);
+  const [porMes, setPorMes] = useState<TotalMes[]>([]);
 
   const [empresaDrill, setEmpresaDrill] = useState<TotalEmpresa | null>(null);
   const [transacoes, setTransacoes] = useState<TransacaoCmv[]>([]);
@@ -209,6 +260,7 @@ export default function CmvDetalhadoPage() {
       }
       setTotais(data.totais || []);
       setConsolidado(data.consolidado || null);
+      setPorMes(data.porMes || []);
       setConsultaExecutada(true);
     } catch (error) {
       console.error('Erro ao buscar resumo do CMV detalhado:', error);
@@ -217,11 +269,6 @@ export default function CmvDetalhadoPage() {
       setLoading(false);
     }
   }
-
-  useEffect(() => {
-    if (empresasDisponiveis.length > 0) buscarResumo();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [empresasDisponiveis.length]);
 
   function toggleEmpresaFiltro(cd: number) {
     setEmpresasSelecionadas((atual) => {
@@ -377,22 +424,54 @@ export default function CmvDetalhadoPage() {
         </div>
       )}
 
+      {!loading && !consultaExecutada && (
+        <div className="bg-white rounded-lg shadow border border-gray-200 p-8 text-center text-gray-500">
+          Escolha o período e as lojas e clique em Consultar.
+        </div>
+      )}
+
       {consultaExecutada && (
         <>
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <div className="lg:col-span-2 bg-white rounded-lg shadow-lg p-5">
-              <h2 className="text-base font-semibold text-gray-800 mb-1">% de CMV por loja</h2>
-              <p className="text-xs text-gray-500 mb-3">
-                Clique numa barra pra ver as transações dessa loja no período. &quot;Parcial&quot; = ainda faltam meses
-                calcular no detalhe.
-              </p>
-              <GraficoCmvPorLoja dados={totaisOrdenados} />
+          {consolidado && (
+            <div className="bg-white rounded-lg shadow-lg p-5">
+              <GraficoCmvConsolidado consolidado={consolidado} />
             </div>
-            <div className="bg-white rounded-lg shadow-lg p-5 flex flex-col justify-center">
-              <h2 className="text-base font-semibold text-gray-800 mb-1 text-center">Consolidado do Filtro</h2>
-              {consolidado && <GraficoCmvConsolidado consolidado={consolidado} />}
-            </div>
+          )}
+
+          <div className="bg-white rounded-lg shadow-lg p-5">
+            <h2 className="text-base font-semibold text-gray-800 mb-1">% de CMV por loja</h2>
+            <p className="text-xs text-gray-500 mb-3">Clique numa barra (ou numa linha da tabela) pra ver as transações dessa loja no período.</p>
+            <GraficoBarrasPercentual
+              ariaLabel="CMV percentual por loja"
+              dados={totaisOrdenados.filter((d) => d.cmvPercentual !== null).map((d) => ({
+                chave: d.cdEmpresa,
+                label: nomeCurto(d.nome),
+                valor: d.cmvPercentual as number,
+                aviso: !d.detalhado,
+                tooltip: `${d.nome}: ${formatarPct(d.cmvPercentual)} (CMV ${formatarValor(-Math.abs(d.valorTotal))} / Receita ${formatarValor(d.receita)})`,
+              }))}
+              onBarClick={(chave) => {
+                const empresa = totaisOrdenados.find((t) => t.cdEmpresa === chave);
+                if (empresa) abrirDrillEmpresa(empresa);
+              }}
+            />
           </div>
+
+          {porMes.length > 0 && (
+            <div className="bg-white rounded-lg shadow-lg p-5">
+              <h2 className="text-base font-semibold text-gray-800 mb-1">% de CMV por mês</h2>
+              <p className="text-xs text-gray-500 mb-3">Somando todas as lojas/fábrica selecionadas no filtro, mês a mês.</p>
+              <GraficoBarrasPercentual
+                ariaLabel="CMV percentual por mês"
+                dados={porMes.filter((m) => m.cmvPercentual !== null).map((m) => ({
+                  chave: m.anoMes,
+                  label: labelMes(m.anoMes),
+                  valor: m.cmvPercentual as number,
+                  tooltip: `${labelMes(m.anoMes)}: ${formatarPct(m.cmvPercentual)} (CMV ${formatarValor(-Math.abs(m.valorTotal))} / Receita ${formatarValor(m.receita)})`,
+                }))}
+              />
+            </div>
+          )}
 
           <div className="bg-white rounded-lg shadow-lg overflow-hidden">
             <div className="p-4 border-b border-gray-200 bg-gray-50">

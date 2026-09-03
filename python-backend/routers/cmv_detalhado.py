@@ -122,6 +122,36 @@ def _buscar_receita_por_empresa(cd_empresas: list, data_inicio: str, data_fim_in
     return {r['cd_empresa']: float(r['receita'] or 0) for r in rows or []}
 
 
+def _buscar_receita_por_mes(cd_empresas: list, data_inicio: str, data_fim_inclusiva: str) -> dict:
+    """Mesma regra da receita acima, mas agrupada por mes (somando todas as
+    empresas pedidas) - base do grafico de %CMV por mes."""
+    if not cd_empresas:
+        return {}
+    placeholders = ",".join(["%s"] * len(cd_empresas))
+    query = f"""
+        SELECT
+            TO_CHAR(DATE_TRUNC('month', dt_transacao), 'YYYY-MM') AS ano_mes,
+            SUM(
+                CASE
+                    WHEN tp_modalidade::text IN ('4', '8') AND tp_operacao::text = 'S' THEN vl_transacao
+                    WHEN tp_modalidade::text = '3' AND tp_operacao::text = 'E' THEN -vl_transacao
+                    ELSE 0
+                END
+            ) AS receita
+        FROM vr_tra_transacao
+        WHERE tp_situacao = 4
+          AND cd_empresa IN ({placeholders})
+          AND dt_transacao >= %s AND dt_transacao <= %s
+          AND (
+                (tp_modalidade::text IN ('4', '8') AND tp_operacao::text = 'S')
+                OR (tp_modalidade::text = '3' AND tp_operacao::text = 'E')
+              )
+        GROUP BY DATE_TRUNC('month', dt_transacao)
+    """
+    rows = execute_query(query, (*cd_empresas, data_inicio, data_fim_inclusiva))
+    return {r['ano_mes']: float(r['receita'] or 0) for r in rows or []}
+
+
 def _cmv_percentual(valor_cmv: float, receita: float) -> Optional[float]:
     if not receita:
         return None
@@ -346,10 +376,11 @@ def resumo_cmv_detalhado(
     """
     Visao geral pro periodo inteiro (pode cobrir varios meses) e pro conjunto
     de empresas pedido: total de CMV, receita e % de CMV sobre a receita, por
-    empresa ('totais') e consolidado de tudo que foi pedido ('consolidado').
-    Sempre responde rapido (usa as tabelas agregadas ja existentes: mv_cmv_fab
-    pra fabrica, mv_cmv_loja_v2 pra lojas). Pra lojas, tambem informa quais
-    meses do periodo ja tem o detalhe item-a-venda calculado
+    empresa ('totais'), por mes somando as empresas selecionadas ('porMes') e
+    consolidado de tudo que foi pedido ('consolidado'). Sempre responde
+    rapido (usa as tabelas agregadas ja existentes: mv_cmv_fab pra fabrica,
+    mv_cmv_loja_v2 pra lojas). Pra lojas, tambem informa quais meses do
+    periodo ja tem o detalhe item-a-venda calculado
     ('mesesCalculados'/'mesesFaltando') - sem isso calculado, a linha ainda
     aparece no grafico (usa o agregado rapido), mas o drill-down de
     transacao/item fica indisponivel.
@@ -408,6 +439,45 @@ def resumo_cmv_detalhado(
 
         receita_por_empresa = _buscar_receita_por_empresa(cd_empresas, dataInicio, dataFim)
 
+        # CMV por mes (somando todas as empresas pedidas) - base do grafico
+        # de %CMV por mes, so relevante quando o periodo cobre varios meses.
+        cmv_por_mes = {m: 0.0 for m in meses_str}
+        if empresas_fabrica_pedidas:
+            query_fab_mes = """
+                SELECT TO_CHAR(DATE_TRUNC('month', data), 'YYYY-MM') AS ano_mes, ABS(SUM(valor)) AS valor
+                FROM mv_cmv_fab
+                WHERE data >= %s AND data <= %s
+                GROUP BY DATE_TRUNC('month', data)
+            """
+            for r in execute_query(query_fab_mes, (dataInicio, dataFim)) or []:
+                if r['ano_mes'] in cmv_por_mes:
+                    cmv_por_mes[r['ano_mes']] += float(r['valor'] or 0)
+
+        if empresas_lojas_pedidas:
+            placeholders = ",".join(["%s"] * len(empresas_lojas_pedidas))
+            query_lojas_mes = f"""
+                SELECT TO_CHAR(DATE_TRUNC('month', data), 'YYYY-MM') AS ano_mes, ABS(SUM(valor)) AS valor
+                FROM mv_cmv_loja_v2
+                WHERE data >= %s AND data <= %s AND idcentrodecusto IN ({placeholders})
+                GROUP BY DATE_TRUNC('month', data)
+            """
+            for r in execute_query(query_lojas_mes, (dataInicio, dataFim, *empresas_lojas_pedidas)) or []:
+                if r['ano_mes'] in cmv_por_mes:
+                    cmv_por_mes[r['ano_mes']] += float(r['valor'] or 0)
+
+        receita_por_mes = _buscar_receita_por_mes(cd_empresas, dataInicio, dataFim)
+
+        por_mes = []
+        for m in meses_str:
+            valor_total_mes = cmv_por_mes.get(m, 0.0)
+            receita_mes = receita_por_mes.get(m, 0.0)
+            por_mes.append({
+                "anoMes": m,
+                "valorTotal": valor_total_mes,
+                "receita": receita_mes,
+                "cmvPercentual": _cmv_percentual(valor_total_mes, receita_mes),
+            })
+
         totais = []
         for cd_empresa in cd_empresas:
             valores = totais_por_empresa[cd_empresa]
@@ -444,7 +514,7 @@ def resumo_cmv_detalhado(
             "cmvPercentual": _cmv_percentual(valor_total_consolidado, receita_total_consolidada),
         }
 
-        return {"periodos": meses_str, "totais": totais, "consolidado": consolidado}
+        return {"periodos": meses_str, "totais": totais, "consolidado": consolidado, "porMes": por_mes}
     except HTTPException:
         raise
     except Exception as e:
