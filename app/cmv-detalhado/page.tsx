@@ -103,11 +103,21 @@ interface BarraDado {
   tooltip?: string;
 }
 
+// Degrau "redondo" de eixo (1/2/5/10 x uma potencia de 10) pra ter ticks tipo
+// 0/20/40/60/80%, nunca fracionados feios.
+function degrauRedondo(valorBruto: number): number {
+  if (valorBruto <= 0) return 1;
+  const magnitude = 10 ** Math.floor(Math.log10(valorBruto));
+  const residual = valorBruto / magnitude;
+  const residualRedondo = residual > 5 ? 10 : residual > 2 ? 5 : residual > 1 ? 2 : 1;
+  return residualRedondo * magnitude;
+}
+
 // Grafico de barras responsivo: viewBox fixo + width 100% faz o SVG escalar
 // pra caber no container inteiro, sem nunca precisar de scroll horizontal -
 // a largura de cada barra e calculada a partir da quantidade de itens, nunca
-// de um pixel fixo. Rotula sempre acima da barra (%), com o nome/mes
-// levemente rotacionado embaixo pra caber mais categorias sem se sobrepor.
+// de um pixel fixo. Tem eixo Y com grade (0/20/40...%) e rotulo sempre acima
+// da barra, com o nome/mes rotacionado embaixo so quando o espaco aperta.
 function GraficoBarrasPercentual({
   dados,
   ariaLabel,
@@ -120,21 +130,32 @@ function GraficoBarrasPercentual({
   if (dados.length === 0) {
     return <p className="text-sm text-gray-400 py-8 text-center">Sem dado no período pra calcular o %.</p>;
   }
+  const margemEsquerda = 52;
+  const margemDireita = 12;
+  const margemTopo = 26;
   const gap = 16;
-  const alturaMax = 110;
+  const alturaMax = 190;
   const larguraViewBox = 1000;
+  const larguraUtil = larguraViewBox - margemEsquerda - margemDireita;
   const larguraMaxBarra = 72; // barra nunca fica gigante quando ha poucas categorias (ex: 1 mes)
-  const larguraBarra = Math.min(Math.max((larguraViewBox - gap * (dados.length + 1)) / dados.length, 8), larguraMaxBarra);
+  const larguraBarra = Math.min(Math.max((larguraUtil - gap * (dados.length + 1)) / dados.length, 8), larguraMaxBarra);
   const larguraGrupo = dados.length * larguraBarra + (dados.length + 1) * gap;
-  const offsetX = Math.max((larguraViewBox - larguraGrupo) / 2, 0);
-  const maxValor = Math.max(...dados.map((d) => d.valor), 1);
+  const offsetX = margemEsquerda + Math.max((larguraUtil - larguraGrupo) / 2, 0);
+
+  const maxValorReal = Math.max(...dados.map((d) => d.valor), 1);
+  const passo = degrauRedondo((maxValorReal * 1.15) / 4);
+  const qtdPassos = Math.ceil((maxValorReal * 1.15) / passo);
+  const maxEixo = passo * qtdPassos;
+  const ticks = Array.from({ length: qtdPassos + 1 }, (_, i) => passo * i);
+
   const rotacionar = larguraBarra < 60;
   const fonteRotulo = larguraBarra < 34 ? 9 : 12;
   const fonteLabel = larguraBarra < 34 ? 8 : 10;
-  const alturaSvg = alturaMax + (rotacionar ? 90 : 60);
-  const yBase = 28 + alturaMax;
+  const alturaSvg = margemTopo + alturaMax + (rotacionar ? 90 : 60);
+  const yBase = margemTopo + alturaMax;
   const yEixoX = yBase + 14;
   const temAviso = dados.some((d) => d.aviso);
+  const escalaY = (valor: number) => yBase - (valor / maxEixo) * alturaMax;
 
   return (
     <div>
@@ -154,11 +175,29 @@ function GraficoBarrasPercentual({
         role="img"
         aria-label={ariaLabel}
       >
-        <line x1={0} y1={yBase} x2={larguraViewBox} y2={yBase} stroke="#e1e0d9" strokeWidth={1} />
+        {ticks.map((tick) => {
+          const y = escalaY(tick);
+          return (
+            <g key={tick}>
+              <line
+                x1={margemEsquerda}
+                y1={y}
+                x2={larguraViewBox - margemDireita}
+                y2={y}
+                stroke="#e1e0d9"
+                strokeWidth={1}
+                strokeDasharray={tick === 0 ? undefined : '3,3'}
+              />
+              <text x={margemEsquerda - 8} y={y + 3.5} textAnchor="end" fontSize={10} fill="#898781">
+                {tick.toFixed(0)}%
+              </text>
+            </g>
+          );
+        })}
         {dados.map((d, i) => {
           const x = offsetX + gap + i * (larguraBarra + gap);
-          const h = Math.max((d.valor / maxValor) * alturaMax, 2);
-          const y = yBase - h;
+          const y = escalaY(d.valor);
+          const h = Math.max(yBase - y, 2);
           const xCentro = x + larguraBarra / 2;
           return (
             <g
@@ -170,7 +209,7 @@ function GraficoBarrasPercentual({
               <text x={xCentro} y={y - 8} textAnchor="middle" fontSize={fonteRotulo} fontWeight={700} fill="#0b0b0b">
                 {formatarPct(d.valor)}
               </text>
-              <rect x={x} y={y} width={larguraBarra} height={h} rx={4} fill={COR_BARRA} />
+              <rect x={x} y={yBase - h} width={larguraBarra} height={h} rx={4} fill={COR_BARRA} />
               <text
                 x={xCentro}
                 y={yEixoX}
@@ -282,6 +321,49 @@ export default function CmvDetalhadoPage() {
     } finally {
       setLoading(false);
     }
+  }
+
+  function definirMesAtual() {
+    const hoje = new Date();
+    const inicioMes = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
+    const fimMes = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0);
+    setDataInicio(`${inicioMes.getFullYear()}-${String(inicioMes.getMonth() + 1).padStart(2, '0')}-01`);
+    setDataFim(
+      `${fimMes.getFullYear()}-${String(fimMes.getMonth() + 1).padStart(2, '0')}-${String(fimMes.getDate()).padStart(2, '0')}`
+    );
+  }
+
+  function definirMesAnterior() {
+    const hoje = new Date();
+    const inicioMesAnterior = new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1);
+    const fimMesAnterior = new Date(hoje.getFullYear(), hoje.getMonth(), 0);
+    setDataInicio(`${inicioMesAnterior.getFullYear()}-${String(inicioMesAnterior.getMonth() + 1).padStart(2, '0')}-01`);
+    setDataFim(
+      `${fimMesAnterior.getFullYear()}-${String(fimMesAnterior.getMonth() + 1).padStart(2, '0')}-${String(fimMesAnterior.getDate()).padStart(2, '0')}`
+    );
+  }
+
+  function definirUltimosMeses(qtdMeses: number) {
+    const hoje = new Date();
+    const fimMesAnterior = new Date(hoje.getFullYear(), hoje.getMonth(), 0);
+    const inicioIntervalo = new Date(hoje.getFullYear(), hoje.getMonth() - qtdMeses, 1);
+    setDataInicio(`${inicioIntervalo.getFullYear()}-${String(inicioIntervalo.getMonth() + 1).padStart(2, '0')}-01`);
+    setDataFim(
+      `${fimMesAnterior.getFullYear()}-${String(fimMesAnterior.getMonth() + 1).padStart(2, '0')}-${String(fimMesAnterior.getDate()).padStart(2, '0')}`
+    );
+  }
+
+  function definirAnoAtual() {
+    const hoje = new Date();
+    const anoAtual = hoje.getFullYear();
+    const fimMesAnterior = new Date(anoAtual, hoje.getMonth(), 0);
+    // Em janeiro nao ha mes anterior dentro do ano atual; mostra o mes corrente
+    const dataFimAnoAtual =
+      fimMesAnterior.getFullYear() === anoAtual ? fimMesAnterior : new Date(anoAtual, hoje.getMonth() + 1, 0);
+    setDataInicio(`${anoAtual}-01-01`);
+    setDataFim(
+      `${dataFimAnoAtual.getFullYear()}-${String(dataFimAnoAtual.getMonth() + 1).padStart(2, '0')}-${String(dataFimAnoAtual.getDate()).padStart(2, '0')}`
+    );
   }
 
   function toggleEmpresaFiltro(cd: number) {
@@ -428,6 +510,55 @@ export default function CmvDetalhadoPage() {
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
         </div>
+
+        <div className="flex items-center gap-2 flex-wrap mt-3">
+          <button
+            onClick={definirMesAnterior}
+            className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md transition-colors"
+          >
+            Mês Anterior
+          </button>
+          <button
+            onClick={definirMesAtual}
+            className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md transition-colors"
+          >
+            Mês Atual
+          </button>
+          <button
+            onClick={() => definirUltimosMeses(3)}
+            className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md transition-colors"
+          >
+            Últimos 3 Meses
+          </button>
+          <button
+            onClick={() => definirUltimosMeses(6)}
+            className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md transition-colors"
+          >
+            Últimos 6 Meses
+          </button>
+          <button
+            onClick={() => definirUltimosMeses(12)}
+            className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md transition-colors"
+          >
+            Últimos 12 Meses
+          </button>
+          <button
+            onClick={definirAnoAtual}
+            className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md transition-colors"
+          >
+            Ano Atual
+          </button>
+          <button
+            onClick={() => {
+              setDataInicio('2025-01-01');
+              setDataFim('2025-12-31');
+            }}
+            className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md transition-colors"
+          >
+            2025
+          </button>
+        </div>
+
         {statusCarregamento && <p className="text-sm text-red-600 mt-3">{statusCarregamento}</p>}
       </div>
 
