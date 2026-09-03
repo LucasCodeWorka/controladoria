@@ -5,7 +5,6 @@ import {
   Boxes,
   Calendar,
   ChevronDown,
-  ChevronRight,
   Loader2,
   RefreshCw,
 } from 'lucide-react';
@@ -55,22 +54,20 @@ interface TotalMes {
   cmvPercentual: number | null;
 }
 
-interface TransacaoCmv {
+interface VendaDetalhada {
+  cdEmpresa: number;
+  nomeEmpresa: string;
   nrTransacao: number;
   dtTransacao: string | null;
-  vlTransacao: number | null;
-  valorCmc: number;
-  cmvPercentual: number | null;
-  qtdItens: number;
-}
-
-interface ItemTransacao {
   cdProduto: number;
   dsProduto: string;
-  idconta: string;
+  referencia: string | null;
   qtSolicitada: number | null;
-  valorUnitario: number | null;
-  valorCmc: number;
+  valorUnitarioVenda: number | null;
+  valorUnitarioCmv: number | null;
+  valorTotalVenda: number | null;
+  valorTotalCmv: number;
+  cmvPercentual: number | null;
 }
 
 // Cores em ordem categorica fixa (paleta validada) - aqui so a primeira
@@ -232,12 +229,9 @@ export default function CmvDetalhadoPage() {
   const [porMes, setPorMes] = useState<TotalMes[]>([]);
 
   const [empresaDrill, setEmpresaDrill] = useState<TotalEmpresa | null>(null);
-  const [transacoes, setTransacoes] = useState<TransacaoCmv[]>([]);
-  const [carregandoTransacoes, setCarregandoTransacoes] = useState(false);
-
-  const [transacaoExpandida, setTransacaoExpandida] = useState<number | null>(null);
-  const [itensPorTransacao, setItensPorTransacao] = useState<Record<number, ItemTransacao[]>>({});
-  const [carregandoItens, setCarregandoItens] = useState(false);
+  const [vendasDetalhadas, setVendasDetalhadas] = useState<VendaDetalhada[]>([]);
+  const [vendasLimitadas, setVendasLimitadas] = useState(false);
+  const [carregandoVendas, setCarregandoVendas] = useState(false);
 
   const [calculandoMes, setCalculandoMes] = useState<string | null>(null);
 
@@ -260,7 +254,6 @@ export default function CmvDetalhadoPage() {
     setLoading(true);
     setStatusCarregamento(null);
     setEmpresaDrill(null);
-    setTransacaoExpandida(null);
     try {
       const params = new URLSearchParams({
         dataInicio,
@@ -339,37 +332,17 @@ export default function CmvDetalhadoPage() {
 
   async function abrirDrillEmpresa(empresa: TotalEmpresa) {
     setEmpresaDrill(empresa);
-    setTransacaoExpandida(null);
-    setCarregandoTransacoes(true);
+    setCarregandoVendas(true);
     try {
       const params = new URLSearchParams({ cdEmpresa: String(empresa.cdEmpresa), dataInicio, dataFim });
-      const response = await fetch(`/api/cmv-detalhado/transacoes-resumo?${params.toString()}`, { cache: 'no-store' });
+      const response = await fetch(`/api/cmv-detalhado/vendas-detalhadas?${params.toString()}`, { cache: 'no-store' });
       const data = await response.json();
-      setTransacoes(data.transacoes || []);
+      setVendasDetalhadas(data.vendas || []);
+      setVendasLimitadas(!!data.limitado);
     } catch (error) {
-      console.error('Erro ao buscar transações do CMV detalhado:', error);
+      console.error('Erro ao buscar vendas detalhadas do CMV:', error);
     } finally {
-      setCarregandoTransacoes(false);
-    }
-  }
-
-  async function toggleTransacao(nrTransacao: number) {
-    if (transacaoExpandida === nrTransacao) {
-      setTransacaoExpandida(null);
-      return;
-    }
-    setTransacaoExpandida(nrTransacao);
-    if (itensPorTransacao[nrTransacao] || !empresaDrill) return;
-    setCarregandoItens(true);
-    try {
-      const params = new URLSearchParams({ cdEmpresa: String(empresaDrill.cdEmpresa), nrTransacao: String(nrTransacao) });
-      const response = await fetch(`/api/cmv-detalhado/transacao-itens?${params.toString()}`, { cache: 'no-store' });
-      const data = await response.json();
-      setItensPorTransacao((atual) => ({ ...atual, [nrTransacao]: data.itens || [] }));
-    } catch (error) {
-      console.error('Erro ao buscar itens da transação:', error);
-    } finally {
-      setCarregandoItens(false);
+      setCarregandoVendas(false);
     }
   }
 
@@ -635,99 +608,67 @@ export default function CmvDetalhadoPage() {
             <div className="bg-white rounded-lg shadow-lg overflow-hidden">
               <div className="p-4 border-b border-gray-200 bg-rose-50">
                 <h2 className="text-base font-semibold text-gray-800">
-                  Transações — {empresaDrill.nome}
+                  Vendas detalhadas — {empresaDrill.nome}
                 </h2>
                 <p className="text-xs text-gray-500">
-                  Valor e CMV da venda inteira. Clique numa transação pra ver os itens que a compõem.
+                  Uma linha por SKU vendido dentro de cada transação.
+                  {empresaDrill.tipo === 'fabrica' && (
+                    <> Fábrica: valor de venda por SKU não disponível (fonte muito lenta) — só CMV.</>
+                  )}
+                  {vendasLimitadas && <> Mostrando as {vendasDetalhadas.length} vendas mais recentes do período.</>}
                 </p>
               </div>
-              {carregandoTransacoes ? (
+              {carregandoVendas ? (
                 <div className="flex items-center justify-center py-8">
                   <Loader2 className="w-5 h-5 animate-spin text-gray-400" />
-                  <span className="ml-2 text-sm text-gray-500">Carregando transações...</span>
+                  <span className="ml-2 text-sm text-gray-500">Carregando vendas...</span>
                 </div>
               ) : (
                 <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
-                  <table className="w-full text-sm">
+                  <table className="w-full text-sm whitespace-nowrap">
                     <thead className="sticky top-0 bg-gray-100">
                       <tr>
-                        <th className="px-4 py-2 text-left font-semibold border-b">Transação</th>
+                        <th className="px-4 py-2 text-left font-semibold border-b">Empresa</th>
+                        <th className="px-3 py-2 text-left font-semibold border-b">Transação</th>
                         <th className="px-3 py-2 text-left font-semibold border-b">Data</th>
-                        <th className="px-3 py-2 text-right font-semibold border-b">Itens</th>
-                        <th className="px-3 py-2 text-right font-semibold border-b">Valor da Venda</th>
-                        <th className="px-3 py-2 text-right font-semibold border-b">CMV</th>
+                        <th className="px-3 py-2 text-left font-semibold border-b">SKU</th>
+                        <th className="px-3 py-2 text-left font-semibold border-b">Referência</th>
+                        <th className="px-3 py-2 text-left font-semibold border-b">Produto</th>
+                        <th className="px-3 py-2 text-right font-semibold border-b">Qtde</th>
+                        <th className="px-3 py-2 text-right font-semibold border-b">Vl. Unit. Venda</th>
+                        <th className="px-3 py-2 text-right font-semibold border-b">CMV Unit.</th>
+                        <th className="px-3 py-2 text-right font-semibold border-b">Vl. Total Venda</th>
+                        <th className="px-3 py-2 text-right font-semibold border-b">Vl. Total CMV</th>
                         <th className="px-3 py-2 text-right font-semibold border-b">% CMV</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {transacoes.map((t) => {
-                        const aberta = transacaoExpandida === t.nrTransacao;
-                        return (
-                          <React.Fragment key={t.nrTransacao}>
-                            <tr
-                              className={`border-t hover:bg-gray-50 cursor-pointer ${aberta ? 'bg-gray-50' : ''}`}
-                              onClick={() => toggleTransacao(t.nrTransacao)}
-                            >
-                              <td className="px-4 py-1.5 font-mono text-gray-600">
-                                <div className="flex items-center gap-1.5">
-                                  {aberta ? <ChevronDown className="w-3.5 h-3.5 text-gray-400" /> : <ChevronRight className="w-3.5 h-3.5 text-gray-400" />}
-                                  {t.nrTransacao}
-                                </div>
-                              </td>
-                              <td className="px-3 py-1.5 text-gray-500">
-                                {t.dtTransacao ? new Date(t.dtTransacao).toLocaleDateString('pt-BR') : '-'}
-                              </td>
-                              <td className="px-3 py-1.5 text-right text-gray-500">{t.qtdItens}</td>
-                              <td className="px-3 py-1.5 text-right text-gray-700">
-                                {t.vlTransacao !== null ? formatarValor(t.vlTransacao) : '-'}
-                              </td>
-                              <td className="px-3 py-1.5 text-right text-red-600 font-medium">
-                                {formatarValor(-Math.abs(t.valorCmc))}
-                              </td>
-                              <td className="px-3 py-1.5 text-right font-semibold">{formatarPct(t.cmvPercentual)}</td>
-                            </tr>
-                            {aberta && (
-                              <tr>
-                                <td colSpan={6} className="p-0 bg-gray-50">
-                                  {carregandoItens && !itensPorTransacao[t.nrTransacao] ? (
-                                    <div className="flex items-center justify-center py-4">
-                                      <Loader2 className="w-4 h-4 animate-spin text-gray-400" />
-                                      <span className="ml-2 text-xs text-gray-500">Carregando itens...</span>
-                                    </div>
-                                  ) : (
-                                    <table className="w-full text-xs">
-                                      <thead>
-                                        <tr className="bg-gray-100 text-gray-500">
-                                          <th className="px-10 py-1.5 text-left font-semibold">Produto</th>
-                                          <th className="px-3 py-1.5 text-left font-semibold">Conta</th>
-                                          <th className="px-3 py-1.5 text-right font-semibold">Qtd</th>
-                                          <th className="px-3 py-1.5 text-right font-semibold">Custo Unit.</th>
-                                          <th className="px-3 py-1.5 text-right font-semibold">CMV</th>
-                                        </tr>
-                                      </thead>
-                                      <tbody>
-                                        {(itensPorTransacao[t.nrTransacao] || []).map((item, idx) => (
-                                          <tr key={`${item.cdProduto}-${idx}`} className="border-t border-gray-200">
-                                            <td className="px-10 py-1">{item.dsProduto}</td>
-                                            <td className="px-3 py-1 font-mono text-gray-500">{item.idconta}</td>
-                                            <td className="px-3 py-1 text-right text-gray-500">{item.qtSolicitada ?? '-'}</td>
-                                            <td className="px-3 py-1 text-right text-gray-500">
-                                              {item.valorUnitario !== null ? formatarValor(item.valorUnitario) : '-'}
-                                            </td>
-                                            <td className="px-3 py-1 text-right text-red-600 font-medium">
-                                              {formatarValor(-Math.abs(item.valorCmc))}
-                                            </td>
-                                          </tr>
-                                        ))}
-                                      </tbody>
-                                    </table>
-                                  )}
-                                </td>
-                              </tr>
-                            )}
-                          </React.Fragment>
-                        );
-                      })}
+                      {vendasDetalhadas.map((v, idx) => (
+                        <tr key={`${v.nrTransacao}-${v.cdProduto}-${idx}`} className="border-t hover:bg-gray-50">
+                          <td className="px-4 py-1.5">{v.nomeEmpresa}</td>
+                          <td className="px-3 py-1.5 font-mono text-gray-600">{v.nrTransacao}</td>
+                          <td className="px-3 py-1.5 text-gray-500">
+                            {v.dtTransacao ? new Date(v.dtTransacao).toLocaleDateString('pt-BR') : '-'}
+                          </td>
+                          <td className="px-3 py-1.5 font-mono text-gray-600">{v.cdProduto}</td>
+                          <td className="px-3 py-1.5 font-mono text-gray-600">{v.referencia ?? '-'}</td>
+                          <td className="px-3 py-1.5 text-gray-700 whitespace-normal max-w-xs">{v.dsProduto}</td>
+                          <td className="px-3 py-1.5 text-right text-gray-500">{v.qtSolicitada ?? '-'}</td>
+                          <td className="px-3 py-1.5 text-right text-gray-700">
+                            {v.valorUnitarioVenda !== null ? formatarValor(v.valorUnitarioVenda) : '-'}
+                          </td>
+                          <td className="px-3 py-1.5 text-right text-gray-700">
+                            {v.valorUnitarioCmv !== null ? formatarValor(v.valorUnitarioCmv) : '-'}
+                          </td>
+                          <td className="px-3 py-1.5 text-right text-gray-700">
+                            {v.valorTotalVenda !== null ? formatarValor(v.valorTotalVenda) : '-'}
+                          </td>
+                          <td className="px-3 py-1.5 text-right text-red-600 font-medium">
+                            {formatarValor(-Math.abs(v.valorTotalCmv))}
+                          </td>
+                          <td className="px-3 py-1.5 text-right font-semibold">{formatarPct(v.cmvPercentual)}</td>
+                        </tr>
+                      ))}
                     </tbody>
                   </table>
                 </div>

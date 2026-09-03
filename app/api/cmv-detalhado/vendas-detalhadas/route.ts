@@ -8,10 +8,11 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const cdEmpresa = searchParams.get('cdEmpresa') || '';
-    const nrTransacao = searchParams.get('nrTransacao') || '';
-    const params = new URLSearchParams({ cdEmpresa, nrTransacao });
+    const dataInicio = searchParams.get('dataInicio') || '';
+    const dataFim = searchParams.get('dataFim') || '';
+    const params = new URLSearchParams({ cdEmpresa, dataInicio, dataFim });
 
-    const response = await fetch(`${PYTHON_API_URL}/api/cmv-detalhado/transacao-itens?${params.toString()}`, {
+    const response = await fetch(`${PYTHON_API_URL}/api/cmv-detalhado/vendas-detalhadas?${params.toString()}`, {
       method: 'GET',
       cache: 'no-store',
       headers: { 'Content-Type': 'application/json' },
@@ -19,7 +20,7 @@ export async function GET(request: NextRequest) {
     const data = await response.json();
     return NextResponse.json(data, { status: response.status });
   } catch (error) {
-    console.error('Erro ao buscar itens da transação do CMV detalhado:', error);
-    return NextResponse.json({ error: 'Erro ao buscar itens da transação do CMV detalhado' }, { status: 500 });
+    console.error('Erro ao buscar vendas detalhadas do CMV detalhado:', error);
+    return NextResponse.json({ error: 'Erro ao buscar vendas detalhadas do CMV detalhado' }, { status: 500 });
   }
 }

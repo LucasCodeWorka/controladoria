@@ -179,6 +179,11 @@ def _criar_tabelas_cache():
             valor_cmc NUMERIC
         )
     """)
+    # Migracao: valor de venda por item (unitario e total) - adicionado depois
+    # da criacao original da tabela. Cache calculado antes disso nao tem esses
+    # dois campos preenchidos (fica NULL ate recalcular aquele mes de novo).
+    execute_insert("ALTER TABLE cmv_detalhado_cache ADD COLUMN IF NOT EXISTS vl_unitario_venda NUMERIC")
+    execute_insert("ALTER TABLE cmv_detalhado_cache ADD COLUMN IF NOT EXISTS vl_total_venda NUMERIC")
     execute_insert("CREATE INDEX IF NOT EXISTS idx_cmv_cache_empresa_mes ON cmv_detalhado_cache (cd_empresa, ano_mes)")
     execute_insert("CREATE INDEX IF NOT EXISTS idx_cmv_cache_empresa_data ON cmv_detalhado_cache (cd_empresa, dt_transacao)")
     execute_insert("CREATE INDEX IF NOT EXISTS idx_cmv_cache_transacao ON cmv_detalhado_cache (cd_empresa, nr_transacao)")
@@ -207,6 +212,8 @@ _QUERY_CMV_LOJA_DETALHADO = """
             t.vl_transacao,
             i.qt_solicitada,
             i.cd_produto AS idproduto,
+            i.vl_unitliquido,
+            i.vl_totalliquido,
             t.tp_operacao,
             BTRIM(pc_marca.cd_classificacao::text) AS idmarca
         FROM vr_tra_transacao t
@@ -251,6 +258,8 @@ _QUERY_CMV_LOJA_DETALHADO = """
         cv.vl_transacao,
         cv.idproduto AS cd_produto,
         cv.qt_solicitada,
+        cv.vl_unitliquido AS vl_unitario_venda,
+        cv.vl_totalliquido AS vl_total_venda,
         cv.idmarca,
         CASE WHEN cv.idmarca IN ('0001', '0002', '0009') THEN '04.02.01' ELSE '04.02.02' END AS idconta,
         cv.valor_unitario,
@@ -288,7 +297,7 @@ def _calcular_e_cachear_loja_mes(cd_empresa: int, ano: int, mes: int) -> dict:
     tamanho_lote = 500
     for inicio in range(0, len(linhas), tamanho_lote):
         lote = linhas[inicio:inicio + tamanho_lote]
-        placeholders = ",".join(["(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"] * len(lote))
+        placeholders = ",".join(["(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"] * len(lote))
         params = []
         for linha in lote:
             valor_cmc = float(linha['valor_cmc'] or 0)
@@ -305,12 +314,15 @@ def _calcular_e_cachear_loja_mes(cd_empresa: int, ano: int, mes: int) -> dict:
                 linha['idconta'],
                 float(linha['valor_unitario'] or 0),
                 valor_cmc,
+                float(linha['vl_unitario_venda']) if linha['vl_unitario_venda'] is not None else None,
+                float(linha['vl_total_venda']) if linha['vl_total_venda'] is not None else None,
             ])
         execute_insert(
             f"""
                 INSERT INTO cmv_detalhado_cache
                     (cd_empresa, ano_mes, nr_transacao, dt_transacao, vl_transacao,
-                     cd_produto, qt_solicitada, idmarca, idconta, valor_unitario, valor_cmc)
+                     cd_produto, qt_solicitada, idmarca, idconta, valor_unitario, valor_cmc,
+                     vl_unitario_venda, vl_total_venda)
                 VALUES {placeholders}
             """,
             tuple(params)
@@ -524,131 +536,103 @@ def resumo_cmv_detalhado(
         raise HTTPException(status_code=500, detail=f"Erro ao buscar resumo CMV detalhado: {str(e)}")
 
 
-@router.get("/api/cmv-detalhado/transacoes-resumo")
-def transacoes_resumo_cmv_detalhado(
+def _buscar_referencias(cd_produtos: list) -> dict:
+    """SKU -> codigo de referencia. Vem de sf_produto (tabela de apoio com o
+    de-para SKU/cor/tamanho -> referencia do modelo, mantida fora do ERP
+    principal) - nao existe esse campo nas tabelas de produto usadas no resto
+    do calculo de CMV."""
+    if not cd_produtos:
+        return {}
+    placeholders = ",".join(["%s"] * len(cd_produtos))
+    rows = execute_query(
+        f'SELECT "CD PRODUTO" AS cd_produto, "REFERENCIA" AS referencia FROM sf_produto WHERE "CD PRODUTO" IN ({placeholders})',
+        tuple(cd_produtos)
+    )
+    return {r['cd_produto']: r['referencia'] for r in rows or []}
+
+
+@router.get("/api/cmv-detalhado/vendas-detalhadas")
+def vendas_detalhadas_cmv_detalhado(
     cdEmpresa: int = Query(..., description="Codigo da empresa/loja"),
     dataInicio: str = Query(..., description="Data inicial (YYYY-MM-DD)"),
     dataFim: str = Query(..., description="Data final (YYYY-MM-DD)")
 ):
     """
-    Uma linha por venda (transacao inteira) de uma empresa no periodo: valor
-    total vendido naquela transacao, CMV total dela (soma de todos os itens)
-    e o % de CMV sobre o valor vendido. Pode abrir os itens de uma transacao
-    especifica em /transacao-itens.
+    Uma linha por SKU vendido (dentro de cada transacao) de uma empresa no
+    periodo: empresa, transacao, SKU, referencia, quantidade, valor unitario
+    de venda, CMV unitario, valor total vendido do SKU, CMV total do SKU e o
+    %CMV sobre a venda daquele SKU.
+
+    Fabrica: CMV vem de mv_cmv_fab (rapido); o valor de venda (unitario/total)
+    nao esta la, entao busca em vr_tra_transitem por lote (so pelas
+    transacoes que apareceram no CMV, agrupado por transacao+produto).
+
+    Lojas: tudo vem do cache (cmv_detalhado_cache), que ja calcula os dois
+    lados juntos. Se o mes ainda nao foi calculado, ou foi calculado antes
+    do valor de venda existir nesse cache, os campos de venda vem nulos -
+    precisa (re)calcular esse mes pra preencher (botao "Calcular detalhe").
     """
     try:
+        limite = 5000
         if _eh_fabrica(cdEmpresa):
+            # So CMV (mv_cmv_fab, rapida). O valor de venda por SKU pra
+            # fabrica exigiria consultar vr_tra_transitem - testado por
+            # varios tamanhos de lote (300 a 5000 transacoes) e essa view
+            # sozinha nunca respondeu em menos de ~1-2 minutos, mesmo com
+            # poucas transacoes no filtro (custo fixo alto, nao escalona
+            # com o filtro - mesmo padrao ja visto em outras views vr_ deste
+            # banco). Por isso, pra fabrica, os campos de venda ficam nulos
+            # (o front mostra "-") - so lojas (que ja calculam os dois lados
+            # juntos no cache) trazem a tabela completa.
             query_cmv = """
-                SELECT nr_transacao, MAX(data) AS dt_transacao,
-                       ABS(SUM(valor)) AS valor_cmc, COUNT(DISTINCT idproduto) AS qtd_itens
+                SELECT nr_transacao, MAX(data) AS dt_transacao, idproduto AS cd_produto,
+                       ABS(SUM(valor)) AS valor_cmc
                 FROM mv_cmv_fab
                 WHERE idcentrocusto = %s AND data >= %s AND data <= %s
-                GROUP BY nr_transacao
+                GROUP BY nr_transacao, idproduto
                 ORDER BY MAX(data) DESC
-                LIMIT 3000
+                LIMIT %s
             """
-            linhas = execute_query(query_cmv, (cdEmpresa, dataInicio, dataFim))
-            nrs_transacao = [l['nr_transacao'] for l in linhas]
-            valores_venda = {}
-            if nrs_transacao:
-                placeholders = ",".join(["%s"] * len(nrs_transacao))
-                rows_venda = execute_query(
-                    f"""
-                        SELECT nr_transacao, SUM(vl_transacao) as vl_transacao
-                        FROM vr_tra_transacao
-                        WHERE cd_empresa = %s AND nr_transacao IN ({placeholders})
-                        GROUP BY nr_transacao
-                    """,
-                    (cdEmpresa, *nrs_transacao)
-                )
-                valores_venda = {r['nr_transacao']: float(r['vl_transacao'] or 0) for r in rows_venda or []}
-            transacoes = []
-            for l in linhas:
-                vl_transacao = valores_venda.get(l['nr_transacao'])
-                valor_cmc = float(l['valor_cmc'] or 0)
-                transacoes.append({
-                    "nrTransacao": l['nr_transacao'],
-                    "dtTransacao": l['dt_transacao'].isoformat() if l['dt_transacao'] else None,
-                    "vlTransacao": vl_transacao,
-                    "valorCmc": valor_cmc,
-                    "cmvPercentual": _cmv_percentual(valor_cmc, vl_transacao) if vl_transacao else None,
-                    "qtdItens": l['qtd_itens'],
-                })
+            linhas_cmv = execute_query(query_cmv, (cdEmpresa, dataInicio, dataFim, limite))
+
+            linhas_base = [{
+                "nrTransacao": l['nr_transacao'],
+                "dtTransacao": l['dt_transacao'].isoformat() if l['dt_transacao'] else None,
+                "cdProduto": l['cd_produto'],
+                "qtSolicitada": None,
+                "valorUnitarioVenda": None,
+                "valorTotalVenda": None,
+                "valorUnitarioCmv": None,
+                "valorTotalCmv": float(l['valor_cmc'] or 0),
+            } for l in linhas_cmv or []]
+            limitado = len(linhas_base) >= limite
         else:
             if cdEmpresa not in CCUSTOS_LOJAS:
                 raise HTTPException(status_code=400, detail=f"Empresa/loja invalida: {cdEmpresa}")
             query = """
-                SELECT nr_transacao, MAX(dt_transacao) AS dt_transacao, MAX(vl_transacao) AS vl_transacao,
-                       SUM(valor_cmc) AS valor_cmc, COUNT(*) AS qtd_itens
+                SELECT nr_transacao, dt_transacao, cd_produto, qt_solicitada,
+                       valor_unitario, valor_cmc, vl_unitario_venda, vl_total_venda
                 FROM cmv_detalhado_cache
                 WHERE cd_empresa = %s AND dt_transacao >= %s AND dt_transacao <= %s
-                GROUP BY nr_transacao
-                ORDER BY MAX(dt_transacao) DESC
-                LIMIT 3000
+                ORDER BY dt_transacao DESC
+                LIMIT %s
             """
-            linhas = execute_query(query, (cdEmpresa, dataInicio, dataFim))
-            transacoes = []
-            for l in linhas or []:
-                vl_transacao = float(l['vl_transacao']) if l['vl_transacao'] is not None else None
-                valor_cmc = float(l['valor_cmc'] or 0)
-                transacoes.append({
-                    "nrTransacao": l['nr_transacao'],
-                    "dtTransacao": l['dt_transacao'].isoformat() if l['dt_transacao'] else None,
-                    "vlTransacao": vl_transacao,
-                    "valorCmc": valor_cmc,
-                    "cmvPercentual": _cmv_percentual(valor_cmc, vl_transacao) if vl_transacao else None,
-                    "qtdItens": l['qtd_itens'],
-                })
-
-        return {"cdEmpresa": cdEmpresa, "nome": _nome_empresa_cmv(cdEmpresa), "transacoes": transacoes}
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"[ERROR] Erro ao buscar transacoes-resumo CMV detalhado: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Erro ao buscar transacoes-resumo CMV detalhado: {str(e)}")
-
-
-@router.get("/api/cmv-detalhado/transacao-itens")
-def transacao_itens_cmv_detalhado(
-    cdEmpresa: int = Query(..., description="Codigo da empresa/loja"),
-    nrTransacao: int = Query(..., description="Numero da transacao (venda)")
-):
-    """Os itens (produtos) que compoem uma transacao especifica."""
-    try:
-        if _eh_fabrica(cdEmpresa):
-            query = """
-                SELECT idproduto AS cd_produto, idconta, ABS(SUM(valor)) AS valor_cmc
-                FROM mv_cmv_fab
-                WHERE idcentrocusto = %s AND nr_transacao = %s
-                GROUP BY idproduto, idconta
-                ORDER BY valor_cmc DESC
-            """
-            linhas = execute_query(query, (cdEmpresa, nrTransacao))
-            itens_base = [{
-                "cdProduto": l['cd_produto'], "idconta": l['idconta'],
-                "qtSolicitada": None, "valorUnitario": None, "valorCmc": float(l['valor_cmc'] or 0),
-            } for l in linhas or []]
-        else:
-            if cdEmpresa not in CCUSTOS_LOJAS:
-                raise HTTPException(status_code=400, detail=f"Empresa/loja invalida: {cdEmpresa}")
-            query = """
-                SELECT cd_produto, idconta, qt_solicitada, valor_unitario, valor_cmc
-                FROM cmv_detalhado_cache
-                WHERE cd_empresa = %s AND nr_transacao = %s
-                ORDER BY valor_cmc ASC
-            """
-            linhas = execute_query(query, (cdEmpresa, nrTransacao))
-            itens_base = [{
-                "cdProduto": l['cd_produto'], "idconta": l['idconta'],
+            linhas = execute_query(query, (cdEmpresa, dataInicio, dataFim, limite))
+            linhas_base = [{
+                "nrTransacao": l['nr_transacao'],
+                "dtTransacao": l['dt_transacao'].isoformat() if l['dt_transacao'] else None,
+                "cdProduto": l['cd_produto'],
                 "qtSolicitada": float(l['qt_solicitada']) if l['qt_solicitada'] is not None else None,
-                "valorUnitario": float(l['valor_unitario']) if l['valor_unitario'] is not None else None,
-                "valorCmc": float(l['valor_cmc'] or 0),
+                "valorUnitarioVenda": float(l['vl_unitario_venda']) if l['vl_unitario_venda'] is not None else None,
+                "valorTotalVenda": float(l['vl_total_venda']) if l['vl_total_venda'] is not None else None,
+                "valorUnitarioCmv": float(l['valor_unitario']) if l['valor_unitario'] is not None else None,
+                "valorTotalCmv": float(l['valor_cmc'] or 0),
             } for l in linhas or []]
+            limitado = len(linhas_base) >= limite
 
-        produto_ids = [i['cdProduto'] for i in itens_base if i['cdProduto'] is not None]
+        produto_ids = list({l['cdProduto'] for l in linhas_base if l['cdProduto'] is not None})
         nomes_produto = {}
+        referencias = {}
         if produto_ids:
             placeholders = ",".join(["%s"] * len(produto_ids))
             rows_nome = execute_query(
@@ -656,15 +640,34 @@ def transacao_itens_cmv_detalhado(
                 tuple(produto_ids)
             )
             nomes_produto = {r['cd_produto']: r['ds_produto'] for r in rows_nome or []}
+            referencias = _buscar_referencias(produto_ids)
 
-        for item in itens_base:
-            item["dsProduto"] = nomes_produto.get(item["cdProduto"], f"PRODUTO {item['cdProduto']}")
+        nome_empresa = _nome_empresa_cmv(cdEmpresa)
+        vendas = []
+        for l in linhas_base:
+            valor_total_venda = l["valorTotalVenda"]
+            valor_total_cmv = l["valorTotalCmv"]
+            vendas.append({
+                "cdEmpresa": cdEmpresa,
+                "nomeEmpresa": nome_empresa,
+                "nrTransacao": l["nrTransacao"],
+                "dtTransacao": l["dtTransacao"],
+                "cdProduto": l["cdProduto"],
+                "dsProduto": nomes_produto.get(l["cdProduto"], f"PRODUTO {l['cdProduto']}"),
+                "referencia": referencias.get(l["cdProduto"]),
+                "qtSolicitada": l["qtSolicitada"],
+                "valorUnitarioVenda": l["valorUnitarioVenda"],
+                "valorUnitarioCmv": l["valorUnitarioCmv"],
+                "valorTotalVenda": valor_total_venda,
+                "valorTotalCmv": valor_total_cmv,
+                "cmvPercentual": _cmv_percentual(valor_total_cmv, valor_total_venda) if valor_total_venda else None,
+            })
 
-        return {"cdEmpresa": cdEmpresa, "nrTransacao": nrTransacao, "itens": itens_base}
+        return {"cdEmpresa": cdEmpresa, "nome": nome_empresa, "vendas": vendas, "limitado": limitado}
     except HTTPException:
         raise
     except Exception as e:
-        print(f"[ERROR] Erro ao buscar itens da transacao CMV detalhado: {e}")
+        print(f"[ERROR] Erro ao buscar vendas detalhadas CMV: {e}")
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Erro ao buscar itens da transacao CMV detalhado: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Erro ao buscar vendas detalhadas CMV: {str(e)}")
