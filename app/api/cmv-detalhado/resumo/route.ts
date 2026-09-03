@@ -9,7 +9,9 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const dataInicio = searchParams.get('dataInicio') || '2026-01-01';
     const dataFim = searchParams.get('dataFim') || '2026-12-31';
+    const empresas = searchParams.get('empresas');
     const params = new URLSearchParams({ dataInicio, dataFim });
+    if (empresas) params.set('empresas', empresas);
 
     const response = await fetch(`${PYTHON_API_URL}/api/cmv-detalhado/resumo?${params.toString()}`, {
       method: 'GET',
