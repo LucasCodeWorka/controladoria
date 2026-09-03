@@ -121,23 +121,30 @@ function GraficoBarrasPercentual({
     return <p className="text-sm text-gray-400 py-8 text-center">Sem dado no período pra calcular o %.</p>;
   }
   const gap = 16;
-  const alturaMax = 170;
+  const alturaMax = 110;
   const larguraViewBox = 1000;
   const larguraBarra = Math.max((larguraViewBox - gap * (dados.length + 1)) / dados.length, 8);
   const maxValor = Math.max(...dados.map((d) => d.valor), 1);
   const fonteRotulo = larguraBarra < 34 ? 9 : 12;
   const fonteLabel = larguraBarra < 34 ? 8 : 10;
-  const alturaSvg = alturaMax + 130;
+  const alturaSvg = alturaMax + 90;
   const yEixoX = 28 + alturaMax + 14;
   const temAviso = dados.some((d) => d.aviso);
 
   return (
     <div>
+      {/* height fixo (em px, nao so via viewBox) - sem isso o SVG cresce
+          junto com a largura do container (aspect ratio do viewBox), o que
+          deixava o grafico enorme em telas largas. width 100% continua
+          fluido; height fica sempre o mesmo, so as barras encolhem/esticam
+          na horizontal. */}
       <svg
         width="100%"
+        height={alturaSvg}
         viewBox={`0 0 ${larguraViewBox} ${alturaSvg}`}
-        preserveAspectRatio="xMidYMid meet"
+        preserveAspectRatio="none"
         className="font-sans"
+        style={{ maxHeight: alturaSvg }}
         role="img"
         aria-label={ariaLabel}
       >
