@@ -16,6 +16,7 @@ import {
   Factory,
   Wallet,
   GitCompare,
+  Boxes,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -47,6 +48,11 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
       name: 'DRE x DFC',
       href: '/dre-dfc',
       icon: GitCompare,
+    },
+    {
+      name: 'CMV Detalhado',
+      href: '/cmv-detalhado',
+      icon: Boxes,
     },
   ];
 
