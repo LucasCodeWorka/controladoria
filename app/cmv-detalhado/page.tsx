@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Boxes,
   Calendar,
@@ -126,18 +126,8 @@ function TooltipBarra({ active, payload }: PayloadTooltipBarra) {
 }
 
 // Grafico de barras via Recharts (responsivo por padrao, ja com grade,
-// eixos e proporcao de barra/espacamento bem resolvidas - trocado de um SVG
-// desenhado a mao, que nunca ficava com a leveza de um grafico de dashboard
-// de verdade).
-function GraficoBarrasPercentual({
-  dados,
-  ariaLabel,
-  onBarClick,
-}: {
-  dados: BarraDado[];
-  ariaLabel: string;
-  onBarClick?: (chave: string | number) => void;
-}) {
+// eixos e proporcao de barra/espacamento bem resolvidas).
+function GraficoBarrasPercentual({ dados, ariaLabel }: { dados: BarraDado[]; ariaLabel: string }) {
   if (dados.length === 0) {
     return <p className="text-sm text-gray-400 py-8 text-center">Sem dado no período pra calcular o %.</p>;
   }
@@ -167,14 +157,7 @@ function GraficoBarrasPercentual({
             width={40}
           />
           <Tooltip content={<TooltipBarra />} cursor={{ fill: 'rgba(11,11,11,0.04)' }} />
-          <Bar
-            dataKey="valor"
-            fill={COR_BARRA}
-            radius={[4, 4, 0, 0]}
-            maxBarSize={56}
-            onClick={onBarClick ? (data) => onBarClick((data as unknown as BarraDado).chave) : undefined}
-            cursor={onBarClick ? 'pointer' : undefined}
-          >
+          <Bar dataKey="valor" fill={COR_BARRA} radius={[4, 4, 0, 0]} maxBarSize={56}>
             <LabelList
               dataKey="valor"
               position="top"
@@ -224,15 +207,14 @@ export default function CmvDetalhadoPage() {
   const [loading, setLoading] = useState(false);
   const [statusCarregamento, setStatusCarregamento] = useState<string | null>(null);
   const [consultaExecutada, setConsultaExecutada] = useState(false);
+
   const [totais, setTotais] = useState<TotalEmpresa[]>([]);
   const [consolidado, setConsolidado] = useState<Consolidado | null>(null);
   const [porMes, setPorMes] = useState<TotalMes[]>([]);
 
-  const [empresaDrill, setEmpresaDrill] = useState<TotalEmpresa | null>(null);
   const [vendasDetalhadas, setVendasDetalhadas] = useState<VendaDetalhada[]>([]);
   const [vendasLimitadas, setVendasLimitadas] = useState(false);
-  const [carregandoVendas, setCarregandoVendas] = useState(false);
-
+  const [pendentes, setPendentes] = useState<TotalEmpresa[]>([]);
   const [calculandoMes, setCalculandoMes] = useState<string | null>(null);
 
   useEffect(() => {
@@ -246,33 +228,57 @@ export default function CmvDetalhadoPage() {
       .catch((e) => console.error('Erro ao buscar empresas do CMV detalhado:', e));
   }, []);
 
-  async function buscarResumo() {
+  async function buscarDados() {
     if (empresasSelecionadas.size === 0) {
       setStatusCarregamento('Selecione pelo menos uma loja/fábrica.');
       return;
     }
     setLoading(true);
     setStatusCarregamento(null);
-    setEmpresaDrill(null);
     try {
-      const params = new URLSearchParams({
+      // 1) /resumo (rapido) so pra saber quais lojas selecionadas ja tem o
+      // detalhe calculado - fabrica sempre tem, lojas dependem do cache.
+      const paramsResumo = new URLSearchParams({
         dataInicio,
         dataFim,
         empresas: Array.from(empresasSelecionadas).join(','),
       });
-      const response = await fetch(`/api/cmv-detalhado/resumo?${params.toString()}`, { cache: 'no-store' });
-      const data = await response.json();
-      if (data.error) {
-        setStatusCarregamento(`Erro do backend: ${data.error}`);
+      const respResumo = await fetch(`/api/cmv-detalhado/resumo?${paramsResumo.toString()}`, { cache: 'no-store' });
+      const dataResumo = await respResumo.json();
+      if (dataResumo.error) {
+        setStatusCarregamento(`Erro do backend: ${dataResumo.error}`);
         return;
       }
-      setTotais(data.totais || []);
-      setConsolidado(data.consolidado || null);
-      setPorMes(data.porMes || []);
+      const totaisResumo: TotalEmpresa[] = dataResumo.totais || [];
+      setTotais(totaisResumo);
+      setConsolidado(dataResumo.consolidado || null);
+      setPorMes(dataResumo.porMes || []);
+      const prontas = totaisResumo.filter((t) => t.detalhado);
+      const naoProntas = totaisResumo.filter((t) => !t.detalhado);
+      setPendentes(naoProntas);
+
+      // 2) Vendas detalhadas de cada empresa pronta, em paralelo, juntando
+      // tudo numa unica tabela.
+      const respostas = await Promise.all(
+        prontas.map((empresa) => {
+          const params = new URLSearchParams({ cdEmpresa: String(empresa.cdEmpresa), dataInicio, dataFim });
+          return fetch(`/api/cmv-detalhado/vendas-detalhadas?${params.toString()}`, { cache: 'no-store' }).then((r) => r.json());
+        })
+      );
+      const todasVendas: VendaDetalhada[] = [];
+      let algumaLimitada = false;
+      for (const resp of respostas) {
+        if (resp.error) continue;
+        todasVendas.push(...(resp.vendas || []));
+        if (resp.limitado) algumaLimitada = true;
+      }
+      todasVendas.sort((a, b) => (b.dtTransacao || '').localeCompare(a.dtTransacao || ''));
+      setVendasDetalhadas(todasVendas);
+      setVendasLimitadas(algumaLimitada);
       setConsultaExecutada(true);
     } catch (error) {
-      console.error('Erro ao buscar resumo do CMV detalhado:', error);
-      setStatusCarregamento('Erro ao buscar o resumo. Tente novamente.');
+      console.error('Erro ao buscar vendas detalhadas do CMV:', error);
+      setStatusCarregamento('Erro ao buscar os dados. Tente novamente.');
     } finally {
       setLoading(false);
     }
@@ -330,23 +336,7 @@ export default function CmvDetalhadoPage() {
     });
   }
 
-  async function abrirDrillEmpresa(empresa: TotalEmpresa) {
-    setEmpresaDrill(empresa);
-    setCarregandoVendas(true);
-    try {
-      const params = new URLSearchParams({ cdEmpresa: String(empresa.cdEmpresa), dataInicio, dataFim });
-      const response = await fetch(`/api/cmv-detalhado/vendas-detalhadas?${params.toString()}`, { cache: 'no-store' });
-      const data = await response.json();
-      setVendasDetalhadas(data.vendas || []);
-      setVendasLimitadas(!!data.limitado);
-    } catch (error) {
-      console.error('Erro ao buscar vendas detalhadas do CMV:', error);
-    } finally {
-      setCarregandoVendas(false);
-    }
-  }
-
-  async function calcularMesesFaltando(empresa: TotalEmpresa) {
+  async function calcularPendente(empresa: TotalEmpresa) {
     for (const mes of empresa.mesesFaltando) {
       setCalculandoMes(`${empresa.nome} — ${mes}`);
       try {
@@ -358,10 +348,8 @@ export default function CmvDetalhadoPage() {
       }
     }
     setCalculandoMes(null);
-    await buscarResumo();
+    await buscarDados();
   }
-
-  const totaisOrdenados = useMemo(() => [...totais].sort((a, b) => (b.cmvPercentual || 0) - (a.cmvPercentual || 0)), [totais]);
 
   return (
     <div className="max-w-[98%] mx-auto py-6 px-4 space-y-6">
@@ -372,9 +360,7 @@ export default function CmvDetalhadoPage() {
           </div>
           <div>
             <h1 className="text-2xl font-bold text-brand-dark">CMV Detalhado</h1>
-            <p className="text-sm text-gray-500">
-              % de CMV por loja, consolidado do período, e detalhe venda a venda / item a item.
-            </p>
+            <p className="text-sm text-gray-500">Venda a venda, item a item — SKU, referência, quantidade, valor de venda e CMV.</p>
           </div>
         </div>
       </div>
@@ -432,13 +418,13 @@ export default function CmvDetalhadoPage() {
           </div>
 
           <button
-            onClick={buscarResumo}
+            onClick={buscarDados}
             className="px-4 py-1.5 text-sm bg-rose-600 text-white rounded-md hover:bg-rose-700 transition-colors"
           >
             Consultar
           </button>
           <button
-            onClick={buscarResumo}
+            onClick={buscarDados}
             className="p-2 text-sm bg-gray-100 text-gray-600 rounded-md hover:bg-gray-200 transition-colors"
             title="Atualizar"
           >
@@ -520,20 +506,19 @@ export default function CmvDetalhadoPage() {
 
           <div className="bg-white rounded-lg shadow-lg p-5">
             <h2 className="text-base font-semibold text-gray-800 mb-1">% de CMV por loja</h2>
-            <p className="text-xs text-gray-500 mb-3">Clique numa barra (ou numa linha da tabela) pra ver as transações dessa loja no período.</p>
+            <p className="text-xs text-gray-500 mb-3">Percentual de CMV sobre a receita, por loja/fábrica selecionada no período.</p>
             <GraficoBarrasPercentual
               ariaLabel="CMV percentual por loja"
-              dados={totaisOrdenados.filter((d) => d.cmvPercentual !== null).map((d) => ({
-                chave: d.cdEmpresa,
-                label: nomeCurto(d.nome),
-                valor: d.cmvPercentual as number,
-                aviso: !d.detalhado,
-                tooltip: `${d.nome}: ${formatarPct(d.cmvPercentual)} (CMV ${formatarValor(-Math.abs(d.valorTotal))} / Receita ${formatarValor(d.receita)})`,
-              }))}
-              onBarClick={(chave) => {
-                const empresa = totaisOrdenados.find((t) => t.cdEmpresa === chave);
-                if (empresa) abrirDrillEmpresa(empresa);
-              }}
+              dados={[...totais]
+                .sort((a, b) => (b.cmvPercentual || 0) - (a.cmvPercentual || 0))
+                .filter((d) => d.cmvPercentual !== null)
+                .map((d) => ({
+                  chave: d.cdEmpresa,
+                  label: nomeCurto(d.nome),
+                  valor: d.cmvPercentual as number,
+                  aviso: !d.detalhado,
+                  tooltip: `${d.nome}: ${formatarPct(d.cmvPercentual)} (CMV ${formatarValor(-Math.abs(d.valorTotal))} / Receita ${formatarValor(d.receita)})`,
+                }))}
             />
           </div>
 
@@ -543,138 +528,106 @@ export default function CmvDetalhadoPage() {
               <p className="text-xs text-gray-500 mb-3">Somando todas as lojas/fábrica selecionadas no filtro, mês a mês.</p>
               <GraficoBarrasPercentual
                 ariaLabel="CMV percentual por mês"
-                dados={porMes.filter((m) => m.cmvPercentual !== null).map((m) => ({
-                  chave: m.anoMes,
-                  label: labelMes(m.anoMes),
-                  valor: m.cmvPercentual as number,
-                  tooltip: `${labelMes(m.anoMes)}: ${formatarPct(m.cmvPercentual)} (CMV ${formatarValor(-Math.abs(m.valorTotal))} / Receita ${formatarValor(m.receita)})`,
-                }))}
+                dados={porMes
+                  .filter((m) => m.cmvPercentual !== null)
+                  .map((m) => ({
+                    chave: m.anoMes,
+                    label: labelMes(m.anoMes),
+                    valor: m.cmvPercentual as number,
+                    tooltip: `${labelMes(m.anoMes)}: ${formatarPct(m.cmvPercentual)} (CMV ${formatarValor(-Math.abs(m.valorTotal))} / Receita ${formatarValor(m.receita)})`,
+                  }))}
               />
             </div>
           )}
 
-          <div className="bg-white rounded-lg shadow-lg overflow-hidden">
-            <div className="p-4 border-b border-gray-200 bg-gray-50">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-gray-500">
-                    <th className="text-left font-semibold pb-2">Loja</th>
-                    <th className="text-right font-semibold pb-2">Mercadoria Revenda</th>
-                    <th className="text-right font-semibold pb-2">Produto Próprio</th>
-                    <th className="text-right font-semibold pb-2">Total CMV</th>
-                    <th className="text-right font-semibold pb-2">Receita</th>
-                    <th className="text-right font-semibold pb-2">% CMV</th>
-                    <th className="text-center font-semibold pb-2">Detalhe</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {totaisOrdenados.map((t) => (
-                    <tr
-                      key={t.cdEmpresa}
-                      className={`border-t border-gray-100 hover:bg-white cursor-pointer ${empresaDrill?.cdEmpresa === t.cdEmpresa ? 'bg-rose-50' : ''}`}
-                      onClick={() => abrirDrillEmpresa(t)}
-                    >
-                      <td className="py-2 font-medium">{t.nome}</td>
-                      <td className="py-2 text-right text-red-600">{formatarValor(-Math.abs(t.mercadoriaRevenda))}</td>
-                      <td className="py-2 text-right text-red-600">{formatarValor(-Math.abs(t.produtoProprio))}</td>
-                      <td className="py-2 text-right font-semibold text-red-600">{formatarValor(-Math.abs(t.valorTotal))}</td>
-                      <td className="py-2 text-right text-gray-600">{formatarValor(t.receita)}</td>
-                      <td className="py-2 text-right font-semibold">{formatarPct(t.cmvPercentual)}</td>
-                      <td className="py-2 text-center" onClick={(e) => e.stopPropagation()}>
-                        {t.detalhado ? (
-                          <span className="text-[11px] px-2 py-0.5 rounded bg-green-100 text-green-700 font-medium">Completo</span>
-                        ) : calculandoMes && calculandoMes.startsWith(t.nome) ? (
-                          <span className="inline-flex items-center gap-1 text-[11px] text-gray-500">
-                            <Loader2 className="w-3 h-3 animate-spin" /> {calculandoMes}
-                          </span>
-                        ) : (
-                          <button
-                            onClick={() => calcularMesesFaltando(t)}
-                            className="text-[11px] px-2 py-0.5 rounded bg-amber-100 text-amber-800 hover:bg-amber-200 font-medium"
-                            title={`Calcular: ${t.mesesFaltando.join(', ')}`}
-                          >
-                            Calcular {t.mesesFaltando.length} mês(es)
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          {empresaDrill && (
-            <div className="bg-white rounded-lg shadow-lg overflow-hidden">
-              <div className="p-4 border-b border-gray-200 bg-rose-50">
-                <h2 className="text-base font-semibold text-gray-800">
-                  Vendas detalhadas — {empresaDrill.nome}
-                </h2>
-                <p className="text-xs text-gray-500">
-                  Uma linha por SKU vendido dentro de cada transação.
-                  {empresaDrill.tipo === 'fabrica' && (
-                    <> Fábrica: valor de venda por SKU não disponível (fonte muito lenta) — só CMV.</>
-                  )}
-                  {vendasLimitadas && <> Mostrando as {vendasDetalhadas.length} vendas mais recentes do período.</>}
-                </p>
+          {pendentes.length > 0 && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+              <p className="text-sm font-medium text-amber-800 mb-2">
+                Ainda faltam calcular o detalhe dessas lojas no período (não entram na tabela abaixo até calcular):
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {pendentes.map((p) => (
+                  <button
+                    key={p.cdEmpresa}
+                    onClick={() => calcularPendente(p)}
+                    disabled={!!calculandoMes}
+                    className="text-xs px-2.5 py-1.5 rounded bg-amber-100 text-amber-800 hover:bg-amber-200 font-medium disabled:opacity-50"
+                    title={`Calcular: ${p.mesesFaltando.join(', ')}`}
+                  >
+                    {calculandoMes && calculandoMes.startsWith(p.nome) ? (
+                      <span className="inline-flex items-center gap-1">
+                        <Loader2 className="w-3 h-3 animate-spin" /> {calculandoMes}
+                      </span>
+                    ) : (
+                      <>{p.nome} ({p.mesesFaltando.length} mês(es))</>
+                    )}
+                  </button>
+                ))}
               </div>
-              {carregandoVendas ? (
-                <div className="flex items-center justify-center py-8">
-                  <Loader2 className="w-5 h-5 animate-spin text-gray-400" />
-                  <span className="ml-2 text-sm text-gray-500">Carregando vendas...</span>
-                </div>
-              ) : (
-                <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
-                  <table className="w-full text-sm whitespace-nowrap">
-                    <thead className="sticky top-0 bg-gray-100">
-                      <tr>
-                        <th className="px-4 py-2 text-left font-semibold border-b">Empresa</th>
-                        <th className="px-3 py-2 text-left font-semibold border-b">Transação</th>
-                        <th className="px-3 py-2 text-left font-semibold border-b">Data</th>
-                        <th className="px-3 py-2 text-left font-semibold border-b">SKU</th>
-                        <th className="px-3 py-2 text-left font-semibold border-b">Referência</th>
-                        <th className="px-3 py-2 text-left font-semibold border-b">Produto</th>
-                        <th className="px-3 py-2 text-right font-semibold border-b">Qtde</th>
-                        <th className="px-3 py-2 text-right font-semibold border-b">Vl. Unit. Venda</th>
-                        <th className="px-3 py-2 text-right font-semibold border-b">CMV Unit.</th>
-                        <th className="px-3 py-2 text-right font-semibold border-b">Vl. Total Venda</th>
-                        <th className="px-3 py-2 text-right font-semibold border-b">Vl. Total CMV</th>
-                        <th className="px-3 py-2 text-right font-semibold border-b">% CMV</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {vendasDetalhadas.map((v, idx) => (
-                        <tr key={`${v.nrTransacao}-${v.cdProduto}-${idx}`} className="border-t hover:bg-gray-50">
-                          <td className="px-4 py-1.5">{v.nomeEmpresa}</td>
-                          <td className="px-3 py-1.5 font-mono text-gray-600">{v.nrTransacao}</td>
-                          <td className="px-3 py-1.5 text-gray-500">
-                            {v.dtTransacao ? new Date(v.dtTransacao).toLocaleDateString('pt-BR') : '-'}
-                          </td>
-                          <td className="px-3 py-1.5 font-mono text-gray-600">{v.cdProduto}</td>
-                          <td className="px-3 py-1.5 font-mono text-gray-600">{v.referencia ?? '-'}</td>
-                          <td className="px-3 py-1.5 text-gray-700 whitespace-normal max-w-xs">{v.dsProduto}</td>
-                          <td className="px-3 py-1.5 text-right text-gray-500">{v.qtSolicitada ?? '-'}</td>
-                          <td className="px-3 py-1.5 text-right text-gray-700">
-                            {v.valorUnitarioVenda !== null ? formatarValor(v.valorUnitarioVenda) : '-'}
-                          </td>
-                          <td className="px-3 py-1.5 text-right text-gray-700">
-                            {v.valorUnitarioCmv !== null ? formatarValor(v.valorUnitarioCmv) : '-'}
-                          </td>
-                          <td className="px-3 py-1.5 text-right text-gray-700">
-                            {v.valorTotalVenda !== null ? formatarValor(v.valorTotalVenda) : '-'}
-                          </td>
-                          <td className="px-3 py-1.5 text-right text-red-600 font-medium">
-                            {formatarValor(-Math.abs(v.valorTotalCmv))}
-                          </td>
-                          <td className="px-3 py-1.5 text-right font-semibold">{formatarPct(v.cmvPercentual)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
             </div>
           )}
+
+          <div className="bg-white rounded-lg shadow-lg overflow-hidden">
+            <div className="p-4 border-b border-gray-200 bg-rose-50">
+              <h2 className="text-base font-semibold text-gray-800">Vendas detalhadas</h2>
+              <p className="text-xs text-gray-500">
+                Uma linha por SKU vendido dentro de cada transação.
+                {vendasLimitadas && <> Mostrando as vendas mais recentes do período (algumas empresas ultrapassaram o limite de linhas).</>}
+              </p>
+            </div>
+            {vendasDetalhadas.length === 0 ? (
+              <p className="text-sm text-gray-400 py-8 text-center">Nenhuma venda encontrada no período/filtro selecionado.</p>
+            ) : (
+              <div className="overflow-x-auto max-h-[720px] overflow-y-auto">
+                <table className="w-full text-sm whitespace-nowrap">
+                  <thead className="sticky top-0 bg-gray-100">
+                    <tr>
+                      <th className="px-4 py-2 text-left font-semibold border-b">Empresa</th>
+                      <th className="px-3 py-2 text-left font-semibold border-b">Transação</th>
+                      <th className="px-3 py-2 text-left font-semibold border-b">Data</th>
+                      <th className="px-3 py-2 text-left font-semibold border-b">SKU</th>
+                      <th className="px-3 py-2 text-left font-semibold border-b">Referência</th>
+                      <th className="px-3 py-2 text-left font-semibold border-b">Produto</th>
+                      <th className="px-3 py-2 text-right font-semibold border-b">Qtde</th>
+                      <th className="px-3 py-2 text-right font-semibold border-b">Vl. Unit. Venda</th>
+                      <th className="px-3 py-2 text-right font-semibold border-b">CMV Unit.</th>
+                      <th className="px-3 py-2 text-right font-semibold border-b">Vl. Total Venda</th>
+                      <th className="px-3 py-2 text-right font-semibold border-b">Vl. Total CMV</th>
+                      <th className="px-3 py-2 text-right font-semibold border-b">% CMV</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {vendasDetalhadas.map((v, idx) => (
+                      <tr key={`${v.cdEmpresa}-${v.nrTransacao}-${v.cdProduto}-${idx}`} className="border-t hover:bg-gray-50">
+                        <td className="px-4 py-1.5">{v.nomeEmpresa}</td>
+                        <td className="px-3 py-1.5 font-mono text-gray-600">{v.nrTransacao}</td>
+                        <td className="px-3 py-1.5 text-gray-500">
+                          {v.dtTransacao ? new Date(v.dtTransacao).toLocaleDateString('pt-BR') : '-'}
+                        </td>
+                        <td className="px-3 py-1.5 font-mono text-gray-600">{v.cdProduto}</td>
+                        <td className="px-3 py-1.5 font-mono text-gray-600">{v.referencia ?? '-'}</td>
+                        <td className="px-3 py-1.5 text-gray-700 whitespace-normal max-w-xs">{v.dsProduto}</td>
+                        <td className="px-3 py-1.5 text-right text-gray-500">{v.qtSolicitada ?? '-'}</td>
+                        <td className="px-3 py-1.5 text-right text-gray-700">
+                          {v.valorUnitarioVenda !== null ? formatarValor(v.valorUnitarioVenda) : '-'}
+                        </td>
+                        <td className="px-3 py-1.5 text-right text-gray-700">
+                          {v.valorUnitarioCmv !== null ? formatarValor(v.valorUnitarioCmv) : '-'}
+                        </td>
+                        <td className="px-3 py-1.5 text-right text-gray-700">
+                          {v.valorTotalVenda !== null ? formatarValor(v.valorTotalVenda) : '-'}
+                        </td>
+                        <td className="px-3 py-1.5 text-right text-red-600 font-medium">
+                          {formatarValor(-Math.abs(v.valorTotalCmv))}
+                        </td>
+                        <td className="px-3 py-1.5 text-right font-semibold">{formatarPct(v.cmvPercentual)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </>
       )}
     </div>
