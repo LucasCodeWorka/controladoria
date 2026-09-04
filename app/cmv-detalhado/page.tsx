@@ -282,7 +282,12 @@ export default function CmvDetalhadoPage() {
         if (resp.limitado) algumaLimitada = true;
       }
       todasVendas.sort((a, b) => (b.dtTransacao || '').localeCompare(a.dtTransacao || ''));
-      setVendasDetalhadas(todasVendas);
+      // Com varias lojas selecionadas, a soma pode passar de dezenas de
+      // milhares de linhas - renderizar tudo numa tabela so trava/derruba a
+      // aba do navegador (tela em branco). Corta nas mais recentes.
+      const LIMITE_TABELA = 3000;
+      if (todasVendas.length > LIMITE_TABELA) algumaLimitada = true;
+      setVendasDetalhadas(todasVendas.slice(0, LIMITE_TABELA));
       setVendasLimitadas(algumaLimitada);
       setConsultaExecutada(true);
     } catch (error) {
@@ -584,7 +589,12 @@ export default function CmvDetalhadoPage() {
               <h2 className="text-base font-semibold text-gray-800">Vendas detalhadas</h2>
               <p className="text-xs text-gray-500">
                 Uma linha por SKU vendido dentro de cada transação.
-                {vendasLimitadas && <> Mostrando as vendas mais recentes do período (algumas empresas ultrapassaram o limite de linhas).</>}
+                {vendasLimitadas && (
+                  <>
+                    {' '}Mostrando as {vendasDetalhadas.length} vendas mais recentes do período — filtre menos lojas ou
+                    um período menor pra ver o restante.
+                  </>
+                )}
               </p>
             </div>
             {vendasDetalhadas.length === 0 ? (
