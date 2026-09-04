@@ -216,6 +216,7 @@ export default function CmvDetalhadoPage() {
   const [vendasLimitadas, setVendasLimitadas] = useState(false);
   const [pendentes, setPendentes] = useState<TotalEmpresa[]>([]);
   const [calculandoMes, setCalculandoMes] = useState<string | null>(null);
+  const [progresso, setProgresso] = useState<{ feito: number; total: number } | null>(null);
 
   useEffect(() => {
     fetch('/api/cmv-detalhado/empresas', { cache: 'no-store' })
@@ -257,12 +258,20 @@ export default function CmvDetalhadoPage() {
       const naoProntas = totaisResumo.filter((t) => !t.detalhado);
       setPendentes(naoProntas);
 
-      // 2) Vendas detalhadas de cada empresa pronta, em paralelo, juntando
-      // tudo numa unica tabela.
+      // 2) Vendas detalhadas de cada empresa pronta. Disparadas todas juntas,
+      // mas o navegador so abre ~6 conexoes por vez pro mesmo endereco - com
+      // muitas lojas selecionadas isso pode levar bem mais que alguns
+      // segundos, entao mostra progresso (senao parece travado, mesmo
+      // funcionando).
+      let concluidas = 0;
+      setProgresso({ feito: 0, total: prontas.length });
       const respostas = await Promise.all(
-        prontas.map((empresa) => {
+        prontas.map(async (empresa) => {
           const params = new URLSearchParams({ cdEmpresa: String(empresa.cdEmpresa), dataInicio, dataFim });
-          return fetch(`/api/cmv-detalhado/vendas-detalhadas?${params.toString()}`, { cache: 'no-store' }).then((r) => r.json());
+          const resp = await fetch(`/api/cmv-detalhado/vendas-detalhadas?${params.toString()}`, { cache: 'no-store' }).then((r) => r.json());
+          concluidas += 1;
+          setProgresso({ feito: concluidas, total: prontas.length });
+          return resp;
         })
       );
       const todasVendas: VendaDetalhada[] = [];
@@ -281,6 +290,7 @@ export default function CmvDetalhadoPage() {
       setStatusCarregamento('Erro ao buscar os dados. Tente novamente.');
     } finally {
       setLoading(false);
+      setProgresso(null);
     }
   }
 
@@ -486,7 +496,9 @@ export default function CmvDetalhadoPage() {
       {loading && !consultaExecutada && (
         <div className="flex items-center justify-center py-16">
           <Loader2 className="w-6 h-6 animate-spin text-rose-600" />
-          <span className="ml-3 text-gray-600">Carregando...</span>
+          <span className="ml-3 text-gray-600">
+            {progresso ? `Carregando vendas... ${progresso.feito}/${progresso.total} lojas` : 'Carregando...'}
+          </span>
         </div>
       )}
 
