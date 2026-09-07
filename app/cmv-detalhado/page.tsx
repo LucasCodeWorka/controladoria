@@ -36,9 +36,6 @@ interface TotalEmpresa {
   valorTotal: number;
   receita: number;
   cmvPercentual: number | null;
-  mesesCalculados: string[];
-  mesesFaltando: string[];
-  detalhado: boolean;
 }
 
 interface Consolidado {
@@ -54,20 +51,25 @@ interface TotalMes {
   cmvPercentual: number | null;
 }
 
-interface VendaDetalhada {
-  cdEmpresa: number;
-  nomeEmpresa: string;
-  nrTransacao: number;
-  dtTransacao: string | null;
-  cdProduto: number;
-  dsProduto: string;
-  referencia: string | null;
-  qtSolicitada: number | null;
-  valorUnitarioVenda: number | null;
-  valorUnitarioCmv: number | null;
-  valorTotalVenda: number | null;
-  valorTotalCmv: number;
-  cmvPercentual: number | null;
+type Dimensao = 'linha' | 'familia' | 'colecao' | 'status' | 'continuidade';
+
+const DIMENSOES: { chave: Dimensao; label: string }[] = [
+  { chave: 'linha', label: 'Linha' },
+  { chave: 'familia', label: 'Família' },
+  { chave: 'colecao', label: 'Coleção' },
+  { chave: 'status', label: 'Status' },
+  { chave: 'continuidade', label: 'Continuidade' },
+];
+
+interface ItemDimensao {
+  chave: string;
+  valor: number;
+}
+
+interface RespostaDimensao {
+  dimensao: Dimensao;
+  itens: ItemDimensao[];
+  empresasIgnoradas: string[];
 }
 
 // Cores em ordem categorica fixa (paleta validada) - aqui so a primeira
@@ -102,11 +104,20 @@ function nomeCurto(nome: string): string {
   return nome.length > 12 ? `${nome.slice(0, 11)}…` : nome;
 }
 
+// Versao compacta pra rotulo/eixo de grafico (R$ 4,5 mi / R$ 730 mil) - o
+// valor cheio (formatarValor) fica no tooltip.
+function formatarValorCompacto(valor: number): string {
+  const abs = Math.abs(valor);
+  const sinal = valor < 0 ? '-' : '';
+  if (abs >= 1_000_000) return `${sinal}R$ ${(abs / 1_000_000).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} mi`;
+  if (abs >= 1_000) return `${sinal}R$ ${(abs / 1_000).toLocaleString('pt-BR', { maximumFractionDigits: 0 })} mil`;
+  return formatarValor(valor);
+}
+
 interface BarraDado {
   chave: string | number;
   label: string;
   valor: number;
-  aviso?: boolean;
   tooltip?: string;
 }
 
@@ -131,17 +142,15 @@ function GraficoBarrasPercentual({ dados, ariaLabel }: { dados: BarraDado[]; ari
   if (dados.length === 0) {
     return <p className="text-sm text-gray-400 py-8 text-center">Sem dado no período pra calcular o %.</p>;
   }
-  const temAviso = dados.some((d) => d.aviso);
   const muitasCategorias = dados.length > 8;
-  const dadosComLabel = dados.map((d) => ({ ...d, labelEixo: `${d.label}${d.aviso ? ' *' : ''}` }));
 
   return (
     <div role="img" aria-label={ariaLabel}>
       <ResponsiveContainer width="100%" height={muitasCategorias ? 300 : 240}>
-        <BarChart data={dadosComLabel} margin={{ top: 24, right: 8, left: 0, bottom: muitasCategorias ? 56 : 4 }}>
+        <BarChart data={dados} margin={{ top: 24, right: 8, left: 0, bottom: muitasCategorias ? 56 : 4 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#e1e0d9" vertical={false} />
           <XAxis
-            dataKey="labelEixo"
+            dataKey="label"
             tick={{ fontSize: 11, fill: '#52514e' }}
             interval={0}
             angle={muitasCategorias ? -35 : 0}
@@ -167,9 +176,51 @@ function GraficoBarrasPercentual({ dados, ariaLabel }: { dados: BarraDado[]; ari
           </Bar>
         </BarChart>
       </ResponsiveContainer>
-      {temAviso && (
-        <p className="text-[11px] text-amber-600 text-center mt-1">* ainda faltam meses calcular no detalhe dessa loja</p>
-      )}
+    </div>
+  );
+}
+
+// Mesmo estilo do grafico de %, mas pra valor em R$ (CMV por linha/familia/
+// colecao/status/continuidade) - eixo e rotulo em formato compacto, tooltip
+// com o valor cheio.
+function GraficoBarrasValor({ dados, ariaLabel }: { dados: BarraDado[]; ariaLabel: string }) {
+  if (dados.length === 0) {
+    return <p className="text-sm text-gray-400 py-8 text-center">Sem dado no período pra essa dimensão.</p>;
+  }
+  const muitasCategorias = dados.length > 8;
+
+  return (
+    <div role="img" aria-label={ariaLabel}>
+      <ResponsiveContainer width="100%" height={muitasCategorias ? 320 : 260}>
+        <BarChart data={dados} margin={{ top: 24, right: 8, left: 0, bottom: muitasCategorias ? 64 : 4 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#e1e0d9" vertical={false} />
+          <XAxis
+            dataKey="label"
+            tick={{ fontSize: 11, fill: '#52514e' }}
+            interval={0}
+            angle={muitasCategorias ? -35 : 0}
+            textAnchor={muitasCategorias ? 'end' : 'middle'}
+            axisLine={{ stroke: '#c3c2b7' }}
+            tickLine={false}
+          />
+          <YAxis
+            tickFormatter={(v: number) => formatarValorCompacto(v)}
+            tick={{ fontSize: 11, fill: '#898781' }}
+            axisLine={false}
+            tickLine={false}
+            width={64}
+          />
+          <Tooltip content={<TooltipBarra />} cursor={{ fill: 'rgba(11,11,11,0.04)' }} />
+          <Bar dataKey="valor" fill={COR_BARRA} radius={[4, 4, 0, 0]} maxBarSize={56}>
+            <LabelList
+              dataKey="valor"
+              position="top"
+              formatter={(v: React.ReactNode) => formatarValorCompacto(v as number)}
+              style={{ fontSize: 11, fontWeight: 700, fill: '#0b0b0b' }}
+            />
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
     </div>
   );
 }
@@ -212,11 +263,14 @@ export default function CmvDetalhadoPage() {
   const [consolidado, setConsolidado] = useState<Consolidado | null>(null);
   const [porMes, setPorMes] = useState<TotalMes[]>([]);
 
-  const [vendasDetalhadas, setVendasDetalhadas] = useState<VendaDetalhada[]>([]);
-  const [vendasLimitadas, setVendasLimitadas] = useState(false);
-  const [pendentes, setPendentes] = useState<TotalEmpresa[]>([]);
-  const [calculandoMes, setCalculandoMes] = useState<string | null>(null);
-  const [progresso, setProgresso] = useState<{ feito: number; total: number } | null>(null);
+  const [dimensaoSelecionada, setDimensaoSelecionada] = useState<Dimensao>('linha');
+  const [dadosPorDimensao, setDadosPorDimensao] = useState<Record<Dimensao, RespostaDimensao | null>>({
+    linha: null,
+    familia: null,
+    colecao: null,
+    status: null,
+    continuidade: null,
+  });
 
   useEffect(() => {
     fetch('/api/cmv-detalhado/empresas', { cache: 'no-store' })
@@ -237,65 +291,47 @@ export default function CmvDetalhadoPage() {
     setLoading(true);
     setStatusCarregamento(null);
     try {
-      // 1) /resumo (rapido) so pra saber quais lojas selecionadas ja tem o
-      // detalhe calculado - fabrica sempre tem, lojas dependem do cache.
-      const paramsResumo = new URLSearchParams({
-        dataInicio,
-        dataFim,
-        empresas: Array.from(empresasSelecionadas).join(','),
-      });
-      const respResumo = await fetch(`/api/cmv-detalhado/resumo?${paramsResumo.toString()}`, { cache: 'no-store' });
-      const dataResumo = await respResumo.json();
+      const empresasParam = Array.from(empresasSelecionadas).join(',');
+      const paramsResumo = new URLSearchParams({ dataInicio, dataFim, empresas: empresasParam });
+
+      const [respostaResumo, ...respostasDimensao] = await Promise.all([
+        fetch(`/api/cmv-detalhado/resumo?${paramsResumo.toString()}`, { cache: 'no-store' }),
+        ...DIMENSOES.map((d) => {
+          const params = new URLSearchParams({ dimensao: d.chave, dataInicio, dataFim, empresas: empresasParam });
+          return fetch(`/api/cmv-detalhado/por-dimensao?${params.toString()}`, { cache: 'no-store' });
+        }),
+      ]);
+
+      const dataResumo = await respostaResumo.json();
       if (dataResumo.error) {
         setStatusCarregamento(`Erro do backend: ${dataResumo.error}`);
         return;
       }
-      const totaisResumo: TotalEmpresa[] = dataResumo.totais || [];
-      setTotais(totaisResumo);
+      setTotais(dataResumo.totais || []);
       setConsolidado(dataResumo.consolidado || null);
       setPorMes(dataResumo.porMes || []);
-      const prontas = totaisResumo.filter((t) => t.detalhado);
-      const naoProntas = totaisResumo.filter((t) => !t.detalhado);
-      setPendentes(naoProntas);
 
-      // 2) Vendas detalhadas de cada empresa pronta. Disparadas todas juntas,
-      // mas o navegador so abre ~6 conexoes por vez pro mesmo endereco - com
-      // muitas lojas selecionadas isso pode levar bem mais que alguns
-      // segundos, entao mostra progresso (senao parece travado, mesmo
-      // funcionando).
-      let concluidas = 0;
-      setProgresso({ feito: 0, total: prontas.length });
-      const respostas = await Promise.all(
-        prontas.map(async (empresa) => {
-          const params = new URLSearchParams({ cdEmpresa: String(empresa.cdEmpresa), dataInicio, dataFim });
-          const resp = await fetch(`/api/cmv-detalhado/vendas-detalhadas?${params.toString()}`, { cache: 'no-store' }).then((r) => r.json());
-          concluidas += 1;
-          setProgresso({ feito: concluidas, total: prontas.length });
-          return resp;
-        })
-      );
-      const todasVendas: VendaDetalhada[] = [];
-      let algumaLimitada = false;
-      for (const resp of respostas) {
-        if (resp.error) continue;
-        todasVendas.push(...(resp.vendas || []));
-        if (resp.limitado) algumaLimitada = true;
+      const novosDadosDimensao: Record<Dimensao, RespostaDimensao | null> = {
+        linha: null,
+        familia: null,
+        colecao: null,
+        status: null,
+        continuidade: null,
+      };
+      for (let i = 0; i < DIMENSOES.length; i++) {
+        const dataDim = await respostasDimensao[i].json();
+        if (!dataDim.error) {
+          novosDadosDimensao[DIMENSOES[i].chave] = dataDim;
+        }
       }
-      todasVendas.sort((a, b) => (b.dtTransacao || '').localeCompare(a.dtTransacao || ''));
-      // Com varias lojas selecionadas, a soma pode passar de dezenas de
-      // milhares de linhas - renderizar tudo numa tabela so trava/derruba a
-      // aba do navegador (tela em branco). Corta nas mais recentes.
-      const LIMITE_TABELA = 3000;
-      if (todasVendas.length > LIMITE_TABELA) algumaLimitada = true;
-      setVendasDetalhadas(todasVendas.slice(0, LIMITE_TABELA));
-      setVendasLimitadas(algumaLimitada);
+      setDadosPorDimensao(novosDadosDimensao);
+
       setConsultaExecutada(true);
     } catch (error) {
-      console.error('Erro ao buscar vendas detalhadas do CMV:', error);
+      console.error('Erro ao buscar resumo do CMV detalhado:', error);
       setStatusCarregamento('Erro ao buscar os dados. Tente novamente.');
     } finally {
       setLoading(false);
-      setProgresso(null);
     }
   }
 
@@ -351,21 +387,6 @@ export default function CmvDetalhadoPage() {
     });
   }
 
-  async function calcularPendente(empresa: TotalEmpresa) {
-    for (const mes of empresa.mesesFaltando) {
-      setCalculandoMes(`${empresa.nome} — ${mes}`);
-      try {
-        const params = new URLSearchParams({ cdEmpresa: String(empresa.cdEmpresa), anoMes: mes });
-        // eslint-disable-next-line no-await-in-loop
-        await fetch(`/api/cmv-detalhado/calcular?${params.toString()}`, { method: 'POST', cache: 'no-store' });
-      } catch (error) {
-        console.error(`Erro ao calcular ${empresa.nome}/${mes}:`, error);
-      }
-    }
-    setCalculandoMes(null);
-    await buscarDados();
-  }
-
   return (
     <div className="max-w-[98%] mx-auto py-6 px-4 space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-4">
@@ -375,7 +396,7 @@ export default function CmvDetalhadoPage() {
           </div>
           <div>
             <h1 className="text-2xl font-bold text-brand-dark">CMV Detalhado</h1>
-            <p className="text-sm text-gray-500">Venda a venda, item a item — SKU, referência, quantidade, valor de venda e CMV.</p>
+            <p className="text-sm text-gray-500">% de CMV sobre a receita, por loja/fábrica e por mês.</p>
           </div>
         </div>
       </div>
@@ -501,9 +522,7 @@ export default function CmvDetalhadoPage() {
       {loading && !consultaExecutada && (
         <div className="flex items-center justify-center py-16">
           <Loader2 className="w-6 h-6 animate-spin text-rose-600" />
-          <span className="ml-3 text-gray-600">
-            {progresso ? `Carregando vendas... ${progresso.feito}/${progresso.total} lojas` : 'Carregando...'}
-          </span>
+          <span className="ml-3 text-gray-600">Carregando...</span>
         </div>
       )}
 
@@ -533,7 +552,6 @@ export default function CmvDetalhadoPage() {
                   chave: d.cdEmpresa,
                   label: nomeCurto(d.nome),
                   valor: d.cmvPercentual as number,
-                  aviso: !d.detalhado,
                   tooltip: `${d.nome}: ${formatarPct(d.cmvPercentual)} (CMV ${formatarValor(-Math.abs(d.valorTotal))} / Receita ${formatarValor(d.receita)})`,
                 }))}
             />
@@ -557,97 +575,42 @@ export default function CmvDetalhadoPage() {
             </div>
           )}
 
-          {pendentes.length > 0 && (
-            <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
-              <p className="text-sm font-medium text-amber-800 mb-2">
-                Ainda faltam calcular o detalhe dessas lojas no período (não entram na tabela abaixo até calcular):
-              </p>
-              <div className="flex flex-wrap gap-2">
-                {pendentes.map((p) => (
+          <div className="bg-white rounded-lg shadow-lg p-5">
+            <div className="flex items-center justify-between flex-wrap gap-3 mb-1">
+              <h2 className="text-base font-semibold text-gray-800">CMV por {DIMENSOES.find((d) => d.chave === dimensaoSelecionada)?.label.toLowerCase()}</h2>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {DIMENSOES.map((d) => (
                   <button
-                    key={p.cdEmpresa}
-                    onClick={() => calcularPendente(p)}
-                    disabled={!!calculandoMes}
-                    className="text-xs px-2.5 py-1.5 rounded bg-amber-100 text-amber-800 hover:bg-amber-200 font-medium disabled:opacity-50"
-                    title={`Calcular: ${p.mesesFaltando.join(', ')}`}
+                    key={d.chave}
+                    onClick={() => setDimensaoSelecionada(d.chave)}
+                    className={`px-2.5 py-1 text-xs rounded-md transition-colors ${
+                      dimensaoSelecionada === d.chave
+                        ? 'bg-rose-600 text-white'
+                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                    }`}
                   >
-                    {calculandoMes && calculandoMes.startsWith(p.nome) ? (
-                      <span className="inline-flex items-center gap-1">
-                        <Loader2 className="w-3 h-3 animate-spin" /> {calculandoMes}
-                      </span>
-                    ) : (
-                      <>{p.nome} ({p.mesesFaltando.length} mês(es))</>
-                    )}
+                    {d.label}
                   </button>
                 ))}
               </div>
             </div>
-          )}
-
-          <div className="bg-white rounded-lg shadow-lg overflow-hidden">
-            <div className="p-4 border-b border-gray-200 bg-rose-50">
-              <h2 className="text-base font-semibold text-gray-800">Vendas detalhadas</h2>
-              <p className="text-xs text-gray-500">
-                Uma linha por SKU vendido dentro de cada transação.
-                {vendasLimitadas && (
-                  <>
-                    {' '}Mostrando as {vendasDetalhadas.length} vendas mais recentes do período — filtre menos lojas ou
-                    um período menor pra ver o restante.
-                  </>
-                )}
+            <p className="text-xs text-gray-500 mb-3">
+              Valor de CMV (04.02) no período, agrupado por {DIMENSOES.find((d) => d.chave === dimensaoSelecionada)?.label.toLowerCase()} do produto. Só cobre a
+              fábrica — as lojas não têm o produto vendido registrado na base rápida de CMV.
+            </p>
+            <GraficoBarrasValor
+              ariaLabel={`CMV por ${dimensaoSelecionada}`}
+              dados={(dadosPorDimensao[dimensaoSelecionada]?.itens || []).map((item) => ({
+                chave: item.chave,
+                label: nomeCurto(item.chave),
+                valor: item.valor,
+                tooltip: `${item.chave}: ${formatarValor(item.valor)}`,
+              }))}
+            />
+            {dadosPorDimensao[dimensaoSelecionada] && dadosPorDimensao[dimensaoSelecionada]!.empresasIgnoradas.length > 0 && (
+              <p className="text-xs text-amber-600 mt-2">
+                Não entram nesse gráfico (sem detalhe de produto na base de CMV): {dadosPorDimensao[dimensaoSelecionada]!.empresasIgnoradas.join(', ')}.
               </p>
-            </div>
-            {vendasDetalhadas.length === 0 ? (
-              <p className="text-sm text-gray-400 py-8 text-center">Nenhuma venda encontrada no período/filtro selecionado.</p>
-            ) : (
-              <div className="overflow-x-auto max-h-[720px] overflow-y-auto">
-                <table className="w-full text-sm whitespace-nowrap">
-                  <thead className="sticky top-0 bg-gray-100">
-                    <tr>
-                      <th className="px-4 py-2 text-left font-semibold border-b">Empresa</th>
-                      <th className="px-3 py-2 text-left font-semibold border-b">Transação</th>
-                      <th className="px-3 py-2 text-left font-semibold border-b">Data</th>
-                      <th className="px-3 py-2 text-left font-semibold border-b">SKU</th>
-                      <th className="px-3 py-2 text-left font-semibold border-b">Referência</th>
-                      <th className="px-3 py-2 text-left font-semibold border-b">Produto</th>
-                      <th className="px-3 py-2 text-right font-semibold border-b">Qtde</th>
-                      <th className="px-3 py-2 text-right font-semibold border-b">Vl. Unit. Venda</th>
-                      <th className="px-3 py-2 text-right font-semibold border-b">CMV Unit.</th>
-                      <th className="px-3 py-2 text-right font-semibold border-b">Vl. Total Venda</th>
-                      <th className="px-3 py-2 text-right font-semibold border-b">Vl. Total CMV</th>
-                      <th className="px-3 py-2 text-right font-semibold border-b">% CMV</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {vendasDetalhadas.map((v, idx) => (
-                      <tr key={`${v.cdEmpresa}-${v.nrTransacao}-${v.cdProduto}-${idx}`} className="border-t hover:bg-gray-50">
-                        <td className="px-4 py-1.5">{v.nomeEmpresa}</td>
-                        <td className="px-3 py-1.5 font-mono text-gray-600">{v.nrTransacao}</td>
-                        <td className="px-3 py-1.5 text-gray-500">
-                          {v.dtTransacao ? new Date(v.dtTransacao).toLocaleDateString('pt-BR') : '-'}
-                        </td>
-                        <td className="px-3 py-1.5 font-mono text-gray-600">{v.cdProduto}</td>
-                        <td className="px-3 py-1.5 font-mono text-gray-600">{v.referencia ?? '-'}</td>
-                        <td className="px-3 py-1.5 text-gray-700 whitespace-normal max-w-xs">{v.dsProduto}</td>
-                        <td className="px-3 py-1.5 text-right text-gray-500">{v.qtSolicitada ?? '-'}</td>
-                        <td className="px-3 py-1.5 text-right text-gray-700">
-                          {v.valorUnitarioVenda !== null ? formatarValor(v.valorUnitarioVenda) : '-'}
-                        </td>
-                        <td className="px-3 py-1.5 text-right text-gray-700">
-                          {v.valorUnitarioCmv !== null ? formatarValor(v.valorUnitarioCmv) : '-'}
-                        </td>
-                        <td className="px-3 py-1.5 text-right text-gray-700">
-                          {v.valorTotalVenda !== null ? formatarValor(v.valorTotalVenda) : '-'}
-                        </td>
-                        <td className="px-3 py-1.5 text-right text-red-600 font-medium">
-                          {formatarValor(-Math.abs(v.valorTotalCmv))}
-                        </td>
-                        <td className="px-3 py-1.5 text-right font-semibold">{formatarPct(v.cmvPercentual)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
             )}
           </div>
         </>
