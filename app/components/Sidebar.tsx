@@ -17,6 +17,7 @@ import {
   Wallet,
   GitCompare,
   Boxes,
+  RotateCw,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -53,6 +54,11 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
       name: 'CMV Detalhado',
       href: '/cmv-detalhado',
       icon: Boxes,
+    },
+    {
+      name: 'Giro',
+      href: '/giro',
+      icon: RotateCw,
     },
   ];
 
