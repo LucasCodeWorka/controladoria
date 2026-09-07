@@ -292,6 +292,13 @@ def cmv_por_dimensao(
     lentas (varias dezenas de segundos, custo fixo, independente do filtro).
     Empresas do tipo loja pedidas em 'empresas' sao ignoradas aqui e
     reportadas em 'empresasIgnoradas'.
+
+    O campo 'percentual' de cada item e a fatia da categoria sobre o TOTAL DE
+    CMV do proprio grafico (composicao), nao CMV/receita como nos outros
+    graficos da tela: a unica fonte rapida de receita por produto pra fabrica
+    (mv_vendas_valor) vem de PEDIDOS, nao de vendas realizadas, e bate ~35%
+    diferente da receita oficial ja usada no resto da tela - usar isso geraria
+    um % que nao reconcilia com o resto do painel.
     """
     try:
         coluna = DIMENSOES_CMV.get(dimensao)
@@ -326,6 +333,13 @@ def cmv_por_dimensao(
             if outros_valor > 0:
                 principais.append({"chave": "OUTROS", "valor": outros_valor})
             itens = principais
+
+        # Percentual de composicao: fatia de cada categoria sobre o total de
+        # CMV do grafico (nao e CMV/receita - nao ha fonte rapida e correta
+        # de receita por produto pra fabrica, ver docstring da funcao).
+        total_valor = sum(i["valor"] for i in itens)
+        for item in itens:
+            item["percentual"] = (item["valor"] / total_valor * 100) if total_valor else 0.0
 
         return {
             "dimensao": dimensao,

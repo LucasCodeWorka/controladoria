@@ -64,6 +64,7 @@ const DIMENSOES: { chave: Dimensao; label: string }[] = [
 interface ItemDimensao {
   chave: string;
   valor: number;
+  percentual: number;
 }
 
 interface RespostaDimensao {
@@ -102,16 +103,6 @@ function formatarPct(valor: number | null): string {
 
 function nomeCurto(nome: string): string {
   return nome.length > 12 ? `${nome.slice(0, 11)}…` : nome;
-}
-
-// Versao compacta pra rotulo/eixo de grafico (R$ 4,5 mi / R$ 730 mil) - o
-// valor cheio (formatarValor) fica no tooltip.
-function formatarValorCompacto(valor: number): string {
-  const abs = Math.abs(valor);
-  const sinal = valor < 0 ? '-' : '';
-  if (abs >= 1_000_000) return `${sinal}R$ ${(abs / 1_000_000).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} mi`;
-  if (abs >= 1_000) return `${sinal}R$ ${(abs / 1_000).toLocaleString('pt-BR', { maximumFractionDigits: 0 })} mil`;
-  return formatarValor(valor);
 }
 
 interface BarraDado {
@@ -172,51 +163,6 @@ function GraficoBarrasPercentual({ dados, ariaLabel }: { dados: BarraDado[]; ari
               position="top"
               formatter={(v: React.ReactNode) => formatarPct(v as number)}
               style={{ fontSize: 12, fontWeight: 700, fill: '#0b0b0b' }}
-            />
-          </Bar>
-        </BarChart>
-      </ResponsiveContainer>
-    </div>
-  );
-}
-
-// Mesmo estilo do grafico de %, mas pra valor em R$ (CMV por linha/familia/
-// colecao/status/continuidade) - eixo e rotulo em formato compacto, tooltip
-// com o valor cheio.
-function GraficoBarrasValor({ dados, ariaLabel }: { dados: BarraDado[]; ariaLabel: string }) {
-  if (dados.length === 0) {
-    return <p className="text-sm text-gray-400 py-8 text-center">Sem dado no período pra essa dimensão.</p>;
-  }
-  const muitasCategorias = dados.length > 8;
-
-  return (
-    <div role="img" aria-label={ariaLabel}>
-      <ResponsiveContainer width="100%" height={muitasCategorias ? 320 : 260}>
-        <BarChart data={dados} margin={{ top: 24, right: 8, left: 0, bottom: muitasCategorias ? 64 : 4 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#e1e0d9" vertical={false} />
-          <XAxis
-            dataKey="label"
-            tick={{ fontSize: 11, fill: '#52514e' }}
-            interval={0}
-            angle={muitasCategorias ? -35 : 0}
-            textAnchor={muitasCategorias ? 'end' : 'middle'}
-            axisLine={{ stroke: '#c3c2b7' }}
-            tickLine={false}
-          />
-          <YAxis
-            tickFormatter={(v: number) => formatarValorCompacto(v)}
-            tick={{ fontSize: 11, fill: '#898781' }}
-            axisLine={false}
-            tickLine={false}
-            width={64}
-          />
-          <Tooltip content={<TooltipBarra />} cursor={{ fill: 'rgba(11,11,11,0.04)' }} />
-          <Bar dataKey="valor" fill={COR_BARRA} radius={[4, 4, 0, 0]} maxBarSize={56}>
-            <LabelList
-              dataKey="valor"
-              position="top"
-              formatter={(v: React.ReactNode) => formatarValorCompacto(v as number)}
-              style={{ fontSize: 11, fontWeight: 700, fill: '#0b0b0b' }}
             />
           </Bar>
         </BarChart>
@@ -595,16 +541,16 @@ export default function CmvDetalhadoPage() {
               </div>
             </div>
             <p className="text-xs text-gray-500 mb-3">
-              Valor de CMV (04.02) no período, agrupado por {DIMENSOES.find((d) => d.chave === dimensaoSelecionada)?.label.toLowerCase()} do produto. Só cobre a
+              % de participação de cada {DIMENSOES.find((d) => d.chave === dimensaoSelecionada)?.label.toLowerCase()} sobre o total de CMV (04.02) do período. Só cobre a
               fábrica — as lojas não têm o produto vendido registrado na base rápida de CMV.
             </p>
-            <GraficoBarrasValor
+            <GraficoBarrasPercentual
               ariaLabel={`CMV por ${dimensaoSelecionada}`}
               dados={(dadosPorDimensao[dimensaoSelecionada]?.itens || []).map((item) => ({
                 chave: item.chave,
                 label: nomeCurto(item.chave),
-                valor: item.valor,
-                tooltip: `${item.chave}: ${formatarValor(item.valor)}`,
+                valor: item.percentual,
+                tooltip: `${item.chave}: ${formatarPct(item.percentual)} (CMV ${formatarValor(item.valor)})`,
               }))}
             />
             {dadosPorDimensao[dimensaoSelecionada] && dadosPorDimensao[dimensaoSelecionada]!.empresasIgnoradas.length > 0 && (
