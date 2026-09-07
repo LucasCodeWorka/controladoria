@@ -106,6 +106,14 @@ function nomeCurto(nome: string): string {
   return nome.length > 12 ? `${nome.slice(0, 11)}…` : nome;
 }
 
+// Corte maior que nomeCurto, pra categorias de dimensao (status/familia/...)
+// - com 12 caracteres, valores como "OPORTUNIDADE ATE 1 ANO" e "OPORTUNIDADE
+// ACIMA DE 2 ANOS" ficavam identicos ("OPORTUNIDAD…"), parecendo repetidos.
+// 22 mantem o suficiente pra distinguir sem estourar o espaco do eixo.
+function nomeCurtoDimensao(nome: string): string {
+  return nome.length > 22 ? `${nome.slice(0, 21)}…` : nome;
+}
+
 interface BarraDado {
   chave: string | number;
   label: string;
@@ -585,7 +593,7 @@ export default function CmvDetalhadoPage() {
                 .filter((item) => item.percentual !== null)
                 .map((item) => ({
                   chave: item.chave,
-                  label: nomeCurto(item.chave),
+                  label: nomeCurtoDimensao(item.chave),
                   valor: item.percentual as number,
                   tooltip: `${item.chave}: ${formatarPct(item.percentual)} (CMV ${formatarValor(item.valor)} / Receita ${formatarValor(item.receita)})`,
                 }))}
