@@ -241,11 +241,15 @@ export default function CmvDetalhadoPage() {
         // Restaura o filtro salvo da ultima visita, se houver - senao,
         // seleciona todas por padrao (mesmo padrao do DRE/DFC).
         const salvo = carregarFiltro<{ dataInicio: string; dataFim: string; empresas: number[] }>('cmv_detalhado_filtros');
+        const validas = new Set(lista.map((e) => e.cdEmpresa));
         if (salvo) {
           if (salvo.dataInicio) setDataInicio(salvo.dataInicio);
           if (salvo.dataFim) setDataFim(salvo.dataFim);
-          if (salvo.empresas) setEmpresasSelecionadas(new Set(salvo.empresas));
-          else setEmpresasSelecionadas(new Set(lista.map((e) => e.cdEmpresa)));
+          // So aceita empresas que ainda existem na lista atual - uma
+          // selecao salva antes (ex: um codigo que deixou de ser listado)
+          // nao pode virar um pedido invalido pro backend.
+          const empresasValidas = (salvo.empresas || []).filter((cd) => validas.has(cd));
+          setEmpresasSelecionadas(new Set(empresasValidas.length > 0 ? empresasValidas : lista.map((e) => e.cdEmpresa)));
         } else {
           setEmpresasSelecionadas(new Set(lista.map((e) => e.cdEmpresa)));
         }
@@ -285,8 +289,11 @@ export default function CmvDetalhadoPage() {
       ]);
 
       const dataResumo = await respostaResumo.json();
-      if (dataResumo.error) {
-        setStatusCarregamento(`Erro do backend: ${dataResumo.error}`);
+      // !ok cobre qualquer erro do backend, nao so o formato {error: ...} -
+      // o FastAPI usa {detail: ...} - sem isso, um erro (ex: filtro
+      // invalido) virava "dados" com formato errado e quebrava a tela.
+      if (!respostaResumo.ok || dataResumo.error) {
+        setStatusCarregamento(`Erro do backend: ${dataResumo.detail || dataResumo.error || 'Erro desconhecido'}`);
         return;
       }
       setTotais(dataResumo.totais || []);
@@ -303,7 +310,7 @@ export default function CmvDetalhadoPage() {
       let faltantes: string[] = [];
       for (let i = 0; i < DIMENSOES.length; i++) {
         const dataDim = await respostasDimensao[i].json();
-        if (!dataDim.error) {
+        if (respostasDimensao[i].ok && !dataDim.error) {
           novosDadosDimensao[DIMENSOES[i].chave] = dataDim;
           faltantes = dataDim.mesesFaltantes || [];
         }
@@ -332,8 +339,8 @@ export default function CmvDetalhadoPage() {
           cache: 'no-store',
         });
         const data = await response.json();
-        if (data.error) {
-          setStatusCarregamento(`Erro ao calcular ${anoMes}: ${data.error}`);
+        if (!response.ok || data.error) {
+          setStatusCarregamento(`Erro ao calcular ${anoMes}: ${data.detail || data.error || 'Erro desconhecido'}`);
           return;
         }
         setProgressoCalculo({ atual: i + 1, total: mesesFaltantes.length });

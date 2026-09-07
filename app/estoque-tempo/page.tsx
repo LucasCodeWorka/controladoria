@@ -247,8 +247,12 @@ export default function EstoqueTempoPage() {
         const lista: EmpresaOpcao[] = data.empresas || [];
         setEmpresasDisponiveis(lista);
         const salvo = carregarFiltro<{ empresas: number[] }>('estoque_tempo_filtros');
-        if (salvo?.empresas) setEmpresasSelecionadas(new Set(salvo.empresas));
-        else setEmpresasSelecionadas(new Set(lista.map((e) => e.cdEmpresa)));
+        // So aceita empresas que ainda existem na lista atual - uma selecao
+        // salva antes (ex: um codigo que deixou de ser listado) nao pode
+        // virar um pedido invalido pro backend.
+        const validas = new Set(lista.map((e) => e.cdEmpresa));
+        const empresasValidas = (salvo?.empresas || []).filter((cd) => validas.has(cd));
+        setEmpresasSelecionadas(new Set(empresasValidas.length > 0 ? empresasValidas : lista.map((e) => e.cdEmpresa)));
       })
       .catch((e) => console.error('Erro ao buscar empresas do estoque por tempo:', e));
   }, []);
@@ -273,8 +277,8 @@ export default function EstoqueTempoPage() {
       const params = new URLSearchParams({ empresas: Array.from(empresasSelecionadas).join(',') });
       const response = await fetch(`/api/estoque-tempo/dados?${params.toString()}`, { cache: 'no-store' });
       const data = await response.json();
-      if (data.error) {
-        setErro(`Erro do backend: ${data.error}`);
+      if (!response.ok || data.error) {
+        setErro(`Erro do backend: ${data.detail || data.error || 'Erro desconhecido'}`);
         return;
       }
       setDados(data);

@@ -271,10 +271,14 @@ export default function GiroPage() {
         // Restaura o filtro salvo da ultima visita, se houver - senao,
         // seleciona todas por padrao (mesmo padrao do DRE/DFC).
         const salvo = carregarFiltro<{ mesReferencia: string; empresas: number[]; status: string[] }>('giro_filtros');
+        const validas = new Set(lista.map((e) => e.cdEmpresa));
         if (salvo) {
           if (salvo.mesReferencia) setMesReferencia(salvo.mesReferencia);
-          if (salvo.empresas) setEmpresasSelecionadas(new Set(salvo.empresas));
-          else setEmpresasSelecionadas(new Set(lista.map((e) => e.cdEmpresa)));
+          // So aceita empresas que ainda existem na lista atual - uma
+          // selecao salva antes (ex: um codigo que deixou de ser listado)
+          // nao pode virar um pedido invalido pro backend.
+          const empresasValidas = (salvo.empresas || []).filter((cd) => validas.has(cd));
+          setEmpresasSelecionadas(new Set(empresasValidas.length > 0 ? empresasValidas : lista.map((e) => e.cdEmpresa)));
           if (salvo.status) setStatusSelecionados(new Set(salvo.status));
         } else {
           setEmpresasSelecionadas(new Set(lista.map((e) => e.cdEmpresa)));
@@ -310,8 +314,12 @@ export default function GiroPage() {
       if (statusParam) params.set('status', statusParam);
       const response = await fetch(`/api/giro/dados?${params.toString()}`, { cache: 'no-store' });
       const data = await response.json();
-      if (data.error) {
-        setErro(`Erro do backend: ${data.error}`);
+      // !response.ok cobre qualquer erro do backend, nao so o formato
+      // {error: ...} - o FastAPI usa {detail: ...} - sem isso, um erro
+      // (ex: empresa invalida) virava "dados" com formato errado e
+      // quebrava a tela ao tentar renderizar.
+      if (!response.ok || data.error) {
+        setErro(`Erro do backend: ${data.detail || data.error || 'Erro desconhecido'}`);
         return;
       }
       setDados(data);
@@ -348,8 +356,8 @@ export default function GiroPage() {
         const params = new URLSearchParams({ mesReferencia, empresas: String(faltantes[i]) });
         const response = await fetch(`/api/giro/recalcular?${params.toString()}`, { method: 'POST', cache: 'no-store' });
         const data = await response.json();
-        if (data.error) {
-          setErro(`Erro ao calcular: ${data.error}`);
+        if (!response.ok || data.error) {
+          setErro(`Erro ao calcular: ${data.detail || data.error || 'Erro desconhecido'}`);
           return;
         }
         setProgressoCalculo({ atual: i + 1, total: faltantes.length });
