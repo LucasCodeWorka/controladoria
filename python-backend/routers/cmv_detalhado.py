@@ -10,6 +10,7 @@ vr_tra_transacao (sem join com item/produto).
 from fastapi import APIRouter, HTTPException, Query
 from typing import Optional
 from datetime import datetime
+import calendar
 from database import execute_query, execute_insert
 from routers.dre import CCUSTOS_LOJAS, EMPRESAS_FABRICA
 
@@ -137,6 +138,130 @@ DIMENSOES_CMV = {
     "continuidade": "continuidade",
 }
 TOP_N_DIMENSAO = 12
+
+
+# ---------------------------------------------------------------------------
+# Cache de CMV por loja+produto+mes.
+#
+# mv_cmv_loja_v2 (rapida) NAO guarda o produto da venda, so o agregado por
+# conta/centro de custo - por isso o grafico de CMV por dimensao so cobria a
+# fabrica. A fonte que TEM o produto (vr_cmv_lojas_v2) e construida em cima
+# de vr_tra_transacao + vr_tra_transitem, que sao proibitivamente lentas por
+# TRANSACAO/produto (~28s so pra contar linhas de 1 loja num mes). Mas o
+# custo e fixo por mes, nao por filtro: rodar TODAS as lojas de um mes
+# inteiro de uma vez leva o mesmo ~16-30s que uma loja so. Isso torna viavel
+# um cache local: recalcula mes a mes (todas as lojas juntas), guarda o
+# resultado agregado por loja+produto+mes numa tabela local, e o
+# grafico/dimensao le so desse cache (instantaneo) - nunca das views lentas
+# na hora do request.
+# ---------------------------------------------------------------------------
+
+def _criar_tabela_cache_loja_produto():
+    execute_insert("""
+        CREATE TABLE IF NOT EXISTS cmv_loja_produto_cache (
+            idcentrodecusto INTEGER NOT NULL,
+            idproduto INTEGER NOT NULL,
+            ano_mes VARCHAR(7) NOT NULL,
+            valor NUMERIC NOT NULL,
+            PRIMARY KEY (idcentrodecusto, idproduto, ano_mes)
+        )
+    """, ())
+    execute_insert("""
+        CREATE TABLE IF NOT EXISTS cmv_loja_produto_cache_status (
+            ano_mes VARCHAR(7) PRIMARY KEY,
+            linhas INTEGER NOT NULL,
+            valor_total NUMERIC NOT NULL,
+            dt_calculado TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+    """, ())
+
+
+# Query validada: o total bate exatamente com o total oficial do
+# mv_cmv_loja_v2 pro mesmo periodo (testado ago/2026: -759.730,37 nos dois).
+_QUERY_CMV_LOJA_PRODUTO_MES = """
+    WITH base AS (
+        SELECT t.cd_empresa AS idcentrodecusto,
+            t.dt_transacao AS data,
+            i.qt_solicitada,
+            i.cd_produto AS idproduto,
+            t.tp_operacao,
+            btrim(pc_marca.cd_classificacao::text) AS idmarca
+        FROM vr_tra_transacao t
+        JOIN vr_tra_transitem i ON t.nr_transacao = i.nr_transacao AND t.cd_empresa = i.cd_empresa
+        LEFT JOIN prd_produtoclas pc_marca ON pc_marca.cd_produto = i.cd_produto AND pc_marca.cd_tipoclas = 20
+        WHERE t.tp_situacao = 4 AND t.cd_empresa <> ALL (ARRAY[1::bigint, 50::bigint])
+          AND t.dt_transacao >= %s AND t.dt_transacao <= %s
+          AND ((t.tp_modalidade::text = ANY (ARRAY['4','8']::text[])) AND t.tp_operacao::text = 'S'
+               OR t.tp_modalidade::text = '3' AND t.tp_operacao::text = 'E')
+    ), com_valor AS (
+        SELECT b.idcentrodecusto, b.qt_solicitada, b.tp_operacao, b.idmarca, b.idproduto,
+            CASE
+                WHEN b.idmarca = ANY (ARRAY['0001','0002','0009']) THEN
+                    COALESCE(
+                        NULLIF(f_prd_valor_produto2(1::bigint, 1::bigint, 'P'::bpchar, 1::bigint, b.idproduto, b.data), 0),
+                        NULLIF(f_prd_valor_produto2(1::bigint, 1::bigint, 'P'::bpchar, 1::bigint, b.idproduto, NULL::timestamp), 0),
+                        21.9
+                    )
+                ELSE
+                    COALESCE(
+                        NULLIF(f_prd_valor_produto2(1::bigint, 1::bigint, 'C'::bpchar, 2::bigint, b.idproduto, b.data), 0),
+                        NULLIF(f_prd_valor_produto2(1::bigint, 1::bigint, 'C'::bpchar, 2::bigint, b.idproduto, NULL::timestamp), 0),
+                        21.9
+                    )
+            END AS valor_unitario
+        FROM base b
+        WHERE b.idmarca IS NOT NULL AND b.idmarca <> ''
+    )
+    SELECT idcentrodecusto, idproduto,
+        SUM(qt_solicitada * valor_unitario * CASE WHEN tp_operacao::text = 'S' THEN -1 ELSE 1 END
+            * CASE WHEN idcentrodecusto = 2 THEN 0.7 ELSE 0.8 END) AS valor
+    FROM com_valor
+    GROUP BY 1, 2
+"""
+
+
+def _calcular_e_cachear_mes_loja(ano_mes: str) -> dict:
+    """Recalcula (a partir das views originais) e substitui o cache de um
+    mes, com TODAS as lojas de uma vez - e o que torna isso viavel em tempo
+    (~16-30s pro mes inteiro, nao por loja)."""
+    _criar_tabela_cache_loja_produto()
+    ano, mes = ano_mes.split("-")
+    data_inicio = f"{ano}-{mes}-01"
+    ultimo_dia = calendar.monthrange(int(ano), int(mes))[1]
+    data_fim = f"{ano}-{mes}-{ultimo_dia:02d}"
+
+    linhas = execute_query(_QUERY_CMV_LOJA_PRODUTO_MES, (data_inicio, data_fim)) or []
+
+    execute_insert("DELETE FROM cmv_loja_produto_cache WHERE ano_mes = %s", (ano_mes,))
+    valor_total = 0.0
+    for i in range(0, len(linhas), 500):
+        lote = linhas[i:i + 500]
+        valores_sql = []
+        params = []
+        for r in lote:
+            v = float(r["valor"] or 0)
+            valor_total += v
+            valores_sql.append("(%s, %s, %s, %s)")
+            params.extend([r["idcentrodecusto"], r["idproduto"], ano_mes, v])
+        if valores_sql:
+            execute_insert(
+                f"INSERT INTO cmv_loja_produto_cache (idcentrodecusto, idproduto, ano_mes, valor) VALUES {','.join(valores_sql)}",
+                tuple(params)
+            )
+
+    execute_insert("""
+        INSERT INTO cmv_loja_produto_cache_status (ano_mes, linhas, valor_total, dt_calculado)
+        VALUES (%s, %s, %s, NOW())
+        ON CONFLICT (ano_mes) DO UPDATE SET linhas = EXCLUDED.linhas, valor_total = EXCLUDED.valor_total, dt_calculado = NOW()
+    """, (ano_mes, len(linhas), valor_total))
+
+    return {"anoMes": ano_mes, "linhas": len(linhas), "valorTotal": valor_total}
+
+
+def _meses_cacheados() -> set:
+    _criar_tabela_cache_loja_produto()
+    rows = execute_query("SELECT ano_mes FROM cmv_loja_produto_cache_status", ()) or []
+    return {r["ano_mes"] for r in rows}
 
 
 @router.get("/api/cmv-detalhado/empresas")
@@ -281,17 +406,14 @@ def cmv_por_dimensao(
 ):
     """
     CMV agrupado por uma dimensao do produto (linha/familia/colecao/status/
-    continuidade), via join rapido entre a materialized view mv_cmv_fab
-    (idproduto) e a materialized view mv_prd_referencia_produto (cadastro do
-    produto - tambem materializada, entao rapida).
-
-    So cobre a FABRICA: as materialized views de CMV de loja (mv_cmv_loja_v2
-    / mv_cmv_lojas) nao guardam o produto da venda, so o agregado por
-    conta/centro de custo - nao ha como quebrar o CMV de loja por produto sem
-    cair de volta nas views originais (vr_...), que sao proibitivamente
-    lentas (varias dezenas de segundos, custo fixo, independente do filtro).
-    Empresas do tipo loja pedidas em 'empresas' sao ignoradas aqui e
-    reportadas em 'empresasIgnoradas'.
+    continuidade). Fabrica: join rapido e ao vivo entre mv_cmv_fab
+    (idproduto) e mv_prd_referencia_produto (cadastro do produto, tambem
+    materializada, entao rapida). Lojas: mv_cmv_loja_v2 nao guarda o produto
+    da venda, entao lojas leem do cache local cmv_loja_produto_cache
+    (recalculado mes a mes via /calcular-mes-loja, ver esse endpoint pro
+    porque). Meses do periodo pedido que ainda nao foram calculados pras
+    lojas selecionadas voltam em 'mesesFaltantesLojas', pro front avisar e
+    oferecer calcular.
 
     O campo 'percentual' de cada item e a fatia da categoria sobre o TOTAL DE
     CMV do proprio grafico (composicao), nao CMV/receita como nos outros
@@ -309,23 +431,44 @@ def cmv_por_dimensao(
         empresas_fabrica_pedidas = [e for e in cd_empresas if _eh_fabrica(e)]
         empresas_lojas_pedidas = [e for e in cd_empresas if not _eh_fabrica(e)]
 
-        if not empresas_fabrica_pedidas:
-            return {
-                "dimensao": dimensao,
-                "itens": [],
-                "empresasIgnoradas": [_nome_empresa_cmv(e) for e in empresas_lojas_pedidas],
-            }
+        acumulado: dict = {}
 
-        query = f"""
-            SELECT COALESCE(p.{coluna}, 'SEM CLASSIFICACAO') AS chave, ABS(SUM(mv.valor)) AS valor
-            FROM mv_cmv_fab mv
-            LEFT JOIN mv_prd_referencia_produto p ON p.cd_produto = mv.idproduto
-            WHERE mv.data >= %s AND mv.data <= %s
-            GROUP BY 1
-            ORDER BY 2 DESC
-        """
-        linhas = execute_query(query, (dataInicio, dataFim)) or []
-        itens = [{"chave": r["chave"], "valor": float(r["valor"] or 0)} for r in linhas if float(r["valor"] or 0) > 0]
+        if empresas_fabrica_pedidas:
+            query_fab = f"""
+                SELECT COALESCE(p.{coluna}, 'SEM CLASSIFICACAO') AS chave, ABS(SUM(mv.valor)) AS valor
+                FROM mv_cmv_fab mv
+                LEFT JOIN mv_prd_referencia_produto p ON p.cd_produto = mv.idproduto
+                WHERE mv.data >= %s AND mv.data <= %s
+                GROUP BY 1
+            """
+            for r in execute_query(query_fab, (dataInicio, dataFim)) or []:
+                acumulado[r["chave"]] = acumulado.get(r["chave"], 0.0) + float(r["valor"] or 0)
+
+        meses_faltantes = []
+        if empresas_lojas_pedidas:
+            meses = [f"{a:04d}-{m:02d}" for a, m in _gerar_meses(dataInicio, dataFim)]
+            cacheados = _meses_cacheados()
+            meses_faltantes = [m for m in meses if m not in cacheados]
+            meses_prontos = [m for m in meses if m in cacheados]
+
+            if meses_prontos:
+                placeholders_meses = ",".join(["%s"] * len(meses_prontos))
+                placeholders_lojas = ",".join(["%s"] * len(empresas_lojas_pedidas))
+                query_lojas = f"""
+                    SELECT COALESCE(p.{coluna}, 'SEM CLASSIFICACAO') AS chave, ABS(SUM(c.valor)) AS valor
+                    FROM cmv_loja_produto_cache c
+                    LEFT JOIN mv_prd_referencia_produto p ON p.cd_produto = c.idproduto
+                    WHERE c.ano_mes IN ({placeholders_meses}) AND c.idcentrodecusto IN ({placeholders_lojas})
+                    GROUP BY 1
+                """
+                for r in execute_query(query_lojas, (*meses_prontos, *empresas_lojas_pedidas)) or []:
+                    acumulado[r["chave"]] = acumulado.get(r["chave"], 0.0) + float(r["valor"] or 0)
+
+        itens = sorted(
+            [{"chave": k, "valor": v} for k, v in acumulado.items() if v > 0],
+            key=lambda i: i["valor"],
+            reverse=True,
+        )
 
         if len(itens) > TOP_N_DIMENSAO:
             principais = itens[:TOP_N_DIMENSAO]
@@ -344,7 +487,7 @@ def cmv_por_dimensao(
         return {
             "dimensao": dimensao,
             "itens": itens,
-            "empresasIgnoradas": [_nome_empresa_cmv(e) for e in empresas_lojas_pedidas],
+            "mesesFaltantesLojas": meses_faltantes,
         }
     except HTTPException:
         raise
@@ -353,3 +496,47 @@ def cmv_por_dimensao(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Erro ao buscar CMV por dimensao: {str(e)}")
+
+
+@router.get("/api/cmv-detalhado/meses-cache-lojas")
+def meses_cache_lojas(
+    dataInicio: str = Query(..., description="Data inicial (YYYY-MM-DD)"),
+    dataFim: str = Query(..., description="Data final (YYYY-MM-DD)")
+):
+    """Quais meses do periodo pedido ja estao no cache de CMV por produto das
+    lojas (cmv_loja_produto_cache) e quais ainda faltam calcular."""
+    try:
+        meses = [f"{a:04d}-{m:02d}" for a, m in _gerar_meses(dataInicio, dataFim)]
+        cacheados = _meses_cacheados()
+        return {
+            "mesesNecessarios": meses,
+            "mesesCalculados": [m for m in meses if m in cacheados],
+            "mesesFaltantes": [m for m in meses if m not in cacheados],
+        }
+    except Exception as e:
+        print(f"[ERROR] Erro ao checar cache de lojas: {e}")
+        raise HTTPException(status_code=500, detail=f"Erro ao checar cache de lojas: {str(e)}")
+
+
+@router.post("/api/cmv-detalhado/calcular-mes-loja")
+def calcular_mes_loja(anoMes: str = Query(..., description="Mes a calcular, formato YYYY-MM")):
+    """
+    Recalcula o cache de CMV por produto das lojas pra UM mes (todas as
+    lojas de uma vez - e o que mantem isso rapido, ~16-30s, em vez de horas:
+    o custo das views originais e fixo por mes, nao por filtro de loja/
+    transacao, entao processar todas juntas nao custa mais que processar uma
+    so). Chamado pelo front mes a mes, com barra de progresso, quando
+    'mesesFaltantesLojas' do /por-dimensao acusa meses nao calculados.
+    """
+    try:
+        if len(anoMes) != 7 or anoMes[4] != "-":
+            raise HTTPException(status_code=400, detail=f"anoMes invalido: {anoMes}. Use YYYY-MM.")
+        resultado = _calcular_e_cachear_mes_loja(anoMes)
+        return resultado
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[ERROR] Erro ao calcular cache de loja pro mes {anoMes}: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Erro ao calcular cache de loja pro mes {anoMes}: {str(e)}")

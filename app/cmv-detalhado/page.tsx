@@ -70,7 +70,7 @@ interface ItemDimensao {
 interface RespostaDimensao {
   dimensao: Dimensao;
   itens: ItemDimensao[];
-  empresasIgnoradas: string[];
+  mesesFaltantesLojas: string[];
 }
 
 // Cores em ordem categorica fixa (paleta validada) - aqui so a primeira
@@ -217,6 +217,9 @@ export default function CmvDetalhadoPage() {
     status: null,
     continuidade: null,
   });
+  const [mesesFaltantesLojas, setMesesFaltantesLojas] = useState<string[]>([]);
+  const [calculandoLojas, setCalculandoLojas] = useState(false);
+  const [progressoCalculo, setProgressoCalculo] = useState<{ atual: number; total: number } | null>(null);
 
   useEffect(() => {
     fetch('/api/cmv-detalhado/empresas', { cache: 'no-store' })
@@ -264,13 +267,16 @@ export default function CmvDetalhadoPage() {
         status: null,
         continuidade: null,
       };
+      let faltantes: string[] = [];
       for (let i = 0; i < DIMENSOES.length; i++) {
         const dataDim = await respostasDimensao[i].json();
         if (!dataDim.error) {
           novosDadosDimensao[DIMENSOES[i].chave] = dataDim;
+          faltantes = dataDim.mesesFaltantesLojas || [];
         }
       }
       setDadosPorDimensao(novosDadosDimensao);
+      setMesesFaltantesLojas(faltantes);
 
       setConsultaExecutada(true);
     } catch (error) {
@@ -278,6 +284,41 @@ export default function CmvDetalhadoPage() {
       setStatusCarregamento('Erro ao buscar os dados. Tente novamente.');
     } finally {
       setLoading(false);
+    }
+  }
+
+  // So faz sentido oferecer "calcular" se tem loja selecionada - fabrica
+  // (mv_cmv_fab) e sempre ao vivo, nunca fica faltando.
+  const temLojaSelecionada = Array.from(empresasSelecionadas).some(
+    (cd) => empresasDisponiveis.find((e) => e.cdEmpresa === cd)?.tipo === 'loja'
+  );
+
+  async function calcularMesesFaltantes() {
+    if (mesesFaltantesLojas.length === 0) return;
+    setCalculandoLojas(true);
+    setProgressoCalculo({ atual: 0, total: mesesFaltantesLojas.length });
+    try {
+      for (let i = 0; i < mesesFaltantesLojas.length; i++) {
+        const anoMes = mesesFaltantesLojas[i];
+        const response = await fetch(`/api/cmv-detalhado/calcular-mes-loja?anoMes=${anoMes}`, {
+          method: 'POST',
+          cache: 'no-store',
+        });
+        const data = await response.json();
+        if (data.error) {
+          setStatusCarregamento(`Erro ao calcular ${anoMes}: ${data.error}`);
+          return;
+        }
+        setProgressoCalculo({ atual: i + 1, total: mesesFaltantesLojas.length });
+      }
+      // Meses calculados - refaz a consulta pra trazer os graficos com lojas.
+      await buscarDados();
+    } catch (error) {
+      console.error('Erro ao calcular meses de loja:', error);
+      setStatusCarregamento('Erro ao calcular os dados de loja. Tente novamente.');
+    } finally {
+      setCalculandoLojas(false);
+      setProgressoCalculo(null);
     }
   }
 
@@ -541,8 +582,7 @@ export default function CmvDetalhadoPage() {
               </div>
             </div>
             <p className="text-xs text-gray-500 mb-3">
-              % de participação de cada {DIMENSOES.find((d) => d.chave === dimensaoSelecionada)?.label.toLowerCase()} sobre o total de CMV (04.02) do período. Só cobre a
-              fábrica — as lojas não têm o produto vendido registrado na base rápida de CMV.
+              % de participação de cada {DIMENSOES.find((d) => d.chave === dimensaoSelecionada)?.label.toLowerCase()} sobre o total de CMV (04.02) do período — fábrica e lojas.
             </p>
             <GraficoBarrasPercentual
               ariaLabel={`CMV por ${dimensaoSelecionada}`}
@@ -553,10 +593,22 @@ export default function CmvDetalhadoPage() {
                 tooltip: `${item.chave}: ${formatarPct(item.percentual)} (CMV ${formatarValor(item.valor)})`,
               }))}
             />
-            {dadosPorDimensao[dimensaoSelecionada] && dadosPorDimensao[dimensaoSelecionada]!.empresasIgnoradas.length > 0 && (
-              <p className="text-xs text-amber-600 mt-2">
-                Não entram nesse gráfico (sem detalhe de produto na base de CMV): {dadosPorDimensao[dimensaoSelecionada]!.empresasIgnoradas.join(', ')}.
-              </p>
+            {temLojaSelecionada && mesesFaltantesLojas.length > 0 && (
+              <div className="mt-3 flex items-center justify-between gap-3 flex-wrap bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+                <p className="text-xs text-amber-700">
+                  {calculandoLojas && progressoCalculo
+                    ? `Calculando dados de loja... mês ${progressoCalculo.atual} de ${progressoCalculo.total}.`
+                    : `${mesesFaltantesLojas.length} mês(es) ainda sem dado de loja nesse gráfico (${mesesFaltantesLojas.join(', ')}) — o cálculo é pesado e roda mês a mês, por isso não é automático.`}
+                </p>
+                <button
+                  onClick={calcularMesesFaltantes}
+                  disabled={calculandoLojas}
+                  className="px-3 py-1.5 text-xs bg-amber-600 text-white rounded-md hover:bg-amber-700 transition-colors disabled:opacity-60 flex items-center gap-1.5 shrink-0"
+                >
+                  {calculandoLojas && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  Calcular meses de loja
+                </button>
+              </div>
             )}
           </div>
         </>
