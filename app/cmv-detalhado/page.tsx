@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Boxes,
   Calendar,
@@ -20,6 +20,8 @@ import {
 } from 'recharts';
 
 import { formatarValor } from '../utils/formatters';
+import AtalhosPeriodo from '../components/filtros/AtalhosPeriodo';
+import { carregarFiltro, salvarFiltro } from '../utils/persistirFiltro';
 
 interface EmpresaOpcao {
   cdEmpresa: number;
@@ -236,10 +238,32 @@ export default function CmvDetalhadoPage() {
       .then((data) => {
         const lista: EmpresaOpcao[] = data.empresas || [];
         setEmpresasDisponiveis(lista);
-        setEmpresasSelecionadas(new Set(lista.map((e) => e.cdEmpresa)));
+        // Restaura o filtro salvo da ultima visita, se houver - senao,
+        // seleciona todas por padrao (mesmo padrao do DRE/DFC).
+        const salvo = carregarFiltro<{ dataInicio: string; dataFim: string; empresas: number[] }>('cmv_detalhado_filtros');
+        if (salvo) {
+          if (salvo.dataInicio) setDataInicio(salvo.dataInicio);
+          if (salvo.dataFim) setDataFim(salvo.dataFim);
+          if (salvo.empresas) setEmpresasSelecionadas(new Set(salvo.empresas));
+          else setEmpresasSelecionadas(new Set(lista.map((e) => e.cdEmpresa)));
+        } else {
+          setEmpresasSelecionadas(new Set(lista.map((e) => e.cdEmpresa)));
+        }
       })
       .catch((e) => console.error('Erro ao buscar empresas do CMV detalhado:', e));
   }, []);
+
+  // Salva o filtro atual sempre que o usuario alterar data ou lojas,
+  // pulando a primeira renderizacao pra nao sobrescrever o que acabou de ser
+  // restaurado acima com os valores padrao.
+  const primeiraRenderizacaoFiltroRef = useRef(true);
+  useEffect(() => {
+    if (primeiraRenderizacaoFiltroRef.current) {
+      primeiraRenderizacaoFiltroRef.current = false;
+      return;
+    }
+    salvarFiltro('cmv_detalhado_filtros', { dataInicio, dataFim, empresas: Array.from(empresasSelecionadas) });
+  }, [dataInicio, dataFim, empresasSelecionadas]);
 
   async function buscarDados() {
     if (empresasSelecionadas.size === 0) {
@@ -325,47 +349,11 @@ export default function CmvDetalhadoPage() {
     }
   }
 
-  function definirMesAtual() {
-    const hoje = new Date();
-    const inicioMes = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
-    const fimMes = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0);
-    setDataInicio(`${inicioMes.getFullYear()}-${String(inicioMes.getMonth() + 1).padStart(2, '0')}-01`);
-    setDataFim(
-      `${fimMes.getFullYear()}-${String(fimMes.getMonth() + 1).padStart(2, '0')}-${String(fimMes.getDate()).padStart(2, '0')}`
-    );
-  }
-
-  function definirMesAnterior() {
-    const hoje = new Date();
-    const inicioMesAnterior = new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1);
-    const fimMesAnterior = new Date(hoje.getFullYear(), hoje.getMonth(), 0);
-    setDataInicio(`${inicioMesAnterior.getFullYear()}-${String(inicioMesAnterior.getMonth() + 1).padStart(2, '0')}-01`);
-    setDataFim(
-      `${fimMesAnterior.getFullYear()}-${String(fimMesAnterior.getMonth() + 1).padStart(2, '0')}-${String(fimMesAnterior.getDate()).padStart(2, '0')}`
-    );
-  }
-
-  function definirUltimosMeses(qtdMeses: number) {
-    const hoje = new Date();
-    const fimMesAnterior = new Date(hoje.getFullYear(), hoje.getMonth(), 0);
-    const inicioIntervalo = new Date(hoje.getFullYear(), hoje.getMonth() - qtdMeses, 1);
-    setDataInicio(`${inicioIntervalo.getFullYear()}-${String(inicioIntervalo.getMonth() + 1).padStart(2, '0')}-01`);
-    setDataFim(
-      `${fimMesAnterior.getFullYear()}-${String(fimMesAnterior.getMonth() + 1).padStart(2, '0')}-${String(fimMesAnterior.getDate()).padStart(2, '0')}`
-    );
-  }
-
-  function definirAnoAtual() {
-    const hoje = new Date();
-    const anoAtual = hoje.getFullYear();
-    const fimMesAnterior = new Date(anoAtual, hoje.getMonth(), 0);
-    // Em janeiro nao ha mes anterior dentro do ano atual; mostra o mes corrente
-    const dataFimAnoAtual =
-      fimMesAnterior.getFullYear() === anoAtual ? fimMesAnterior : new Date(anoAtual, hoje.getMonth() + 1, 0);
-    setDataInicio(`${anoAtual}-01-01`);
-    setDataFim(
-      `${dataFimAnoAtual.getFullYear()}-${String(dataFimAnoAtual.getMonth() + 1).padStart(2, '0')}-${String(dataFimAnoAtual.getDate()).padStart(2, '0')}`
-    );
+  // Atalhos de periodo (Mes Anterior/Atual/Ultimos N Meses/Ano Atual/2025)
+  // agora vem do componente compartilhado AtalhosPeriodo.
+  function aplicarPeriodo(periodo: { dataInicio: string; dataFim: string }) {
+    setDataInicio(periodo.dataInicio);
+    setDataFim(periodo.dataFim);
   }
 
   function toggleEmpresaFiltro(cd: number) {
@@ -392,40 +380,43 @@ export default function CmvDetalhadoPage() {
       </div>
 
       <div className="bg-white rounded-lg shadow-md p-4">
+        <div className="flex items-center gap-2 mb-3">
+          <Calendar className="w-5 h-5 text-brand-primary" />
+          <h2 className="text-base font-semibold text-brand-dark">Período</h2>
+        </div>
         <div className="flex items-center gap-3 flex-wrap">
-          <Calendar className="w-4 h-4 text-gray-400" />
           <input
             type="date"
             value={dataInicio}
             onChange={(e) => setDataInicio(e.target.value)}
-            className="px-3 py-1.5 border border-gray-300 rounded-md text-sm"
+            className="px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-primary"
           />
-          <span className="text-gray-400 text-sm">até</span>
+          <span className="text-gray-500 text-sm">até</span>
           <input
             type="date"
             value={dataFim}
             onChange={(e) => setDataFim(e.target.value)}
-            className="px-3 py-1.5 border border-gray-300 rounded-md text-sm"
+            className="px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-primary"
           />
 
           <div className="relative">
             <button
               onClick={() => setFiltroLojasAberto((v) => !v)}
-              className="px-3 py-1.5 border border-gray-300 rounded-md text-sm bg-white hover:bg-gray-50 flex items-center gap-2"
+              className="min-w-[160px] flex items-center justify-between gap-2 px-3 py-2 border border-gray-300 rounded-md text-sm bg-white hover:bg-gray-50"
             >
               Lojas ({empresasSelecionadas.size}/{empresasDisponiveis.length})
-              <ChevronDown className="w-3.5 h-3.5" />
+              <ChevronDown className="w-4 h-4 text-gray-500" />
             </button>
             {filtroLojasAberto && (
-              <div className="absolute z-30 mt-1 w-64 max-h-80 overflow-auto bg-white border border-gray-200 rounded-md shadow-lg p-2">
+              <div className="absolute z-30 mt-1 w-64 max-h-80 overflow-auto bg-white border border-gray-200 rounded-lg shadow-xl p-2">
                 <div className="flex justify-between px-1 pb-1 mb-1 border-b border-gray-100">
                   <button
-                    className="text-xs text-rose-600 hover:underline"
+                    className="text-xs font-medium text-purple-700 hover:text-purple-900"
                     onClick={() => setEmpresasSelecionadas(new Set(empresasDisponiveis.map((e) => e.cdEmpresa)))}
                   >
                     Todas
                   </button>
-                  <button className="text-xs text-gray-500 hover:underline" onClick={() => setEmpresasSelecionadas(new Set())}>
+                  <button className="text-xs font-medium text-gray-600 hover:text-gray-900" onClick={() => setEmpresasSelecionadas(new Set())}>
                     Nenhuma
                   </button>
                 </div>
@@ -445,7 +436,7 @@ export default function CmvDetalhadoPage() {
 
           <button
             onClick={buscarDados}
-            className="px-4 py-1.5 text-sm bg-rose-600 text-white rounded-md hover:bg-rose-700 transition-colors"
+            className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-md transition-colors"
           >
             Consultar
           </button>
@@ -456,54 +447,7 @@ export default function CmvDetalhadoPage() {
           >
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
-        </div>
-
-        <div className="flex items-center gap-2 flex-wrap mt-3">
-          <button
-            onClick={definirMesAnterior}
-            className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md transition-colors"
-          >
-            Mês Anterior
-          </button>
-          <button
-            onClick={definirMesAtual}
-            className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md transition-colors"
-          >
-            Mês Atual
-          </button>
-          <button
-            onClick={() => definirUltimosMeses(3)}
-            className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md transition-colors"
-          >
-            Últimos 3 Meses
-          </button>
-          <button
-            onClick={() => definirUltimosMeses(6)}
-            className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md transition-colors"
-          >
-            Últimos 6 Meses
-          </button>
-          <button
-            onClick={() => definirUltimosMeses(12)}
-            className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md transition-colors"
-          >
-            Últimos 12 Meses
-          </button>
-          <button
-            onClick={definirAnoAtual}
-            className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md transition-colors"
-          >
-            Ano Atual
-          </button>
-          <button
-            onClick={() => {
-              setDataInicio('2025-01-01');
-              setDataFim('2025-12-31');
-            }}
-            className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md transition-colors"
-          >
-            2025
-          </button>
+          <AtalhosPeriodo onSelecionar={aplicarPeriodo} />
         </div>
 
         {statusCarregamento && <p className="text-sm text-red-600 mt-3">{statusCarregamento}</p>}

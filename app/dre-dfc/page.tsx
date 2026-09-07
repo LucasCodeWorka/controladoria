@@ -9,6 +9,8 @@ import {
 } from 'lucide-react';
 
 import { formatarValor } from '../utils/formatters';
+import AtalhosPeriodo from '../components/filtros/AtalhosPeriodo';
+import { carregarFiltro, salvarFiltro } from '../utils/persistirFiltro';
 
 interface OpcaoFiltro {
   valor: string;
@@ -84,6 +86,29 @@ export default function DreXDfcPage() {
     carregarFiltros();
   }, []);
 
+  // Restaura o filtro (periodo + loja/fabrica) salvo da ultima visita, se
+  // houver - mesmo padrao usado no DRE/DFC.
+  useEffect(() => {
+    const salvo = carregarFiltro<{ dataInicio: string; dataFim: string; filtro: string }>('dre_dfc_filtros');
+    if (salvo) {
+      if (salvo.dataInicio) setDataInicio(salvo.dataInicio);
+      if (salvo.dataFim) setDataFim(salvo.dataFim);
+      if (salvo.filtro) setFiltro(salvo.filtro);
+    }
+  }, []);
+
+  // Salva o filtro atual sempre que o usuario alterar data ou loja/fabrica,
+  // pulando a primeira renderizacao pra nao sobrescrever o que acabou de ser
+  // restaurado acima com os valores padrao.
+  const primeiraRenderizacaoFiltroRef = useRef(true);
+  useEffect(() => {
+    if (primeiraRenderizacaoFiltroRef.current) {
+      primeiraRenderizacaoFiltroRef.current = false;
+      return;
+    }
+    salvarFiltro('dre_dfc_filtros', { dataInicio, dataFim, filtro });
+  }, [dataInicio, dataFim, filtro]);
+
   useEffect(() => {
     async function carregarNomesSubgrupos() {
       try {
@@ -153,28 +178,11 @@ export default function DreXDfcPage() {
     }
   }
 
-  function definirMesAtual() {
-    const hoje = new Date();
-    const inicioMes = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
-    const fimMes = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0);
-    setDataInicio(`${inicioMes.getFullYear()}-${String(inicioMes.getMonth() + 1).padStart(2, '0')}-01`);
-    setDataFim(`${fimMes.getFullYear()}-${String(fimMes.getMonth() + 1).padStart(2, '0')}-${String(fimMes.getDate()).padStart(2, '0')}`);
-  }
-
-  function definirMesAnterior() {
-    const hoje = new Date();
-    const inicioMesAnterior = new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1);
-    const fimMesAnterior = new Date(hoje.getFullYear(), hoje.getMonth(), 0);
-    setDataInicio(`${inicioMesAnterior.getFullYear()}-${String(inicioMesAnterior.getMonth() + 1).padStart(2, '0')}-01`);
-    setDataFim(`${fimMesAnterior.getFullYear()}-${String(fimMesAnterior.getMonth() + 1).padStart(2, '0')}-${String(fimMesAnterior.getDate()).padStart(2, '0')}`);
-  }
-
-  function definirUltimosMeses(qtdMeses: number) {
-    const hoje = new Date();
-    const fimMesAnterior = new Date(hoje.getFullYear(), hoje.getMonth(), 0);
-    const inicioIntervalo = new Date(hoje.getFullYear(), hoje.getMonth() - qtdMeses, 1);
-    setDataInicio(`${inicioIntervalo.getFullYear()}-${String(inicioIntervalo.getMonth() + 1).padStart(2, '0')}-01`);
-    setDataFim(`${fimMesAnterior.getFullYear()}-${String(fimMesAnterior.getMonth() + 1).padStart(2, '0')}-${String(fimMesAnterior.getDate()).padStart(2, '0')}`);
+  // Atalhos de periodo (Mes Anterior/Atual/Ultimos N Meses/Ano Atual/2025)
+  // agora vem do componente compartilhado AtalhosPeriodo.
+  function aplicarPeriodo(periodo: { dataInicio: string; dataFim: string }) {
+    setDataInicio(periodo.dataInicio);
+    setDataFim(periodo.dataFim);
   }
 
   const opcoesLojas = opcoesFiltro.filter((o) => o.tipo === 'loja');
@@ -374,7 +382,7 @@ export default function DreXDfcPage() {
                     setFiltro('consolidado');
                     setFiltroAberto(false);
                   }}
-                  className={`block w-full text-left px-3 py-2 text-sm hover:bg-gray-100 ${filtro === 'consolidado' ? 'bg-blue-50 font-semibold' : ''}`}
+                  className={`block w-full text-left px-3 py-2 text-sm hover:bg-gray-100 ${filtro === 'consolidado' ? 'bg-green-50 text-green-800 font-semibold' : ''}`}
                 >
                   CONSOLIDADO (TODAS)
                 </button>
@@ -383,7 +391,7 @@ export default function DreXDfcPage() {
                     setFiltro('fabrica');
                     setFiltroAberto(false);
                   }}
-                  className={`block w-full text-left px-3 py-2 text-sm hover:bg-gray-100 ${filtro === 'fabrica' ? 'bg-blue-50 font-semibold' : ''}`}
+                  className={`block w-full text-left px-3 py-2 text-sm hover:bg-gray-100 ${filtro === 'fabrica' ? 'bg-blue-50 text-blue-800 font-semibold' : ''}`}
                 >
                   FABRICA
                 </button>
@@ -407,7 +415,7 @@ export default function DreXDfcPage() {
           <button
             onClick={() => buscarDados()}
             disabled={loading}
-            className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-md transition-colors disabled:opacity-50"
+            className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-md transition-colors disabled:opacity-50"
           >
             {loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : null}
             Consultar
@@ -420,27 +428,7 @@ export default function DreXDfcPage() {
           >
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
-          <button onClick={definirMesAnterior} className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md transition-colors">
-            Mês Anterior
-          </button>
-          <button onClick={definirMesAtual} className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md transition-colors">
-            Mês Atual
-          </button>
-          <button onClick={() => definirUltimosMeses(3)} className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md transition-colors">
-            Últimos 3 Meses
-          </button>
-          <button onClick={() => definirUltimosMeses(6)} className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md transition-colors">
-            Últimos 6 Meses
-          </button>
-          <button
-            onClick={() => {
-              setDataInicio('2025-01-01');
-              setDataFim('2025-12-31');
-            }}
-            className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md transition-colors"
-          >
-            2025
-          </button>
+          <AtalhosPeriodo onSelecionar={aplicarPeriodo} />
         </div>
 
         {statusCarregamento && (

@@ -27,6 +27,7 @@ import {
 
 import { type PeriodoDRE } from '../dre-fabrica/dreCalculos';
 import { formatarValor } from '../utils/formatters';
+import AtalhosPeriodo from '../components/filtros/AtalhosPeriodo';
 
 interface OpcaoFiltro {
   valor: string;
@@ -698,46 +699,11 @@ export default function DFCPage() {
     return `${dia}/${mes}/${ano}`;
   }
 
-  function definirMesAtual() {
-    const hoje = new Date();
-    const inicioMes = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
-    const fimMes = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0);
-    setDataInicio(`${inicioMes.getFullYear()}-${String(inicioMes.getMonth() + 1).padStart(2, '0')}-01`);
-    setDataFim(
-      `${fimMes.getFullYear()}-${String(fimMes.getMonth() + 1).padStart(2, '0')}-${String(fimMes.getDate()).padStart(2, '0')}`
-    );
-  }
-
-  function definirMesAnterior() {
-    const hoje = new Date();
-    const inicioMesAnterior = new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1);
-    const fimMesAnterior = new Date(hoje.getFullYear(), hoje.getMonth(), 0);
-    setDataInicio(`${inicioMesAnterior.getFullYear()}-${String(inicioMesAnterior.getMonth() + 1).padStart(2, '0')}-01`);
-    setDataFim(
-      `${fimMesAnterior.getFullYear()}-${String(fimMesAnterior.getMonth() + 1).padStart(2, '0')}-${String(fimMesAnterior.getDate()).padStart(2, '0')}`
-    );
-  }
-
-  function definirUltimosMeses(qtdMeses: number) {
-    const hoje = new Date();
-    const fimMesAnterior = new Date(hoje.getFullYear(), hoje.getMonth(), 0);
-    const inicioIntervalo = new Date(hoje.getFullYear(), hoje.getMonth() - qtdMeses, 1);
-    setDataInicio(`${inicioIntervalo.getFullYear()}-${String(inicioIntervalo.getMonth() + 1).padStart(2, '0')}-01`);
-    setDataFim(
-      `${fimMesAnterior.getFullYear()}-${String(fimMesAnterior.getMonth() + 1).padStart(2, '0')}-${String(fimMesAnterior.getDate()).padStart(2, '0')}`
-    );
-  }
-
-  function definirAnoAtual() {
-    const hoje = new Date();
-    const anoAtual = hoje.getFullYear();
-    const fimMesAnterior = new Date(anoAtual, hoje.getMonth(), 0);
-    const dataFimAnoAtual =
-      fimMesAnterior.getFullYear() === anoAtual ? fimMesAnterior : new Date(anoAtual, hoje.getMonth() + 1, 0);
-    setDataInicio(`${anoAtual}-01-01`);
-    setDataFim(
-      `${dataFimAnoAtual.getFullYear()}-${String(dataFimAnoAtual.getMonth() + 1).padStart(2, '0')}-${String(dataFimAnoAtual.getDate()).padStart(2, '0')}`
-    );
+  // Atalhos de periodo (Mes Anterior/Atual/Ultimos N Meses/Ano Atual/2025)
+  // agora vem do componente compartilhado AtalhosPeriodo.
+  function aplicarPeriodo(periodo: { dataInicio: string; dataFim: string }) {
+    setDataInicio(periodo.dataInicio);
+    setDataFim(periodo.dataFim);
   }
 
   function valorConta(codigo: string, periodoKey?: string): number {
@@ -1432,7 +1398,7 @@ export default function DFCPage() {
           <button
             onClick={() => buscarDados()}
             disabled={loading}
-            className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-md transition-colors disabled:opacity-50"
+            className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-md transition-colors disabled:opacity-50"
           >
             {loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : null}
             Consultar
@@ -1445,33 +1411,7 @@ export default function DFCPage() {
           >
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
-          <button onClick={definirMesAnterior} className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md transition-colors">
-            Mês Anterior
-          </button>
-          <button onClick={definirMesAtual} className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md transition-colors">
-            Mês Atual
-          </button>
-          <button onClick={() => definirUltimosMeses(3)} className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md transition-colors">
-            Últimos 3 Meses
-          </button>
-          <button onClick={() => definirUltimosMeses(6)} className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md transition-colors">
-            Últimos 6 Meses
-          </button>
-          <button onClick={() => definirUltimosMeses(12)} className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md transition-colors">
-            Últimos 12 Meses
-          </button>
-          <button onClick={definirAnoAtual} className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md transition-colors">
-            Ano Atual
-          </button>
-          <button
-            onClick={() => {
-              setDataInicio('2025-01-01');
-              setDataFim('2025-12-31');
-            }}
-            className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md transition-colors"
-          >
-            2025
-          </button>
+          <AtalhosPeriodo onSelecionar={aplicarPeriodo} />
 
           {consultaExecutada && (
             <>

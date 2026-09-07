@@ -57,6 +57,20 @@ def _criar_tabela_giro():
             PRIMARY KEY (cd_empresa, mes_referencia)
         )
     """, ())
+    # Mesma ideia, mas por produto - base do top 10 melhor/pior giro. Guardado
+    # separado (nao junto do giro_snapshot) porque e um grao bem mais fino
+    # (milhares de linhas por empresa+mes, contra uma linha so no snapshot
+    # por empresa).
+    execute_insert("""
+        CREATE TABLE IF NOT EXISTS giro_produto_snapshot (
+            cd_empresa INTEGER NOT NULL,
+            cd_produto INTEGER NOT NULL,
+            mes_referencia VARCHAR(7) NOT NULL,
+            estoque_atual NUMERIC NOT NULL,
+            venda_media_3m NUMERIC NOT NULL,
+            PRIMARY KEY (cd_empresa, cd_produto, mes_referencia)
+        )
+    """, ())
 
 
 def _mes_atual() -> str:
@@ -118,8 +132,11 @@ def _datas_periodo(mes_referencia: str) -> tuple:
 # classificacao pode nao achar o produto (p.produto NULL) - nesse caso
 # mantem o produto (so descarta quando da pra confirmar que e sacola).
 
+# Agrupado por empresa+produto (nao so empresa) - alimenta tanto o
+# consolidado por empresa quanto o top 10 melhor/pior giro por produto, sem
+# precisar de uma segunda query pesada.
 _QUERY_ESTOQUE_ATUAL = """
-    SELECT cd_empresa, SUM(qt_saldo) AS estoque_total
+    SELECT cd_empresa, cd_produto, SUM(qt_saldo) AS estoque_total
     FROM (
         SELECT DISTINCT ON (s.cd_empresa, s.cd_produto) s.cd_empresa, s.cd_produto, s.qt_saldo
         FROM prd_prdsaldo s
@@ -130,15 +147,14 @@ _QUERY_ESTOQUE_ATUAL = """
           AND (p.produto IS NULL OR p.produto NOT ILIKE '%%SACOLA%%')
         ORDER BY s.cd_empresa, s.cd_produto, s.dt_saldo DESC
     ) x
-    GROUP BY 1
+    GROUP BY 1, 2
 """
 
-# Quantidade vendida por empresa no periodo - mesma regra de
+# Quantidade vendida por empresa+produto no periodo - mesma regra de
 # modalidade/operacao/situacao ja validada (bate com a receita oficial) pro
-# cache de CMV/receita por produto, so que aqui em quantidade e agrupado so
-# por empresa (sem produto - mais leve, sem precisar de cache por produto).
+# cache de CMV/receita por produto.
 _QUERY_QTD_VENDIDA = """
-    SELECT t.cd_empresa,
+    SELECT t.cd_empresa, i.cd_produto,
         SUM(
             CASE
                 WHEN t.tp_modalidade::text IN ('4','8') AND t.tp_operacao::text = 'S' THEN i.qt_solicitada
@@ -155,7 +171,7 @@ _QUERY_QTD_VENDIDA = """
       AND ((t.tp_modalidade::text IN ('4','8') AND t.tp_operacao::text = 'S') OR (t.tp_modalidade::text = '3' AND t.tp_operacao::text = 'E'))
       AND i.cd_produto < 1000000
       AND (p.produto IS NULL OR p.produto NOT ILIKE '%%SACOLA%%')
-    GROUP BY 1
+    GROUP BY 1, 2
 """
 
 
@@ -163,10 +179,22 @@ def _calcular_giro(mes_referencia: str, cd_empresas: list) -> dict:
     _criar_tabela_giro()
     dt_corte_estoque, data_inicio, data_fim, mes_ini, mes_fim = _datas_periodo(mes_referencia)
 
-    estoque_por_empresa = {r["cd_empresa"]: float(r["estoque_total"] or 0)
-                            for r in execute_query(_QUERY_ESTOQUE_ATUAL, (dt_corte_estoque, cd_empresas)) or []}
-    qtd_por_empresa = {r["cd_empresa"]: float(r["qt_vendida"] or 0)
-                        for r in execute_query(_QUERY_QTD_VENDIDA, (cd_empresas, data_inicio, data_fim)) or []}
+    linhas_estoque = execute_query(_QUERY_ESTOQUE_ATUAL, (dt_corte_estoque, cd_empresas)) or []
+    linhas_venda = execute_query(_QUERY_QTD_VENDIDA, (cd_empresas, data_inicio, data_fim)) or []
+
+    estoque_por_empresa: dict = {}
+    estoque_por_produto: dict = {}
+    for r in linhas_estoque:
+        v = float(r["estoque_total"] or 0)
+        estoque_por_empresa[r["cd_empresa"]] = estoque_por_empresa.get(r["cd_empresa"], 0.0) + v
+        estoque_por_produto[(r["cd_empresa"], r["cd_produto"])] = v
+
+    qtd_por_empresa: dict = {}
+    qtd_por_produto: dict = {}
+    for r in linhas_venda:
+        v = float(r["qt_vendida"] or 0)
+        qtd_por_empresa[r["cd_empresa"]] = qtd_por_empresa.get(r["cd_empresa"], 0.0) + v
+        qtd_por_produto[(r["cd_empresa"], r["cd_produto"])] = v
 
     for cd_empresa in cd_empresas:
         estoque = estoque_por_empresa.get(cd_empresa, 0.0)
@@ -182,7 +210,76 @@ def _calcular_giro(mes_referencia: str, cd_empresas: list) -> dict:
                 dt_calculado = NOW()
         """, (cd_empresa, mes_referencia, estoque, venda_media_3m, mes_ini, mes_fim))
 
+    # Por produto: so grava quem tem estoque OU venda no periodo, senao a
+    # tabela cresce com zero-zero (produto nunca circulou nessa empresa).
+    execute_insert(
+        "DELETE FROM giro_produto_snapshot WHERE mes_referencia = %s AND cd_empresa = ANY(%s)",
+        (mes_referencia, cd_empresas)
+    )
+    chaves_produto = set(estoque_por_produto.keys()) | set(qtd_por_produto.keys())
+    linhas_para_gravar = [
+        (cd_empresa, cd_produto, mes_referencia, estoque_por_produto.get((cd_empresa, cd_produto), 0.0),
+         qtd_por_produto.get((cd_empresa, cd_produto), 0.0) / 3.0)
+        for cd_empresa, cd_produto in chaves_produto
+    ]
+    lista_chaves = list(linhas_para_gravar)
+    for i in range(0, len(lista_chaves), 500):
+        lote = lista_chaves[i:i + 500]
+        valores_sql = ",".join(["(%s, %s, %s, %s, %s)"] * len(lote))
+        params = [v for linha in lote for v in linha]
+        execute_insert(
+            f"INSERT INTO giro_produto_snapshot (cd_empresa, cd_produto, mes_referencia, estoque_atual, venda_media_3m) VALUES {valores_sql}",
+            tuple(params)
+        )
+
     return _montar_resposta(mes_referencia, cd_empresas)
+
+
+TOP_N_PRODUTOS_GIRO = 10
+
+
+def _top_produtos_giro(mes_referencia: str, cd_empresas: list) -> dict:
+    """Top 10 melhor e pior giro por produto, somando estoque/venda das
+    empresas selecionadas que ja tem giro_produto_snapshot pro mes pedido.
+    Produtos com venda media = 0 (sem nenhuma venda no periodo, so estoque
+    parado) entram no 'pior giro' com giro null - sao o pior caso na pratica
+    (estoque parado, giro indefinido), nao um caso a esconder."""
+    placeholders = ",".join(["%s"] * len(cd_empresas))
+    rows = execute_query(f"""
+        SELECT g.cd_produto, p.referencia, p.produto AS nome,
+            SUM(g.estoque_atual) AS estoque_atual, SUM(g.venda_media_3m) AS venda_media_3m
+        FROM giro_produto_snapshot g
+        LEFT JOIN mv_prd_referencia_produto p ON p.cd_produto = g.cd_produto
+        WHERE g.mes_referencia = %s AND g.cd_empresa IN ({placeholders})
+        GROUP BY 1, 2, 3
+    """, (mes_referencia, *cd_empresas)) or []
+
+    itens = []
+    for r in rows:
+        estoque = float(r["estoque_atual"] or 0)
+        venda_media = float(r["venda_media_3m"] or 0)
+        if estoque <= 0:
+            continue
+        giro = (estoque / venda_media) if venda_media > 0 else None
+        itens.append({
+            "cdProduto": r["cd_produto"],
+            "referencia": r["referencia"] or str(r["cd_produto"]),
+            "nome": r["nome"] or "(sem cadastro)",
+            "estoqueAtual": estoque,
+            "vendaMedia3m": venda_media,
+            "giro": giro,
+        })
+
+    com_venda = [i for i in itens if i["giro"] is not None]
+    parados = [i for i in itens if i["giro"] is None]
+
+    melhor_giro = sorted(com_venda, key=lambda i: i["giro"])[:TOP_N_PRODUTOS_GIRO]
+    # Pior giro: primeiro os parados (estoque sem nenhuma venda - pior caso
+    # possivel), depois os de maior giro numerico, ate completar o top 10.
+    pior_giro = (sorted(parados, key=lambda i: i["estoqueAtual"], reverse=True) +
+                 sorted(com_venda, key=lambda i: i["giro"], reverse=True))[:TOP_N_PRODUTOS_GIRO]
+
+    return {"melhorGiro": melhor_giro, "piorGiro": pior_giro}
 
 
 def _montar_resposta(mes_referencia: str, cd_empresas: list) -> dict:
@@ -204,6 +301,7 @@ def _montar_resposta(mes_referencia: str, cd_empresas: list) -> dict:
             "itens": [], "consolidadoFabrica": None, "consolidadoLojas": None, "consolidadoGeral": None,
             "dtCalculado": None, "mesIni": None, "mesFim": None,
             "mesReferencia": mes_referencia, "empresasFaltantes": empresas_faltantes,
+            "topProdutos": {"melhorGiro": [], "piorGiro": []},
         }
 
     def _giro(estoque: float, venda_media: float):
@@ -244,6 +342,7 @@ def _montar_resposta(mes_referencia: str, cd_empresas: list) -> dict:
         "mesFim": rows[0]["mes_fim"],
         "mesReferencia": mes_referencia,
         "empresasFaltantes": empresas_faltantes,
+        "topProdutos": _top_produtos_giro(mes_referencia, list(calculadas)),
     }
 
 

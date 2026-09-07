@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
-import { RotateCw, Loader2, ChevronDown } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { RotateCw, Loader2, ChevronDown, Calendar } from 'lucide-react';
 import {
   Bar,
   BarChart,
@@ -12,6 +12,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
+import { carregarFiltro, salvarFiltro } from '../utils/persistirFiltro';
 
 interface EmpresaOpcao {
   cdEmpresa: number;
@@ -39,6 +40,20 @@ interface EmpresaFaltante {
   nome: string;
 }
 
+interface ItemProdutoGiro {
+  cdProduto: number;
+  referencia: string;
+  nome: string;
+  estoqueAtual: number;
+  vendaMedia3m: number;
+  giro: number | null;
+}
+
+interface TopProdutos {
+  melhorGiro: ItemProdutoGiro[];
+  piorGiro: ItemProdutoGiro[];
+}
+
 interface DadosGiro {
   itens: ItemGiro[];
   consolidadoFabrica: Consolidado | null;
@@ -49,6 +64,7 @@ interface DadosGiro {
   mesFim: string | null;
   mesReferencia: string;
   empresasFaltantes: EmpresaFaltante[];
+  topProdutos: TopProdutos;
 }
 
 const COR_BARRA = '#2a78d6';
@@ -159,6 +175,52 @@ function CardConsolidado({ titulo, dado }: { titulo: string; dado: Consolidado |
   );
 }
 
+function TabelaTopProdutos({ titulo, subtitulo, itens, corDestaque }: {
+  titulo: string;
+  subtitulo: string;
+  itens: ItemProdutoGiro[];
+  corDestaque: string;
+}) {
+  return (
+    <div className="bg-white rounded-lg shadow-lg overflow-hidden">
+      <div className="p-4 pb-2">
+        <h2 className="text-base font-semibold text-gray-800">{titulo}</h2>
+        <p className="text-xs text-gray-500">{subtitulo}</p>
+      </div>
+      {itens.length === 0 ? (
+        <p className="text-sm text-gray-400 py-8 text-center">Sem produtos suficientes pra calcular.</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 border-b border-gray-200">
+              <tr>
+                <th className="text-left px-4 py-2 font-medium text-gray-600">Referência</th>
+                <th className="text-left px-4 py-2 font-medium text-gray-600">Produto</th>
+                <th className="text-right px-4 py-2 font-medium text-gray-600">Estoque</th>
+                <th className="text-right px-4 py-2 font-medium text-gray-600">Venda Média 3m</th>
+                <th className="text-right px-4 py-2 font-medium text-gray-600">Giro</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {itens.map((item) => (
+                <tr key={item.cdProduto} className="hover:bg-gray-50">
+                  <td className="px-4 py-2 text-gray-500">{item.referencia}</td>
+                  <td className="px-4 py-2 text-gray-800">{item.nome}</td>
+                  <td className="px-4 py-2 text-right text-gray-700">{formatarQtd(item.estoqueAtual)}</td>
+                  <td className="px-4 py-2 text-right text-gray-700">{item.vendaMedia3m.toLocaleString('pt-BR', { maximumFractionDigits: 1 })}</td>
+                  <td className={`px-4 py-2 text-right font-medium ${corDestaque}`}>
+                    {item.giro === null ? 'Parado' : formatarGiro(item.giro)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function GiroPage() {
   const [mesReferencia, setMesReferencia] = useState(mesAtual());
   const [empresasDisponiveis, setEmpresasDisponiveis] = useState<EmpresaOpcao[]>([]);
@@ -177,10 +239,31 @@ export default function GiroPage() {
       .then((data) => {
         const lista: EmpresaOpcao[] = data.empresas || [];
         setEmpresasDisponiveis(lista);
-        setEmpresasSelecionadas(new Set(lista.map((e) => e.cdEmpresa)));
+        // Restaura o filtro salvo da ultima visita, se houver - senao,
+        // seleciona todas por padrao (mesmo padrao do DRE/DFC).
+        const salvo = carregarFiltro<{ mesReferencia: string; empresas: number[] }>('giro_filtros');
+        if (salvo) {
+          if (salvo.mesReferencia) setMesReferencia(salvo.mesReferencia);
+          if (salvo.empresas) setEmpresasSelecionadas(new Set(salvo.empresas));
+          else setEmpresasSelecionadas(new Set(lista.map((e) => e.cdEmpresa)));
+        } else {
+          setEmpresasSelecionadas(new Set(lista.map((e) => e.cdEmpresa)));
+        }
       })
       .catch((e) => console.error('Erro ao buscar empresas do giro:', e));
   }, []);
+
+  // Salva o filtro atual sempre que o usuario alterar mes ou lojas, pulando
+  // a primeira renderizacao pra nao sobrescrever o que acabou de ser
+  // restaurado acima com os valores padrao.
+  const primeiraRenderizacaoFiltroRef = useRef(true);
+  useEffect(() => {
+    if (primeiraRenderizacaoFiltroRef.current) {
+      primeiraRenderizacaoFiltroRef.current = false;
+      return;
+    }
+    salvarFiltro('giro_filtros', { mesReferencia, empresas: Array.from(empresasSelecionadas) });
+  }, [mesReferencia, empresasSelecionadas]);
 
   async function buscarSnapshot(mesRef: string, empresasParam: string) {
     try {
@@ -277,6 +360,10 @@ export default function GiroPage() {
       </div>
 
       <div className="bg-white rounded-lg shadow-md p-4">
+        <div className="flex items-center gap-2 mb-3">
+          <Calendar className="w-5 h-5 text-brand-primary" />
+          <h2 className="text-base font-semibold text-brand-dark">Período</h2>
+        </div>
         <div className="flex items-center gap-3 flex-wrap">
           <label className="text-sm text-gray-500">Mês de referência</label>
           <input
@@ -284,27 +371,27 @@ export default function GiroPage() {
             value={mesReferencia}
             onChange={(e) => setMesReferencia(e.target.value)}
             max={mesAtual()}
-            className="px-3 py-1.5 border border-gray-300 rounded-md text-sm"
+            className="px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-primary"
           />
 
           <div className="relative">
             <button
               onClick={() => setFiltroLojasAberto((v) => !v)}
-              className="px-3 py-1.5 border border-gray-300 rounded-md text-sm bg-white hover:bg-gray-50 flex items-center gap-2"
+              className="min-w-[160px] flex items-center justify-between gap-2 px-3 py-2 border border-gray-300 rounded-md text-sm bg-white hover:bg-gray-50"
             >
               Lojas ({empresasSelecionadas.size}/{empresasDisponiveis.length})
-              <ChevronDown className="w-3.5 h-3.5" />
+              <ChevronDown className="w-4 h-4 text-gray-500" />
             </button>
             {filtroLojasAberto && (
-              <div className="absolute z-30 mt-1 w-64 max-h-80 overflow-auto bg-white border border-gray-200 rounded-md shadow-lg p-2">
+              <div className="absolute z-30 mt-1 w-64 max-h-80 overflow-auto bg-white border border-gray-200 rounded-lg shadow-xl p-2">
                 <div className="flex justify-between px-1 pb-1 mb-1 border-b border-gray-100">
                   <button
-                    className="text-xs text-rose-600 hover:underline"
+                    className="text-xs font-medium text-purple-700 hover:text-purple-900"
                     onClick={() => setEmpresasSelecionadas(new Set(empresasDisponiveis.map((e) => e.cdEmpresa)))}
                   >
                     Todas
                   </button>
-                  <button className="text-xs text-gray-500 hover:underline" onClick={() => setEmpresasSelecionadas(new Set())}>
+                  <button className="text-xs font-medium text-gray-600 hover:text-gray-900" onClick={() => setEmpresasSelecionadas(new Set())}>
                     Nenhuma
                   </button>
                 </div>
@@ -324,7 +411,7 @@ export default function GiroPage() {
 
           <button
             onClick={consultar}
-            className="px-4 py-1.5 text-sm bg-rose-600 text-white rounded-md hover:bg-rose-700 transition-colors"
+            className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-md transition-colors"
           >
             Consultar
           </button>
@@ -421,6 +508,21 @@ export default function GiroPage() {
                 </tbody>
               </table>
             </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <TabelaTopProdutos
+              titulo="Top 10 melhor giro"
+              subtitulo="Produtos com estoque que giram mais rápido (menos meses de cobertura)."
+              itens={dados!.topProdutos.melhorGiro}
+              corDestaque="text-green-700"
+            />
+            <TabelaTopProdutos
+              titulo="Top 10 pior giro"
+              subtitulo="Estoque parado (sem venda no período) primeiro, depois os de giro mais lento."
+              itens={dados!.topProdutos.piorGiro}
+              corDestaque="text-red-700"
+            />
           </div>
         </>
       )}
