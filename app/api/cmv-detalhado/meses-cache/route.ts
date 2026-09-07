@@ -11,7 +11,7 @@ export async function GET(request: NextRequest) {
     const dataFim = searchParams.get('dataFim') || '2026-12-31';
     const params = new URLSearchParams({ dataInicio, dataFim });
 
-    const response = await fetch(`${PYTHON_API_URL}/api/cmv-detalhado/meses-cache-lojas?${params.toString()}`, {
+    const response = await fetch(`${PYTHON_API_URL}/api/cmv-detalhado/meses-cache?${params.toString()}`, {
       method: 'GET',
       cache: 'no-store',
       headers: { 'Content-Type': 'application/json' },
@@ -19,7 +19,7 @@ export async function GET(request: NextRequest) {
     const data = await response.json();
     return NextResponse.json(data, { status: response.status });
   } catch (error) {
-    console.error('Erro ao checar cache de lojas do CMV detalhado:', error);
-    return NextResponse.json({ error: 'Erro ao checar cache de lojas do CMV detalhado' }, { status: 500 });
+    console.error('Erro ao checar cache do CMV detalhado:', error);
+    return NextResponse.json({ error: 'Erro ao checar cache do CMV detalhado' }, { status: 500 });
   }
 }

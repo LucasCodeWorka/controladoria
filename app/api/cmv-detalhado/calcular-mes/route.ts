@@ -13,7 +13,7 @@ export async function POST(request: NextRequest) {
     }
     const params = new URLSearchParams({ anoMes });
 
-    const response = await fetch(`${PYTHON_API_URL}/api/cmv-detalhado/calcular-mes-loja?${params.toString()}`, {
+    const response = await fetch(`${PYTHON_API_URL}/api/cmv-detalhado/calcular-mes?${params.toString()}`, {
       method: 'POST',
       cache: 'no-store',
       headers: { 'Content-Type': 'application/json' },
@@ -21,7 +21,7 @@ export async function POST(request: NextRequest) {
     const data = await response.json();
     return NextResponse.json(data, { status: response.status });
   } catch (error) {
-    console.error('Erro ao calcular cache de loja do CMV detalhado:', error);
-    return NextResponse.json({ error: 'Erro ao calcular cache de loja do CMV detalhado' }, { status: 500 });
+    console.error('Erro ao calcular cache do CMV detalhado:', error);
+    return NextResponse.json({ error: 'Erro ao calcular cache do CMV detalhado' }, { status: 500 });
   }
 }

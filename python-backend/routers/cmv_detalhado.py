@@ -258,10 +258,129 @@ def _calcular_e_cachear_mes_loja(ano_mes: str) -> dict:
     return {"anoMes": ano_mes, "linhas": len(linhas), "valorTotal": valor_total}
 
 
-def _meses_cacheados() -> set:
+def _meses_loja_cacheados() -> set:
     _criar_tabela_cache_loja_produto()
     rows = execute_query("SELECT ano_mes FROM cmv_loja_produto_cache_status", ()) or []
     return {r["ano_mes"] for r in rows}
+
+
+# ---------------------------------------------------------------------------
+# Cache de receita por empresa+produto+mes.
+#
+# Pra %CMV = CMV/receita por dimensao (linha/familia/...), precisa de receita
+# NO NIVEL DE PRODUTO - e nao existe fonte rapida correta pra isso (testado:
+# mv_vendas_valor usa, pra fabrica, uma base de PEDIDOS, nao de vendas
+# realizadas, e bate ~35% diferente do valor oficial). A fonte certa e
+# vr_tra_transitem (vl_totalliquido) com a MESMA regra de modalidade/operacao/
+# situacao ja usada em _buscar_receita_por_empresa - validado que bate exato
+# (empresa 1, ago/2026: 2.903.548,63 nos dois; empresa 3: 341.270,29 nos
+# dois). O custo tambem e fixo por mes (nao por filtro de empresa): rodar
+# TODAS as empresas (fabrica + lojas) de um mes de uma vez leva ~48s, entao
+# processa junto com o cache de loja, mes a mes.
+# ---------------------------------------------------------------------------
+
+def _criar_tabela_cache_receita_produto():
+    execute_insert("""
+        CREATE TABLE IF NOT EXISTS receita_produto_cache (
+            cd_empresa INTEGER NOT NULL,
+            idproduto INTEGER NOT NULL,
+            ano_mes VARCHAR(7) NOT NULL,
+            receita NUMERIC NOT NULL,
+            PRIMARY KEY (cd_empresa, idproduto, ano_mes)
+        )
+    """, ())
+    execute_insert("""
+        CREATE TABLE IF NOT EXISTS receita_produto_cache_status (
+            ano_mes VARCHAR(7) PRIMARY KEY,
+            linhas INTEGER NOT NULL,
+            receita_total NUMERIC NOT NULL,
+            dt_calculado TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+    """, ())
+
+
+# Query validada: bate exato com _buscar_receita_por_empresa (mesma regra de
+# modalidade/operacao/situacao), so que no nivel de produto em vez de so
+# empresa - testado empresa 1 e empresa 3, ago/2026, ambas batendo.
+_QUERY_RECEITA_PRODUTO_MES = """
+    SELECT t.cd_empresa, i.cd_produto AS idproduto,
+        SUM(
+            CASE
+                WHEN t.tp_modalidade::text IN ('4','8') AND t.tp_operacao::text = 'S' THEN i.vl_totalliquido
+                WHEN t.tp_modalidade::text = '3' AND t.tp_operacao::text = 'E' THEN -i.vl_totalliquido
+                ELSE 0
+            END
+        ) AS receita
+    FROM vr_tra_transacao t
+    JOIN vr_tra_transitem i ON t.nr_transacao = i.nr_transacao AND t.cd_empresa = i.cd_empresa
+    WHERE t.tp_situacao = 4
+      AND t.dt_transacao >= %s AND t.dt_transacao <= %s
+      AND ((t.tp_modalidade::text IN ('4','8') AND t.tp_operacao::text = 'S') OR (t.tp_modalidade::text = '3' AND t.tp_operacao::text = 'E'))
+    GROUP BY 1, 2
+"""
+
+
+def _calcular_e_cachear_receita_mes(ano_mes: str) -> dict:
+    """Mesma logica do cache de CMV de loja, mas pra receita por produto -
+    roda TODAS as empresas (fabrica + lojas) de uma vez (~48s pro mes
+    inteiro)."""
+    _criar_tabela_cache_receita_produto()
+    ano, mes = ano_mes.split("-")
+    data_inicio = f"{ano}-{mes}-01"
+    ultimo_dia = calendar.monthrange(int(ano), int(mes))[1]
+    data_fim = f"{ano}-{mes}-{ultimo_dia:02d}"
+
+    linhas = execute_query(_QUERY_RECEITA_PRODUTO_MES, (data_inicio, data_fim)) or []
+
+    execute_insert("DELETE FROM receita_produto_cache WHERE ano_mes = %s", (ano_mes,))
+    receita_total = 0.0
+    for i in range(0, len(linhas), 500):
+        lote = linhas[i:i + 500]
+        valores_sql = []
+        params = []
+        for r in lote:
+            v = float(r["receita"] or 0)
+            receita_total += v
+            valores_sql.append("(%s, %s, %s, %s)")
+            params.extend([r["cd_empresa"], r["idproduto"], ano_mes, v])
+        if valores_sql:
+            execute_insert(
+                f"INSERT INTO receita_produto_cache (cd_empresa, idproduto, ano_mes, receita) VALUES {','.join(valores_sql)}",
+                tuple(params)
+            )
+
+    execute_insert("""
+        INSERT INTO receita_produto_cache_status (ano_mes, linhas, receita_total, dt_calculado)
+        VALUES (%s, %s, %s, NOW())
+        ON CONFLICT (ano_mes) DO UPDATE SET linhas = EXCLUDED.linhas, receita_total = EXCLUDED.receita_total, dt_calculado = NOW()
+    """, (ano_mes, len(linhas), receita_total))
+
+    return {"anoMes": ano_mes, "linhas": len(linhas), "receitaTotal": receita_total}
+
+
+def _meses_receita_cacheados() -> set:
+    _criar_tabela_cache_receita_produto()
+    rows = execute_query("SELECT ano_mes FROM receita_produto_cache_status", ()) or []
+    return {r["ano_mes"] for r in rows}
+
+
+def _calcular_e_cachear_mes(ano_mes: str) -> dict:
+    """Recalcula os dois caches (CMV de loja e receita por produto) de um
+    mes, com TODAS as empresas de uma vez - e o par completo que o grafico
+    de %CMV por dimensao precisa pra aquele mes."""
+    resultado_cmv_loja = _calcular_e_cachear_mes_loja(ano_mes)
+    resultado_receita = _calcular_e_cachear_receita_mes(ano_mes)
+    return {
+        "anoMes": ano_mes,
+        "cmvLoja": resultado_cmv_loja,
+        "receita": resultado_receita,
+    }
+
+
+def _meses_prontos_dimensao() -> set:
+    """Um mes so esta pronto pro grafico de %CMV por dimensao quando os dois
+    caches (loja e receita) tem ele calculado."""
+    return _meses_loja_cacheados() & _meses_receita_cacheados()
 
 
 @router.get("/api/cmv-detalhado/empresas")
@@ -405,22 +524,20 @@ def cmv_por_dimensao(
     empresas: Optional[str] = Query(None, description="Lista de cd_empresa separados por virgula (default: todas)")
 ):
     """
-    CMV agrupado por uma dimensao do produto (linha/familia/colecao/status/
-    continuidade). Fabrica: join rapido e ao vivo entre mv_cmv_fab
-    (idproduto) e mv_prd_referencia_produto (cadastro do produto, tambem
-    materializada, entao rapida). Lojas: mv_cmv_loja_v2 nao guarda o produto
-    da venda, entao lojas leem do cache local cmv_loja_produto_cache
-    (recalculado mes a mes via /calcular-mes-loja, ver esse endpoint pro
-    porque). Meses do periodo pedido que ainda nao foram calculados pras
-    lojas selecionadas voltam em 'mesesFaltantesLojas', pro front avisar e
-    oferecer calcular.
+    %CMV = CMV/receita por uma dimensao do produto (linha/familia/colecao/
+    status/continuidade), igual conceito dos outros graficos da tela (ex:
+    vendeu 100mil de permanente, custo foi 40mil, CMV e 40%) - so que
+    quebrado por categoria do produto em vez de por loja/mes.
 
-    O campo 'percentual' de cada item e a fatia da categoria sobre o TOTAL DE
-    CMV do proprio grafico (composicao), nao CMV/receita como nos outros
-    graficos da tela: a unica fonte rapida de receita por produto pra fabrica
-    (mv_vendas_valor) vem de PEDIDOS, nao de vendas realizadas, e bate ~35%
-    diferente da receita oficial ja usada no resto da tela - usar isso geraria
-    um % que nao reconcilia com o resto do painel.
+    CMV por produto: fabrica ao vivo (mv_cmv_fab, rapida) + lojas do cache
+    cmv_loja_produto_cache. Receita por produto: SEMPRE do cache
+    receita_produto_cache (fabrica e lojas) - nao ha fonte rapida de receita
+    por produto (testada mv_vendas_valor: usa PEDIDOS pra fabrica, nao vendas
+    realizadas, bate ~35% diferente do oficial). Os dois caches sao
+    recalculados juntos, mes a mes, via /calcular-mes (~60-80s o mes
+    inteiro, todas as empresas de uma vez - custo fixo por mes, nao por
+    filtro). Meses do periodo pedido ainda sem os dois caches voltam em
+    'mesesFaltantes', pro front avisar e oferecer calcular.
     """
     try:
         coluna = DIMENSOES_CMV.get(dimensao)
@@ -431,28 +548,29 @@ def cmv_por_dimensao(
         empresas_fabrica_pedidas = [e for e in cd_empresas if _eh_fabrica(e)]
         empresas_lojas_pedidas = [e for e in cd_empresas if not _eh_fabrica(e)]
 
-        acumulado: dict = {}
+        meses = [f"{a:04d}-{m:02d}" for a, m in _gerar_meses(dataInicio, dataFim)]
+        meses_prontos_geral = _meses_prontos_dimensao()
+        meses_faltantes = [m for m in meses if m not in meses_prontos_geral]
+        meses_prontos = [m for m in meses if m in meses_prontos_geral]
 
-        if empresas_fabrica_pedidas:
-            query_fab = f"""
-                SELECT COALESCE(p.{coluna}, 'SEM CLASSIFICACAO') AS chave, ABS(SUM(mv.valor)) AS valor
-                FROM mv_cmv_fab mv
-                LEFT JOIN mv_prd_referencia_produto p ON p.cd_produto = mv.idproduto
-                WHERE mv.data >= %s AND mv.data <= %s
-                GROUP BY 1
-            """
-            for r in execute_query(query_fab, (dataInicio, dataFim)) or []:
-                acumulado[r["chave"]] = acumulado.get(r["chave"], 0.0) + float(r["valor"] or 0)
+        cmv_por_chave: dict = {}
+        receita_por_chave: dict = {}
 
-        meses_faltantes = []
-        if empresas_lojas_pedidas:
-            meses = [f"{a:04d}-{m:02d}" for a, m in _gerar_meses(dataInicio, dataFim)]
-            cacheados = _meses_cacheados()
-            meses_faltantes = [m for m in meses if m not in cacheados]
-            meses_prontos = [m for m in meses if m in cacheados]
+        if meses_prontos:
+            placeholders_meses = ",".join(["%s"] * len(meses_prontos))
 
-            if meses_prontos:
-                placeholders_meses = ",".join(["%s"] * len(meses_prontos))
+            if empresas_fabrica_pedidas:
+                query_fab = f"""
+                    SELECT COALESCE(p.{coluna}, 'SEM CLASSIFICACAO') AS chave, ABS(SUM(mv.valor)) AS valor
+                    FROM mv_cmv_fab mv
+                    LEFT JOIN mv_prd_referencia_produto p ON p.cd_produto = mv.idproduto
+                    WHERE TO_CHAR(mv.data, 'YYYY-MM') IN ({placeholders_meses})
+                    GROUP BY 1
+                """
+                for r in execute_query(query_fab, tuple(meses_prontos)) or []:
+                    cmv_por_chave[r["chave"]] = cmv_por_chave.get(r["chave"], 0.0) + float(r["valor"] or 0)
+
+            if empresas_lojas_pedidas:
                 placeholders_lojas = ",".join(["%s"] * len(empresas_lojas_pedidas))
                 query_lojas = f"""
                     SELECT COALESCE(p.{coluna}, 'SEM CLASSIFICACAO') AS chave, ABS(SUM(c.valor)) AS valor
@@ -462,32 +580,45 @@ def cmv_por_dimensao(
                     GROUP BY 1
                 """
                 for r in execute_query(query_lojas, (*meses_prontos, *empresas_lojas_pedidas)) or []:
-                    acumulado[r["chave"]] = acumulado.get(r["chave"], 0.0) + float(r["valor"] or 0)
+                    cmv_por_chave[r["chave"]] = cmv_por_chave.get(r["chave"], 0.0) + float(r["valor"] or 0)
+
+            placeholders_empresas = ",".join(["%s"] * len(cd_empresas))
+            query_receita = f"""
+                SELECT COALESCE(p.{coluna}, 'SEM CLASSIFICACAO') AS chave, ABS(SUM(r.receita)) AS receita
+                FROM receita_produto_cache r
+                LEFT JOIN mv_prd_referencia_produto p ON p.cd_produto = r.idproduto
+                WHERE r.ano_mes IN ({placeholders_meses}) AND r.cd_empresa IN ({placeholders_empresas})
+                GROUP BY 1
+            """
+            for r in execute_query(query_receita, (*meses_prontos, *cd_empresas)) or []:
+                receita_por_chave[r["chave"]] = receita_por_chave.get(r["chave"], 0.0) + float(r["receita"] or 0)
 
         itens = sorted(
-            [{"chave": k, "valor": v} for k, v in acumulado.items() if v > 0],
+            [{"chave": k, "valor": v} for k, v in cmv_por_chave.items() if v > 0],
             key=lambda i: i["valor"],
             reverse=True,
         )
 
         if len(itens) > TOP_N_DIMENSAO:
             principais = itens[:TOP_N_DIMENSAO]
+            chaves_outros = {i["chave"] for i in itens[TOP_N_DIMENSAO:]}
             outros_valor = sum(i["valor"] for i in itens[TOP_N_DIMENSAO:])
             if outros_valor > 0:
-                principais.append({"chave": "OUTROS", "valor": outros_valor})
+                principais.append({"chave": "OUTROS", "valor": outros_valor, "_chavesOutros": chaves_outros})
             itens = principais
 
-        # Percentual de composicao: fatia de cada categoria sobre o total de
-        # CMV do grafico (nao e CMV/receita - nao ha fonte rapida e correta
-        # de receita por produto pra fabrica, ver docstring da funcao).
-        total_valor = sum(i["valor"] for i in itens)
         for item in itens:
-            item["percentual"] = (item["valor"] / total_valor * 100) if total_valor else 0.0
+            if item["chave"] == "OUTROS" and "_chavesOutros" in item:
+                receita = sum(receita_por_chave.get(c, 0.0) for c in item.pop("_chavesOutros"))
+            else:
+                receita = receita_por_chave.get(item["chave"], 0.0)
+            item["receita"] = receita
+            item["percentual"] = _cmv_percentual(item["valor"], receita)
 
         return {
             "dimensao": dimensao,
             "itens": itens,
-            "mesesFaltantesLojas": meses_faltantes,
+            "mesesFaltantes": meses_faltantes,
         }
     except HTTPException:
         raise
@@ -498,45 +629,47 @@ def cmv_por_dimensao(
         raise HTTPException(status_code=500, detail=f"Erro ao buscar CMV por dimensao: {str(e)}")
 
 
-@router.get("/api/cmv-detalhado/meses-cache-lojas")
-def meses_cache_lojas(
+@router.get("/api/cmv-detalhado/meses-cache")
+def meses_cache(
     dataInicio: str = Query(..., description="Data inicial (YYYY-MM-DD)"),
     dataFim: str = Query(..., description="Data final (YYYY-MM-DD)")
 ):
-    """Quais meses do periodo pedido ja estao no cache de CMV por produto das
-    lojas (cmv_loja_produto_cache) e quais ainda faltam calcular."""
+    """Quais meses do periodo pedido ja tem os dois caches (CMV de loja +
+    receita por produto) necessarios pro grafico de %CMV por dimensao, e
+    quais ainda faltam calcular."""
     try:
         meses = [f"{a:04d}-{m:02d}" for a, m in _gerar_meses(dataInicio, dataFim)]
-        cacheados = _meses_cacheados()
+        prontos = _meses_prontos_dimensao()
         return {
             "mesesNecessarios": meses,
-            "mesesCalculados": [m for m in meses if m in cacheados],
-            "mesesFaltantes": [m for m in meses if m not in cacheados],
+            "mesesCalculados": [m for m in meses if m in prontos],
+            "mesesFaltantes": [m for m in meses if m not in prontos],
         }
     except Exception as e:
-        print(f"[ERROR] Erro ao checar cache de lojas: {e}")
-        raise HTTPException(status_code=500, detail=f"Erro ao checar cache de lojas: {str(e)}")
+        print(f"[ERROR] Erro ao checar cache de dimensao: {e}")
+        raise HTTPException(status_code=500, detail=f"Erro ao checar cache de dimensao: {str(e)}")
 
 
-@router.post("/api/cmv-detalhado/calcular-mes-loja")
-def calcular_mes_loja(anoMes: str = Query(..., description="Mes a calcular, formato YYYY-MM")):
+@router.post("/api/cmv-detalhado/calcular-mes")
+def calcular_mes(anoMes: str = Query(..., description="Mes a calcular, formato YYYY-MM")):
     """
-    Recalcula o cache de CMV por produto das lojas pra UM mes (todas as
-    lojas de uma vez - e o que mantem isso rapido, ~16-30s, em vez de horas:
-    o custo das views originais e fixo por mes, nao por filtro de loja/
-    transacao, entao processar todas juntas nao custa mais que processar uma
-    so). Chamado pelo front mes a mes, com barra de progresso, quando
-    'mesesFaltantesLojas' do /por-dimensao acusa meses nao calculados.
+    Recalcula os dois caches (CMV de loja e receita por produto, todas as
+    empresas de uma vez) pra UM mes - e o que mantem isso rapido (~60-80s o
+    mes inteiro, em vez de horas): o custo das views originais e fixo por
+    mes, nao por filtro de empresa/produto/transacao, entao processar tudo
+    junto nao custa mais que processar uma empresa so. Chamado pelo front
+    mes a mes, com barra de progresso, quando 'mesesFaltantes' do
+    /por-dimensao acusa meses nao calculados.
     """
     try:
         if len(anoMes) != 7 or anoMes[4] != "-":
             raise HTTPException(status_code=400, detail=f"anoMes invalido: {anoMes}. Use YYYY-MM.")
-        resultado = _calcular_e_cachear_mes_loja(anoMes)
+        resultado = _calcular_e_cachear_mes(anoMes)
         return resultado
     except HTTPException:
         raise
     except Exception as e:
-        print(f"[ERROR] Erro ao calcular cache de loja pro mes {anoMes}: {e}")
+        print(f"[ERROR] Erro ao calcular cache pro mes {anoMes}: {e}")
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Erro ao calcular cache de loja pro mes {anoMes}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Erro ao calcular cache pro mes {anoMes}: {str(e)}")
