@@ -16,8 +16,16 @@ from routers.dre import CCUSTOS_LOJAS, EMPRESAS_FABRICA
 
 router = APIRouter()
 
-EMPRESAS_CMV_DETALHADO = sorted(set(EMPRESAS_FABRICA) | set(CCUSTOS_LOJAS.keys()))
 CD_EMPRESA_FABRICA = EMPRESAS_FABRICA[0]
+# So o codigo 1 (nao os dois de EMPRESAS_FABRICA=[1,50]) entra na lista de
+# empresas SELECIONAVEIS/LISTADAS (CMV Detalhado, Giro, Estoque por Tempo):
+# o codigo 50 e a mesma "FABRICA" sem nenhuma mercadoria real associada
+# (confirmado: so tinha uns itens de embalagem, ja excluidos do calculo) -
+# listar os dois como linhas separadas so duplicava "FABRICA" nas telas sem
+# nenhum dado a mais. EMPRESAS_FABRICA continua [1,50] pra quem usa como
+# filtro agregado (ex: DRE, onde os dois somados = "FABRICA" sempre foi
+# tratado como um bloco so, nunca item por item).
+EMPRESAS_CMV_DETALHADO = sorted({CD_EMPRESA_FABRICA} | set(CCUSTOS_LOJAS.keys()))
 
 
 def _nome_empresa_cmv(cd_empresa: int) -> str:

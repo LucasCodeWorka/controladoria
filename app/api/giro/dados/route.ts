@@ -9,9 +9,11 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const mesReferencia = searchParams.get('mesReferencia');
     const empresas = searchParams.get('empresas');
+    const status = searchParams.get('status');
     const params = new URLSearchParams();
     if (mesReferencia) params.set('mesReferencia', mesReferencia);
     if (empresas) params.set('empresas', empresas);
+    if (status) params.set('status', status);
 
     const response = await fetch(`${PYTHON_API_URL}/api/giro/dados?${params.toString()}`, {
       method: 'GET',

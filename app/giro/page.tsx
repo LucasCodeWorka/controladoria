@@ -249,6 +249,12 @@ export default function GiroPage() {
   const [empresasSelecionadas, setEmpresasSelecionadas] = useState<Set<number>>(new Set());
   const [filtroLojasAberto, setFiltroLojasAberto] = useState(false);
 
+  // Status de produto (EM LINHA, OPORTUNIDADE, LEVE DEFEITO...) - vazio =
+  // todos (sem filtro, mais rapido, le direto do agregado por empresa).
+  const [statusDisponiveis, setStatusDisponiveis] = useState<string[]>([]);
+  const [statusSelecionados, setStatusSelecionados] = useState<Set<string>>(new Set());
+  const [filtroStatusAberto, setFiltroStatusAberto] = useState(false);
+
   const [dados, setDados] = useState<DadosGiro | null>(null);
   const [carregandoInicial, setCarregandoInicial] = useState(false);
   const [consultaExecutada, setConsultaExecutada] = useState(false);
@@ -264,33 +270,44 @@ export default function GiroPage() {
         setEmpresasDisponiveis(lista);
         // Restaura o filtro salvo da ultima visita, se houver - senao,
         // seleciona todas por padrao (mesmo padrao do DRE/DFC).
-        const salvo = carregarFiltro<{ mesReferencia: string; empresas: number[] }>('giro_filtros');
+        const salvo = carregarFiltro<{ mesReferencia: string; empresas: number[]; status: string[] }>('giro_filtros');
         if (salvo) {
           if (salvo.mesReferencia) setMesReferencia(salvo.mesReferencia);
           if (salvo.empresas) setEmpresasSelecionadas(new Set(salvo.empresas));
           else setEmpresasSelecionadas(new Set(lista.map((e) => e.cdEmpresa)));
+          if (salvo.status) setStatusSelecionados(new Set(salvo.status));
         } else {
           setEmpresasSelecionadas(new Set(lista.map((e) => e.cdEmpresa)));
         }
       })
       .catch((e) => console.error('Erro ao buscar empresas do giro:', e));
+
+    fetch('/api/giro/status-produtos', { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((data) => setStatusDisponiveis(data.status || []))
+      .catch((e) => console.error('Erro ao buscar status de produto:', e));
   }, []);
 
-  // Salva o filtro atual sempre que o usuario alterar mes ou lojas, pulando
-  // a primeira renderizacao pra nao sobrescrever o que acabou de ser
-  // restaurado acima com os valores padrao.
+  // Salva o filtro atual sempre que o usuario alterar mes, lojas ou status,
+  // pulando a primeira renderizacao pra nao sobrescrever o que acabou de
+  // ser restaurado acima com os valores padrao.
   const primeiraRenderizacaoFiltroRef = useRef(true);
   useEffect(() => {
     if (primeiraRenderizacaoFiltroRef.current) {
       primeiraRenderizacaoFiltroRef.current = false;
       return;
     }
-    salvarFiltro('giro_filtros', { mesReferencia, empresas: Array.from(empresasSelecionadas) });
-  }, [mesReferencia, empresasSelecionadas]);
+    salvarFiltro('giro_filtros', {
+      mesReferencia,
+      empresas: Array.from(empresasSelecionadas),
+      status: Array.from(statusSelecionados),
+    });
+  }, [mesReferencia, empresasSelecionadas, statusSelecionados]);
 
-  async function buscarSnapshot(mesRef: string, empresasParam: string) {
+  async function buscarSnapshot(mesRef: string, empresasParam: string, statusParam: string) {
     try {
       const params = new URLSearchParams({ mesReferencia: mesRef, empresas: empresasParam });
+      if (statusParam) params.set('status', statusParam);
       const response = await fetch(`/api/giro/dados?${params.toString()}`, { cache: 'no-store' });
       const data = await response.json();
       if (data.error) {
@@ -312,7 +329,7 @@ export default function GiroPage() {
     }
     setErro(null);
     setCarregandoInicial(true);
-    buscarSnapshot(mesReferencia, Array.from(empresasSelecionadas).join(','))
+    buscarSnapshot(mesReferencia, Array.from(empresasSelecionadas).join(','), Array.from(statusSelecionados).join(','))
       .then(() => setConsultaExecutada(true))
       .finally(() => setCarregandoInicial(false));
   }
@@ -337,7 +354,7 @@ export default function GiroPage() {
         }
         setProgressoCalculo({ atual: i + 1, total: faltantes.length });
       }
-      await buscarSnapshot(mesReferencia, Array.from(empresasSelecionadas).join(','));
+      await buscarSnapshot(mesReferencia, Array.from(empresasSelecionadas).join(','), Array.from(statusSelecionados).join(','));
     } catch (error) {
       console.error('Erro ao calcular giro:', error);
       setErro('Erro ao calcular o giro. Tente novamente.');
@@ -352,6 +369,15 @@ export default function GiroPage() {
       const novo = new Set(atual);
       if (novo.has(cd)) novo.delete(cd);
       else novo.add(cd);
+      return novo;
+    });
+  }
+
+  function toggleStatusFiltro(status: string) {
+    setStatusSelecionados((atual) => {
+      const novo = new Set(atual);
+      if (novo.has(status)) novo.delete(status);
+      else novo.add(status);
       return novo;
     });
   }
@@ -423,6 +449,41 @@ export default function GiroPage() {
                       onChange={() => toggleEmpresaFiltro(e.cdEmpresa)}
                     />
                     {e.nome}
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="relative">
+            <button
+              onClick={() => setFiltroStatusAberto((v) => !v)}
+              className="min-w-[160px] flex items-center justify-between gap-2 px-3 py-2 border border-gray-300 rounded-md text-sm bg-white hover:bg-gray-50"
+            >
+              Status ({statusSelecionados.size === 0 ? 'todos' : statusSelecionados.size})
+              <ChevronDown className="w-4 h-4 text-gray-500" />
+            </button>
+            {filtroStatusAberto && (
+              <div className="absolute z-30 mt-1 w-72 max-h-80 overflow-auto bg-white border border-gray-200 rounded-lg shadow-xl p-2">
+                <div className="flex justify-between px-1 pb-1 mb-1 border-b border-gray-100">
+                  <button
+                    className="text-xs font-medium text-purple-700 hover:text-purple-900"
+                    onClick={() => setStatusSelecionados(new Set(statusDisponiveis))}
+                  >
+                    Todos
+                  </button>
+                  <button className="text-xs font-medium text-gray-600 hover:text-gray-900" onClick={() => setStatusSelecionados(new Set())}>
+                    Limpar
+                  </button>
+                </div>
+                {statusDisponiveis.map((s) => (
+                  <label key={s} className="flex items-center gap-2 px-1 py-1 text-sm hover:bg-gray-50 rounded cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={statusSelecionados.has(s)}
+                      onChange={() => toggleStatusFiltro(s)}
+                    />
+                    {s.replace(/\s+/g, ' ')}
                   </label>
                 ))}
               </div>
