@@ -93,6 +93,28 @@ function mesAtual(): string {
   return `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}`;
 }
 
+function labelMesCompleto(anoMes: string): string {
+  const [ano, mes] = anoMes.split('-');
+  const nomes = [
+    'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
+    'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro',
+  ];
+  return `${nomes[Number(mes) - 1]} ${ano}`;
+}
+
+// Opcoes de mes pra escolher num <select> em vez do <input type="month">
+// nativo - no Safari ele exige digitar o mes manualmente em vez de dar uma
+// lista pra escolher, confuso. Ultimos 24 meses, mais recente primeiro.
+function opcoesMesReferencia(): string[] {
+  const hoje = new Date();
+  const opcoes: string[] = [];
+  for (let i = 0; i < 24; i++) {
+    const d = new Date(hoje.getFullYear(), hoje.getMonth() - i, 1);
+    opcoes.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+  }
+  return opcoes;
+}
+
 interface BarraDado {
   chave: string | number;
   label: string;
@@ -228,7 +250,8 @@ export default function GiroPage() {
   const [filtroLojasAberto, setFiltroLojasAberto] = useState(false);
 
   const [dados, setDados] = useState<DadosGiro | null>(null);
-  const [carregandoInicial, setCarregandoInicial] = useState(true);
+  const [carregandoInicial, setCarregandoInicial] = useState(false);
+  const [consultaExecutada, setConsultaExecutada] = useState(false);
   const [recalculando, setRecalculando] = useState(false);
   const [progressoCalculo, setProgressoCalculo] = useState<{ atual: number; total: number } | null>(null);
   const [erro, setErro] = useState<string | null>(null);
@@ -281,16 +304,7 @@ export default function GiroPage() {
     }
   }
 
-  // So le o snapshot ja calculado pro mes+empresas atuais (rapido, so
-  // consulta o cache local) - nao dispara o calculo pesado sozinho, isso e
-  // so no clique de "Calcular".
-  useEffect(() => {
-    if (empresasSelecionadas.size === 0) return;
-    setCarregandoInicial(true);
-    buscarSnapshot(mesReferencia, Array.from(empresasSelecionadas).join(',')).finally(() => setCarregandoInicial(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [empresasDisponiveis.length]);
-
+  // Nao consulta sozinho ao abrir a tela - so no clique em "Consultar".
   function consultar() {
     if (empresasSelecionadas.size === 0) {
       setErro('Selecione pelo menos uma loja/fábrica.');
@@ -298,7 +312,9 @@ export default function GiroPage() {
     }
     setErro(null);
     setCarregandoInicial(true);
-    buscarSnapshot(mesReferencia, Array.from(empresasSelecionadas).join(',')).finally(() => setCarregandoInicial(false));
+    buscarSnapshot(mesReferencia, Array.from(empresasSelecionadas).join(','))
+      .then(() => setConsultaExecutada(true))
+      .finally(() => setCarregandoInicial(false));
   }
 
   async function calcularFaltantes() {
@@ -366,13 +382,17 @@ export default function GiroPage() {
         </div>
         <div className="flex items-center gap-3 flex-wrap">
           <label className="text-sm text-gray-500">Mês de referência</label>
-          <input
-            type="month"
+          <select
             value={mesReferencia}
             onChange={(e) => setMesReferencia(e.target.value)}
-            max={mesAtual()}
-            className="px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-primary"
-          />
+            className="px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-primary bg-white"
+          >
+            {opcoesMesReferencia().map((m) => (
+              <option key={m} value={m}>
+                {labelMesCompleto(m)}
+              </option>
+            ))}
+          </select>
 
           <div className="relative">
             <button
@@ -434,7 +454,13 @@ export default function GiroPage() {
         </div>
       )}
 
-      {!carregandoInicial && dados && dados.empresasFaltantes.length > 0 && (
+      {!carregandoInicial && !consultaExecutada && (
+        <div className="bg-white rounded-lg shadow border border-gray-200 p-8 text-center text-gray-500">
+          Escolha o mês de referência e as lojas e clique em Consultar.
+        </div>
+      )}
+
+      {!carregandoInicial && consultaExecutada && dados && dados.empresasFaltantes.length > 0 && (
         <div className="flex items-center justify-between gap-3 flex-wrap bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
           <p className="text-xs text-amber-700">
             {recalculando && progressoCalculo
@@ -452,13 +478,13 @@ export default function GiroPage() {
         </div>
       )}
 
-      {!carregandoInicial && !temDados && !recalculando && dados?.empresasFaltantes.length === 0 && (
+      {!carregandoInicial && consultaExecutada && !temDados && !recalculando && dados?.empresasFaltantes.length === 0 && (
         <div className="bg-white rounded-lg shadow border border-gray-200 p-8 text-center text-gray-500">
           Nenhuma empresa selecionada.
         </div>
       )}
 
-      {temDados && (
+      {consultaExecutada && temDados && (
         <>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <CardConsolidado titulo="Giro Fábrica" dado={dados!.consolidadoFabrica} />

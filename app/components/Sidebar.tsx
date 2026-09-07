@@ -18,6 +18,7 @@ import {
   GitCompare,
   Boxes,
   RotateCw,
+  Clock,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -59,6 +60,11 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
       name: 'Giro',
       href: '/giro',
       icon: RotateCw,
+    },
+    {
+      name: 'Estoque por Tempo',
+      href: '/estoque-tempo',
+      icon: Clock,
     },
   ];
 

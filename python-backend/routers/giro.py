@@ -127,10 +127,21 @@ def _datas_periodo(mes_referencia: str) -> tuple:
 # mesma convencao ja usada em mv_estoque_primeiro_dia_mes/vl_mp, aplicada em
 # TODAS as empresas - lojas tambem tem milhares de linhas de saldo nessa
 # faixa, em codigos sem cadastro de produto e quantidades enormes, claramente
-# material de PDV/embalagem) e produtos "sacola" (sem classificacao/grupo
-# consistente no cadastro, filtrado pelo nome). O LEFT JOIN com a
+# material de PDV/embalagem) e itens que nao sao mercadoria de venda (sacola,
+# cupom, gancheira, saquinho, display, expositor, farda, brinde... - sem
+# classificacao/grupo consistente no cadastro pra filtrar de outro jeito,
+# entao filtrado pelo nome - ver TERMOS_PRODUTO_EXCLUIDOS). O LEFT JOIN com a
 # classificacao pode nao achar o produto (p.produto NULL) - nesse caso
-# mantem o produto (so descarta quando da pra confirmar que e sacola).
+# mantem o produto (so descarta quando da pra confirmar que e um desses).
+TERMOS_PRODUTO_EXCLUIDOS = [
+    "SACOLA", "CUPOM", "GANCHEIRA", "SAQUINHO", "DISPLAY", "EXPOSITOR",
+    "PORTA CALCINHA", "FARDA", "BRINDE", "CAIXA DYSPLAY", "MALA ",
+]
+
+
+def _padroes_produto_excluidos() -> list:
+    return [f"%{t}%" for t in TERMOS_PRODUTO_EXCLUIDOS]
+
 
 # Agrupado por empresa+produto (nao so empresa) - alimenta tanto o
 # consolidado por empresa quanto o top 10 melhor/pior giro por produto, sem
@@ -144,7 +155,7 @@ _QUERY_ESTOQUE_ATUAL = """
         WHERE s.cd_saldo = 1 AND s.dt_saldo < %s
           AND s.cd_empresa = ANY(%s)
           AND s.cd_produto < 1000000
-          AND (p.produto IS NULL OR p.produto NOT ILIKE '%%SACOLA%%')
+          AND (p.produto IS NULL OR p.produto NOT ILIKE ALL(%s))
         ORDER BY s.cd_empresa, s.cd_produto, s.dt_saldo DESC
     ) x
     GROUP BY 1, 2
@@ -170,7 +181,7 @@ _QUERY_QTD_VENDIDA = """
       AND t.dt_transacao >= %s AND t.dt_transacao <= %s
       AND ((t.tp_modalidade::text IN ('4','8') AND t.tp_operacao::text = 'S') OR (t.tp_modalidade::text = '3' AND t.tp_operacao::text = 'E'))
       AND i.cd_produto < 1000000
-      AND (p.produto IS NULL OR p.produto NOT ILIKE '%%SACOLA%%')
+      AND (p.produto IS NULL OR p.produto NOT ILIKE ALL(%s))
     GROUP BY 1, 2
 """
 
@@ -179,8 +190,9 @@ def _calcular_giro(mes_referencia: str, cd_empresas: list) -> dict:
     _criar_tabela_giro()
     dt_corte_estoque, data_inicio, data_fim, mes_ini, mes_fim = _datas_periodo(mes_referencia)
 
-    linhas_estoque = execute_query(_QUERY_ESTOQUE_ATUAL, (dt_corte_estoque, cd_empresas)) or []
-    linhas_venda = execute_query(_QUERY_QTD_VENDIDA, (cd_empresas, data_inicio, data_fim)) or []
+    padroes_excluidos = _padroes_produto_excluidos()
+    linhas_estoque = execute_query(_QUERY_ESTOQUE_ATUAL, (dt_corte_estoque, cd_empresas, padroes_excluidos)) or []
+    linhas_venda = execute_query(_QUERY_QTD_VENDIDA, (cd_empresas, data_inicio, data_fim, padroes_excluidos)) or []
 
     estoque_por_empresa: dict = {}
     estoque_por_produto: dict = {}
