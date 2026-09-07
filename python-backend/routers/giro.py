@@ -62,19 +62,27 @@ def _ultimos_3_meses_completos() -> tuple:
     )
 
 
+# Produtos fora da conta de giro: codigo >= 1000000 (materia-prima/insumo -
+# mesma convencao ja usada em mv_estoque_primeiro_dia_mes/vl_mp, agora
+# aplicada em TODAS as empresas, nao so fabrica - lojas tambem tem milhares
+# de linhas de saldo nessa faixa) e produtos "sacola" (embalagem, nao
+# mercadoria de venda - sem classificacao/grupo consistente no cadastro,
+# filtrado pelo nome mesmo). O LEFT JOIN com a classificacao pode nao achar
+# o produto (p.produto NULL) - nesse caso mantem o produto (so descarta
+# quando da pra confirmar que e sacola), por isso o "p.produto IS NULL OR".
+
 # Estoque atual em quantidade, por empresa - ultimo saldo (cd_saldo=1,
-# estoque disponivel) de cada produto. Pra fabrica (cd_empresa=1), exclui
-# codigos de materia-prima (cd_produto >= 1000000 - mesma convencao ja usada
-# em mv_estoque_primeiro_dia_mes/vl_mp) pra nao inflar o estoque com MP em
-# vez de produto acabado.
+# estoque disponivel) de cada produto.
 _QUERY_ESTOQUE_ATUAL = """
     SELECT cd_empresa, SUM(qt_saldo) AS estoque_total
     FROM (
         SELECT DISTINCT ON (s.cd_empresa, s.cd_produto) s.cd_empresa, s.cd_produto, s.qt_saldo
         FROM prd_prdsaldo s
+        LEFT JOIN mv_prd_referencia_produto p ON p.cd_produto = s.cd_produto
         WHERE s.cd_saldo = 1 AND s.dt_saldo < CURRENT_DATE
           AND s.cd_empresa = ANY(%s)
-          AND (s.cd_empresa <> 1 OR s.cd_produto < 1000000)
+          AND s.cd_produto < 1000000
+          AND (p.produto IS NULL OR p.produto NOT ILIKE '%%SACOLA%%')
         ORDER BY s.cd_empresa, s.cd_produto, s.dt_saldo DESC
     ) x
     GROUP BY 1
@@ -95,10 +103,13 @@ _QUERY_QTD_VENDIDA = """
         ) AS qt_vendida
     FROM vr_tra_transacao t
     JOIN vr_tra_transitem i ON t.nr_transacao = i.nr_transacao AND t.cd_empresa = i.cd_empresa
+    LEFT JOIN mv_prd_referencia_produto p ON p.cd_produto = i.cd_produto
     WHERE t.tp_situacao = 4
       AND t.cd_empresa = ANY(%s)
       AND t.dt_transacao >= %s AND t.dt_transacao <= %s
       AND ((t.tp_modalidade::text IN ('4','8') AND t.tp_operacao::text = 'S') OR (t.tp_modalidade::text = '3' AND t.tp_operacao::text = 'E'))
+      AND i.cd_produto < 1000000
+      AND (p.produto IS NULL OR p.produto NOT ILIKE '%%SACOLA%%')
     GROUP BY 1
 """
 
