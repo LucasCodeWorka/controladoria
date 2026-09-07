@@ -1,12 +1,19 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 
 export const dynamic = 'force-dynamic';
 
 const PYTHON_API_URL = process.env.PYTHON_API_URL || 'http://127.0.0.1:8000';
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    const response = await fetch(`${PYTHON_API_URL}/api/giro/dados`, {
+    const { searchParams } = new URL(request.url);
+    const mesReferencia = searchParams.get('mesReferencia');
+    const empresas = searchParams.get('empresas');
+    const params = new URLSearchParams();
+    if (mesReferencia) params.set('mesReferencia', mesReferencia);
+    if (empresas) params.set('empresas', empresas);
+
+    const response = await fetch(`${PYTHON_API_URL}/api/giro/dados?${params.toString()}`, {
       method: 'GET',
       cache: 'no-store',
       headers: { 'Content-Type': 'application/json' },
