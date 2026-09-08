@@ -295,6 +295,12 @@ export default function GiroPage() {
   const [matrizOrdem, setMatrizOrdem] = useState<'asc' | 'desc'>('asc');
   const MATRIZ_POR_PAGINA = 50;
 
+  // Tooltip da matriz com o calculo do giro (estoque / venda = giro) - o
+  // atributo title nativo do navegador demora pra aparecer e alguns
+  // usuarios nem percebem que existe, entao usa um balao proprio que segue
+  // o mouse, igual ao dos graficos.
+  const [tooltipCelula, setTooltipCelula] = useState<{ texto: string; x: number; y: number } | null>(null);
+
   useEffect(() => {
     fetch('/api/cmv-detalhado/empresas', { cache: 'no-store' })
       .then((r) => r.json())
@@ -784,16 +790,20 @@ export default function GiroPage() {
                           return (
                             <td
                               key={e.cdEmpresa}
-                              className="px-3 py-2 text-right text-gray-700"
-                              title={dados ? tooltipGiro(dados.estoque, dados.venda, dados.giro) : undefined}
+                              className="px-3 py-2 text-right text-gray-700 cursor-default"
+                              onMouseEnter={(ev) => dados && setTooltipCelula({ texto: tooltipGiro(dados.estoque, dados.venda, dados.giro), x: ev.clientX, y: ev.clientY })}
+                              onMouseMove={(ev) => dados && setTooltipCelula({ texto: tooltipGiro(dados.estoque, dados.venda, dados.giro), x: ev.clientX, y: ev.clientY })}
+                              onMouseLeave={() => setTooltipCelula(null)}
                             >
                               {formatarGiro(dados?.giro ?? null)}
                             </td>
                           );
                         })}
                         <td
-                          className="px-4 py-2 text-right font-semibold text-gray-900 bg-gray-50"
-                          title={tooltipGiro(item.estoqueTotal, item.vendaTotal, item.giroTotal)}
+                          className="px-4 py-2 text-right font-semibold text-gray-900 bg-gray-50 cursor-default"
+                          onMouseEnter={(ev) => setTooltipCelula({ texto: tooltipGiro(item.estoqueTotal, item.vendaTotal, item.giroTotal), x: ev.clientX, y: ev.clientY })}
+                          onMouseMove={(ev) => setTooltipCelula({ texto: tooltipGiro(item.estoqueTotal, item.vendaTotal, item.giroTotal), x: ev.clientX, y: ev.clientY })}
+                          onMouseLeave={() => setTooltipCelula(null)}
                         >
                           {formatarGiro(item.giroTotal)}
                         </td>
@@ -801,6 +811,15 @@ export default function GiroPage() {
                     ))}
                   </tbody>
                 </table>
+              </div>
+            )}
+
+            {tooltipCelula && (
+              <div
+                className="fixed z-50 bg-gray-900 text-white text-xs rounded px-2.5 py-1.5 shadow-lg pointer-events-none whitespace-nowrap"
+                style={{ left: tooltipCelula.x + 12, top: tooltipCelula.y + 12 }}
+              >
+                {tooltipCelula.texto}
               </div>
             )}
 
