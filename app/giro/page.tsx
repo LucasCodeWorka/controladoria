@@ -67,10 +67,18 @@ interface DadosGiro {
   topProdutos: TopProdutos;
 }
 
+interface GiroLoja {
+  estoque: number;
+  venda: number;
+  giro: number | null;
+}
+
 interface ItemMatrizGiro {
   referencia: string;
   nome: string;
-  porLoja: Record<string, number | null>;
+  porLoja: Record<string, GiroLoja>;
+  estoqueTotal: number;
+  vendaTotal: number;
   giroTotal: number | null;
   precoFabrica: number | null;
   precoAtacado: number | null;
@@ -97,6 +105,17 @@ function formatarQtd(valor: number): string {
 function formatarGiro(valor: number | null): string {
   if (valor === null) return '-';
   return valor.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+// Tooltip da matriz por referencia: mostra a conta que chegou naquele giro
+// (estoque atual / venda media dos ultimos 3 meses), tanto por loja quanto
+// no total.
+function tooltipGiro(estoque: number, venda: number, giro: number | null): string {
+  const vendaFmt = venda.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (giro === null) {
+    return `Estoque: ${formatarQtd(estoque)} ÷ Venda média: ${vendaFmt} = sem venda no período (giro indefinido)`;
+  }
+  return `Estoque: ${formatarQtd(estoque)} ÷ Venda média: ${vendaFmt} = ${formatarGiro(giro)}`;
 }
 
 function formatarPreco(valor: number | null): string {
@@ -731,6 +750,9 @@ export default function GiroPage() {
                           Produto{indicadorOrdenacao('nome')}
                         </button>
                       </th>
+                      <th className="text-right px-3 py-2 font-medium text-gray-600 whitespace-nowrap">Preço Fábrica</th>
+                      <th className="text-right px-3 py-2 font-medium text-gray-600 whitespace-nowrap">Preço Atacado</th>
+                      <th className="text-right px-3 py-2 font-medium text-gray-600 whitespace-nowrap">Preço Varejo</th>
                       {matriz.empresas.map((e) => (
                         <th key={e.cdEmpresa} className="text-right px-3 py-2 font-medium text-gray-600 whitespace-nowrap">
                           <button
@@ -747,9 +769,6 @@ export default function GiroPage() {
                           Total{indicadorOrdenacao('total')}
                         </button>
                       </th>
-                      <th className="text-right px-3 py-2 font-medium text-gray-600 whitespace-nowrap">Preço Fábrica</th>
-                      <th className="text-right px-3 py-2 font-medium text-gray-600 whitespace-nowrap">Preço Atacado</th>
-                      <th className="text-right px-3 py-2 font-medium text-gray-600 whitespace-nowrap">Preço Varejo</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
@@ -757,15 +776,27 @@ export default function GiroPage() {
                       <tr key={item.referencia} className="hover:bg-gray-50">
                         <td className="px-4 py-2 text-gray-500 sticky left-0 bg-white z-10">{item.referencia}</td>
                         <td className="px-4 py-2 text-gray-800 sticky left-[100px] bg-white z-10">{item.nome}</td>
-                        {matriz.empresas.map((e) => (
-                          <td key={e.cdEmpresa} className="px-3 py-2 text-right text-gray-700">
-                            {formatarGiro(item.porLoja[String(e.cdEmpresa)] ?? null)}
-                          </td>
-                        ))}
-                        <td className="px-4 py-2 text-right font-semibold text-gray-900 bg-gray-50">{formatarGiro(item.giroTotal)}</td>
                         <td className="px-3 py-2 text-right text-gray-700 whitespace-nowrap">{formatarPreco(item.precoFabrica)}</td>
                         <td className="px-3 py-2 text-right text-gray-700 whitespace-nowrap">{formatarPreco(item.precoAtacado)}</td>
                         <td className="px-3 py-2 text-right text-gray-700 whitespace-nowrap">{formatarPreco(item.precoVarejo)}</td>
+                        {matriz.empresas.map((e) => {
+                          const dados = item.porLoja[String(e.cdEmpresa)];
+                          return (
+                            <td
+                              key={e.cdEmpresa}
+                              className="px-3 py-2 text-right text-gray-700"
+                              title={dados ? tooltipGiro(dados.estoque, dados.venda, dados.giro) : undefined}
+                            >
+                              {formatarGiro(dados?.giro ?? null)}
+                            </td>
+                          );
+                        })}
+                        <td
+                          className="px-4 py-2 text-right font-semibold text-gray-900 bg-gray-50"
+                          title={tooltipGiro(item.estoqueTotal, item.vendaTotal, item.giroTotal)}
+                        >
+                          {formatarGiro(item.giroTotal)}
+                        </td>
                       </tr>
                     ))}
                   </tbody>

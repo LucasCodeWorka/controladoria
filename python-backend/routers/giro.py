@@ -321,11 +321,19 @@ def _obter_matriz_agregada(mes_referencia: str, cd_empresas: list) -> list:
         d["estoqueTotal"] += estoque
         d["vendaTotal"] += venda
 
+    # porLoja/total guardam estoque e venda media crus junto do giro (nao so
+    # o resultado da divisao) pra montar o tooltip "estoque / venda = giro"
+    # no frontend, sem precisar de outra consulta.
     resultado = [
         {
             "referencia": ref,
             "nome": d["nome"] or "(sem cadastro)",
-            "porLoja": {cd_empresa: _giro(estoque, venda) for cd_empresa, (estoque, venda) in d["porLoja"].items()},
+            "porLoja": {
+                cd_empresa: {"estoque": estoque, "venda": venda, "giro": _giro(estoque, venda)}
+                for cd_empresa, (estoque, venda) in d["porLoja"].items()
+            },
+            "estoqueTotal": d["estoqueTotal"],
+            "vendaTotal": d["vendaTotal"],
             "giroTotal": _giro(d["estoqueTotal"], d["vendaTotal"]),
             "cdProdutoPreco": d["cdProdutoPreco"] or d["cdProdutoFallback"],
         }
@@ -631,7 +639,7 @@ def matriz_produtos_giro(
                 cd_empresa_ord = int(ordenarPor)
             except ValueError:
                 raise HTTPException(status_code=400, detail=f"ordenarPor invalido: {ordenarPor}")
-            extrair = lambda i: i["porLoja"].get(cd_empresa_ord)
+            extrair = lambda i: (i["porLoja"].get(cd_empresa_ord) or {}).get("giro")
 
         desc = ordem == "desc"
 
@@ -665,6 +673,8 @@ def matriz_produtos_giro(
                 "referencia": item["referencia"],
                 "nome": item["nome"],
                 "porLoja": item["porLoja"],
+                "estoqueTotal": item["estoqueTotal"],
+                "vendaTotal": item["vendaTotal"],
                 "giroTotal": item["giroTotal"],
                 "precoFabrica": preco["precoFabrica"],
                 "precoAtacado": preco["precoAtacado"],
