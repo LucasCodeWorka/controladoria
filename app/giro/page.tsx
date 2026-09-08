@@ -106,6 +106,19 @@ function nomeCurto(nome: string): string {
   return nome.length > 14 ? `${nome.slice(0, 13)}…` : nome;
 }
 
+// So pro cabecalho da matriz por referencia: tira "SHOPPING" e o sufixo de
+// cidade que sobra depois (ex: "BARRA SHOPPING - RJ" -> "BARRA",
+// "SALVADOR SHOPPING - BA" -> "SALVADOR", "MORUMBI SHOPPING" -> "MORUMBI") -
+// nao mexe no nome em nenhum outro lugar da tela (filtro de lojas, tabela
+// principal), so no cabecalho de coluna, onde o espaco e curto.
+function nomeColunaLoja(nome: string): string {
+  const limpo = nome
+    .replace(/\s*SHOPPING\s*/gi, ' ')
+    .replace(/\s*-\s*[A-Z]{2}\s*$/i, '')
+    .trim();
+  return nomeCurto(limpo || nome);
+}
+
 function mesAtual(): string {
   const hoje = new Date();
   return `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}`;
@@ -239,6 +252,8 @@ export default function GiroPage() {
   const [matriz, setMatriz] = useState<MatrizGiro | null>(null);
   const [matrizPagina, setMatrizPagina] = useState(1);
   const [matrizCarregando, setMatrizCarregando] = useState(false);
+  const [matrizOrdenarPor, setMatrizOrdenarPor] = useState('referencia');
+  const [matrizOrdem, setMatrizOrdem] = useState<'asc' | 'desc'>('asc');
   const MATRIZ_POR_PAGINA = 50;
 
   useEffect(() => {
@@ -309,7 +324,7 @@ export default function GiroPage() {
   }
 
   // Nao consulta sozinho ao abrir a tela - so no clique em "Consultar".
-  async function buscarMatriz(mesRef: string, empresasParam: string, pagina: number) {
+  async function buscarMatriz(mesRef: string, empresasParam: string, pagina: number, ordenarPor: string, ordem: 'asc' | 'desc') {
     setMatrizCarregando(true);
     try {
       const params = new URLSearchParams({
@@ -317,6 +332,8 @@ export default function GiroPage() {
         empresas: empresasParam,
         pagina: String(pagina),
         porPagina: String(MATRIZ_POR_PAGINA),
+        ordenarPor,
+        ordem,
       });
       const response = await fetch(`/api/giro/matriz-produtos?${params.toString()}`, { cache: 'no-store' });
       const data = await response.json();
@@ -345,11 +362,28 @@ export default function GiroPage() {
     buscarSnapshot(mesReferencia, empresasParam, Array.from(statusSelecionados).join(','))
       .then(() => setConsultaExecutada(true))
       .finally(() => setCarregandoInicial(false));
-    buscarMatriz(mesReferencia, empresasParam, 1);
+    setMatrizOrdenarPor('referencia');
+    setMatrizOrdem('asc');
+    buscarMatriz(mesReferencia, empresasParam, 1, 'referencia', 'asc');
   }
 
   function trocarPaginaMatriz(novaPagina: number) {
-    buscarMatriz(mesReferencia, Array.from(empresasSelecionadas).join(','), novaPagina);
+    buscarMatriz(mesReferencia, Array.from(empresasSelecionadas).join(','), novaPagina, matrizOrdenarPor, matrizOrdem);
+  }
+
+  // Clicar numa coluna ja ordenada inverte o sentido; numa coluna nova,
+  // comeca ascendente. Sempre volta pra pagina 1 (a ordenacao e da base
+  // inteira, nao so da pagina atual).
+  function ordenarMatrizPor(coluna: string) {
+    const novoOrdem: 'asc' | 'desc' = matrizOrdenarPor === coluna && matrizOrdem === 'asc' ? 'desc' : 'asc';
+    setMatrizOrdenarPor(coluna);
+    setMatrizOrdem(novoOrdem);
+    buscarMatriz(mesReferencia, Array.from(empresasSelecionadas).join(','), 1, coluna, novoOrdem);
+  }
+
+  function indicadorOrdenacao(coluna: string): string {
+    if (matrizOrdenarPor !== coluna) return '';
+    return matrizOrdem === 'asc' ? ' ↑' : ' ↓';
   }
 
   async function calcularFaltantes() {
@@ -374,7 +408,7 @@ export default function GiroPage() {
       }
       const empresasParam = Array.from(empresasSelecionadas).join(',');
       await buscarSnapshot(mesReferencia, empresasParam, Array.from(statusSelecionados).join(','));
-      await buscarMatriz(mesReferencia, empresasParam, matrizPagina);
+      await buscarMatriz(mesReferencia, empresasParam, matrizPagina, matrizOrdenarPor, matrizOrdem);
     } catch (error) {
       console.error('Erro ao calcular giro:', error);
       setErro('Erro ao calcular o giro. Tente novamente.');
@@ -667,14 +701,32 @@ export default function GiroPage() {
                 <table className="w-full text-sm">
                   <thead className="bg-gray-50 border-b border-gray-200">
                     <tr>
-                      <th className="text-left px-4 py-2 font-medium text-gray-600 sticky left-0 bg-gray-50 z-10 min-w-[100px]">Referência</th>
-                      <th className="text-left px-4 py-2 font-medium text-gray-600 sticky left-[100px] bg-gray-50 z-10 min-w-[220px]">Produto</th>
+                      <th className="text-left px-4 py-2 font-medium text-gray-600 sticky left-0 bg-gray-50 z-10 min-w-[100px]">
+                        <button onClick={() => ordenarMatrizPor('referencia')} className="flex items-center gap-1 hover:text-gray-900">
+                          Referência{indicadorOrdenacao('referencia')}
+                        </button>
+                      </th>
+                      <th className="text-left px-4 py-2 font-medium text-gray-600 sticky left-[100px] bg-gray-50 z-10 min-w-[220px]">
+                        <button onClick={() => ordenarMatrizPor('nome')} className="flex items-center gap-1 hover:text-gray-900">
+                          Produto{indicadorOrdenacao('nome')}
+                        </button>
+                      </th>
                       {matriz.empresas.map((e) => (
                         <th key={e.cdEmpresa} className="text-right px-3 py-2 font-medium text-gray-600 whitespace-nowrap">
-                          {nomeCurto(e.nome)}
+                          <button
+                            onClick={() => ordenarMatrizPor(String(e.cdEmpresa))}
+                            className="flex items-center gap-1 ml-auto hover:text-gray-900"
+                            title={e.nome}
+                          >
+                            {nomeColunaLoja(e.nome)}{indicadorOrdenacao(String(e.cdEmpresa))}
+                          </button>
                         </th>
                       ))}
-                      <th className="text-right px-4 py-2 font-semibold text-gray-800 bg-gray-100 whitespace-nowrap">Total</th>
+                      <th className="text-right px-4 py-2 font-semibold text-gray-800 bg-gray-100 whitespace-nowrap">
+                        <button onClick={() => ordenarMatrizPor('total')} className="flex items-center gap-1 ml-auto hover:text-gray-600">
+                          Total{indicadorOrdenacao('total')}
+                        </button>
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">

@@ -11,11 +11,15 @@ export async function GET(request: NextRequest) {
     const empresas = searchParams.get('empresas');
     const pagina = searchParams.get('pagina');
     const porPagina = searchParams.get('porPagina');
+    const ordenarPor = searchParams.get('ordenarPor');
+    const ordem = searchParams.get('ordem');
     const params = new URLSearchParams();
     if (mesReferencia) params.set('mesReferencia', mesReferencia);
     if (empresas) params.set('empresas', empresas);
     if (pagina) params.set('pagina', pagina);
     if (porPagina) params.set('porPagina', porPagina);
+    if (ordenarPor) params.set('ordenarPor', ordenarPor);
+    if (ordem) params.set('ordem', ordem);
 
     const response = await fetch(`${PYTHON_API_URL}/api/giro/matriz-produtos?${params.toString()}`, {
       method: 'GET',

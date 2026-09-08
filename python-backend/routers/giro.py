@@ -251,10 +251,65 @@ def _calcular_giro(mes_referencia: str, cd_empresas: list) -> dict:
             tuple(params)
         )
 
+    _cache_matriz_referencia.clear()
     return _montar_resposta(mes_referencia, cd_empresas)
 
 
 TOP_N_PRODUTOS_GIRO = 10
+
+# Cache em memoria (nao no banco - e derivado, barato de refazer) da matriz
+# ja agregada por REFERENCIA - {(mes_referencia, tuple(cd_empresas ordenado)):
+# [itens]}. Ordenar por uma coluna qualquer (loja ou total) precisa do giro
+# de TODAS as referencias, nao so da pagina - buscar e agregar tudo direto
+# do banco a cada clique de ordenar levaria uns 8-10s (220 mil linhas no mes
+# cheio); cacheado, so a primeira vez custa isso, depois e instantaneo.
+# Limpo em _calcular_giro (dado novo invalida o cache).
+_cache_matriz_referencia: dict = {}
+
+
+def _obter_matriz_agregada(mes_referencia: str, cd_empresas: list) -> list:
+    chave = (mes_referencia, tuple(sorted(cd_empresas)))
+    if chave in _cache_matriz_referencia:
+        return _cache_matriz_referencia[chave]
+
+    placeholders = ",".join(["%s"] * len(cd_empresas))
+    linhas = execute_query(f"""
+        SELECT g.cd_empresa, g.estoque_atual, g.venda_media_3m,
+            COALESCE(p.referencia, g.cd_produto::text) AS referencia, p.produto AS nome
+        FROM giro_produto_snapshot g
+        LEFT JOIN mv_prd_referencia_produto p ON p.cd_produto = g.cd_produto
+        WHERE g.mes_referencia = %s AND g.cd_empresa IN ({placeholders})
+    """, (mes_referencia, *cd_empresas)) or []
+
+    def _giro(estoque: float, venda: float):
+        return (estoque / venda) if venda > 0 else None
+
+    por_ref: dict = {}
+    for r in linhas:
+        ref = r["referencia"]
+        if ref not in por_ref:
+            por_ref[ref] = {"nome": r["nome"], "porLoja": {}, "estoqueTotal": 0.0, "vendaTotal": 0.0}
+        d = por_ref[ref]
+        if not d["nome"] and r["nome"]:
+            d["nome"] = r["nome"]
+        estoque = float(r["estoque_atual"] or 0)
+        venda = float(r["venda_media_3m"] or 0)
+        estoque_prev, venda_prev = d["porLoja"].get(r["cd_empresa"], (0.0, 0.0))
+        d["porLoja"][r["cd_empresa"]] = (estoque_prev + estoque, venda_prev + venda)
+        d["estoqueTotal"] += estoque
+        d["vendaTotal"] += venda
+
+    resultado = [
+        {
+            "referencia": ref,
+            "nome": d["nome"] or "(sem cadastro)",
+            "porLoja": {cd_empresa: _giro(estoque, venda) for cd_empresa, (estoque, venda) in d["porLoja"].items()},
+            "giroTotal": _giro(d["estoqueTotal"], d["vendaTotal"]),
+        }
+        for ref, d in por_ref.items()
+    ]
+    _cache_matriz_referencia[chave] = resultado
+    return resultado
 
 
 def _status_produto_disponiveis() -> list:
@@ -466,7 +521,9 @@ def matriz_produtos_giro(
     mesReferencia: Optional[str] = Query(None, description="Mes de referencia YYYY-MM (default: mes atual)"),
     empresas: Optional[str] = Query(None, description="Lista de cd_empresa separados por virgula (default: todas)"),
     pagina: int = Query(1, ge=1, description="Pagina (comeca em 1)"),
-    porPagina: int = Query(50, ge=1, le=200, description="Produtos por pagina")
+    porPagina: int = Query(50, ge=1, le=200, description="Produtos por pagina"),
+    ordenarPor: str = Query("referencia", description="'referencia', 'nome', 'total', ou um cd_empresa (ex: '3')"),
+    ordem: str = Query("asc", description="'asc' ou 'desc'")
 ):
     """
     Giro por REFERENCIA (nao por SKU/cor/tamanho individual) e empresa, numa
@@ -479,16 +536,17 @@ def matriz_produtos_giro(
     (giro_produto_snapshot) - sem nenhuma query pesada, ja que os dados ja
     estao la (mesmo cache usado no top 10). Paginado por referencia (bem
     menos que por SKU - ex: 2 mil referencias contra 20+ mil produtos).
+
+    Ordenavel por qualquer coluna (loja ou total) - ordena a base INTEIRA,
+    nao so a pagina atual (senao "ordenar" so reordenaria os mesmos 50 itens
+    da pagina). Isso exige o giro de todas as referencias calculado antes de
+    paginar - ver _obter_matriz_agregada pro cache que evita refazer isso a
+    cada clique.
     """
     try:
         mes_ref = mesReferencia or _mes_atual()
         cd_empresas = _parse_empresas_giro(empresas)
         placeholders = ",".join(["%s"] * len(cd_empresas))
-        # Chave de agrupamento: referencia cadastrada, ou o proprio codigo
-        # do produto quando nao tem (mantem produtos sem cadastro
-        # separados uns dos outros, em vez de juntar tudo num "sem
-        # referencia" so).
-        chave_ref = "COALESCE(p.referencia, g.cd_produto::text)"
 
         calculadas = {
             r["cd_empresa"] for r in execute_query(
@@ -497,69 +555,49 @@ def matriz_produtos_giro(
             ) or []
         }
         empresas_faltantes = [{"cdEmpresa": e, "nome": _nome_empresa_cmv(e)} for e in cd_empresas if e not in calculadas]
-
-        total_referencias = execute_query(f"""
-            SELECT COUNT(DISTINCT {chave_ref}) c
-            FROM giro_produto_snapshot g
-            LEFT JOIN mv_prd_referencia_produto p ON p.cd_produto = g.cd_produto
-            WHERE g.mes_referencia = %s AND g.cd_empresa IN ({placeholders})
-        """, (mes_ref, *cd_empresas))[0]["c"]
-
         empresas_colunas = [{"cdEmpresa": e, "nome": _nome_empresa_cmv(e)} for e in cd_empresas]
+
+        dados_completos = _obter_matriz_agregada(mes_ref, cd_empresas)
+        total_referencias = len(dados_completos)
         total_paginas = max(1, -(-total_referencias // porPagina))
 
+        # Extrai o valor de ordenacao de cada item - nulos sempre por
+        # ultimo, em qualquer direcao (senao "desc" jogaria os nulos pra
+        # primeira posicao, o que nao faz sentido pra giro).
+        if ordenarPor == "referencia":
+            extrair = lambda i: i["referencia"]
+        elif ordenarPor == "nome":
+            extrair = lambda i: i["nome"]
+        elif ordenarPor == "total":
+            extrair = lambda i: i["giroTotal"]
+        else:
+            try:
+                cd_empresa_ord = int(ordenarPor)
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"ordenarPor invalido: {ordenarPor}")
+            extrair = lambda i: i["porLoja"].get(cd_empresa_ord)
+
+        desc = ordem == "desc"
+
+        def _chave_ordenacao(item):
+            v = extrair(item)
+            if v is None:
+                return (1, 0)
+            if isinstance(v, str):
+                return (0, v)
+            return (0, -v if desc else v)
+
+        # Strings (referencia/nome) usam reverse= pro sentido; numeros ja
+        # tem o sinal invertido em _chave_ordenacao (pra nulos ficarem
+        # sempre por ultimo mesmo com reverse=True).
+        reverse_str = desc and ordenarPor in ("referencia", "nome")
+        itens_ordenados = sorted(dados_completos, key=_chave_ordenacao, reverse=reverse_str)
+
         offset = (pagina - 1) * porPagina
-        refs_pagina = execute_query(f"""
-            SELECT {chave_ref} AS referencia, MIN(p.produto) AS nome
-            FROM giro_produto_snapshot g
-            LEFT JOIN mv_prd_referencia_produto p ON p.cd_produto = g.cd_produto
-            WHERE g.mes_referencia = %s AND g.cd_empresa IN ({placeholders})
-            GROUP BY 1
-            ORDER BY 1
-            LIMIT %s OFFSET %s
-        """, (mes_ref, *cd_empresas, porPagina, offset)) or []
-
-        if not refs_pagina:
-            return {
-                "itens": [], "empresas": empresas_colunas, "totalProdutos": total_referencias,
-                "pagina": pagina, "porPagina": porPagina, "totalPaginas": total_paginas,
-                "empresasFaltantes": empresas_faltantes, "mesReferencia": mes_ref,
-            }
-
-        refs_ids = [r["referencia"] for r in refs_pagina]
-        linhas = execute_query(f"""
-            SELECT {chave_ref} AS referencia, g.cd_empresa,
-                SUM(g.estoque_atual) AS estoque, SUM(g.venda_media_3m) AS venda
-            FROM giro_produto_snapshot g
-            LEFT JOIN mv_prd_referencia_produto p ON p.cd_produto = g.cd_produto
-            WHERE g.mes_referencia = %s AND g.cd_empresa IN ({placeholders}) AND {chave_ref} = ANY(%s)
-            GROUP BY 1, 2
-        """, (mes_ref, *cd_empresas, refs_ids)) or []
-
-        def _giro(estoque: float, venda: float):
-            return (estoque / venda) if venda > 0 else None
-
-        por_referencia = {r["referencia"]: {"porLoja": {}, "estoqueTotal": 0.0, "vendaTotal": 0.0} for r in refs_pagina}
-        for r in linhas:
-            estoque = float(r["estoque"] or 0)
-            venda = float(r["venda"] or 0)
-            d = por_referencia[r["referencia"]]
-            d["porLoja"][r["cd_empresa"]] = _giro(estoque, venda)
-            d["estoqueTotal"] += estoque
-            d["vendaTotal"] += venda
-
-        itens = []
-        for r in refs_pagina:
-            d = por_referencia[r["referencia"]]
-            itens.append({
-                "referencia": r["referencia"],
-                "nome": r["nome"] or "(sem cadastro)",
-                "porLoja": d["porLoja"],
-                "giroTotal": _giro(d["estoqueTotal"], d["vendaTotal"]),
-            })
+        itens_pagina = itens_ordenados[offset:offset + porPagina]
 
         return {
-            "itens": itens,
+            "itens": itens_pagina,
             "empresas": empresas_colunas,
             "totalProdutos": total_referencias,
             "pagina": pagina,
