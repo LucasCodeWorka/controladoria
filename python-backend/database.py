@@ -35,7 +35,19 @@ def get_connection_pool():
                 database=os.getenv('DB_NAME', 'liebe'),
                 user=os.getenv('DB_USER', 'liebe_ro'),
                 password=password,
-                connect_timeout=30,  # Timeout de conexão
+                connect_timeout=30,  # Timeout de conexao
+                # TCP keepalive: sem isso, se a rede cair no MEIO de uma
+                # query (nao na conexao inicial - connect_timeout nao ajuda
+                # ai), o socket fica esperando resposta de um peer morto e
+                # so desiste no timeout default do SO (pode ser minutos) -
+                # o request fica "travado" sem erro nenhum, sem log, sem
+                # nada (reproduzido: uma query simples ficou 4+ min presa
+                # depois de uma query longa na mesma conexao). Com isso,
+                # o SO detecta em ~10+5*5=35s e psycopg2 levanta erro.
+                keepalives=1,
+                keepalives_idle=10,
+                keepalives_interval=5,
+                keepalives_count=5,
                 options='-c statement_timeout=300000'  # Timeout de query: 5 minutos
             )
             print("[OK] PostgreSQL connection pool created successfully")
