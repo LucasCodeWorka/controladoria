@@ -107,15 +107,33 @@ function formatarGiro(valor: number | null): string {
   return valor.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-// Texto exibido na celula de giro: numero normal quando da pra calcular
-// (teve venda no periodo); "SV-3M" (sem venda nos ultimos 3 meses) quando
-// tem estoque mas nao vendeu nada - o pior caso (estoque parado); "-" so
+// Cor do numero de giro - "meses de cobertura" de estoque no ritmo medio
+// de venda: baixo gira rapido (bom), alto fica parado demais (ruim).
+// Limiares aproximados, so pra dar um sinal visual rapido.
+function classeGiro(giro: number): string {
+  if (giro <= 3) return 'text-emerald-700';
+  if (giro <= 8) return 'text-amber-700';
+  return 'text-rose-700';
+}
+
+// Celula de giro: numero colorido quando da pra calcular (teve venda no
+// periodo); badge ambar "SV-3M" (sem venda nos ultimos 3 meses) quando tem
+// estoque mas nao vendeu nada - o pior caso (estoque parado); "-" cinza so
 // quando nao tem NADA (nem estoque nem venda) - referencias assim nem
 // aparecem mais na tabela, mas uma loja isolada dentro de uma referencia
 // com movimento em outras lojas pode cair aqui.
-function textoCelulaGiro(estoque: number, giro: number | null): string {
-  if (giro !== null) return formatarGiro(giro);
-  return estoque > 0 ? 'SV-3M' : '-';
+function CelulaGiro({ estoque, giro }: { estoque: number; giro: number | null }) {
+  if (giro !== null) {
+    return <span className={`font-medium ${classeGiro(giro)}`}>{formatarGiro(giro)}</span>;
+  }
+  if (estoque > 0) {
+    return (
+      <span className="inline-block px-1.5 py-0.5 text-[10px] font-semibold rounded bg-amber-50 text-amber-700 border border-amber-200">
+        SV-3M
+      </span>
+    );
+  }
+  return <span className="text-gray-300">-</span>;
 }
 
 // Tooltip da matriz por referencia: mostra a conta que chegou naquele giro
@@ -768,6 +786,15 @@ export default function GiroPage() {
                   loja/fábrica selecionada, e o giro total no final (estoque somado ÷ venda média somada de todas as
                   empresas do filtro).
                 </p>
+                <div className="flex items-center gap-3 mt-1 text-[11px] text-gray-500">
+                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500" /> Giro rápido</span>
+                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500" /> Atenção</span>
+                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-rose-500" /> Estoque parado</span>
+                  <span className="flex items-center gap-1">
+                    <span className="px-1 py-0.5 text-[10px] font-semibold rounded bg-amber-50 text-amber-700 border border-amber-200">SV-3M</span>
+                    Sem venda nos últimos 3 meses
+                  </span>
+                </div>
               </div>
               {matriz && (
                 <div className="flex items-center gap-2 text-sm shrink-0">
@@ -818,18 +845,18 @@ export default function GiroPage() {
                           Produto{indicadorOrdenacao('nome')}
                         </button>
                       </th>
-                      <th className="text-right px-3 py-2 font-medium text-gray-600 whitespace-nowrap">
-                        <button onClick={() => ordenarMatrizPor('precoFabrica')} className="flex items-center gap-1 ml-auto hover:text-gray-900">
+                      <th className="text-right px-3 py-2 font-medium text-blue-700 bg-blue-50/60 whitespace-nowrap">
+                        <button onClick={() => ordenarMatrizPor('precoFabrica')} className="flex items-center gap-1 ml-auto hover:text-blue-900">
                           Preço Fábrica{indicadorOrdenacao('precoFabrica')}
                         </button>
                       </th>
-                      <th className="text-right px-3 py-2 font-medium text-gray-600 whitespace-nowrap">
-                        <button onClick={() => ordenarMatrizPor('precoAtacado')} className="flex items-center gap-1 ml-auto hover:text-gray-900">
+                      <th className="text-right px-3 py-2 font-medium text-blue-700 bg-blue-50/60 whitespace-nowrap">
+                        <button onClick={() => ordenarMatrizPor('precoAtacado')} className="flex items-center gap-1 ml-auto hover:text-blue-900">
                           Preço Atacado{indicadorOrdenacao('precoAtacado')}
                         </button>
                       </th>
-                      <th className="text-right px-3 py-2 font-medium text-gray-600 whitespace-nowrap">
-                        <button onClick={() => ordenarMatrizPor('precoVarejo')} className="flex items-center gap-1 ml-auto hover:text-gray-900">
+                      <th className="text-right px-3 py-2 font-medium text-blue-700 bg-blue-50/60 whitespace-nowrap">
+                        <button onClick={() => ordenarMatrizPor('precoVarejo')} className="flex items-center gap-1 ml-auto hover:text-blue-900">
                           Preço Varejo{indicadorOrdenacao('precoVarejo')}
                         </button>
                       </th>
@@ -844,17 +871,17 @@ export default function GiroPage() {
                           </button>
                         </th>
                       ))}
-                      <th className="text-right px-3 py-2 font-medium text-gray-600 whitespace-nowrap">
-                        <button onClick={() => ordenarMatrizPor('estoque')} className="flex items-center gap-1 ml-auto hover:text-gray-900">
+                      <th className="text-right px-3 py-2 font-medium text-slate-700 bg-slate-50 whitespace-nowrap">
+                        <button onClick={() => ordenarMatrizPor('estoque')} className="flex items-center gap-1 ml-auto hover:text-slate-900">
                           Estoque{indicadorOrdenacao('estoque')}
                         </button>
                       </th>
-                      <th className="text-right px-3 py-2 font-medium text-gray-600 whitespace-nowrap">
-                        <button onClick={() => ordenarMatrizPor('totalVenda')} className="flex items-center gap-1 ml-auto hover:text-gray-900">
+                      <th className="text-right px-3 py-2 font-medium text-slate-700 bg-slate-50 whitespace-nowrap">
+                        <button onClick={() => ordenarMatrizPor('totalVenda')} className="flex items-center gap-1 ml-auto hover:text-slate-900">
                           Total Venda{indicadorOrdenacao('totalVenda')}
                         </button>
                       </th>
-                      <th className="text-right px-4 py-2 font-semibold text-gray-800 bg-gray-100 whitespace-nowrap">
+                      <th className="text-right px-4 py-2 font-semibold text-gray-800 bg-gray-200/70 border-l-2 border-gray-300 whitespace-nowrap">
                         <button onClick={() => ordenarMatrizPor('total')} className="flex items-center gap-1 ml-auto hover:text-gray-600">
                           Total{indicadorOrdenacao('total')}
                         </button>
@@ -862,36 +889,36 @@ export default function GiroPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {matriz.itens.map((item) => (
-                      <tr key={item.referencia} className="hover:bg-gray-50">
-                        <td className="px-4 py-2 text-gray-500 sticky left-0 bg-white z-10">{item.referencia}</td>
-                        <td className="px-4 py-2 text-gray-800 sticky left-[100px] bg-white z-10">{item.nome}</td>
-                        <td className="px-3 py-2 text-right text-gray-700 whitespace-nowrap">{formatarPreco(item.precoFabrica)}</td>
-                        <td className="px-3 py-2 text-right text-gray-700 whitespace-nowrap">{formatarPreco(item.precoAtacado)}</td>
-                        <td className="px-3 py-2 text-right text-gray-700 whitespace-nowrap">{formatarPreco(item.precoVarejo)}</td>
+                    {matriz.itens.map((item, idx) => (
+                      <tr key={item.referencia} className={`${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'} hover:bg-rose-50 transition-colors`}>
+                        <td className="px-4 py-2 text-gray-500 sticky left-0 bg-inherit z-10">{item.referencia}</td>
+                        <td className="px-4 py-2 text-gray-800 sticky left-[100px] bg-inherit z-10">{item.nome}</td>
+                        <td className="px-3 py-2 text-right text-blue-900 bg-blue-50/30 whitespace-nowrap">{formatarPreco(item.precoFabrica)}</td>
+                        <td className="px-3 py-2 text-right text-blue-900 bg-blue-50/30 whitespace-nowrap">{formatarPreco(item.precoAtacado)}</td>
+                        <td className="px-3 py-2 text-right text-blue-900 bg-blue-50/30 whitespace-nowrap">{formatarPreco(item.precoVarejo)}</td>
                         {matriz.empresas.map((e) => {
                           const dados = item.porLoja[String(e.cdEmpresa)];
                           return (
                             <td
                               key={e.cdEmpresa}
-                              className="px-3 py-2 text-right text-gray-700 cursor-default"
+                              className="px-3 py-2 text-right cursor-default"
                               onMouseEnter={(ev) => dados && setTooltipCelula({ texto: tooltipGiro(dados.estoque, dados.venda, dados.giro), x: ev.clientX, y: ev.clientY })}
                               onMouseMove={(ev) => dados && setTooltipCelula({ texto: tooltipGiro(dados.estoque, dados.venda, dados.giro), x: ev.clientX, y: ev.clientY })}
                               onMouseLeave={() => setTooltipCelula(null)}
                             >
-                              {dados ? textoCelulaGiro(dados.estoque, dados.giro) : '-'}
+                              {dados ? <CelulaGiro estoque={dados.estoque} giro={dados.giro} /> : <span className="text-gray-300">-</span>}
                             </td>
                           );
                         })}
-                        <td className="px-3 py-2 text-right text-gray-700 whitespace-nowrap">{formatarQtd(item.estoqueTotal)}</td>
-                        <td className="px-3 py-2 text-right text-gray-700 whitespace-nowrap">{formatarGiro(item.vendaTotal)}</td>
+                        <td className="px-3 py-2 text-right text-slate-700 bg-slate-50/50 whitespace-nowrap">{formatarQtd(item.estoqueTotal)}</td>
+                        <td className="px-3 py-2 text-right text-slate-700 bg-slate-50/50 whitespace-nowrap">{formatarGiro(item.vendaTotal)}</td>
                         <td
-                          className="px-4 py-2 text-right font-semibold text-gray-900 bg-gray-50 cursor-default"
+                          className="px-4 py-2 text-right font-semibold bg-gray-100/70 border-l-2 border-gray-200 cursor-default"
                           onMouseEnter={(ev) => setTooltipCelula({ texto: tooltipGiro(item.estoqueTotal, item.vendaTotal, item.giroTotal), x: ev.clientX, y: ev.clientY })}
                           onMouseMove={(ev) => setTooltipCelula({ texto: tooltipGiro(item.estoqueTotal, item.vendaTotal, item.giroTotal), x: ev.clientX, y: ev.clientY })}
                           onMouseLeave={() => setTooltipCelula(null)}
                         >
-                          {textoCelulaGiro(item.estoqueTotal, item.giroTotal)}
+                          <CelulaGiro estoque={item.estoqueTotal} giro={item.giroTotal} />
                         </td>
                       </tr>
                     ))}
