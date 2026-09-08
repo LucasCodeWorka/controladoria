@@ -106,12 +106,24 @@ function nomeCurto(nome: string): string {
   return nome.length > 14 ? `${nome.slice(0, 13)}…` : nome;
 }
 
-// So pro cabecalho da matriz por referencia: tira "SHOPPING" e o sufixo de
-// cidade que sobra depois (ex: "BARRA SHOPPING - RJ" -> "BARRA",
-// "SALVADOR SHOPPING - BA" -> "SALVADOR", "MORUMBI SHOPPING" -> "MORUMBI") -
-// nao mexe no nome em nenhum outro lugar da tela (filtro de lojas, tabela
-// principal), so no cabecalho de coluna, onde o espaco e curto.
+// Apelidos especificos pro cabecalho da matriz - nao seguem um padrao
+// generico pra derivar automaticamente, entao e uma lista fixa.
+const APELIDOS_COLUNA_LOJA: Record<string, string> = {
+  'RIO MAR RECIFE': 'RECIFE',
+  'NORTH JOQUEI': 'JOQUEI',
+  'RIOMAR KENNEDY': 'KENNEDY',
+  ECOMMERCE: 'ECOM',
+  'DOM LUIS': 'D.LUIS',
+};
+
+// So pro cabecalho da matriz por referencia: usa o apelido especifico
+// quando tem um, senao tira "SHOPPING" e o sufixo de cidade que sobra
+// depois (ex: "BARRA SHOPPING - RJ" -> "BARRA", "SALVADOR SHOPPING - BA"
+// -> "SALVADOR", "MORUMBI SHOPPING" -> "MORUMBI") - nao mexe no nome em
+// nenhum outro lugar da tela (filtro de lojas, tabela principal), so no
+// cabecalho de coluna, onde o espaco e curto.
 function nomeColunaLoja(nome: string): string {
+  if (APELIDOS_COLUNA_LOJA[nome]) return APELIDOS_COLUNA_LOJA[nome];
   const limpo = nome
     .replace(/\s*SHOPPING\s*/gi, ' ')
     .replace(/\s*-\s*[A-Z]{2}\s*$/i, '')
