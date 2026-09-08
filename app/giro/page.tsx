@@ -307,6 +307,11 @@ export default function GiroPage() {
   const [matrizOrdem, setMatrizOrdem] = useState<'asc' | 'desc'>('asc');
   const MATRIZ_POR_PAGINA = 50;
 
+  // Filtro "giro maior que X" - texto cru do input (permite vazio = sem
+  // filtro) ate clicar em Aplicar/Enter, pra nao refazer a busca a cada
+  // digito.
+  const [matrizGiroMinimo, setMatrizGiroMinimo] = useState('');
+
   // Tooltip da matriz com o calculo do giro (estoque / venda = giro) - o
   // atributo title nativo do navegador demora pra aparecer e alguns
   // usuarios nem percebem que existe, entao usa um balao proprio que segue
@@ -381,7 +386,7 @@ export default function GiroPage() {
   }
 
   // Nao consulta sozinho ao abrir a tela - so no clique em "Consultar".
-  async function buscarMatriz(mesRef: string, empresasParam: string, pagina: number, ordenarPor: string, ordem: 'asc' | 'desc') {
+  async function buscarMatriz(mesRef: string, empresasParam: string, pagina: number, ordenarPor: string, ordem: 'asc' | 'desc', giroMinimo: string) {
     setMatrizCarregando(true);
     try {
       const params = new URLSearchParams({
@@ -392,6 +397,10 @@ export default function GiroPage() {
         ordenarPor,
         ordem,
       });
+      const giroMinimoNum = Number(giroMinimo.trim().replace(',', '.'));
+      if (giroMinimo.trim() !== '' && !Number.isNaN(giroMinimoNum)) {
+        params.set('giroMinimo', String(giroMinimoNum));
+      }
       const response = await fetch(`/api/giro/matriz-produtos?${params.toString()}`, { cache: 'no-store' });
       const data = await response.json();
       if (!response.ok || data.error) {
@@ -421,11 +430,11 @@ export default function GiroPage() {
       .finally(() => setCarregandoInicial(false));
     setMatrizOrdenarPor('referencia');
     setMatrizOrdem('asc');
-    buscarMatriz(mesReferencia, empresasParam, 1, 'referencia', 'asc');
+    buscarMatriz(mesReferencia, empresasParam, 1, 'referencia', 'asc', matrizGiroMinimo);
   }
 
   function trocarPaginaMatriz(novaPagina: number) {
-    buscarMatriz(mesReferencia, Array.from(empresasSelecionadas).join(','), novaPagina, matrizOrdenarPor, matrizOrdem);
+    buscarMatriz(mesReferencia, Array.from(empresasSelecionadas).join(','), novaPagina, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo);
   }
 
   // Clicar numa coluna ja ordenada inverte o sentido; numa coluna nova,
@@ -435,7 +444,18 @@ export default function GiroPage() {
     const novoOrdem: 'asc' | 'desc' = matrizOrdenarPor === coluna && matrizOrdem === 'asc' ? 'desc' : 'asc';
     setMatrizOrdenarPor(coluna);
     setMatrizOrdem(novoOrdem);
-    buscarMatriz(mesReferencia, Array.from(empresasSelecionadas).join(','), 1, coluna, novoOrdem);
+    buscarMatriz(mesReferencia, Array.from(empresasSelecionadas).join(','), 1, coluna, novoOrdem, matrizGiroMinimo);
+  }
+
+  // Aplica o filtro "giro maior que X" digitado - volta pra pagina 1
+  // mantendo a ordenacao atual.
+  function aplicarFiltroGiroMinimo() {
+    buscarMatriz(mesReferencia, Array.from(empresasSelecionadas).join(','), 1, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo);
+  }
+
+  function limparFiltroGiroMinimo() {
+    setMatrizGiroMinimo('');
+    buscarMatriz(mesReferencia, Array.from(empresasSelecionadas).join(','), 1, matrizOrdenarPor, matrizOrdem, '');
   }
 
   function indicadorOrdenacao(coluna: string): string {
@@ -465,7 +485,7 @@ export default function GiroPage() {
       }
       const empresasParam = Array.from(empresasSelecionadas).join(',');
       await buscarSnapshot(mesReferencia, empresasParam, Array.from(statusSelecionados).join(','));
-      await buscarMatriz(mesReferencia, empresasParam, matrizPagina, matrizOrdenarPor, matrizOrdem);
+      await buscarMatriz(mesReferencia, empresasParam, matrizPagina, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo);
     } catch (error) {
       console.error('Erro ao calcular giro:', error);
       setErro('Erro ao calcular o giro. Tente novamente.');
@@ -710,6 +730,36 @@ export default function GiroPage() {
 
 
           <div className="bg-white rounded-lg shadow-lg overflow-hidden">
+            <div className="px-4 pt-3 flex items-center gap-2 text-sm flex-wrap">
+              <label htmlFor="giro-minimo" className="text-gray-600">Giro maior que:</label>
+              <input
+                id="giro-minimo"
+                type="number"
+                step="0.01"
+                min="0"
+                placeholder="ex: 2"
+                value={matrizGiroMinimo}
+                onChange={(e) => setMatrizGiroMinimo(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') aplicarFiltroGiroMinimo(); }}
+                className="w-24 border border-gray-300 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-rose-500"
+              />
+              <button
+                onClick={aplicarFiltroGiroMinimo}
+                disabled={matrizCarregando}
+                className="px-3 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md text-xs disabled:opacity-40 transition-colors"
+              >
+                Aplicar
+              </button>
+              {matrizGiroMinimo.trim() !== '' && (
+                <button
+                  onClick={limparFiltroGiroMinimo}
+                  disabled={matrizCarregando}
+                  className="text-xs text-gray-400 hover:text-gray-600 underline disabled:opacity-40"
+                >
+                  Limpar
+                </button>
+              )}
+            </div>
             <div className="p-4 pb-2 flex items-center justify-between flex-wrap gap-3">
               <div>
                 <h2 className="text-base font-semibold text-gray-800">Giro por referência e loja</h2>
@@ -768,9 +818,21 @@ export default function GiroPage() {
                           Produto{indicadorOrdenacao('nome')}
                         </button>
                       </th>
-                      <th className="text-right px-3 py-2 font-medium text-gray-600 whitespace-nowrap">Preço Fábrica</th>
-                      <th className="text-right px-3 py-2 font-medium text-gray-600 whitespace-nowrap">Preço Atacado</th>
-                      <th className="text-right px-3 py-2 font-medium text-gray-600 whitespace-nowrap">Preço Varejo</th>
+                      <th className="text-right px-3 py-2 font-medium text-gray-600 whitespace-nowrap">
+                        <button onClick={() => ordenarMatrizPor('precoFabrica')} className="flex items-center gap-1 ml-auto hover:text-gray-900">
+                          Preço Fábrica{indicadorOrdenacao('precoFabrica')}
+                        </button>
+                      </th>
+                      <th className="text-right px-3 py-2 font-medium text-gray-600 whitespace-nowrap">
+                        <button onClick={() => ordenarMatrizPor('precoAtacado')} className="flex items-center gap-1 ml-auto hover:text-gray-900">
+                          Preço Atacado{indicadorOrdenacao('precoAtacado')}
+                        </button>
+                      </th>
+                      <th className="text-right px-3 py-2 font-medium text-gray-600 whitespace-nowrap">
+                        <button onClick={() => ordenarMatrizPor('precoVarejo')} className="flex items-center gap-1 ml-auto hover:text-gray-900">
+                          Preço Varejo{indicadorOrdenacao('precoVarejo')}
+                        </button>
+                      </th>
                       {matriz.empresas.map((e) => (
                         <th key={e.cdEmpresa} className="text-right px-3 py-2 font-medium text-gray-600 whitespace-nowrap">
                           <button
@@ -782,8 +844,16 @@ export default function GiroPage() {
                           </button>
                         </th>
                       ))}
-                      <th className="text-right px-3 py-2 font-medium text-gray-600 whitespace-nowrap">Estoque</th>
-                      <th className="text-right px-3 py-2 font-medium text-gray-600 whitespace-nowrap">Total Venda</th>
+                      <th className="text-right px-3 py-2 font-medium text-gray-600 whitespace-nowrap">
+                        <button onClick={() => ordenarMatrizPor('estoque')} className="flex items-center gap-1 ml-auto hover:text-gray-900">
+                          Estoque{indicadorOrdenacao('estoque')}
+                        </button>
+                      </th>
+                      <th className="text-right px-3 py-2 font-medium text-gray-600 whitespace-nowrap">
+                        <button onClick={() => ordenarMatrizPor('totalVenda')} className="flex items-center gap-1 ml-auto hover:text-gray-900">
+                          Total Venda{indicadorOrdenacao('totalVenda')}
+                        </button>
+                      </th>
                       <th className="text-right px-4 py-2 font-semibold text-gray-800 bg-gray-100 whitespace-nowrap">
                         <button onClick={() => ordenarMatrizPor('total')} className="flex items-center gap-1 ml-auto hover:text-gray-600">
                           Total{indicadorOrdenacao('total')}

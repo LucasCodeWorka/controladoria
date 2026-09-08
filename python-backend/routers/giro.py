@@ -590,8 +590,9 @@ def matriz_produtos_giro(
     empresas: Optional[str] = Query(None, description="Lista de cd_empresa separados por virgula (default: todas)"),
     pagina: int = Query(1, ge=1, description="Pagina (comeca em 1)"),
     porPagina: int = Query(50, ge=1, le=200, description="Produtos por pagina"),
-    ordenarPor: str = Query("referencia", description="'referencia', 'nome', 'total', ou um cd_empresa (ex: '3')"),
-    ordem: str = Query("asc", description="'asc' ou 'desc'")
+    ordenarPor: str = Query("referencia", description="'referencia', 'nome', 'total', 'estoque', 'totalVenda', 'precoFabrica', 'precoAtacado', 'precoVarejo', ou um cd_empresa (ex: '3')"),
+    ordem: str = Query("asc", description="'asc' ou 'desc'"),
+    giroMinimo: Optional[float] = Query(None, description="So retorna referencias com giro TOTAL maior que esse valor (referencias sem giro - SV-3M/sem estoque - ficam de fora)")
 ):
     """
     Giro por REFERENCIA (nao por SKU/cor/tamanho individual) e empresa, numa
@@ -626,18 +627,37 @@ def matriz_produtos_giro(
         empresas_colunas = [{"cdEmpresa": e, "nome": _nome_empresa_cmv(e)} for e in cd_empresas]
 
         dados_completos = _obter_matriz_agregada(mes_ref, cd_empresas)
+        if giroMinimo is not None:
+            # Giro null (SV-3M ou sem estoque/venda nenhum) nunca passa no
+            # filtro "giro maior que X" - nao da pra comparar "sem giro" com
+            # um numero.
+            dados_completos = [i for i in dados_completos if i["giroTotal"] is not None and i["giroTotal"] > giroMinimo]
         total_referencias = len(dados_completos)
         total_paginas = max(1, -(-total_referencias // porPagina))
 
         # Extrai o valor de ordenacao de cada item - nulos sempre por
         # ultimo, em qualquer direcao (senao "desc" jogaria os nulos pra
         # primeira posicao, o que nao faz sentido pra giro).
+        CHAVES_PRECO = {"precoFabrica": "precoFabrica", "precoAtacado": "precoAtacado", "precoVarejo": "precoVarejo"}
         if ordenarPor == "referencia":
             extrair = lambda i: i["referencia"]
         elif ordenarPor == "nome":
             extrair = lambda i: i["nome"]
         elif ordenarPor == "total":
             extrair = lambda i: i["giroTotal"]
+        elif ordenarPor == "estoque":
+            extrair = lambda i: i["estoqueTotal"]
+        elif ordenarPor == "totalVenda":
+            extrair = lambda i: i["vendaTotal"]
+        elif ordenarPor in CHAVES_PRECO:
+            # Preco de ordenacao precisa de TODAS as referencias (nao so da
+            # pagina), senao "ordenar" so reordenaria os 50 itens que ja
+            # estavam na pagina. So busca em lote quando realmente for
+            # ordenar por preco - fica no cache por cd_produto, entao trocar
+            # de pagina ou reordenar de novo depois nao busca de novo.
+            chave_preco = CHAVES_PRECO[ordenarPor]
+            precos_completos = _obter_precos_produtos([i["cdProdutoPreco"] for i in dados_completos])
+            extrair = lambda i: (precos_completos.get(i["cdProdutoPreco"]) or {}).get(chave_preco)
         else:
             try:
                 cd_empresa_ord = int(ordenarPor)

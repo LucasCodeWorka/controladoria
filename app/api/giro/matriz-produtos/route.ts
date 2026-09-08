@@ -13,6 +13,7 @@ export async function GET(request: NextRequest) {
     const porPagina = searchParams.get('porPagina');
     const ordenarPor = searchParams.get('ordenarPor');
     const ordem = searchParams.get('ordem');
+    const giroMinimo = searchParams.get('giroMinimo');
     const params = new URLSearchParams();
     if (mesReferencia) params.set('mesReferencia', mesReferencia);
     if (empresas) params.set('empresas', empresas);
@@ -20,6 +21,7 @@ export async function GET(request: NextRequest) {
     if (porPagina) params.set('porPagina', porPagina);
     if (ordenarPor) params.set('ordenarPor', ordenarPor);
     if (ordem) params.set('ordem', ordem);
+    if (giroMinimo) params.set('giroMinimo', giroMinimo);
 
     const response = await fetch(`${PYTHON_API_URL}/api/giro/matriz-produtos?${params.toString()}`, {
       method: 'GET',
