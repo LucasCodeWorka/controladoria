@@ -72,6 +72,9 @@ interface ItemMatrizGiro {
   nome: string;
   porLoja: Record<string, number | null>;
   giroTotal: number | null;
+  precoFabrica: number | null;
+  precoAtacado: number | null;
+  precoVarejo: number | null;
 }
 
 interface MatrizGiro {
@@ -94,6 +97,11 @@ function formatarQtd(valor: number): string {
 function formatarGiro(valor: number | null): string {
   if (valor === null) return '-';
   return valor.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function formatarPreco(valor: number | null): string {
+  if (valor === null) return '-';
+  return valor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }
 
 function labelMes(anoMes: string): string {
@@ -739,6 +747,9 @@ export default function GiroPage() {
                           Total{indicadorOrdenacao('total')}
                         </button>
                       </th>
+                      <th className="text-right px-3 py-2 font-medium text-gray-600 whitespace-nowrap">Preço Fábrica</th>
+                      <th className="text-right px-3 py-2 font-medium text-gray-600 whitespace-nowrap">Preço Atacado</th>
+                      <th className="text-right px-3 py-2 font-medium text-gray-600 whitespace-nowrap">Preço Varejo</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
@@ -752,6 +763,9 @@ export default function GiroPage() {
                           </td>
                         ))}
                         <td className="px-4 py-2 text-right font-semibold text-gray-900 bg-gray-50">{formatarGiro(item.giroTotal)}</td>
+                        <td className="px-3 py-2 text-right text-gray-700 whitespace-nowrap">{formatarPreco(item.precoFabrica)}</td>
+                        <td className="px-3 py-2 text-right text-gray-700 whitespace-nowrap">{formatarPreco(item.precoAtacado)}</td>
+                        <td className="px-3 py-2 text-right text-gray-700 whitespace-nowrap">{formatarPreco(item.precoVarejo)}</td>
                       </tr>
                     ))}
                   </tbody>

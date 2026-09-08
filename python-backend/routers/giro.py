@@ -267,6 +267,16 @@ TOP_N_PRODUTOS_GIRO = 10
 _cache_matriz_referencia: dict = {}
 
 
+def _eh_variante_preco_desconsiderada(status: Optional[str], familia: Optional[str]) -> bool:
+    """Variantes de uma referencia cujo preco nao representa o preco 'normal'
+    dela - leve defeito (preco reduzido) e doacao (preco zerado) tem valores
+    bem diferentes das demais cores/tamanhos da mesma referencia (confirmado:
+    ref '0001' tinha varejo 59.99 nas variantes normais, 27.9 na leve defeito
+    e 0.0 na doacao). Por pedido do usuario, essas ficam de fora ao escolher
+    qual produto representa o preco da referencia."""
+    return status == "LEVE DEFEITO" or familia == "DOACAO"
+
+
 def _obter_matriz_agregada(mes_referencia: str, cd_empresas: list) -> list:
     chave = (mes_referencia, tuple(sorted(cd_empresas)))
     if chave in _cache_matriz_referencia:
@@ -274,8 +284,9 @@ def _obter_matriz_agregada(mes_referencia: str, cd_empresas: list) -> list:
 
     placeholders = ",".join(["%s"] * len(cd_empresas))
     linhas = execute_query(f"""
-        SELECT g.cd_empresa, g.estoque_atual, g.venda_media_3m,
-            COALESCE(p.referencia, g.cd_produto::text) AS referencia, p.produto AS nome
+        SELECT g.cd_empresa, g.cd_produto, g.estoque_atual, g.venda_media_3m,
+            COALESCE(p.referencia, g.cd_produto::text) AS referencia, p.produto AS nome,
+            p.status, p.familia
         FROM giro_produto_snapshot g
         LEFT JOIN mv_prd_referencia_produto p ON p.cd_produto = g.cd_produto
         WHERE g.mes_referencia = %s AND g.cd_empresa IN ({placeholders})
@@ -288,10 +299,21 @@ def _obter_matriz_agregada(mes_referencia: str, cd_empresas: list) -> list:
     for r in linhas:
         ref = r["referencia"]
         if ref not in por_ref:
-            por_ref[ref] = {"nome": r["nome"], "porLoja": {}, "estoqueTotal": 0.0, "vendaTotal": 0.0}
+            por_ref[ref] = {
+                "nome": r["nome"], "porLoja": {}, "estoqueTotal": 0.0, "vendaTotal": 0.0,
+                "cdProdutoPreco": None, "cdProdutoFallback": None,
+            }
         d = por_ref[ref]
         if not d["nome"] and r["nome"]:
             d["nome"] = r["nome"]
+        # Produto representativo pra buscar o preco da referencia: o primeiro
+        # que nao for leve defeito/doacao (preco "normal"). Se a referencia
+        # so tiver variantes assim, usa qualquer uma como ultimo recurso (pra
+        # nao ficar sem preco nenhum).
+        if d["cdProdutoPreco"] is None and not _eh_variante_preco_desconsiderada(r["status"], r["familia"]):
+            d["cdProdutoPreco"] = r["cd_produto"]
+        if d["cdProdutoFallback"] is None:
+            d["cdProdutoFallback"] = r["cd_produto"]
         estoque = float(r["estoque_atual"] or 0)
         venda = float(r["venda_media_3m"] or 0)
         estoque_prev, venda_prev = d["porLoja"].get(r["cd_empresa"], (0.0, 0.0))
@@ -305,11 +327,45 @@ def _obter_matriz_agregada(mes_referencia: str, cd_empresas: list) -> list:
             "nome": d["nome"] or "(sem cadastro)",
             "porLoja": {cd_empresa: _giro(estoque, venda) for cd_empresa, (estoque, venda) in d["porLoja"].items()},
             "giroTotal": _giro(d["estoqueTotal"], d["vendaTotal"]),
+            "cdProdutoPreco": d["cdProdutoPreco"] or d["cdProdutoFallback"],
         }
         for ref, d in por_ref.items()
     ]
     _cache_matriz_referencia[chave] = resultado
     return resultado
+
+
+# Cache em memoria de preco por cd_produto - {cd_produto: {"fabrica":...,
+# "atacado":..., "varejo":...}}. Preco nao e ligado ao giro (fonte diferente,
+# PRD_VALOR via f_dic_prd_valorprod), entao nao e limpo junto com o cache da
+# matriz - so cresce sob demanda, evitando rebuscar preco de produtos ja
+# vistos ao trocar de pagina/ordenacao.
+_cache_preco_produto: dict = {}
+
+
+def _obter_precos_produtos(cd_produtos: list) -> dict:
+    """Preco fabrica/atacado/varejo pra uma lista de cd_produto, via a funcao
+    public.f_dic_prd_valorprod(cd_produto, 'P', cd_valor) - 1=fabrica,
+    2=atacado, 3=varejo (confirmado com o usuario). Busca tudo numa unica
+    query (VALUES + funcao por linha, executada no servidor) em vez de uma
+    chamada por produto - testado com 50 produtos x 3 precos em ~0.4s."""
+    faltantes = [cd for cd in set(cd_produtos) if cd is not None and cd not in _cache_preco_produto]
+    if faltantes:
+        placeholders = ",".join(["(%s)"] * len(faltantes))
+        linhas = execute_query(f"""
+            SELECT t.cd_produto,
+                public.f_dic_prd_valorprod(t.cd_produto, 'P', 1) AS preco_fabrica,
+                public.f_dic_prd_valorprod(t.cd_produto, 'P', 2) AS preco_atacado,
+                public.f_dic_prd_valorprod(t.cd_produto, 'P', 3) AS preco_varejo
+            FROM (VALUES {placeholders}) AS t(cd_produto)
+        """, tuple(faltantes)) or []
+        for r in linhas:
+            _cache_preco_produto[r["cd_produto"]] = {
+                "precoFabrica": r["preco_fabrica"],
+                "precoAtacado": r["preco_atacado"],
+                "precoVarejo": r["preco_varejo"],
+            }
+    return {cd: _cache_preco_produto.get(cd) for cd in cd_produtos}
 
 
 def _status_produto_disponiveis() -> list:
@@ -596,8 +652,27 @@ def matriz_produtos_giro(
         offset = (pagina - 1) * porPagina
         itens_pagina = itens_ordenados[offset:offset + porPagina]
 
+        # Preco (fabrica/atacado/varejo) so pra pagina atual - buscar da base
+        # inteira (2 mil+ referencias) a cada consulta seria desperdicio. Os
+        # itens de itens_pagina sao os MESMOS objetos cacheados em
+        # _cache_matriz_referencia (dados_completos) - monta dict novo pra
+        # cada linha da resposta em vez de mutar o item cacheado.
+        precos = _obter_precos_produtos([i["cdProdutoPreco"] for i in itens_pagina])
+        itens_resposta = []
+        for item in itens_pagina:
+            preco = precos.get(item["cdProdutoPreco"]) or {"precoFabrica": None, "precoAtacado": None, "precoVarejo": None}
+            itens_resposta.append({
+                "referencia": item["referencia"],
+                "nome": item["nome"],
+                "porLoja": item["porLoja"],
+                "giroTotal": item["giroTotal"],
+                "precoFabrica": preco["precoFabrica"],
+                "precoAtacado": preco["precoAtacado"],
+                "precoVarejo": preco["precoVarejo"],
+            })
+
         return {
-            "itens": itens_pagina,
+            "itens": itens_resposta,
             "empresas": empresas_colunas,
             "totalProdutos": total_referencias,
             "pagina": pagina,
