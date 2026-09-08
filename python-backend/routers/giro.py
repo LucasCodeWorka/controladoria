@@ -459,3 +459,119 @@ def recalcular_giro(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Erro ao recalcular giro: {str(e)}")
+
+
+@router.get("/api/giro/matriz-produtos")
+def matriz_produtos_giro(
+    mesReferencia: Optional[str] = Query(None, description="Mes de referencia YYYY-MM (default: mes atual)"),
+    empresas: Optional[str] = Query(None, description="Lista de cd_empresa separados por virgula (default: todas)"),
+    pagina: int = Query(1, ge=1, description="Pagina (comeca em 1)"),
+    porPagina: int = Query(50, ge=1, le=200, description="Produtos por pagina")
+):
+    """
+    Giro por REFERENCIA (nao por SKU/cor/tamanho individual) e empresa, numa
+    matriz: referencia/descricao + uma coluna de giro por empresa
+    selecionada + giro total (soma do estoque de TODOS os produtos daquela
+    referencia / soma da venda media de todos eles, de todas as empresas do
+    filtro). Produtos sem referencia cadastrada viram uma "referencia" so
+    deles (o proprio codigo), pra nao misturar produtos diferentes sem
+    cadastro num unico grupo. Le direto do cache por produto
+    (giro_produto_snapshot) - sem nenhuma query pesada, ja que os dados ja
+    estao la (mesmo cache usado no top 10). Paginado por referencia (bem
+    menos que por SKU - ex: 2 mil referencias contra 20+ mil produtos).
+    """
+    try:
+        mes_ref = mesReferencia or _mes_atual()
+        cd_empresas = _parse_empresas_giro(empresas)
+        placeholders = ",".join(["%s"] * len(cd_empresas))
+        # Chave de agrupamento: referencia cadastrada, ou o proprio codigo
+        # do produto quando nao tem (mantem produtos sem cadastro
+        # separados uns dos outros, em vez de juntar tudo num "sem
+        # referencia" so).
+        chave_ref = "COALESCE(p.referencia, g.cd_produto::text)"
+
+        calculadas = {
+            r["cd_empresa"] for r in execute_query(
+                f"SELECT DISTINCT cd_empresa FROM giro_snapshot WHERE mes_referencia = %s AND cd_empresa IN ({placeholders})",
+                (mes_ref, *cd_empresas)
+            ) or []
+        }
+        empresas_faltantes = [{"cdEmpresa": e, "nome": _nome_empresa_cmv(e)} for e in cd_empresas if e not in calculadas]
+
+        total_referencias = execute_query(f"""
+            SELECT COUNT(DISTINCT {chave_ref}) c
+            FROM giro_produto_snapshot g
+            LEFT JOIN mv_prd_referencia_produto p ON p.cd_produto = g.cd_produto
+            WHERE g.mes_referencia = %s AND g.cd_empresa IN ({placeholders})
+        """, (mes_ref, *cd_empresas))[0]["c"]
+
+        empresas_colunas = [{"cdEmpresa": e, "nome": _nome_empresa_cmv(e)} for e in cd_empresas]
+        total_paginas = max(1, -(-total_referencias // porPagina))
+
+        offset = (pagina - 1) * porPagina
+        refs_pagina = execute_query(f"""
+            SELECT {chave_ref} AS referencia, MIN(p.produto) AS nome
+            FROM giro_produto_snapshot g
+            LEFT JOIN mv_prd_referencia_produto p ON p.cd_produto = g.cd_produto
+            WHERE g.mes_referencia = %s AND g.cd_empresa IN ({placeholders})
+            GROUP BY 1
+            ORDER BY 1
+            LIMIT %s OFFSET %s
+        """, (mes_ref, *cd_empresas, porPagina, offset)) or []
+
+        if not refs_pagina:
+            return {
+                "itens": [], "empresas": empresas_colunas, "totalProdutos": total_referencias,
+                "pagina": pagina, "porPagina": porPagina, "totalPaginas": total_paginas,
+                "empresasFaltantes": empresas_faltantes, "mesReferencia": mes_ref,
+            }
+
+        refs_ids = [r["referencia"] for r in refs_pagina]
+        linhas = execute_query(f"""
+            SELECT {chave_ref} AS referencia, g.cd_empresa,
+                SUM(g.estoque_atual) AS estoque, SUM(g.venda_media_3m) AS venda
+            FROM giro_produto_snapshot g
+            LEFT JOIN mv_prd_referencia_produto p ON p.cd_produto = g.cd_produto
+            WHERE g.mes_referencia = %s AND g.cd_empresa IN ({placeholders}) AND {chave_ref} = ANY(%s)
+            GROUP BY 1, 2
+        """, (mes_ref, *cd_empresas, refs_ids)) or []
+
+        def _giro(estoque: float, venda: float):
+            return (estoque / venda) if venda > 0 else None
+
+        por_referencia = {r["referencia"]: {"porLoja": {}, "estoqueTotal": 0.0, "vendaTotal": 0.0} for r in refs_pagina}
+        for r in linhas:
+            estoque = float(r["estoque"] or 0)
+            venda = float(r["venda"] or 0)
+            d = por_referencia[r["referencia"]]
+            d["porLoja"][r["cd_empresa"]] = _giro(estoque, venda)
+            d["estoqueTotal"] += estoque
+            d["vendaTotal"] += venda
+
+        itens = []
+        for r in refs_pagina:
+            d = por_referencia[r["referencia"]]
+            itens.append({
+                "referencia": r["referencia"],
+                "nome": r["nome"] or "(sem cadastro)",
+                "porLoja": d["porLoja"],
+                "giroTotal": _giro(d["estoqueTotal"], d["vendaTotal"]),
+            })
+
+        return {
+            "itens": itens,
+            "empresas": empresas_colunas,
+            "totalProdutos": total_referencias,
+            "pagina": pagina,
+            "porPagina": porPagina,
+            "totalPaginas": total_paginas,
+            "empresasFaltantes": empresas_faltantes,
+            "mesReferencia": mes_ref,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[ERROR] Erro ao buscar matriz de produtos do giro: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Erro ao buscar matriz de produtos do giro: {str(e)}")

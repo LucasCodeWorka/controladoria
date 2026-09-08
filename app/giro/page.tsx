@@ -67,6 +67,24 @@ interface DadosGiro {
   topProdutos: TopProdutos;
 }
 
+interface ItemMatrizGiro {
+  referencia: string;
+  nome: string;
+  porLoja: Record<string, number | null>;
+  giroTotal: number | null;
+}
+
+interface MatrizGiro {
+  itens: ItemMatrizGiro[];
+  empresas: EmpresaFaltante[];
+  totalProdutos: number;
+  pagina: number;
+  porPagina: number;
+  totalPaginas: number;
+  empresasFaltantes: EmpresaFaltante[];
+  mesReferencia: string;
+}
+
 const COR_BARRA = '#2a78d6';
 
 function formatarQtd(valor: number): string {
@@ -262,6 +280,13 @@ export default function GiroPage() {
   const [progressoCalculo, setProgressoCalculo] = useState<{ atual: number; total: number } | null>(null);
   const [erro, setErro] = useState<string | null>(null);
 
+  // Matriz referencia x loja - le do mesmo cache por produto, paginada
+  // (um mes cheio pode ter 20+ mil produtos distintos).
+  const [matriz, setMatriz] = useState<MatrizGiro | null>(null);
+  const [matrizPagina, setMatrizPagina] = useState(1);
+  const [matrizCarregando, setMatrizCarregando] = useState(false);
+  const MATRIZ_POR_PAGINA = 50;
+
   useEffect(() => {
     fetch('/api/cmv-detalhado/empresas', { cache: 'no-store' })
       .then((r) => r.json())
@@ -330,6 +355,31 @@ export default function GiroPage() {
   }
 
   // Nao consulta sozinho ao abrir a tela - so no clique em "Consultar".
+  async function buscarMatriz(mesRef: string, empresasParam: string, pagina: number) {
+    setMatrizCarregando(true);
+    try {
+      const params = new URLSearchParams({
+        mesReferencia: mesRef,
+        empresas: empresasParam,
+        pagina: String(pagina),
+        porPagina: String(MATRIZ_POR_PAGINA),
+      });
+      const response = await fetch(`/api/giro/matriz-produtos?${params.toString()}`, { cache: 'no-store' });
+      const data = await response.json();
+      if (!response.ok || data.error) {
+        setErro(`Erro do backend: ${data.detail || data.error || 'Erro desconhecido'}`);
+        return;
+      }
+      setMatriz(data);
+      setMatrizPagina(pagina);
+    } catch (error) {
+      console.error('Erro ao buscar matriz de giro:', error);
+      setErro('Erro ao buscar a matriz por loja.');
+    } finally {
+      setMatrizCarregando(false);
+    }
+  }
+
   function consultar() {
     if (empresasSelecionadas.size === 0) {
       setErro('Selecione pelo menos uma loja/fábrica.');
@@ -337,9 +387,15 @@ export default function GiroPage() {
     }
     setErro(null);
     setCarregandoInicial(true);
-    buscarSnapshot(mesReferencia, Array.from(empresasSelecionadas).join(','), Array.from(statusSelecionados).join(','))
+    const empresasParam = Array.from(empresasSelecionadas).join(',');
+    buscarSnapshot(mesReferencia, empresasParam, Array.from(statusSelecionados).join(','))
       .then(() => setConsultaExecutada(true))
       .finally(() => setCarregandoInicial(false));
+    buscarMatriz(mesReferencia, empresasParam, 1);
+  }
+
+  function trocarPaginaMatriz(novaPagina: number) {
+    buscarMatriz(mesReferencia, Array.from(empresasSelecionadas).join(','), novaPagina);
   }
 
   async function calcularFaltantes() {
@@ -362,7 +418,9 @@ export default function GiroPage() {
         }
         setProgressoCalculo({ atual: i + 1, total: faltantes.length });
       }
-      await buscarSnapshot(mesReferencia, Array.from(empresasSelecionadas).join(','), Array.from(statusSelecionados).join(','));
+      const empresasParam = Array.from(empresasSelecionadas).join(',');
+      await buscarSnapshot(mesReferencia, empresasParam, Array.from(statusSelecionados).join(','));
+      await buscarMatriz(mesReferencia, empresasParam, matrizPagina);
     } catch (error) {
       console.error('Erro ao calcular giro:', error);
       setErro('Erro ao calcular o giro. Tente novamente.');
@@ -618,6 +676,90 @@ export default function GiroPage() {
               itens={dados!.topProdutos.piorGiro}
               corDestaque="text-red-700"
             />
+          </div>
+
+          <div className="bg-white rounded-lg shadow-lg overflow-hidden">
+            <div className="p-4 pb-2 flex items-center justify-between flex-wrap gap-3">
+              <div>
+                <h2 className="text-base font-semibold text-gray-800">Giro por referência e loja</h2>
+                <p className="text-xs text-gray-500">
+                  Cada linha é uma referência (soma de todas as cores/tamanhos dela) — uma coluna de giro por
+                  loja/fábrica selecionada, e o giro total no final (estoque somado ÷ venda média somada de todas as
+                  empresas do filtro).
+                </p>
+              </div>
+              {matriz && (
+                <div className="flex items-center gap-2 text-sm shrink-0">
+                  <button
+                    onClick={() => trocarPaginaMatriz(matrizPagina - 1)}
+                    disabled={matrizCarregando || matrizPagina <= 1}
+                    className="px-2.5 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md disabled:opacity-40 transition-colors"
+                  >
+                    ← Anterior
+                  </button>
+                  <span className="text-gray-500 text-xs whitespace-nowrap">
+                    Página {matriz.pagina} de {matriz.totalPaginas} ({formatarQtd(matriz.totalProdutos)} produtos)
+                  </span>
+                  <button
+                    onClick={() => trocarPaginaMatriz(matrizPagina + 1)}
+                    disabled={matrizCarregando || matrizPagina >= matriz.totalPaginas}
+                    className="px-2.5 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md disabled:opacity-40 transition-colors"
+                  >
+                    Próxima →
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {matrizCarregando && (
+              <div className="flex items-center justify-center py-12">
+                <Loader2 className="w-5 h-5 animate-spin text-rose-600" />
+                <span className="ml-3 text-gray-500 text-sm">Carregando...</span>
+              </div>
+            )}
+
+            {!matrizCarregando && matriz && matriz.itens.length === 0 && (
+              <p className="text-sm text-gray-400 py-8 text-center">Nenhum produto encontrado.</p>
+            )}
+
+            {!matrizCarregando && matriz && matriz.itens.length > 0 && (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50 border-b border-gray-200">
+                    <tr>
+                      <th className="text-left px-4 py-2 font-medium text-gray-600 sticky left-0 bg-gray-50 z-10 min-w-[100px]">Referência</th>
+                      <th className="text-left px-4 py-2 font-medium text-gray-600 sticky left-[100px] bg-gray-50 z-10 min-w-[220px]">Produto</th>
+                      {matriz.empresas.map((e) => (
+                        <th key={e.cdEmpresa} className="text-right px-3 py-2 font-medium text-gray-600 whitespace-nowrap">
+                          {nomeCurto(e.nome)}
+                        </th>
+                      ))}
+                      <th className="text-right px-4 py-2 font-semibold text-gray-800 bg-gray-100 whitespace-nowrap">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {matriz.itens.map((item) => (
+                      <tr key={item.referencia} className="hover:bg-gray-50">
+                        <td className="px-4 py-2 text-gray-500 sticky left-0 bg-white z-10">{item.referencia}</td>
+                        <td className="px-4 py-2 text-gray-800 sticky left-[100px] bg-white z-10">{item.nome}</td>
+                        {matriz.empresas.map((e) => (
+                          <td key={e.cdEmpresa} className="px-3 py-2 text-right text-gray-700">
+                            {formatarGiro(item.porLoja[String(e.cdEmpresa)] ?? null)}
+                          </td>
+                        ))}
+                        <td className="px-4 py-2 text-right font-semibold text-gray-900 bg-gray-50">{formatarGiro(item.giroTotal)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {matriz && matriz.empresasFaltantes.length > 0 && (
+              <p className="text-xs text-amber-700 bg-amber-50 border-t border-amber-200 px-4 py-2">
+                Sem cálculo pra {matriz.empresasFaltantes.map((e) => e.nome).join(', ')} nesse mês — as colunas dessas empresas ficam vazias até calcular.
+              </p>
+            )}
           </div>
         </>
       )}
