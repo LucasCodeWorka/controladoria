@@ -107,13 +107,25 @@ function formatarGiro(valor: number | null): string {
   return valor.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+// Texto exibido na celula de giro: numero normal quando da pra calcular
+// (teve venda no periodo); "SV-3M" (sem venda nos ultimos 3 meses) quando
+// tem estoque mas nao vendeu nada - o pior caso (estoque parado); "-" so
+// quando nao tem NADA (nem estoque nem venda) - referencias assim nem
+// aparecem mais na tabela, mas uma loja isolada dentro de uma referencia
+// com movimento em outras lojas pode cair aqui.
+function textoCelulaGiro(estoque: number, giro: number | null): string {
+  if (giro !== null) return formatarGiro(giro);
+  return estoque > 0 ? 'SV-3M' : '-';
+}
+
 // Tooltip da matriz por referencia: mostra a conta que chegou naquele giro
 // (estoque atual / venda media dos ultimos 3 meses), tanto por loja quanto
 // no total.
 function tooltipGiro(estoque: number, venda: number, giro: number | null): string {
   const vendaFmt = venda.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   if (giro === null) {
-    return `Estoque: ${formatarQtd(estoque)} ÷ Venda média: ${vendaFmt} = sem venda no período (giro indefinido)`;
+    const motivo = estoque > 0 ? 'sem venda nos últimos 3 meses (SV-3M)' : 'sem estoque e sem venda no período';
+    return `Estoque: ${formatarQtd(estoque)} ÷ Venda média: ${vendaFmt} = ${motivo}`;
   }
   return `Estoque: ${formatarQtd(estoque)} ÷ Venda média: ${vendaFmt} = ${formatarGiro(giro)}`;
 }
@@ -770,6 +782,8 @@ export default function GiroPage() {
                           </button>
                         </th>
                       ))}
+                      <th className="text-right px-3 py-2 font-medium text-gray-600 whitespace-nowrap">Estoque</th>
+                      <th className="text-right px-3 py-2 font-medium text-gray-600 whitespace-nowrap">Total Venda</th>
                       <th className="text-right px-4 py-2 font-semibold text-gray-800 bg-gray-100 whitespace-nowrap">
                         <button onClick={() => ordenarMatrizPor('total')} className="flex items-center gap-1 ml-auto hover:text-gray-600">
                           Total{indicadorOrdenacao('total')}
@@ -795,17 +809,19 @@ export default function GiroPage() {
                               onMouseMove={(ev) => dados && setTooltipCelula({ texto: tooltipGiro(dados.estoque, dados.venda, dados.giro), x: ev.clientX, y: ev.clientY })}
                               onMouseLeave={() => setTooltipCelula(null)}
                             >
-                              {formatarGiro(dados?.giro ?? null)}
+                              {dados ? textoCelulaGiro(dados.estoque, dados.giro) : '-'}
                             </td>
                           );
                         })}
+                        <td className="px-3 py-2 text-right text-gray-700 whitespace-nowrap">{formatarQtd(item.estoqueTotal)}</td>
+                        <td className="px-3 py-2 text-right text-gray-700 whitespace-nowrap">{formatarGiro(item.vendaTotal)}</td>
                         <td
                           className="px-4 py-2 text-right font-semibold text-gray-900 bg-gray-50 cursor-default"
                           onMouseEnter={(ev) => setTooltipCelula({ texto: tooltipGiro(item.estoqueTotal, item.vendaTotal, item.giroTotal), x: ev.clientX, y: ev.clientY })}
                           onMouseMove={(ev) => setTooltipCelula({ texto: tooltipGiro(item.estoqueTotal, item.vendaTotal, item.giroTotal), x: ev.clientX, y: ev.clientY })}
                           onMouseLeave={() => setTooltipCelula(null)}
                         >
-                          {formatarGiro(item.giroTotal)}
+                          {textoCelulaGiro(item.estoqueTotal, item.giroTotal)}
                         </td>
                       </tr>
                     ))}

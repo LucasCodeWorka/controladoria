@@ -338,6 +338,10 @@ def _obter_matriz_agregada(mes_referencia: str, cd_empresas: list) -> list:
             "cdProdutoPreco": d["cdProdutoPreco"] or d["cdProdutoFallback"],
         }
         for ref, d in por_ref.items()
+        # Fora as referencias totalmente mortas (zero estoque e zero venda
+        # em TODAS as empresas do filtro) - nao tem giro, nem venda, nem
+        # estoque pra mostrar, so linha vazia sem informacao nenhuma.
+        if d["estoqueTotal"] > 0 or d["vendaTotal"] > 0
     ]
     _cache_matriz_referencia[chave] = resultado
     return resultado
