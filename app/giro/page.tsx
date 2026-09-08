@@ -215,52 +215,6 @@ function CardConsolidado({ titulo, dado }: { titulo: string; dado: Consolidado |
   );
 }
 
-function TabelaTopProdutos({ titulo, subtitulo, itens, corDestaque }: {
-  titulo: string;
-  subtitulo: string;
-  itens: ItemProdutoGiro[];
-  corDestaque: string;
-}) {
-  return (
-    <div className="bg-white rounded-lg shadow-lg overflow-hidden">
-      <div className="p-4 pb-2">
-        <h2 className="text-base font-semibold text-gray-800">{titulo}</h2>
-        <p className="text-xs text-gray-500">{subtitulo}</p>
-      </div>
-      {itens.length === 0 ? (
-        <p className="text-sm text-gray-400 py-8 text-center">Sem produtos suficientes pra calcular.</p>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50 border-b border-gray-200">
-              <tr>
-                <th className="text-left px-4 py-2 font-medium text-gray-600">Referência</th>
-                <th className="text-left px-4 py-2 font-medium text-gray-600">Produto</th>
-                <th className="text-right px-4 py-2 font-medium text-gray-600">Estoque</th>
-                <th className="text-right px-4 py-2 font-medium text-gray-600">Venda Média 3m</th>
-                <th className="text-right px-4 py-2 font-medium text-gray-600">Giro</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {itens.map((item) => (
-                <tr key={item.cdProduto} className="hover:bg-gray-50">
-                  <td className="px-4 py-2 text-gray-500">{item.referencia}</td>
-                  <td className="px-4 py-2 text-gray-800">{item.nome}</td>
-                  <td className="px-4 py-2 text-right text-gray-700">{formatarQtd(item.estoqueAtual)}</td>
-                  <td className="px-4 py-2 text-right text-gray-700">{item.vendaMedia3m.toLocaleString('pt-BR', { maximumFractionDigits: 1 })}</td>
-                  <td className={`px-4 py-2 text-right font-medium ${corDestaque}`}>
-                    {item.giro === null ? 'Parado' : formatarGiro(item.giro)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
-  );
-}
-
 export default function GiroPage() {
   const [mesReferencia, setMesReferencia] = useState(mesAtual());
   const [empresasDisponiveis, setEmpresasDisponiveis] = useState<EmpresaOpcao[]>([]);
@@ -663,20 +617,6 @@ export default function GiroPage() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <TabelaTopProdutos
-              titulo="Top 10 melhor giro"
-              subtitulo="Produtos com estoque que giram mais rápido (menos meses de cobertura)."
-              itens={dados!.topProdutos.melhorGiro}
-              corDestaque="text-green-700"
-            />
-            <TabelaTopProdutos
-              titulo="Top 10 pior giro"
-              subtitulo="Estoque parado (sem venda no período) primeiro, depois os de giro mais lento."
-              itens={dados!.topProdutos.piorGiro}
-              corDestaque="text-red-700"
-            />
-          </div>
 
           <div className="bg-white rounded-lg shadow-lg overflow-hidden">
             <div className="p-4 pb-2 flex items-center justify-between flex-wrap gap-3">
