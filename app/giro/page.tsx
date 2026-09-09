@@ -133,7 +133,7 @@ function CelulaGiro({ estoque, giro }: { estoque: number; giro: number | null })
       </span>
     );
   }
-  return <span className="text-gray-300">-</span>;
+  return <span className="text-gray-400">-</span>;
 }
 
 // Tooltip da matriz por referencia: mostra a conta que chegou naquele giro
@@ -792,8 +792,9 @@ export default function GiroPage() {
                   <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-rose-500" /> Estoque parado</span>
                   <span className="flex items-center gap-1">
                     <span className="px-1 py-0.5 text-[10px] font-semibold rounded bg-amber-50 text-amber-700 border border-amber-200">SV-3M</span>
-                    Sem venda nos últimos 3 meses
+                    Tem estoque mas sem venda nos últimos 3 meses
                   </span>
+                  <span className="flex items-center gap-1"><span className="text-gray-400 font-medium">-</span> Sem estoque e sem venda nessa loja</span>
                 </div>
               </div>
               {matriz && (
@@ -906,7 +907,7 @@ export default function GiroPage() {
                               onMouseMove={(ev) => dados && setTooltipCelula({ texto: tooltipGiro(dados.estoque, dados.venda, dados.giro), x: ev.clientX, y: ev.clientY })}
                               onMouseLeave={() => setTooltipCelula(null)}
                             >
-                              {dados ? <CelulaGiro estoque={dados.estoque} giro={dados.giro} /> : <span className="text-gray-300">-</span>}
+                              {dados ? <CelulaGiro estoque={dados.estoque} giro={dados.giro} /> : <span className="text-gray-400">-</span>}
                             </td>
                           );
                         })}
