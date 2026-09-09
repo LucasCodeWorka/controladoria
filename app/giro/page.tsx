@@ -118,10 +118,10 @@ function classeGiro(giro: number): string {
 
 // Celula de giro: numero colorido quando da pra calcular (teve venda no
 // periodo); badge ambar "SV-3M" (sem venda nos ultimos 3 meses) quando tem
-// estoque mas nao vendeu nada - o pior caso (estoque parado); "-" cinza so
-// quando nao tem NADA (nem estoque nem venda) - referencias assim nem
-// aparecem mais na tabela, mas uma loja isolada dentro de uma referencia
-// com movimento em outras lojas pode cair aqui.
+// estoque mas nao vendeu nada - o pior caso (estoque parado); badge cinza
+// "SE-SV" (sem estoque e sem venda) so quando nao tem NADA - referencias
+// assim nem aparecem mais na tabela, mas uma loja isolada dentro de uma
+// referencia com movimento em outras lojas pode cair aqui.
 function CelulaGiro({ estoque, giro }: { estoque: number; giro: number | null }) {
   if (giro !== null) {
     return <span className={`font-medium ${classeGiro(giro)}`}>{formatarGiro(giro)}</span>;
@@ -133,7 +133,11 @@ function CelulaGiro({ estoque, giro }: { estoque: number; giro: number | null })
       </span>
     );
   }
-  return <span className="text-gray-400">-</span>;
+  return (
+    <span className="inline-block px-1.5 py-0.5 text-[10px] font-semibold rounded bg-gray-100 text-gray-500 border border-gray-200">
+      SE-SV
+    </span>
+  );
 }
 
 // Tooltip da matriz por referencia: mostra a conta que chegou naquele giro
@@ -148,9 +152,33 @@ function tooltipGiro(estoque: number, venda: number, giro: number | null): strin
   return `Estoque: ${formatarQtd(estoque)} ÷ Venda média: ${vendaFmt} = ${formatarGiro(giro)}`;
 }
 
+// Tooltip da coluna Estoque (total): abre o estoque em cada loja do filtro
+// aplicado, maior pra menor - so pra dar uma visao rapida de onde esta
+// concentrado sem precisar rolar a tabela ate as colunas de loja.
+function tooltipEstoquePorLoja(item: ItemMatrizGiro, empresas: EmpresaFaltante[]): string {
+  const linhas = empresas
+    .map((e) => ({ nome: nomeColunaLoja(e.nome), estoque: item.porLoja[String(e.cdEmpresa)]?.estoque ?? 0 }))
+    .sort((a, b) => b.estoque - a.estoque)
+    .map((l) => `${l.nome}: ${formatarQtd(l.estoque)}`);
+  return `Estoque por loja:\n${linhas.join('\n')}`;
+}
+
 function formatarPreco(valor: number | null): string {
   if (valor === null) return '-';
   return valor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+}
+
+// Variacao % do preco fabrica pro preco pedido (atacado/varejo) - null
+// quando nao da pra calcular (sem um dos dois precos, ou fabrica = 0).
+function variacaoPercentual(precoFabrica: number | null, preco: number | null): number | null {
+  if (precoFabrica === null || preco === null || precoFabrica === 0) return null;
+  return ((preco - precoFabrica) / precoFabrica) * 100;
+}
+
+function formatarVariacao(pct: number | null): string {
+  if (pct === null) return '';
+  const sinal = pct > 0 ? '+' : '';
+  return `${sinal}${pct.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}%`;
 }
 
 function labelMes(anoMes: string): string {
@@ -794,7 +822,10 @@ export default function GiroPage() {
                     <span className="px-1 py-0.5 text-[10px] font-semibold rounded bg-amber-50 text-amber-700 border border-amber-200">SV-3M</span>
                     Tem estoque mas sem venda nos últimos 3 meses
                   </span>
-                  <span className="flex items-center gap-1"><span className="text-gray-400 font-medium">-</span> Sem estoque e sem venda nessa loja</span>
+                  <span className="flex items-center gap-1">
+                    <span className="px-1 py-0.5 text-[10px] font-semibold rounded bg-gray-100 text-gray-500 border border-gray-200">SE-SV</span>
+                    Sem estoque e sem venda nessa loja
+                  </span>
                 </div>
               </div>
               {matriz && (
@@ -895,8 +926,14 @@ export default function GiroPage() {
                         <td className="px-4 py-2 text-gray-500 sticky left-0 bg-inherit z-10">{item.referencia}</td>
                         <td className="px-4 py-2 text-gray-800 sticky left-[100px] bg-inherit z-10">{item.nome}</td>
                         <td className="px-3 py-2 text-right text-blue-900 bg-blue-50/30 whitespace-nowrap">{formatarPreco(item.precoFabrica)}</td>
-                        <td className="px-3 py-2 text-right text-blue-900 bg-blue-50/30 whitespace-nowrap">{formatarPreco(item.precoAtacado)}</td>
-                        <td className="px-3 py-2 text-right text-blue-900 bg-blue-50/30 whitespace-nowrap">{formatarPreco(item.precoVarejo)}</td>
+                        <td className="px-3 py-2 text-right text-blue-900 bg-blue-50/30 whitespace-nowrap">
+                          <div className="text-[10px] text-blue-400 leading-tight">{formatarVariacao(variacaoPercentual(item.precoFabrica, item.precoAtacado))}</div>
+                          {formatarPreco(item.precoAtacado)}
+                        </td>
+                        <td className="px-3 py-2 text-right text-blue-900 bg-blue-50/30 whitespace-nowrap">
+                          <div className="text-[10px] text-blue-400 leading-tight">{formatarVariacao(variacaoPercentual(item.precoFabrica, item.precoVarejo))}</div>
+                          {formatarPreco(item.precoVarejo)}
+                        </td>
                         {matriz.empresas.map((e) => {
                           const dados = item.porLoja[String(e.cdEmpresa)];
                           return (
@@ -907,11 +944,18 @@ export default function GiroPage() {
                               onMouseMove={(ev) => dados && setTooltipCelula({ texto: tooltipGiro(dados.estoque, dados.venda, dados.giro), x: ev.clientX, y: ev.clientY })}
                               onMouseLeave={() => setTooltipCelula(null)}
                             >
-                              {dados ? <CelulaGiro estoque={dados.estoque} giro={dados.giro} /> : <span className="text-gray-400">-</span>}
+                              <CelulaGiro estoque={dados?.estoque ?? 0} giro={dados?.giro ?? null} />
                             </td>
                           );
                         })}
-                        <td className="px-3 py-2 text-right text-slate-700 bg-slate-50/50 whitespace-nowrap">{formatarQtd(item.estoqueTotal)}</td>
+                        <td
+                          className="px-3 py-2 text-right text-slate-700 bg-slate-50/50 whitespace-nowrap cursor-default"
+                          onMouseEnter={(ev) => setTooltipCelula({ texto: tooltipEstoquePorLoja(item, matriz.empresas), x: ev.clientX, y: ev.clientY })}
+                          onMouseMove={(ev) => setTooltipCelula({ texto: tooltipEstoquePorLoja(item, matriz.empresas), x: ev.clientX, y: ev.clientY })}
+                          onMouseLeave={() => setTooltipCelula(null)}
+                        >
+                          {formatarQtd(item.estoqueTotal)}
+                        </td>
                         <td className="px-3 py-2 text-right text-slate-700 bg-slate-50/50 whitespace-nowrap">{formatarGiro(item.vendaTotal)}</td>
                         <td
                           className="px-4 py-2 text-right font-semibold bg-gray-100/70 border-l-2 border-gray-200 cursor-default"
@@ -930,7 +974,7 @@ export default function GiroPage() {
 
             {tooltipCelula && (
               <div
-                className="fixed z-50 bg-gray-900 text-white text-xs rounded px-2.5 py-1.5 shadow-lg pointer-events-none whitespace-nowrap"
+                className="fixed z-50 bg-gray-900 text-white text-xs rounded px-2.5 py-1.5 shadow-lg pointer-events-none whitespace-pre-line"
                 style={{ left: tooltipCelula.x + 12, top: tooltipCelula.y + 12 }}
               >
                 {tooltipCelula.texto}
