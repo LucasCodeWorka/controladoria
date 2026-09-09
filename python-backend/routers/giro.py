@@ -749,3 +749,82 @@ def matriz_produtos_giro(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Erro ao buscar matriz de produtos do giro: {str(e)}")
+
+
+DIMENSOES_GIRO = {
+    "grupo": "grupo",
+    "linha": "linha",
+    "familia": "familia",
+    "colecao": "colecao",
+    "status": "status",
+}
+TOP_N_DIMENSAO_GIRO = 12
+
+
+@router.get("/api/giro/por-dimensao")
+def giro_por_dimensao(
+    dimensao: str = Query(..., description="grupo, linha, familia, colecao ou status"),
+    mesReferencia: Optional[str] = Query(None, description="Mes de referencia YYYY-MM (default: mes atual)"),
+    empresas: Optional[str] = Query(None, description="Lista de cd_empresa separados por virgula (default: todas)")
+):
+    """
+    Giro (estoque somado / venda media somada de TODOS os produtos daquela
+    categoria) agregado por uma dimensao do produto (grupo/linha/familia/
+    colecao/status) em vez de por referencia individual - mesma ideia da
+    matriz por referencia, so que a chave de agrupamento e o atributo do
+    produto. Le direto do cache giro_produto_snapshot (rapido - so um
+    GROUP BY em cima de dado ja calculado, sem custo extra).
+
+    Top N categorias por tamanho de estoque, resto agrupado em 'OUTROS'
+    (mesmo padrao do CMV por dimensao) - sem isso, uma dimensao com muitas
+    categorias pequenas (ex: familia) deixaria o grafico ilegivel.
+    """
+    try:
+        coluna = DIMENSOES_GIRO.get(dimensao)
+        if not coluna:
+            raise HTTPException(status_code=400, detail=f"Dimensao invalida: {dimensao}. Use uma de: {list(DIMENSOES_GIRO.keys())}")
+
+        mes_ref = mesReferencia or _mes_atual()
+        cd_empresas = _parse_empresas_giro(empresas)
+        placeholders = ",".join(["%s"] * len(cd_empresas))
+
+        rows = execute_query(f"""
+            SELECT COALESCE(p.{coluna}, 'SEM CLASSIFICACAO') AS chave,
+                SUM(g.estoque_atual) AS estoque, SUM(g.venda_media_3m) AS venda
+            FROM giro_produto_snapshot g
+            LEFT JOIN mv_prd_referencia_produto p ON p.cd_produto = g.cd_produto
+            WHERE g.mes_referencia = %s AND g.cd_empresa IN ({placeholders})
+            GROUP BY 1
+        """, (mes_ref, *cd_empresas)) or []
+
+        itens = sorted(
+            [
+                {"chave": r["chave"], "estoqueTotal": float(r["estoque"] or 0), "vendaTotal": float(r["venda"] or 0)}
+                for r in rows
+                if (r["estoque"] or 0) > 0 or (r["venda"] or 0) > 0
+            ],
+            key=lambda i: i["estoqueTotal"],
+            reverse=True,
+        )
+
+        if len(itens) > TOP_N_DIMENSAO_GIRO:
+            principais = itens[:TOP_N_DIMENSAO_GIRO]
+            resto = itens[TOP_N_DIMENSAO_GIRO:]
+            principais.append({
+                "chave": "OUTROS",
+                "estoqueTotal": sum(i["estoqueTotal"] for i in resto),
+                "vendaTotal": sum(i["vendaTotal"] for i in resto),
+            })
+            itens = principais
+
+        for item in itens:
+            item["giro"] = (item["estoqueTotal"] / item["vendaTotal"]) if item["vendaTotal"] > 0 else None
+
+        return {"dimensao": dimensao, "itens": itens, "mesReferencia": mes_ref}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[ERROR] Erro ao buscar giro por dimensao: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Erro ao buscar giro por dimensao: {str(e)}")

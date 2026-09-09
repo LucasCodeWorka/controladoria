@@ -67,6 +67,29 @@ interface DadosGiro {
   topProdutos: TopProdutos;
 }
 
+type DimensaoGiro = 'grupo' | 'linha' | 'familia' | 'status' | 'colecao';
+
+interface ItemDimensaoGiro {
+  chave: string;
+  estoqueTotal: number;
+  vendaTotal: number;
+  giro: number | null;
+}
+
+interface RespostaDimensaoGiro {
+  dimensao: DimensaoGiro;
+  itens: ItemDimensaoGiro[];
+  mesReferencia: string;
+}
+
+const DIMENSOES_GIRO: { chave: DimensaoGiro; label: string }[] = [
+  { chave: 'grupo', label: 'Grupo' },
+  { chave: 'linha', label: 'Linha' },
+  { chave: 'familia', label: 'Família' },
+  { chave: 'status', label: 'Status' },
+  { chave: 'colecao', label: 'Coleção' },
+];
+
 interface GiroLoja {
   estoque: number;
   venda: number;
@@ -189,6 +212,13 @@ function labelMes(anoMes: string): string {
 
 function nomeCurto(nome: string): string {
   return nome.length > 14 ? `${nome.slice(0, 13)}…` : nome;
+}
+
+// Corte maior que nomeCurto, pra categorias de dimensao (status/familia/...)
+// - com 14 caracteres, valores como "OPORTUNIDADE ATE 1 ANO" e "OPORTUNIDADE
+// ACIMA DE 2 ANOS" ficavam identicos, parecendo repetidos.
+function nomeCurtoDimensao(nome: string): string {
+  return nome.length > 22 ? `${nome.slice(0, 21)}…` : nome;
 }
 
 // Apelidos especificos pro cabecalho da matriz - nao seguem um padrao
@@ -354,6 +384,14 @@ export default function GiroPage() {
   const [matrizOrdem, setMatrizOrdem] = useState<'asc' | 'desc'>('asc');
   const MATRIZ_POR_PAGINA = 50;
 
+  // Giro por dimensao do produto (grupo/linha/familia/status/colecao) - as
+  // 5 vem juntas na consulta, trocar de aba so troca qual ja veio (sem
+  // refazer a busca).
+  const [dimensaoSelecionada, setDimensaoSelecionada] = useState<DimensaoGiro>('grupo');
+  const [dadosPorDimensao, setDadosPorDimensao] = useState<Record<DimensaoGiro, RespostaDimensaoGiro | null>>({
+    grupo: null, linha: null, familia: null, status: null, colecao: null,
+  });
+
   // Filtro "giro maior que X" - texto cru do input (permite vazio = sem
   // filtro) ate clicar em Aplicar/Enter, pra nao refazer a busca a cada
   // digito.
@@ -464,6 +502,30 @@ export default function GiroPage() {
     }
   }
 
+  // Busca as 5 dimensoes juntas (paralelo) - trocar de aba depois so troca
+  // qual delas ja veio, sem refazer a busca a cada clique.
+  async function buscarDimensoes(mesRef: string, empresasParam: string) {
+    try {
+      const respostas = await Promise.all(
+        DIMENSOES_GIRO.map((d) => {
+          const params = new URLSearchParams({ dimensao: d.chave, mesReferencia: mesRef, empresas: empresasParam });
+          return fetch(`/api/giro/por-dimensao?${params.toString()}`, { cache: 'no-store' }).then((r) => r.json());
+        })
+      );
+      const novosDados: Record<DimensaoGiro, RespostaDimensaoGiro | null> = {
+        grupo: null, linha: null, familia: null, status: null, colecao: null,
+      };
+      DIMENSOES_GIRO.forEach((d, i) => {
+        if (!respostas[i].error && !respostas[i].detail) {
+          novosDados[d.chave] = respostas[i];
+        }
+      });
+      setDadosPorDimensao(novosDados);
+    } catch (error) {
+      console.error('Erro ao buscar giro por dimensão:', error);
+    }
+  }
+
   function consultar() {
     if (empresasSelecionadas.size === 0) {
       setErro('Selecione pelo menos uma loja/fábrica.');
@@ -478,6 +540,7 @@ export default function GiroPage() {
     setMatrizOrdenarPor('referencia');
     setMatrizOrdem('asc');
     buscarMatriz(mesReferencia, empresasParam, 1, 'referencia', 'asc', matrizGiroMinimo);
+    buscarDimensoes(mesReferencia, empresasParam);
   }
 
   function trocarPaginaMatriz(novaPagina: number) {
@@ -533,6 +596,7 @@ export default function GiroPage() {
       const empresasParam = Array.from(empresasSelecionadas).join(',');
       await buscarSnapshot(mesReferencia, empresasParam, Array.from(statusSelecionados).join(','));
       await buscarMatriz(mesReferencia, empresasParam, matrizPagina, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo);
+      await buscarDimensoes(mesReferencia, empresasParam);
     } catch (error) {
       console.error('Erro ao calcular giro:', error);
       setErro('Erro ao calcular o giro. Tente novamente.');
@@ -744,6 +808,40 @@ export default function GiroPage() {
                   label: nomeCurto(i.nome),
                   valor: i.giro as number,
                   tooltip: `${i.nome}: ${formatarGiro(i.giro)} meses de cobertura (estoque ${formatarQtd(i.estoqueAtual)} un. / venda média ${formatarQtd(i.vendaMedia3m)} un./mês)`,
+                }))}
+            />
+          </div>
+
+          <div className="bg-white rounded-lg shadow-lg p-5">
+            <div className="flex items-center justify-between flex-wrap gap-3 mb-1">
+              <h2 className="text-base font-semibold text-gray-800">Giro por {DIMENSOES_GIRO.find((d) => d.chave === dimensaoSelecionada)?.label.toLowerCase()}</h2>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {DIMENSOES_GIRO.map((d) => (
+                  <button
+                    key={d.chave}
+                    onClick={() => setDimensaoSelecionada(d.chave)}
+                    className={`px-2.5 py-1 text-xs rounded-md transition-colors ${
+                      dimensaoSelecionada === d.chave
+                        ? 'bg-rose-600 text-white'
+                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                    }`}
+                  >
+                    {d.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <p className="text-xs text-gray-500 mb-3">
+              Giro (estoque somado ÷ venda média somada) por {DIMENSOES_GIRO.find((d) => d.chave === dimensaoSelecionada)?.label.toLowerCase()} do produto, somando todas as empresas do filtro — top {12} categorias por estoque, resto agrupado em &quot;OUTROS&quot;.
+            </p>
+            <GraficoGiro
+              dados={(dadosPorDimensao[dimensaoSelecionada]?.itens || [])
+                .filter((item) => item.giro !== null)
+                .map((item) => ({
+                  chave: item.chave,
+                  label: nomeCurtoDimensao(item.chave),
+                  valor: item.giro as number,
+                  tooltip: `${item.chave}: ${formatarGiro(item.giro)} meses de cobertura (estoque ${formatarQtd(item.estoqueTotal)} un. / venda média ${formatarQtd(item.vendaTotal)} un./mês)`,
                 }))}
             />
           </div>
