@@ -277,6 +277,24 @@ def _eh_variante_preco_desconsiderada(status: Optional[str], familia: Optional[s
     return status == "LEVE DEFEITO" or familia == "DOACAO"
 
 
+def _nome_base_referencia(produto: Optional[str], ds_cor: Optional[str], ds_tamanho: Optional[str]) -> Optional[str]:
+    """O nome cadastrado (mv_prd_referencia_produto.produto) e do SKU, nao da
+    referencia - sempre termina com "COR TAMANHO" (ex: "SUTIA MINI CHOCOLATE
+    U"; confirmado em ~99% dos produtos com cor e tamanho cadastrados). Tira
+    esse sufixo pra sobrar so a descricao comum a referencia toda ("SUTIA
+    MINI"), a mesma pra qualquer cor/tamanho dela. Quando o padrao nao bate
+    (sufixo raro, cor/tamanho ausente), devolve o nome original sem alterar."""
+    if not produto:
+        return produto
+    if ds_cor and ds_tamanho:
+        sufixo = f"{ds_cor} {ds_tamanho}"
+        if produto.upper().endswith(sufixo.upper()):
+            base = produto[:-len(sufixo)].rstrip()
+            if base:
+                return base
+    return produto
+
+
 def _obter_matriz_agregada(mes_referencia: str, cd_empresas: list) -> list:
     chave = (mes_referencia, tuple(sorted(cd_empresas)))
     if chave in _cache_matriz_referencia:
@@ -286,7 +304,7 @@ def _obter_matriz_agregada(mes_referencia: str, cd_empresas: list) -> list:
     linhas = execute_query(f"""
         SELECT g.cd_empresa, g.cd_produto, g.estoque_atual, g.venda_media_3m,
             COALESCE(p.referencia, g.cd_produto::text) AS referencia, p.produto AS nome,
-            p.status, p.familia
+            p.ds_cor, p.ds_tamanho, p.status, p.familia
         FROM giro_produto_snapshot g
         LEFT JOIN mv_prd_referencia_produto p ON p.cd_produto = g.cd_produto
         WHERE g.mes_referencia = %s AND g.cd_empresa IN ({placeholders})
@@ -300,17 +318,26 @@ def _obter_matriz_agregada(mes_referencia: str, cd_empresas: list) -> list:
         ref = r["referencia"]
         if ref not in por_ref:
             por_ref[ref] = {
-                "nome": r["nome"], "porLoja": {}, "estoqueTotal": 0.0, "vendaTotal": 0.0,
+                "nomeBase": None, "nomeBaseFallback": None, "porLoja": {}, "estoqueTotal": 0.0, "vendaTotal": 0.0,
                 "cdProdutoPreco": None, "cdProdutoFallback": None,
             }
         d = por_ref[ref]
-        if not d["nome"] and r["nome"]:
-            d["nome"] = r["nome"]
+        nome_sem_variante = _nome_base_referencia(r["nome"], r["ds_cor"], r["ds_tamanho"])
+        variante_desconsiderada = _eh_variante_preco_desconsiderada(r["status"], r["familia"])
+        # Descricao da referencia: tira cor/tamanho do nome do SKU (ex:
+        # "SUTIA MINI CHOCOLATE U" -> "SUTIA MINI") pra nao mostrar a
+        # descricao de uma unica variante como se fosse da referencia
+        # inteira. Prefere um SKU "normal" (nao leve defeito/doacao), com
+        # fallback pra qualquer um se so sobrar variante assim.
+        if d["nomeBase"] is None and nome_sem_variante and not variante_desconsiderada:
+            d["nomeBase"] = nome_sem_variante
+        if d["nomeBaseFallback"] is None and nome_sem_variante:
+            d["nomeBaseFallback"] = nome_sem_variante
         # Produto representativo pra buscar o preco da referencia: o primeiro
         # que nao for leve defeito/doacao (preco "normal"). Se a referencia
         # so tiver variantes assim, usa qualquer uma como ultimo recurso (pra
         # nao ficar sem preco nenhum).
-        if d["cdProdutoPreco"] is None and not _eh_variante_preco_desconsiderada(r["status"], r["familia"]):
+        if d["cdProdutoPreco"] is None and not variante_desconsiderada:
             d["cdProdutoPreco"] = r["cd_produto"]
         if d["cdProdutoFallback"] is None:
             d["cdProdutoFallback"] = r["cd_produto"]
@@ -327,7 +354,7 @@ def _obter_matriz_agregada(mes_referencia: str, cd_empresas: list) -> list:
     resultado = [
         {
             "referencia": ref,
-            "nome": d["nome"] or "(sem cadastro)",
+            "nome": d["nomeBase"] or d["nomeBaseFallback"] or "(sem cadastro)",
             "porLoja": {
                 cd_empresa: {"estoque": estoque, "venda": venda, "giro": _giro(estoque, venda)}
                 for cd_empresa, (estoque, venda) in d["porLoja"].items()

@@ -178,7 +178,7 @@ function variacaoPercentual(precoFabrica: number | null, preco: number | null): 
 function formatarVariacao(pct: number | null): string {
   if (pct === null) return '';
   const sinal = pct > 0 ? '+' : '';
-  return `${sinal}${pct.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}%`;
+  return `${sinal}${pct.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
 }
 
 function labelMes(anoMes: string): string {
