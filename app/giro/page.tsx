@@ -199,6 +199,7 @@ const APELIDOS_COLUNA_LOJA: Record<string, string> = {
   'RIOMAR KENNEDY': 'KENNEDY',
   ECOMMERCE: 'ECOM',
   'DOM LUIS': 'D.LUIS',
+  'PORTO ALEGRE': 'P. ALEGRE',
 };
 
 // So pro cabecalho da matriz por referencia: usa o apelido especifico
@@ -879,17 +880,17 @@ export default function GiroPage() {
                       </th>
                       <th className="text-right px-3 py-2 font-medium text-blue-700 bg-blue-50/60 whitespace-nowrap">
                         <button onClick={() => ordenarMatrizPor('precoFabrica')} className="flex items-center gap-1 ml-auto hover:text-blue-900">
-                          Preço Fábrica{indicadorOrdenacao('precoFabrica')}
+                          Fábrica{indicadorOrdenacao('precoFabrica')}
                         </button>
                       </th>
                       <th className="text-right px-3 py-2 font-medium text-blue-700 bg-blue-50/60 whitespace-nowrap">
                         <button onClick={() => ordenarMatrizPor('precoAtacado')} className="flex items-center gap-1 ml-auto hover:text-blue-900">
-                          Preço Atacado{indicadorOrdenacao('precoAtacado')}
+                          Atacado{indicadorOrdenacao('precoAtacado')}
                         </button>
                       </th>
                       <th className="text-right px-3 py-2 font-medium text-blue-700 bg-blue-50/60 whitespace-nowrap">
                         <button onClick={() => ordenarMatrizPor('precoVarejo')} className="flex items-center gap-1 ml-auto hover:text-blue-900">
-                          Preço Varejo{indicadorOrdenacao('precoVarejo')}
+                          Varejo{indicadorOrdenacao('precoVarejo')}
                         </button>
                       </th>
                       {matriz.empresas.map((e) => (
