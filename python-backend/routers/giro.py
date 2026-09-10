@@ -150,6 +150,32 @@ def _padroes_produto_excluidos() -> list:
     return [f"%{t}%" for t in TERMOS_PRODUTO_EXCLUIDOS]
 
 
+def _produtos_sem_status_e_marca() -> list:
+    """cd_produto que nao tem NEM status (classificacao 27) NEM marca
+    (classificacao 20) cadastrados no dicionario de produto - conferido com
+    o usuario: esse grupo concentra peca de maquina/eletronico/produto de
+    terceiros sem nenhuma classificacao usavel (ex: "MOTO G04S", "MEMORIA
+    NOT DDR3", "AMORTECEDOR DO ACOPLADO TRAVETE"), misturado com pouca
+    mercadoria de verdade - pedido pra tirar tudo isso da analise de giro.
+    status ja vem pronto na materialized view; marca (classificacao 20) nao
+    esta nela, entao so chama a funcao pros produtos sem status (bem menos
+    que o catalogo inteiro - ~950 contra ~40 mil)."""
+    sem_status = execute_query(
+        "SELECT cd_produto FROM mv_prd_referencia_produto WHERE status IS NULL AND cd_produto < 1000000", ()
+    ) or []
+    ids = [r["cd_produto"] for r in sem_status]
+    if not ids:
+        return []
+    linhas = execute_query(
+        """
+            SELECT cd_produto FROM (SELECT DISTINCT cd_produto FROM mv_prd_referencia_produto WHERE cd_produto = ANY(%s)) t
+            WHERE f_dic_prd_classificacao(cd_produto, 'DS', 20) IS NULL
+        """,
+        (ids,)
+    ) or []
+    return [r["cd_produto"] for r in linhas]
+
+
 # Agrupado por empresa+produto (nao so empresa) - alimenta tanto o
 # consolidado por empresa quanto o top 10 melhor/pior giro por produto, sem
 # precisar de uma segunda query pesada.
@@ -159,10 +185,12 @@ _QUERY_ESTOQUE_ATUAL = """
         SELECT DISTINCT ON (s.cd_empresa, s.cd_produto) s.cd_empresa, s.cd_produto, s.qt_saldo
         FROM prd_prdsaldo s
         LEFT JOIN mv_prd_referencia_produto p ON p.cd_produto = s.cd_produto
+        LEFT JOIN (SELECT unnest(%s::int[]) AS cd_produto) excl ON excl.cd_produto = s.cd_produto
         WHERE s.cd_saldo = 1 AND s.dt_saldo < %s
           AND s.cd_empresa = ANY(%s)
           AND s.cd_produto < 1000000
           AND (p.produto IS NULL OR p.produto NOT ILIKE ALL(%s))
+          AND excl.cd_produto IS NULL
         ORDER BY s.cd_empresa, s.cd_produto, s.dt_saldo DESC
     ) x
     GROUP BY 1, 2
@@ -183,12 +211,14 @@ _QUERY_QTD_VENDIDA = """
     FROM vr_tra_transacao t
     JOIN vr_tra_transitem i ON t.nr_transacao = i.nr_transacao AND t.cd_empresa = i.cd_empresa
     LEFT JOIN mv_prd_referencia_produto p ON p.cd_produto = i.cd_produto
+    LEFT JOIN (SELECT unnest(%s::int[]) AS cd_produto) excl ON excl.cd_produto = i.cd_produto
     WHERE t.tp_situacao = 4
       AND t.cd_empresa = ANY(%s)
       AND t.dt_transacao >= %s AND t.dt_transacao <= %s
       AND ((t.tp_modalidade::text IN ('4','8') AND t.tp_operacao::text = 'S') OR (t.tp_modalidade::text = '3' AND t.tp_operacao::text = 'E'))
       AND i.cd_produto < 1000000
       AND (p.produto IS NULL OR p.produto NOT ILIKE ALL(%s))
+      AND excl.cd_produto IS NULL
     GROUP BY 1, 2
 """
 
@@ -198,8 +228,9 @@ def _calcular_giro(mes_referencia: str, cd_empresas: list) -> dict:
     dt_corte_estoque, data_inicio, data_fim, mes_ini, mes_fim = _datas_periodo(mes_referencia)
 
     padroes_excluidos = _padroes_produto_excluidos()
-    linhas_estoque = execute_query(_QUERY_ESTOQUE_ATUAL, (dt_corte_estoque, cd_empresas, padroes_excluidos)) or []
-    linhas_venda = execute_query(_QUERY_QTD_VENDIDA, (cd_empresas, data_inicio, data_fim, padroes_excluidos)) or []
+    produtos_sem_classificacao = _produtos_sem_status_e_marca()
+    linhas_estoque = execute_query(_QUERY_ESTOQUE_ATUAL, (produtos_sem_classificacao, dt_corte_estoque, cd_empresas, padroes_excluidos)) or []
+    linhas_venda = execute_query(_QUERY_QTD_VENDIDA, (produtos_sem_classificacao, cd_empresas, data_inicio, data_fim, padroes_excluidos)) or []
 
     estoque_por_empresa: dict = {}
     estoque_por_produto: dict = {}
