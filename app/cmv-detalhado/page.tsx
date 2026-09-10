@@ -53,9 +53,10 @@ interface TotalMes {
   cmvPercentual: number | null;
 }
 
-type Dimensao = 'linha' | 'familia' | 'colecao' | 'status' | 'continuidade';
+type Dimensao = 'grupo' | 'linha' | 'familia' | 'colecao' | 'status' | 'continuidade';
 
 const DIMENSOES: { chave: Dimensao; label: string }[] = [
+  { chave: 'grupo', label: 'Grupo' },
   { chave: 'linha', label: 'Linha' },
   { chave: 'familia', label: 'Família' },
   { chave: 'colecao', label: 'Coleção' },
@@ -145,9 +146,15 @@ function GraficoBarrasPercentual({ dados, ariaLabel }: { dados: BarraDado[]; ari
     return <p className="text-sm text-gray-400 py-8 text-center">Sem dado no período pra calcular o %.</p>;
   }
   const muitasCategorias = dados.length > 8;
+  // Acima de ~14 categorias, "espremer" tudo em 100% da largura deixa as
+  // barras finas e os rotulos ilegiveis - passa a largura fixa por
+  // categoria e deixa rolar na horizontal pra mostrar todas.
+  const rolagemHorizontal = dados.length > 14;
+  const larguraMinima = rolagemHorizontal ? dados.length * 64 : undefined;
 
   return (
-    <div role="img" aria-label={ariaLabel}>
+    <div role="img" aria-label={ariaLabel} className={rolagemHorizontal ? 'overflow-x-auto' : undefined}>
+      <div style={larguraMinima ? { minWidth: larguraMinima } : undefined}>
       <ResponsiveContainer width="100%" height={muitasCategorias ? 300 : 240}>
         <BarChart data={dados} margin={{ top: 24, right: 8, left: 0, bottom: muitasCategorias ? 56 : 4 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#e1e0d9" vertical={false} />
@@ -178,6 +185,7 @@ function GraficoBarrasPercentual({ dados, ariaLabel }: { dados: BarraDado[]; ari
           </Bar>
         </BarChart>
       </ResponsiveContainer>
+      </div>
     </div>
   );
 }
@@ -222,6 +230,7 @@ export default function CmvDetalhadoPage() {
 
   const [dimensaoSelecionada, setDimensaoSelecionada] = useState<Dimensao>('linha');
   const [dadosPorDimensao, setDadosPorDimensao] = useState<Record<Dimensao, RespostaDimensao | null>>({
+    grupo: null,
     linha: null,
     familia: null,
     colecao: null,
@@ -301,6 +310,7 @@ export default function CmvDetalhadoPage() {
       setPorMes(dataResumo.porMes || []);
 
       const novosDadosDimensao: Record<Dimensao, RespostaDimensao | null> = {
+        grupo: null,
         linha: null,
         familia: null,
         colecao: null,

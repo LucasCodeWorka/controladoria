@@ -139,13 +139,35 @@ def _cmv_percentual(valor_cmv: float, receita: float) -> Optional[float]:
 
 
 DIMENSOES_CMV = {
+    "grupo": "grupo",
     "linha": "linha",
     "familia": "familia",
     "colecao": "colecao",
     "status": "status",
     "continuidade": "continuidade",
 }
-TOP_N_DIMENSAO = 12
+
+# Referencias que sao "combo" (kit/conjunto). No grafico de CMV por GRUPO,
+# elas saem do grupo normal (CALCA/SUTIA/...) e entram num grupo sintetico
+# "COMBOS", pra dar pra ver o CMV so dos combos. Isso vale SO pras lojas -
+# a fabrica nao tem combo, entao pra fabrica essas referencias continuam no
+# grupo original.
+COMBOS_REFERENCIAS = [
+    "101000", "301701", "301103", "101500", "101700", "501602", "501701",
+    "501003", "301000", "301700", "501715", "301502", "201301", "211300",
+    "201702", "121000", "121704", "701502", "701302", "503001", "503303",
+    "103102", "341001", "103101",
+]
+
+
+def _expr_chave_dimensao(coluna: str, com_combos: bool) -> tuple:
+    """(expressao SQL do GROUP BY, params extras) pra dimensao. Com
+    com_combos=True (so no grafico de grupo, so pras lojas), reagrupa as
+    referencias de COMBOS_REFERENCIAS num grupo 'COMBOS'."""
+    normal = f"COALESCE(p.{coluna}, 'SEM CLASSIFICACAO')"
+    if com_combos:
+        return (f"CASE WHEN TRIM(p.referencia) = ANY(%s) THEN 'COMBOS' ELSE {normal} END", (COMBOS_REFERENCIAS,))
+    return (normal, ())
 
 
 # ---------------------------------------------------------------------------
@@ -526,7 +548,7 @@ def resumo_cmv_detalhado(
 
 @router.get("/api/cmv-detalhado/por-dimensao")
 def cmv_por_dimensao(
-    dimensao: str = Query(..., description="linha, familia, colecao, status ou continuidade"),
+    dimensao: str = Query(..., description="grupo, linha, familia, colecao, status ou continuidade"),
     dataInicio: str = Query(..., description="Data inicial (YYYY-MM-DD)"),
     dataFim: str = Query(..., description="Data final (YYYY-MM-DD)"),
     empresas: Optional[str] = Query(None, description="Lista de cd_empresa separados por virgula (default: todas)")
@@ -564,62 +586,76 @@ def cmv_por_dimensao(
         cmv_por_chave: dict = {}
         receita_por_chave: dict = {}
 
+        # COMBOS so no grafico de grupo e so pras lojas (a fabrica nao tem
+        # combo - suas referencias de combo ficam no grupo original).
+        combos_nas_lojas = dimensao == "grupo"
+        expr_fab, extra_fab = _expr_chave_dimensao(coluna, com_combos=False)
+        expr_loja, extra_loja = _expr_chave_dimensao(coluna, com_combos=combos_nas_lojas)
+
         if meses_prontos:
             placeholders_meses = ",".join(["%s"] * len(meses_prontos))
 
             if empresas_fabrica_pedidas:
                 query_fab = f"""
-                    SELECT COALESCE(p.{coluna}, 'SEM CLASSIFICACAO') AS chave, ABS(SUM(mv.valor)) AS valor
+                    SELECT {expr_fab} AS chave, ABS(SUM(mv.valor)) AS valor
                     FROM mv_cmv_fab mv
                     LEFT JOIN mv_prd_referencia_produto p ON p.cd_produto = mv.idproduto
                     WHERE TO_CHAR(mv.data, 'YYYY-MM') IN ({placeholders_meses})
                     GROUP BY 1
                 """
-                for r in execute_query(query_fab, tuple(meses_prontos)) or []:
+                for r in execute_query(query_fab, (*extra_fab, *meses_prontos)) or []:
                     cmv_por_chave[r["chave"]] = cmv_por_chave.get(r["chave"], 0.0) + float(r["valor"] or 0)
 
             if empresas_lojas_pedidas:
                 placeholders_lojas = ",".join(["%s"] * len(empresas_lojas_pedidas))
                 query_lojas = f"""
-                    SELECT COALESCE(p.{coluna}, 'SEM CLASSIFICACAO') AS chave, ABS(SUM(c.valor)) AS valor
+                    SELECT {expr_loja} AS chave, ABS(SUM(c.valor)) AS valor
                     FROM cmv_loja_produto_cache c
                     LEFT JOIN mv_prd_referencia_produto p ON p.cd_produto = c.idproduto
                     WHERE c.ano_mes IN ({placeholders_meses}) AND c.idcentrodecusto IN ({placeholders_lojas})
                     GROUP BY 1
                 """
-                for r in execute_query(query_lojas, (*meses_prontos, *empresas_lojas_pedidas)) or []:
+                for r in execute_query(query_lojas, (*extra_loja, *meses_prontos, *empresas_lojas_pedidas)) or []:
                     cmv_por_chave[r["chave"]] = cmv_por_chave.get(r["chave"], 0.0) + float(r["valor"] or 0)
 
-            placeholders_empresas = ",".join(["%s"] * len(cd_empresas))
-            query_receita = f"""
-                SELECT COALESCE(p.{coluna}, 'SEM CLASSIFICACAO') AS chave, ABS(SUM(r.receita)) AS receita
-                FROM receita_produto_cache r
-                LEFT JOIN mv_prd_referencia_produto p ON p.cd_produto = r.idproduto
-                WHERE r.ano_mes IN ({placeholders_meses}) AND r.cd_empresa IN ({placeholders_empresas})
-                GROUP BY 1
-            """
-            for r in execute_query(query_receita, (*meses_prontos, *cd_empresas)) or []:
-                receita_por_chave[r["chave"]] = receita_por_chave.get(r["chave"], 0.0) + float(r["receita"] or 0)
+            # Receita: separada em fabrica (grupo normal) e lojas (com COMBOS
+            # quando for o grafico de grupo), pra bater com a divisao do CMV
+            # acima - a receita das referencias de combo NAS LOJAS entra em
+            # COMBOS, mas a receita delas NA FABRICA fica no grupo original.
+            if empresas_fabrica_pedidas:
+                ph_fab = ",".join(["%s"] * len(empresas_fabrica_pedidas))
+                query_receita_fab = f"""
+                    SELECT {expr_fab} AS chave, ABS(SUM(r.receita)) AS receita
+                    FROM receita_produto_cache r
+                    LEFT JOIN mv_prd_referencia_produto p ON p.cd_produto = r.idproduto
+                    WHERE r.ano_mes IN ({placeholders_meses}) AND r.cd_empresa IN ({ph_fab})
+                    GROUP BY 1
+                """
+                for r in execute_query(query_receita_fab, (*extra_fab, *meses_prontos, *empresas_fabrica_pedidas)) or []:
+                    receita_por_chave[r["chave"]] = receita_por_chave.get(r["chave"], 0.0) + float(r["receita"] or 0)
 
+            if empresas_lojas_pedidas:
+                ph_loja_rec = ",".join(["%s"] * len(empresas_lojas_pedidas))
+                query_receita_loja = f"""
+                    SELECT {expr_loja} AS chave, ABS(SUM(r.receita)) AS receita
+                    FROM receita_produto_cache r
+                    LEFT JOIN mv_prd_referencia_produto p ON p.cd_produto = r.idproduto
+                    WHERE r.ano_mes IN ({placeholders_meses}) AND r.cd_empresa IN ({ph_loja_rec})
+                    GROUP BY 1
+                """
+                for r in execute_query(query_receita_loja, (*extra_loja, *meses_prontos, *empresas_lojas_pedidas)) or []:
+                    receita_por_chave[r["chave"]] = receita_por_chave.get(r["chave"], 0.0) + float(r["receita"] or 0)
+
+        # Mostra TODAS as categorias (sem cortar num top N + "OUTROS") - por
+        # pedido do usuario, que quer ver a lista inteira.
         itens = sorted(
             [{"chave": k, "valor": v} for k, v in cmv_por_chave.items() if v > 0],
             key=lambda i: i["valor"],
             reverse=True,
         )
 
-        if len(itens) > TOP_N_DIMENSAO:
-            principais = itens[:TOP_N_DIMENSAO]
-            chaves_outros = {i["chave"] for i in itens[TOP_N_DIMENSAO:]}
-            outros_valor = sum(i["valor"] for i in itens[TOP_N_DIMENSAO:])
-            if outros_valor > 0:
-                principais.append({"chave": "OUTROS", "valor": outros_valor, "_chavesOutros": chaves_outros})
-            itens = principais
-
         for item in itens:
-            if item["chave"] == "OUTROS" and "_chavesOutros" in item:
-                receita = sum(receita_por_chave.get(c, 0.0) for c in item.pop("_chavesOutros"))
-            else:
-                receita = receita_por_chave.get(item["chave"], 0.0)
+            receita = receita_por_chave.get(item["chave"], 0.0)
             item["receita"] = receita
             item["percentual"] = _cmv_percentual(item["valor"], receita)
 
