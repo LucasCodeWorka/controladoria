@@ -85,6 +85,7 @@ interface ItemCmvSku {
   descricao: string;
   cor: string | null;
   tamanho: string | null;
+  status: string | null;
   linha: string | null;
   familia: string | null;
   cmv: number;
@@ -873,6 +874,11 @@ export default function CmvDetalhadoPage() {
                         </button>
                       </th>
                       <th className="text-left px-3 py-2 font-medium text-gray-600 whitespace-nowrap">
+                        <button onClick={() => ordenarSkuPor('status')} className="flex items-center gap-1 hover:text-gray-900">
+                          Status{indicadorSkuOrdenacao('status')}
+                        </button>
+                      </th>
+                      <th className="text-left px-3 py-2 font-medium text-gray-600 whitespace-nowrap">
                         <button onClick={() => ordenarSkuPor('linha')} className="flex items-center gap-1 hover:text-gray-900">
                           Linha{indicadorSkuOrdenacao('linha')}
                         </button>
@@ -924,6 +930,7 @@ export default function CmvDetalhadoPage() {
                           <td className="px-4 py-2 text-gray-800">{item.descricao}</td>
                           <td className="px-3 py-2 text-gray-600 whitespace-nowrap">{item.cor || '-'}</td>
                           <td className="px-3 py-2 text-gray-600 whitespace-nowrap">{item.tamanho || '-'}</td>
+                          <td className="px-3 py-2 text-gray-600 whitespace-nowrap">{item.status || '-'}</td>
                           <td className="px-3 py-2 text-gray-600 whitespace-nowrap">{item.linha || '-'}</td>
                           <td className="px-3 py-2 text-gray-600 whitespace-nowrap">{item.familia || '-'}</td>
                           <td className="px-3 py-2 text-right text-gray-700 whitespace-nowrap">{formatarQtd(item.qtdVendida)}</td>

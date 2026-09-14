@@ -713,7 +713,7 @@ def cmv_por_sku(
     empresas: Optional[str] = Query(None, description="Lista de cd_empresa separados por virgula (default: todas)"),
     pagina: int = Query(1, ge=1, description="Pagina (comeca em 1)"),
     porPagina: int = Query(50, ge=1, le=200, description="Itens por pagina"),
-    ordenarPor: str = Query("percentualCmv", description="'loja','referencia','descricao','cor','tamanho','linha','familia','cmv','vlVenda','qtdVendida','cmvUnitario','vlVendaUnitario' ou 'percentualCmv'"),
+    ordenarPor: str = Query("percentualCmv", description="'loja','referencia','descricao','cor','tamanho','status','linha','familia','cmv','vlVenda','qtdVendida','cmvUnitario','vlVendaUnitario' ou 'percentualCmv'"),
     ordem: str = Query("desc", description="'asc' ou 'desc'"),
     dimensaoFiltro: Optional[str] = Query(None, description="grupo, linha, familia, colecao, status ou continuidade - filtra so os SKUs dessa categoria (ex: clicou numa barra do grafico por dimensao)"),
     categoriaFiltro: Optional[str] = Query(None, description="Valor da categoria (ex: 'SEM CLASSIFICACAO', 'COMBOS') - exige dimensaoFiltro junto"),
@@ -863,6 +863,7 @@ def cmv_por_sku(
                     "descricao": _nome_base_produto(info["produto"], info["ds_cor"], info["ds_tamanho"]) if info and info["produto"] else "(sem cadastro)",
                     "cor": info["ds_cor"] if info else None,
                     "tamanho": info["ds_tamanho"] if info else None,
+                    "status": categorias.get("status"),
                     "linha": categorias.get("linha"),
                     "familia": categorias.get("familia"),
                     "cmv": custo,
@@ -895,7 +896,7 @@ def cmv_por_sku(
         total_itens = len(itens_completos)
         total_paginas = max(1, -(-total_itens // porPagina))
 
-        colunas_texto = {"loja", "referencia", "descricao", "cor", "tamanho", "linha", "familia"}
+        colunas_texto = {"loja", "referencia", "descricao", "cor", "tamanho", "status", "linha", "familia"}
         colunas_validas = colunas_texto | {"cmv", "vlVenda", "qtdVendida", "cmvUnitario", "vlVendaUnitario", "percentualCmv"}
         if ordenarPor not in colunas_validas:
             raise HTTPException(status_code=400, detail=f"ordenarPor invalido: {ordenarPor}. Use uma de: {sorted(colunas_validas)}")
