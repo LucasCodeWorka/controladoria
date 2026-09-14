@@ -158,6 +158,7 @@ COMBOS_REFERENCIAS = [
     "201702", "121000", "121704", "701502", "701302", "503001", "503303",
     "103102", "341001", "103101",
 ]
+COMBOS_REFERENCIAS_SET = set(COMBOS_REFERENCIAS)
 
 
 def _expr_chave_dimensao(coluna: str, com_combos: bool) -> tuple:
@@ -708,7 +709,9 @@ def cmv_por_sku(
     pagina: int = Query(1, ge=1, description="Pagina (comeca em 1)"),
     porPagina: int = Query(50, ge=1, le=200, description="Itens por pagina"),
     ordenarPor: str = Query("percentualCmv", description="'loja','referencia','descricao','cor','tamanho','cmv','vlVenda' ou 'percentualCmv'"),
-    ordem: str = Query("desc", description="'asc' ou 'desc'")
+    ordem: str = Query("desc", description="'asc' ou 'desc'"),
+    dimensaoFiltro: Optional[str] = Query(None, description="grupo, linha, familia, colecao, status ou continuidade - filtra so os SKUs dessa categoria (ex: clicou numa barra do grafico por dimensao)"),
+    categoriaFiltro: Optional[str] = Query(None, description="Valor da categoria (ex: 'SEM CLASSIFICACAO', 'COMBOS') - exige dimensaoFiltro junto")
 ):
     """
     CMV por SKU individual (nao por referencia agregada) e por loja/fabrica
@@ -716,6 +719,13 @@ def cmv_por_sku(
     receita_produto_cache), so que agrupado por (cd_empresa, cd_produto) em
     vez de por classificacao do produto. Paginado e ordenavel pela base
     INTEIRA (ver _cache_sku_loja).
+
+    dimensaoFiltro+categoriaFiltro filtram pra so os SKUs daquela categoria
+    (clique numa barra do grafico "CMV por dimensao") - a categoria de cada
+    SKU e calculada com a MESMA regra do grafico (inclusive o grupo
+    sintetico 'COMBOS', so pras lojas) e cacheada junto com o item, entao
+    filtrar depois de ja ter a base carregada e so um list comprehension,
+    sem query nova.
     """
     try:
         cd_empresas = _parse_empresas(empresas)
@@ -781,7 +791,8 @@ def cmv_por_sku(
             if produtos_ids:
                 placeholders_produtos = ",".join(["%s"] * len(produtos_ids))
                 for r in execute_query(f"""
-                    SELECT cd_produto, referencia, produto, ds_cor, ds_tamanho
+                    SELECT cd_produto, referencia, produto, ds_cor, ds_tamanho,
+                        grupo, linha, familia, colecao, status, continuidade
                     FROM mv_prd_referencia_produto
                     WHERE cd_produto IN ({placeholders_produtos})
                 """, tuple(produtos_ids)) or []:
@@ -797,18 +808,39 @@ def cmv_por_sku(
                 if custo <= 0 and receita <= 0:
                     continue
                 info = produto_info.get(cd_produto)
+                referencia = (info["referencia"].strip() if info and info["referencia"] else str(cd_produto))
+                # Categoria de cada dimensao, pro filtro por clique no
+                # grafico - mesma regra do /por-dimensao: grupo vira
+                # 'COMBOS' so pra referencia de combo E so pra loja (nunca
+                # fabrica). Fica junto no item cacheado (_categorias),
+                # nao recalculado a cada request.
+                categorias = {}
+                for dim in DIMENSOES_CMV:
+                    valor_bruto = info[dim] if info else None
+                    if dim == "grupo" and not _eh_fabrica(cd_empresa) and referencia in COMBOS_REFERENCIAS_SET:
+                        categorias[dim] = "COMBOS"
+                    else:
+                        categorias[dim] = valor_bruto or "SEM CLASSIFICACAO"
                 itens_completos.append({
                     "cdEmpresa": cd_empresa,
                     "loja": _nome_empresa_cmv(cd_empresa),
-                    "referencia": (info["referencia"].strip() if info and info["referencia"] else str(cd_produto)),
+                    "referencia": referencia,
                     "descricao": _nome_base_produto(info["produto"], info["ds_cor"], info["ds_tamanho"]) if info and info["produto"] else "(sem cadastro)",
                     "cor": info["ds_cor"] if info else None,
                     "tamanho": info["ds_tamanho"] if info else None,
                     "cmv": custo,
                     "vlVenda": receita,
                     "percentualCmv": _cmv_percentual(custo, receita),
+                    "_categorias": categorias,
                 })
             _cache_sku_loja[chave_cache] = itens_completos
+
+        if dimensaoFiltro is not None:
+            if dimensaoFiltro not in DIMENSOES_CMV:
+                raise HTTPException(status_code=400, detail=f"dimensaoFiltro invalida: {dimensaoFiltro}. Use uma de: {list(DIMENSOES_CMV.keys())}")
+            if categoriaFiltro is None:
+                raise HTTPException(status_code=400, detail="categoriaFiltro e obrigatorio junto com dimensaoFiltro")
+            itens_completos = [i for i in itens_completos if i["_categorias"].get(dimensaoFiltro) == categoriaFiltro]
 
         total_itens = len(itens_completos)
         total_paginas = max(1, -(-total_itens // porPagina))
@@ -834,7 +866,8 @@ def cmv_por_sku(
         itens_ordenados = sorted(itens_completos, key=_chave_ordenacao, reverse=reverse_str)
 
         offset = (pagina - 1) * porPagina
-        itens_pagina = itens_ordenados[offset:offset + porPagina]
+        # _categorias e so uso interno (filtro) - nao serializa pro front.
+        itens_pagina = [{k: v for k, v in item.items() if k != "_categorias"} for item in itens_ordenados[offset:offset + porPagina]]
 
         return {
             "itens": itens_pagina,

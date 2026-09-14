@@ -12,6 +12,7 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  Cell,
   LabelList,
   ResponsiveContainer,
   Tooltip,
@@ -162,7 +163,17 @@ function TooltipBarra({ active, payload }: PayloadTooltipBarra) {
 
 // Grafico de barras via Recharts (responsivo por padrao, ja com grade,
 // eixos e proporcao de barra/espacamento bem resolvidas).
-function GraficoBarrasPercentual({ dados, ariaLabel }: { dados: BarraDado[]; ariaLabel: string }) {
+function GraficoBarrasPercentual({
+  dados,
+  ariaLabel,
+  onBarraClick,
+  chaveSelecionada,
+}: {
+  dados: BarraDado[];
+  ariaLabel: string;
+  onBarraClick?: (chave: string | number) => void;
+  chaveSelecionada?: string | number | null;
+}) {
   if (dados.length === 0) {
     return <p className="text-sm text-gray-400 py-8 text-center">Sem dado no período pra calcular o %.</p>;
   }
@@ -196,7 +207,17 @@ function GraficoBarrasPercentual({ dados, ariaLabel }: { dados: BarraDado[]; ari
             width={40}
           />
           <Tooltip content={<TooltipBarra />} cursor={{ fill: 'rgba(11,11,11,0.04)' }} />
-          <Bar dataKey="valor" fill={COR_BARRA} radius={[4, 4, 0, 0]} maxBarSize={56}>
+          <Bar
+            dataKey="valor"
+            fill={COR_BARRA}
+            radius={[4, 4, 0, 0]}
+            maxBarSize={56}
+            cursor={onBarraClick ? 'pointer' : undefined}
+            onClick={onBarraClick ? (data: { payload?: BarraDado }) => data.payload && onBarraClick(data.payload.chave) : undefined}
+          >
+            {onBarraClick && dados.map((d) => (
+              <Cell key={d.chave} fill={chaveSelecionada != null && d.chave === chaveSelecionada ? '#9f1239' : COR_BARRA} />
+            ))}
             <LabelList
               dataKey="valor"
               position="top"
@@ -270,6 +291,10 @@ export default function CmvDetalhadoPage() {
   const [skuOrdenarPor, setSkuOrdenarPor] = useState('percentualCmv');
   const [skuOrdem, setSkuOrdem] = useState<'asc' | 'desc'>('desc');
   const SKU_POR_PAGINA = 50;
+
+  // Filtro da tabela por SKU quando clica numa barra do grafico de
+  // dimensao - null = sem filtro (mostra tudo).
+  const [filtroSku, setFiltroSku] = useState<{ dimensao: Dimensao; chave: string } | null>(null);
 
   useEffect(() => {
     fetch('/api/cmv-detalhado/empresas', { cache: 'no-store' })
@@ -364,7 +389,8 @@ export default function CmvDetalhadoPage() {
       // seu proprio spinner (skuCarregando), igual a matriz do Giro.
       setSkuOrdenarPor('percentualCmv');
       setSkuOrdem('desc');
-      buscarSku(dataInicio, dataFim, empresasParam, 1, 'percentualCmv', 'desc');
+      setFiltroSku(null);
+      buscarSku(dataInicio, dataFim, empresasParam, 1, 'percentualCmv', 'desc', null);
     } catch (error) {
       console.error('Erro ao buscar resumo do CMV detalhado:', error);
       setStatusCarregamento('Erro ao buscar os dados. Tente novamente.');
@@ -375,7 +401,15 @@ export default function CmvDetalhadoPage() {
 
   // Nao consulta sozinho ao abrir a tela - so junto com buscarDados (botao
   // Consultar) ou ao trocar de pagina/ordenacao na tabela por SKU.
-  async function buscarSku(dataIni: string, dataF: string, empresasParam: string, pagina: number, ordenarPor: string, ordem: 'asc' | 'desc') {
+  async function buscarSku(
+    dataIni: string,
+    dataF: string,
+    empresasParam: string,
+    pagina: number,
+    ordenarPor: string,
+    ordem: 'asc' | 'desc',
+    filtro: { dimensao: Dimensao; chave: string } | null
+  ) {
     setSkuCarregando(true);
     try {
       const params = new URLSearchParams({
@@ -387,6 +421,10 @@ export default function CmvDetalhadoPage() {
         ordenarPor,
         ordem,
       });
+      if (filtro) {
+        params.set('dimensaoFiltro', filtro.dimensao);
+        params.set('categoriaFiltro', filtro.chave);
+      }
       const response = await fetch(`/api/cmv-detalhado/por-sku?${params.toString()}`, { cache: 'no-store' });
       const data = await response.json();
       if (!response.ok || data.error) {
@@ -404,7 +442,7 @@ export default function CmvDetalhadoPage() {
 
   function trocarPaginaSku(novaPagina: number) {
     const empresasParam = Array.from(empresasSelecionadas).join(',');
-    buscarSku(dataInicio, dataFim, empresasParam, novaPagina, skuOrdenarPor, skuOrdem);
+    buscarSku(dataInicio, dataFim, empresasParam, novaPagina, skuOrdenarPor, skuOrdem, filtroSku);
   }
 
   // Clicar numa coluna ja ordenada inverte o sentido; numa coluna nova,
@@ -415,12 +453,30 @@ export default function CmvDetalhadoPage() {
     setSkuOrdenarPor(coluna);
     setSkuOrdem(novoOrdem);
     const empresasParam = Array.from(empresasSelecionadas).join(',');
-    buscarSku(dataInicio, dataFim, empresasParam, 1, coluna, novoOrdem);
+    buscarSku(dataInicio, dataFim, empresasParam, 1, coluna, novoOrdem, filtroSku);
   }
 
   function indicadorSkuOrdenacao(coluna: string): string {
     if (skuOrdenarPor !== coluna) return '';
     return skuOrdem === 'asc' ? ' ↑' : ' ↓';
+  }
+
+  // Clique numa barra do grafico "CMV por dimensao" - filtra a tabela por
+  // SKU pra so essa categoria. Clicar de novo na mesma barra remove o
+  // filtro (alterna).
+  function filtrarSkuPorCategoria(dimensao: Dimensao, chave: string | number) {
+    const chaveTexto = String(chave);
+    const empresasParam = Array.from(empresasSelecionadas).join(',');
+    const mesmoFiltro = filtroSku && filtroSku.dimensao === dimensao && filtroSku.chave === chaveTexto;
+    const novoFiltro = mesmoFiltro ? null : { dimensao, chave: chaveTexto };
+    setFiltroSku(novoFiltro);
+    buscarSku(dataInicio, dataFim, empresasParam, 1, skuOrdenarPor, skuOrdem, novoFiltro);
+  }
+
+  function limparFiltroSku() {
+    setFiltroSku(null);
+    const empresasParam = Array.from(empresasSelecionadas).join(',');
+    buscarSku(dataInicio, dataFim, empresasParam, 1, skuOrdenarPor, skuOrdem, null);
   }
 
   async function calcularMesesFaltantes() {
@@ -632,10 +688,12 @@ export default function CmvDetalhadoPage() {
               </div>
             </div>
             <p className="text-xs text-gray-500 mb-3">
-              % de CMV sobre a receita (custo/venda), por {DIMENSOES.find((d) => d.chave === dimensaoSelecionada)?.label.toLowerCase()} do produto — fábrica e lojas.
+              % de CMV sobre a receita (custo/venda), por {DIMENSOES.find((d) => d.chave === dimensaoSelecionada)?.label.toLowerCase()} do produto — fábrica e lojas. Clique numa barra pra filtrar a tabela por SKU abaixo.
             </p>
             <GraficoBarrasPercentual
               ariaLabel={`CMV por ${dimensaoSelecionada}`}
+              onBarraClick={(chave) => filtrarSkuPorCategoria(dimensaoSelecionada, chave)}
+              chaveSelecionada={filtroSku && filtroSku.dimensao === dimensaoSelecionada ? filtroSku.chave : null}
               dados={(dadosPorDimensao[dimensaoSelecionada]?.itens || [])
                 .filter((item) => item.percentual !== null)
                 .map((item) => ({
@@ -671,6 +729,16 @@ export default function CmvDetalhadoPage() {
                 <p className="text-xs text-gray-500">
                   Uma linha por produto (cor/tamanho) e loja/fábrica — custo, venda e %CMV individuais.
                 </p>
+                {filtroSku && (
+                  <div className="mt-1.5 flex items-center gap-2">
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs bg-rose-50 text-rose-700 border border-rose-200 rounded-full">
+                      {DIMENSOES.find((d) => d.chave === filtroSku.dimensao)?.label}: {filtroSku.chave}
+                    </span>
+                    <button onClick={limparFiltroSku} className="text-xs text-gray-400 hover:text-gray-600 underline">
+                      Limpar filtro
+                    </button>
+                  </div>
+                )}
               </div>
               {skuDados && (
                 <div className="flex items-center gap-2 text-sm shrink-0">
