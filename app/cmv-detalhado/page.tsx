@@ -77,6 +77,27 @@ interface RespostaDimensao {
   mesesFaltantes: string[];
 }
 
+interface ItemCmvSku {
+  cdEmpresa: number;
+  loja: string;
+  referencia: string;
+  descricao: string;
+  cor: string | null;
+  tamanho: string | null;
+  cmv: number;
+  vlVenda: number;
+  percentualCmv: number | null;
+}
+
+interface RespostaCmvSku {
+  itens: ItemCmvSku[];
+  totalItens: number;
+  pagina: number;
+  porPagina: number;
+  totalPaginas: number;
+  mesesFaltantes: string[];
+}
+
 // Cores em ordem categorica fixa (paleta validada) - aqui so a primeira
 // (azul) e usada, ja que e uma metrica so (CMV%) comparada entre categorias.
 const COR_BARRA = '#2a78d6';
@@ -241,6 +262,15 @@ export default function CmvDetalhadoPage() {
   const [calculandoMeses, setCalculandoMeses] = useState(false);
   const [progressoCalculo, setProgressoCalculo] = useState<{ atual: number; total: number } | null>(null);
 
+  // CMV por SKU + loja - paginado e ordenavel, le do mesmo cache do
+  // grafico de dimensao, so que agrupado por (empresa, produto).
+  const [skuDados, setSkuDados] = useState<RespostaCmvSku | null>(null);
+  const [skuPagina, setSkuPagina] = useState(1);
+  const [skuCarregando, setSkuCarregando] = useState(false);
+  const [skuOrdenarPor, setSkuOrdenarPor] = useState('percentualCmv');
+  const [skuOrdem, setSkuOrdem] = useState<'asc' | 'desc'>('desc');
+  const SKU_POR_PAGINA = 50;
+
   useEffect(() => {
     fetch('/api/cmv-detalhado/empresas', { cache: 'no-store' })
       .then((r) => r.json())
@@ -329,12 +359,68 @@ export default function CmvDetalhadoPage() {
       setMesesFaltantes(faltantes);
 
       setConsultaExecutada(true);
+
+      // Nao espera a tabela por SKU pra liberar o resto da tela - ela tem
+      // seu proprio spinner (skuCarregando), igual a matriz do Giro.
+      setSkuOrdenarPor('percentualCmv');
+      setSkuOrdem('desc');
+      buscarSku(dataInicio, dataFim, empresasParam, 1, 'percentualCmv', 'desc');
     } catch (error) {
       console.error('Erro ao buscar resumo do CMV detalhado:', error);
       setStatusCarregamento('Erro ao buscar os dados. Tente novamente.');
     } finally {
       setLoading(false);
     }
+  }
+
+  // Nao consulta sozinho ao abrir a tela - so junto com buscarDados (botao
+  // Consultar) ou ao trocar de pagina/ordenacao na tabela por SKU.
+  async function buscarSku(dataIni: string, dataF: string, empresasParam: string, pagina: number, ordenarPor: string, ordem: 'asc' | 'desc') {
+    setSkuCarregando(true);
+    try {
+      const params = new URLSearchParams({
+        dataInicio: dataIni,
+        dataFim: dataF,
+        empresas: empresasParam,
+        pagina: String(pagina),
+        porPagina: String(SKU_POR_PAGINA),
+        ordenarPor,
+        ordem,
+      });
+      const response = await fetch(`/api/cmv-detalhado/por-sku?${params.toString()}`, { cache: 'no-store' });
+      const data = await response.json();
+      if (!response.ok || data.error) {
+        setStatusCarregamento(`Erro do backend: ${data.detail || data.error || 'Erro desconhecido'}`);
+        return;
+      }
+      setSkuDados(data);
+      setSkuPagina(pagina);
+    } catch (error) {
+      console.error('Erro ao buscar CMV por SKU:', error);
+    } finally {
+      setSkuCarregando(false);
+    }
+  }
+
+  function trocarPaginaSku(novaPagina: number) {
+    const empresasParam = Array.from(empresasSelecionadas).join(',');
+    buscarSku(dataInicio, dataFim, empresasParam, novaPagina, skuOrdenarPor, skuOrdem);
+  }
+
+  // Clicar numa coluna ja ordenada inverte o sentido; numa coluna nova,
+  // comeca ascendente. Sempre volta pra pagina 1 (a ordenacao e da base
+  // inteira, nao so da pagina atual).
+  function ordenarSkuPor(coluna: string) {
+    const novoOrdem: 'asc' | 'desc' = skuOrdenarPor === coluna && skuOrdem === 'asc' ? 'desc' : 'asc';
+    setSkuOrdenarPor(coluna);
+    setSkuOrdem(novoOrdem);
+    const empresasParam = Array.from(empresasSelecionadas).join(',');
+    buscarSku(dataInicio, dataFim, empresasParam, 1, coluna, novoOrdem);
+  }
+
+  function indicadorSkuOrdenacao(coluna: string): string {
+    if (skuOrdenarPor !== coluna) return '';
+    return skuOrdem === 'asc' ? ' ↑' : ' ↓';
   }
 
   async function calcularMesesFaltantes() {
@@ -575,6 +661,120 @@ export default function CmvDetalhadoPage() {
                   Calcular meses faltantes
                 </button>
               </div>
+            )}
+          </div>
+
+          <div className="bg-white rounded-lg shadow-lg overflow-hidden">
+            <div className="p-4 pb-2 flex items-center justify-between flex-wrap gap-3">
+              <div>
+                <h2 className="text-base font-semibold text-gray-800">CMV por SKU</h2>
+                <p className="text-xs text-gray-500">
+                  Uma linha por produto (cor/tamanho) e loja/fábrica — custo, venda e %CMV individuais.
+                </p>
+              </div>
+              {skuDados && (
+                <div className="flex items-center gap-2 text-sm shrink-0">
+                  <button
+                    onClick={() => trocarPaginaSku(skuPagina - 1)}
+                    disabled={skuCarregando || skuPagina <= 1}
+                    className="px-2.5 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md disabled:opacity-40 transition-colors"
+                  >
+                    ← Anterior
+                  </button>
+                  <span className="text-gray-500 text-xs whitespace-nowrap">
+                    Página {skuDados.pagina} de {skuDados.totalPaginas} ({skuDados.totalItens.toLocaleString('pt-BR')} itens)
+                  </span>
+                  <button
+                    onClick={() => trocarPaginaSku(skuPagina + 1)}
+                    disabled={skuCarregando || skuPagina >= skuDados.totalPaginas}
+                    className="px-2.5 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md disabled:opacity-40 transition-colors"
+                  >
+                    Próxima →
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {skuCarregando && (
+              <div className="flex items-center justify-center py-12">
+                <Loader2 className="w-5 h-5 animate-spin text-rose-600" />
+                <span className="ml-3 text-gray-500 text-sm">Carregando...</span>
+              </div>
+            )}
+
+            {!skuCarregando && skuDados && skuDados.itens.length === 0 && (
+              <p className="text-sm text-gray-400 py-8 text-center">Nenhum produto encontrado.</p>
+            )}
+
+            {!skuCarregando && skuDados && skuDados.itens.length > 0 && (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50 border-b border-gray-200">
+                    <tr>
+                      <th className="text-left px-4 py-2 font-medium text-gray-600 whitespace-nowrap">
+                        <button onClick={() => ordenarSkuPor('loja')} className="flex items-center gap-1 hover:text-gray-900">
+                          Loja{indicadorSkuOrdenacao('loja')}
+                        </button>
+                      </th>
+                      <th className="text-left px-4 py-2 font-medium text-gray-600 whitespace-nowrap">
+                        <button onClick={() => ordenarSkuPor('referencia')} className="flex items-center gap-1 hover:text-gray-900">
+                          Referência{indicadorSkuOrdenacao('referencia')}
+                        </button>
+                      </th>
+                      <th className="text-left px-4 py-2 font-medium text-gray-600 min-w-[220px]">
+                        <button onClick={() => ordenarSkuPor('descricao')} className="flex items-center gap-1 hover:text-gray-900">
+                          Descrição{indicadorSkuOrdenacao('descricao')}
+                        </button>
+                      </th>
+                      <th className="text-left px-3 py-2 font-medium text-gray-600 whitespace-nowrap">
+                        <button onClick={() => ordenarSkuPor('cor')} className="flex items-center gap-1 hover:text-gray-900">
+                          Cor{indicadorSkuOrdenacao('cor')}
+                        </button>
+                      </th>
+                      <th className="text-left px-3 py-2 font-medium text-gray-600 whitespace-nowrap">
+                        <button onClick={() => ordenarSkuPor('tamanho')} className="flex items-center gap-1 hover:text-gray-900">
+                          Tamanho{indicadorSkuOrdenacao('tamanho')}
+                        </button>
+                      </th>
+                      <th className="text-right px-3 py-2 font-medium text-gray-600 whitespace-nowrap">
+                        <button onClick={() => ordenarSkuPor('cmv')} className="flex items-center gap-1 ml-auto hover:text-gray-900">
+                          CMV{indicadorSkuOrdenacao('cmv')}
+                        </button>
+                      </th>
+                      <th className="text-right px-3 py-2 font-medium text-gray-600 whitespace-nowrap">
+                        <button onClick={() => ordenarSkuPor('vlVenda')} className="flex items-center gap-1 ml-auto hover:text-gray-900">
+                          Vl Venda{indicadorSkuOrdenacao('vlVenda')}
+                        </button>
+                      </th>
+                      <th className="text-right px-4 py-2 font-semibold text-gray-800 bg-gray-100 whitespace-nowrap">
+                        <button onClick={() => ordenarSkuPor('percentualCmv')} className="flex items-center gap-1 ml-auto hover:text-gray-600">
+                          %CMV{indicadorSkuOrdenacao('percentualCmv')}
+                        </button>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {skuDados.itens.map((item, idx) => (
+                      <tr key={`${item.cdEmpresa}-${item.referencia}-${item.cor}-${item.tamanho}-${idx}`} className={`${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'} hover:bg-rose-50 transition-colors`}>
+                        <td className="px-4 py-2 text-gray-500 whitespace-nowrap">{item.loja}</td>
+                        <td className="px-4 py-2 text-gray-500 whitespace-nowrap">{item.referencia}</td>
+                        <td className="px-4 py-2 text-gray-800">{item.descricao}</td>
+                        <td className="px-3 py-2 text-gray-600 whitespace-nowrap">{item.cor || '-'}</td>
+                        <td className="px-3 py-2 text-gray-600 whitespace-nowrap">{item.tamanho || '-'}</td>
+                        <td className="px-3 py-2 text-right text-gray-700 whitespace-nowrap">{formatarValor(item.cmv)}</td>
+                        <td className="px-3 py-2 text-right text-gray-700 whitespace-nowrap">{formatarValor(item.vlVenda)}</td>
+                        <td className="px-4 py-2 text-right font-semibold text-gray-900 bg-gray-50 whitespace-nowrap">{formatarPct(item.percentualCmv)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {skuDados && skuDados.mesesFaltantes.length > 0 && (
+              <p className="text-xs text-amber-700 bg-amber-50 border-t border-amber-200 px-4 py-2">
+                {skuDados.mesesFaltantes.length} mês(es) ainda sem cálculo ({skuDados.mesesFaltantes.join(', ')}) — use &quot;Calcular meses faltantes&quot; acima.
+              </p>
             )}
           </div>
         </>

@@ -673,6 +673,186 @@ def cmv_por_dimensao(
         raise HTTPException(status_code=500, detail=f"Erro ao buscar CMV por dimensao: {str(e)}")
 
 
+def _nome_base_produto(produto: Optional[str], ds_cor: Optional[str], ds_tamanho: Optional[str]) -> Optional[str]:
+    """Mesma logica de _nome_base_referencia do giro.py (duplicada aqui -
+    importar de giro.py criaria import circular, ja que giro.py importa
+    deste modulo). O nome cadastrado do SKU sempre termina com "COR
+    TAMANHO" (ex: "SUTIA MINI CHOCOLATE U") - tira esse sufixo pra sobrar
+    so a descricao, ja que cor e tamanho vao em colunas separadas na
+    tabela por SKU."""
+    if not produto:
+        return produto
+    if ds_cor and ds_tamanho:
+        sufixo = f"{ds_cor} {ds_tamanho}"
+        if produto.upper().endswith(sufixo.upper()):
+            base = produto[:-len(sufixo)].rstrip()
+            if base:
+                return base
+    return produto
+
+
+# Cache em memoria da tabela por SKU+loja ja agregada - {(meses prontos,
+# empresas): [itens]}. Ordenar por qualquer coluna precisa do CMV de TODOS
+# os SKUs, nao so da pagina - cacheado, so o primeiro carregamento de cada
+# periodo/filtro custa a consulta, depois e so reordenar/paginar em Python.
+# Nao e limpo automaticamente quando um mes e recalculado (calcular-mes) -
+# raro o suficiente (cache de mes fechado) pra nao valer a complexidade.
+_cache_sku_loja: dict = {}
+
+
+@router.get("/api/cmv-detalhado/por-sku")
+def cmv_por_sku(
+    dataInicio: str = Query(..., description="Data inicial (YYYY-MM-DD)"),
+    dataFim: str = Query(..., description="Data final (YYYY-MM-DD)"),
+    empresas: Optional[str] = Query(None, description="Lista de cd_empresa separados por virgula (default: todas)"),
+    pagina: int = Query(1, ge=1, description="Pagina (comeca em 1)"),
+    porPagina: int = Query(50, ge=1, le=200, description="Itens por pagina"),
+    ordenarPor: str = Query("percentualCmv", description="'loja','referencia','descricao','cor','tamanho','cmv','vlVenda' ou 'percentualCmv'"),
+    ordem: str = Query("desc", description="'asc' ou 'desc'")
+):
+    """
+    CMV por SKU individual (nao por referencia agregada) e por loja/fabrica
+    - mesma fonte do grafico por dimensao (mv_cmv_fab, cmv_loja_produto_cache,
+    receita_produto_cache), so que agrupado por (cd_empresa, cd_produto) em
+    vez de por classificacao do produto. Paginado e ordenavel pela base
+    INTEIRA (ver _cache_sku_loja).
+    """
+    try:
+        cd_empresas = _parse_empresas(empresas)
+        empresas_fabrica_pedidas = [e for e in cd_empresas if _eh_fabrica(e)]
+        empresas_lojas_pedidas = [e for e in cd_empresas if not _eh_fabrica(e)]
+
+        meses = [f"{a:04d}-{m:02d}" for a, m in _gerar_meses(dataInicio, dataFim)]
+        meses_prontos_geral = _meses_prontos_dimensao()
+        meses_faltantes = [m for m in meses if m not in meses_prontos_geral]
+        meses_prontos = [m for m in meses if m in meses_prontos_geral]
+
+        chave_cache = (tuple(meses_prontos), tuple(sorted(cd_empresas)))
+        if chave_cache in _cache_sku_loja:
+            itens_completos = _cache_sku_loja[chave_cache]
+        else:
+            custo_por_chave: dict = {}    # (cd_empresa, cd_produto) -> custo
+            receita_por_chave: dict = {}  # (cd_empresa, cd_produto) -> receita
+
+            if meses_prontos:
+                placeholders_meses = ",".join(["%s"] * len(meses_prontos))
+
+                # Fabrica: mv_cmv_fab nao tem quebra por empresa (e um bloco
+                # so) - atribui ao codigo de fabrica pedido (so tem um
+                # selecionavel, ver EMPRESAS_CMV_DETALHADO).
+                if empresas_fabrica_pedidas:
+                    query_fab = f"""
+                        SELECT mv.idproduto AS cd_produto, ABS(SUM(mv.valor)) AS valor
+                        FROM mv_cmv_fab mv
+                        WHERE TO_CHAR(mv.data, 'YYYY-MM') IN ({placeholders_meses})
+                        GROUP BY 1
+                    """
+                    for r in execute_query(query_fab, tuple(meses_prontos)) or []:
+                        chave = (empresas_fabrica_pedidas[0], r["cd_produto"])
+                        custo_por_chave[chave] = custo_por_chave.get(chave, 0.0) + float(r["valor"] or 0)
+
+                if empresas_lojas_pedidas:
+                    placeholders_lojas = ",".join(["%s"] * len(empresas_lojas_pedidas))
+                    query_lojas = f"""
+                        SELECT c.idcentrodecusto AS cd_empresa, c.idproduto AS cd_produto, ABS(SUM(c.valor)) AS valor
+                        FROM cmv_loja_produto_cache c
+                        WHERE c.ano_mes IN ({placeholders_meses}) AND c.idcentrodecusto IN ({placeholders_lojas})
+                        GROUP BY 1, 2
+                    """
+                    for r in execute_query(query_lojas, (*meses_prontos, *empresas_lojas_pedidas)) or []:
+                        chave = (r["cd_empresa"], r["cd_produto"])
+                        custo_por_chave[chave] = custo_por_chave.get(chave, 0.0) + float(r["valor"] or 0)
+
+                placeholders_empresas = ",".join(["%s"] * len(cd_empresas))
+                query_receita = f"""
+                    SELECT r.cd_empresa, r.idproduto AS cd_produto, ABS(SUM(r.receita)) AS receita
+                    FROM receita_produto_cache r
+                    WHERE r.ano_mes IN ({placeholders_meses}) AND r.cd_empresa IN ({placeholders_empresas})
+                    GROUP BY 1, 2
+                """
+                for r in execute_query(query_receita, (*meses_prontos, *cd_empresas)) or []:
+                    chave = (r["cd_empresa"], r["cd_produto"])
+                    receita_por_chave[chave] = receita_por_chave.get(chave, 0.0) + float(r["receita"] or 0)
+
+            chaves = set(custo_por_chave) | set(receita_por_chave)
+            produtos_ids = list({cd_produto for (_, cd_produto) in chaves})
+
+            produto_info: dict = {}
+            if produtos_ids:
+                placeholders_produtos = ",".join(["%s"] * len(produtos_ids))
+                for r in execute_query(f"""
+                    SELECT cd_produto, referencia, produto, ds_cor, ds_tamanho
+                    FROM mv_prd_referencia_produto
+                    WHERE cd_produto IN ({placeholders_produtos})
+                """, tuple(produtos_ids)) or []:
+                    produto_info[r["cd_produto"]] = r
+
+            itens_completos = []
+            for chave_item in chaves:
+                cd_empresa, cd_produto = chave_item
+                custo = custo_por_chave.get(chave_item, 0.0)
+                receita = receita_por_chave.get(chave_item, 0.0)
+                # Fora quem nao tem NADA (nem custo nem receita) - pode
+                # sobrar de um produto so com custo=0 registrado.
+                if custo <= 0 and receita <= 0:
+                    continue
+                info = produto_info.get(cd_produto)
+                itens_completos.append({
+                    "cdEmpresa": cd_empresa,
+                    "loja": _nome_empresa_cmv(cd_empresa),
+                    "referencia": (info["referencia"].strip() if info and info["referencia"] else str(cd_produto)),
+                    "descricao": _nome_base_produto(info["produto"], info["ds_cor"], info["ds_tamanho"]) if info and info["produto"] else "(sem cadastro)",
+                    "cor": info["ds_cor"] if info else None,
+                    "tamanho": info["ds_tamanho"] if info else None,
+                    "cmv": custo,
+                    "vlVenda": receita,
+                    "percentualCmv": _cmv_percentual(custo, receita),
+                })
+            _cache_sku_loja[chave_cache] = itens_completos
+
+        total_itens = len(itens_completos)
+        total_paginas = max(1, -(-total_itens // porPagina))
+
+        colunas_texto = {"loja", "referencia", "descricao", "cor", "tamanho"}
+        colunas_validas = colunas_texto | {"cmv", "vlVenda", "percentualCmv"}
+        if ordenarPor not in colunas_validas:
+            raise HTTPException(status_code=400, detail=f"ordenarPor invalido: {ordenarPor}. Use uma de: {sorted(colunas_validas)}")
+
+        desc = ordem == "desc"
+
+        # Nulos (ex: percentualCmv sem venda) sempre por ultimo, em
+        # qualquer direcao - mesmo padrao ja usado no Giro.
+        def _chave_ordenacao(item):
+            v = item.get(ordenarPor)
+            if v is None:
+                return (1, 0)
+            if isinstance(v, str):
+                return (0, v)
+            return (0, -v if desc else v)
+
+        reverse_str = desc and ordenarPor in colunas_texto
+        itens_ordenados = sorted(itens_completos, key=_chave_ordenacao, reverse=reverse_str)
+
+        offset = (pagina - 1) * porPagina
+        itens_pagina = itens_ordenados[offset:offset + porPagina]
+
+        return {
+            "itens": itens_pagina,
+            "totalItens": total_itens,
+            "pagina": pagina,
+            "porPagina": porPagina,
+            "totalPaginas": total_paginas,
+            "mesesFaltantes": meses_faltantes,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[ERROR] Erro ao buscar CMV por SKU: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Erro ao buscar CMV por SKU: {str(e)}")
+
+
 @router.get("/api/cmv-detalhado/meses-cache")
 def meses_cache(
     dataInicio: str = Query(..., description="Data inicial (YYYY-MM-DD)"),
