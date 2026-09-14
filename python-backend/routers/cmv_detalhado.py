@@ -716,7 +716,8 @@ def cmv_por_sku(
     ordenarPor: str = Query("percentualCmv", description="'loja','referencia','descricao','cor','tamanho','linha','familia','cmv','vlVenda','qtdVendida','cmvUnitario','vlVendaUnitario' ou 'percentualCmv'"),
     ordem: str = Query("desc", description="'asc' ou 'desc'"),
     dimensaoFiltro: Optional[str] = Query(None, description="grupo, linha, familia, colecao, status ou continuidade - filtra so os SKUs dessa categoria (ex: clicou numa barra do grafico por dimensao)"),
-    categoriaFiltro: Optional[str] = Query(None, description="Valor da categoria (ex: 'SEM CLASSIFICACAO', 'COMBOS') - exige dimensaoFiltro junto")
+    categoriaFiltro: Optional[str] = Query(None, description="Valor da categoria (ex: 'SEM CLASSIFICACAO', 'COMBOS') - exige dimensaoFiltro junto"),
+    percentualCmvMinimo: Optional[float] = Query(None, description="So retorna SKUs com %CMV maior que esse valor (SKUs sem %CMV calculavel - sem venda - ficam de fora)")
 ):
     """
     CMV por SKU individual (nao por referencia agregada) e por loja/fabrica
@@ -884,6 +885,12 @@ def cmv_por_sku(
             if categoriaFiltro is None:
                 raise HTTPException(status_code=400, detail="categoriaFiltro e obrigatorio junto com dimensaoFiltro")
             itens_completos = [i for i in itens_completos if i["_categorias"].get(dimensaoFiltro) == categoriaFiltro]
+
+        if percentualCmvMinimo is not None:
+            # %CMV nulo (sem venda no periodo) nunca passa no filtro "maior
+            # que X" - nao da pra comparar "sem %CMV" com um numero, mesma
+            # regra ja usada no filtro de giro minimo do Giro.
+            itens_completos = [i for i in itens_completos if i["percentualCmv"] is not None and i["percentualCmv"] > percentualCmvMinimo]
 
         total_itens = len(itens_completos)
         total_paginas = max(1, -(-total_itens // porPagina))

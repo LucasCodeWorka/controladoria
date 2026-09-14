@@ -16,6 +16,7 @@ export async function GET(request: NextRequest) {
     const ordem = searchParams.get('ordem');
     const dimensaoFiltro = searchParams.get('dimensaoFiltro');
     const categoriaFiltro = searchParams.get('categoriaFiltro');
+    const percentualCmvMinimo = searchParams.get('percentualCmvMinimo');
     const params = new URLSearchParams({ dataInicio, dataFim });
     if (empresas) params.set('empresas', empresas);
     if (pagina) params.set('pagina', pagina);
@@ -24,6 +25,7 @@ export async function GET(request: NextRequest) {
     if (ordem) params.set('ordem', ordem);
     if (dimensaoFiltro) params.set('dimensaoFiltro', dimensaoFiltro);
     if (categoriaFiltro) params.set('categoriaFiltro', categoriaFiltro);
+    if (percentualCmvMinimo) params.set('percentualCmvMinimo', percentualCmvMinimo);
 
     const response = await fetch(`${PYTHON_API_URL}/api/cmv-detalhado/por-sku?${params.toString()}`, {
       method: 'GET',

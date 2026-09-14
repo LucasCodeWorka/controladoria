@@ -310,6 +310,11 @@ export default function CmvDetalhadoPage() {
   // dimensao - null = sem filtro (mostra tudo).
   const [filtroSku, setFiltroSku] = useState<{ dimensao: Dimensao; chave: string } | null>(null);
 
+  // Filtro "%CMV maior que X" - texto cru do input (permite vazio = sem
+  // filtro) ate clicar em Aplicar/Enter, mesmo padrao do "giro maior que X"
+  // do Giro.
+  const [skuPercentualMinimo, setSkuPercentualMinimo] = useState('');
+
   useEffect(() => {
     fetch('/api/cmv-detalhado/empresas', { cache: 'no-store' })
       .then((r) => r.json())
@@ -404,7 +409,8 @@ export default function CmvDetalhadoPage() {
       setSkuOrdenarPor('percentualCmv');
       setSkuOrdem('desc');
       setFiltroSku(null);
-      buscarSku(dataInicio, dataFim, empresasParam, 1, 'percentualCmv', 'desc', null);
+      setSkuPercentualMinimo('');
+      buscarSku(dataInicio, dataFim, empresasParam, 1, 'percentualCmv', 'desc', null, '');
     } catch (error) {
       console.error('Erro ao buscar resumo do CMV detalhado:', error);
       setStatusCarregamento('Erro ao buscar os dados. Tente novamente.');
@@ -422,7 +428,8 @@ export default function CmvDetalhadoPage() {
     pagina: number,
     ordenarPor: string,
     ordem: 'asc' | 'desc',
-    filtro: { dimensao: Dimensao; chave: string } | null
+    filtro: { dimensao: Dimensao; chave: string } | null,
+    percentualMinimo: string
   ) {
     setSkuCarregando(true);
     try {
@@ -438,6 +445,10 @@ export default function CmvDetalhadoPage() {
       if (filtro) {
         params.set('dimensaoFiltro', filtro.dimensao);
         params.set('categoriaFiltro', filtro.chave);
+      }
+      const percentualNum = Number(percentualMinimo.trim().replace(',', '.'));
+      if (percentualMinimo.trim() !== '' && !Number.isNaN(percentualNum)) {
+        params.set('percentualCmvMinimo', String(percentualNum));
       }
       const response = await fetch(`/api/cmv-detalhado/por-sku?${params.toString()}`, { cache: 'no-store' });
       const data = await response.json();
@@ -456,7 +467,7 @@ export default function CmvDetalhadoPage() {
 
   function trocarPaginaSku(novaPagina: number) {
     const empresasParam = Array.from(empresasSelecionadas).join(',');
-    buscarSku(dataInicio, dataFim, empresasParam, novaPagina, skuOrdenarPor, skuOrdem, filtroSku);
+    buscarSku(dataInicio, dataFim, empresasParam, novaPagina, skuOrdenarPor, skuOrdem, filtroSku, skuPercentualMinimo);
   }
 
   // Clicar numa coluna ja ordenada inverte o sentido; numa coluna nova,
@@ -467,7 +478,7 @@ export default function CmvDetalhadoPage() {
     setSkuOrdenarPor(coluna);
     setSkuOrdem(novoOrdem);
     const empresasParam = Array.from(empresasSelecionadas).join(',');
-    buscarSku(dataInicio, dataFim, empresasParam, 1, coluna, novoOrdem, filtroSku);
+    buscarSku(dataInicio, dataFim, empresasParam, 1, coluna, novoOrdem, filtroSku, skuPercentualMinimo);
   }
 
   function indicadorSkuOrdenacao(coluna: string): string {
@@ -484,13 +495,26 @@ export default function CmvDetalhadoPage() {
     const mesmoFiltro = filtroSku && filtroSku.dimensao === dimensao && filtroSku.chave === chaveTexto;
     const novoFiltro = mesmoFiltro ? null : { dimensao, chave: chaveTexto };
     setFiltroSku(novoFiltro);
-    buscarSku(dataInicio, dataFim, empresasParam, 1, skuOrdenarPor, skuOrdem, novoFiltro);
+    buscarSku(dataInicio, dataFim, empresasParam, 1, skuOrdenarPor, skuOrdem, novoFiltro, skuPercentualMinimo);
   }
 
   function limparFiltroSku() {
     setFiltroSku(null);
     const empresasParam = Array.from(empresasSelecionadas).join(',');
-    buscarSku(dataInicio, dataFim, empresasParam, 1, skuOrdenarPor, skuOrdem, null);
+    buscarSku(dataInicio, dataFim, empresasParam, 1, skuOrdenarPor, skuOrdem, null, skuPercentualMinimo);
+  }
+
+  // Filtro "%CMV maior que X" - aplica sem mexer no filtro de categoria
+  // (clique na barra), os dois valem juntos.
+  function aplicarFiltroPercentualCmv() {
+    const empresasParam = Array.from(empresasSelecionadas).join(',');
+    buscarSku(dataInicio, dataFim, empresasParam, 1, skuOrdenarPor, skuOrdem, filtroSku, skuPercentualMinimo);
+  }
+
+  function limparFiltroPercentualCmv() {
+    setSkuPercentualMinimo('');
+    const empresasParam = Array.from(empresasSelecionadas).join(',');
+    buscarSku(dataInicio, dataFim, empresasParam, 1, skuOrdenarPor, skuOrdem, filtroSku, '');
   }
 
   async function calcularMesesFaltantes() {
@@ -737,6 +761,36 @@ export default function CmvDetalhadoPage() {
           </div>
 
           <div className="bg-white rounded-lg shadow-lg overflow-hidden">
+            <div className="px-4 pt-3 flex items-center gap-2 text-sm flex-wrap">
+              <label htmlFor="cmv-minimo" className="text-gray-600">%CMV maior que:</label>
+              <input
+                id="cmv-minimo"
+                type="number"
+                step="0.01"
+                min="0"
+                placeholder="ex: 50"
+                value={skuPercentualMinimo}
+                onChange={(e) => setSkuPercentualMinimo(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') aplicarFiltroPercentualCmv(); }}
+                className="w-24 border border-gray-300 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-rose-500"
+              />
+              <button
+                onClick={aplicarFiltroPercentualCmv}
+                disabled={skuCarregando}
+                className="px-3 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md text-xs disabled:opacity-40 transition-colors"
+              >
+                Aplicar
+              </button>
+              {skuPercentualMinimo.trim() !== '' && (
+                <button
+                  onClick={limparFiltroPercentualCmv}
+                  disabled={skuCarregando}
+                  className="text-xs text-gray-400 hover:text-gray-600 underline disabled:opacity-40"
+                >
+                  Limpar
+                </button>
+              )}
+            </div>
             <div className="p-4 pb-2 flex items-center justify-between flex-wrap gap-3">
               <div>
                 <h2 className="text-base font-semibold text-gray-800">CMV por SKU</h2>
