@@ -241,7 +241,12 @@ _QUERY_CMV_LOJA_PRODUTO_MES = """
                     )
             END AS valor_unitario
         FROM base b
-        WHERE b.idmarca IS NOT NULL AND b.idmarca <> ''
+        -- Sem filtro de idmarca aqui de proposito: produto sem marca
+        -- cadastrada (idmarca NULL) cai no ELSE do CASE acima (mesma regra
+        -- de custo usada pra qualquer marca "terceiros", com o mesmo
+        -- fallback pra 21.9) em vez de ficar de fora do calculo - antes,
+        -- esses produtos vendiam (tinham receita) mas nunca tinham custo
+        -- calculado, aparecendo com CMV zerado na tela.
     )
     SELECT idcentrodecusto, idproduto,
         SUM(qt_solicitada * valor_unitario * CASE WHEN tp_operacao::text = 'S' THEN -1 ELSE 1 END
@@ -708,7 +713,7 @@ def cmv_por_sku(
     empresas: Optional[str] = Query(None, description="Lista de cd_empresa separados por virgula (default: todas)"),
     pagina: int = Query(1, ge=1, description="Pagina (comeca em 1)"),
     porPagina: int = Query(50, ge=1, le=200, description="Itens por pagina"),
-    ordenarPor: str = Query("percentualCmv", description="'loja','referencia','descricao','cor','tamanho','cmv','vlVenda' ou 'percentualCmv'"),
+    ordenarPor: str = Query("percentualCmv", description="'loja','referencia','descricao','cor','tamanho','linha','familia','cmv','vlVenda','qtdVendida','cmvUnitario','vlVendaUnitario' ou 'percentualCmv'"),
     ordem: str = Query("desc", description="'asc' ou 'desc'"),
     dimensaoFiltro: Optional[str] = Query(None, description="grupo, linha, familia, colecao, status ou continuidade - filtra so os SKUs dessa categoria (ex: clicou numa barra do grafico por dimensao)"),
     categoriaFiltro: Optional[str] = Query(None, description="Valor da categoria (ex: 'SEM CLASSIFICACAO', 'COMBOS') - exige dimensaoFiltro junto")
@@ -743,6 +748,7 @@ def cmv_por_sku(
         else:
             custo_por_chave: dict = {}    # (cd_empresa, cd_produto) -> custo
             receita_por_chave: dict = {}  # (cd_empresa, cd_produto) -> receita
+            qtd_por_chave: dict = {}      # (cd_empresa, cd_produto) -> quantidade vendida
 
             if meses_prontos:
                 placeholders_meses = ",".join(["%s"] * len(meses_prontos))
@@ -784,6 +790,33 @@ def cmv_por_sku(
                     chave = (r["cd_empresa"], r["cd_produto"])
                     receita_por_chave[chave] = receita_por_chave.get(chave, 0.0) + float(r["receita"] or 0)
 
+                # Quantidade vendida - nao vem cacheada em nenhuma das duas
+                # tabelas (so os valores em R$), entao busca ao vivo direto
+                # das transacoes - mesma regra de modalidade/operacao ja
+                # usada pra CMV e receita (bate com os dois). So pro
+                # periodo/empresas pedidos, e cacheada junto com o resto em
+                # _cache_sku_loja (custo de buscar so na primeira vez).
+                query_qtd = f"""
+                    SELECT t.cd_empresa, i.cd_produto AS idproduto,
+                        SUM(
+                            CASE
+                                WHEN t.tp_modalidade::text IN ('4','8') AND t.tp_operacao::text = 'S' THEN i.qt_solicitada
+                                WHEN t.tp_modalidade::text = '3' AND t.tp_operacao::text = 'E' THEN -i.qt_solicitada
+                                ELSE 0
+                            END
+                        ) AS qt_vendida
+                    FROM vr_tra_transacao t
+                    JOIN vr_tra_transitem i ON t.nr_transacao = i.nr_transacao AND t.cd_empresa = i.cd_empresa
+                    WHERE t.tp_situacao = 4
+                      AND t.cd_empresa IN ({placeholders_empresas})
+                      AND TO_CHAR(t.dt_transacao, 'YYYY-MM') IN ({placeholders_meses})
+                      AND ((t.tp_modalidade::text IN ('4','8') AND t.tp_operacao::text = 'S') OR (t.tp_modalidade::text = '3' AND t.tp_operacao::text = 'E'))
+                    GROUP BY 1, 2
+                """
+                for r in execute_query(query_qtd, (*cd_empresas, *meses_prontos)) or []:
+                    chave = (r["cd_empresa"], r["idproduto"])
+                    qtd_por_chave[chave] = qtd_por_chave.get(chave, 0.0) + float(r["qt_vendida"] or 0)
+
             chaves = set(custo_por_chave) | set(receita_por_chave)
             produtos_ids = list({cd_produto for (_, cd_produto) in chaves})
 
@@ -807,6 +840,7 @@ def cmv_por_sku(
                 # sobrar de um produto so com custo=0 registrado.
                 if custo <= 0 and receita <= 0:
                     continue
+                qtd = qtd_por_chave.get(chave_item, 0.0)
                 info = produto_info.get(cd_produto)
                 referencia = (info["referencia"].strip() if info and info["referencia"] else str(cd_produto))
                 # Categoria de cada dimensao, pro filtro por clique no
@@ -828,8 +862,17 @@ def cmv_por_sku(
                     "descricao": _nome_base_produto(info["produto"], info["ds_cor"], info["ds_tamanho"]) if info and info["produto"] else "(sem cadastro)",
                     "cor": info["ds_cor"] if info else None,
                     "tamanho": info["ds_tamanho"] if info else None,
+                    "linha": categorias.get("linha"),
+                    "familia": categorias.get("familia"),
                     "cmv": custo,
                     "vlVenda": receita,
+                    "qtdVendida": qtd,
+                    # Unitario = total / quantidade - None quando a
+                    # quantidade liquida do periodo e zero (ex: venda e
+                    # devolucao se cancelando exatamente), pra nao dividir
+                    # por zero nem mostrar um numero sem sentido.
+                    "cmvUnitario": (custo / qtd) if qtd > 0 else None,
+                    "vlVendaUnitario": (receita / qtd) if qtd > 0 else None,
                     "percentualCmv": _cmv_percentual(custo, receita),
                     "_categorias": categorias,
                 })
@@ -845,8 +888,8 @@ def cmv_por_sku(
         total_itens = len(itens_completos)
         total_paginas = max(1, -(-total_itens // porPagina))
 
-        colunas_texto = {"loja", "referencia", "descricao", "cor", "tamanho"}
-        colunas_validas = colunas_texto | {"cmv", "vlVenda", "percentualCmv"}
+        colunas_texto = {"loja", "referencia", "descricao", "cor", "tamanho", "linha", "familia"}
+        colunas_validas = colunas_texto | {"cmv", "vlVenda", "qtdVendida", "cmvUnitario", "vlVendaUnitario", "percentualCmv"}
         if ordenarPor not in colunas_validas:
             raise HTTPException(status_code=400, detail=f"ordenarPor invalido: {ordenarPor}. Use uma de: {sorted(colunas_validas)}")
 

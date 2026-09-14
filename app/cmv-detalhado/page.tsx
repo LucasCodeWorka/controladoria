@@ -85,8 +85,13 @@ interface ItemCmvSku {
   descricao: string;
   cor: string | null;
   tamanho: string | null;
+  linha: string | null;
+  familia: string | null;
   cmv: number;
   vlVenda: number;
+  qtdVendida: number;
+  cmvUnitario: number | null;
+  vlVendaUnitario: number | null;
   percentualCmv: number | null;
 }
 
@@ -129,6 +134,15 @@ function formatarPct(valor: number | null): string {
 
 function nomeCurto(nome: string): string {
   return nome.length > 12 ? `${nome.slice(0, 11)}…` : nome;
+}
+
+function formatarQtd(valor: number): string {
+  return valor.toLocaleString('pt-BR', { maximumFractionDigits: 0 });
+}
+
+function formatarValorOuTraco(valor: number | null): string {
+  if (valor === null) return '-';
+  return formatarValor(valor);
 }
 
 // Corte maior que nomeCurto, pra categorias de dimensao (status/familia/...)
@@ -779,17 +793,17 @@ export default function CmvDetalhadoPage() {
                 <table className="w-full text-sm">
                   <thead className="bg-gray-50 border-b border-gray-200">
                     <tr>
-                      <th className="text-left px-4 py-2 font-medium text-gray-600 whitespace-nowrap">
+                      <th className="text-left px-4 py-2 font-medium text-gray-600 whitespace-nowrap sticky left-0 bg-gray-50 z-10">
                         <button onClick={() => ordenarSkuPor('loja')} className="flex items-center gap-1 hover:text-gray-900">
                           Loja{indicadorSkuOrdenacao('loja')}
                         </button>
                       </th>
-                      <th className="text-left px-4 py-2 font-medium text-gray-600 whitespace-nowrap">
+                      <th className="text-left px-4 py-2 font-medium text-gray-600 whitespace-nowrap sticky left-[92px] bg-gray-50 z-10">
                         <button onClick={() => ordenarSkuPor('referencia')} className="flex items-center gap-1 hover:text-gray-900">
                           Referência{indicadorSkuOrdenacao('referencia')}
                         </button>
                       </th>
-                      <th className="text-left px-4 py-2 font-medium text-gray-600 min-w-[220px]">
+                      <th className="text-left px-4 py-2 font-medium text-gray-600 min-w-[200px]">
                         <button onClick={() => ordenarSkuPor('descricao')} className="flex items-center gap-1 hover:text-gray-900">
                           Descrição{indicadorSkuOrdenacao('descricao')}
                         </button>
@@ -804,9 +818,34 @@ export default function CmvDetalhadoPage() {
                           Tamanho{indicadorSkuOrdenacao('tamanho')}
                         </button>
                       </th>
+                      <th className="text-left px-3 py-2 font-medium text-gray-600 whitespace-nowrap">
+                        <button onClick={() => ordenarSkuPor('linha')} className="flex items-center gap-1 hover:text-gray-900">
+                          Linha{indicadorSkuOrdenacao('linha')}
+                        </button>
+                      </th>
+                      <th className="text-left px-3 py-2 font-medium text-gray-600 whitespace-nowrap">
+                        <button onClick={() => ordenarSkuPor('familia')} className="flex items-center gap-1 hover:text-gray-900">
+                          Família{indicadorSkuOrdenacao('familia')}
+                        </button>
+                      </th>
+                      <th className="text-right px-3 py-2 font-medium text-gray-600 whitespace-nowrap">
+                        <button onClick={() => ordenarSkuPor('qtdVendida')} className="flex items-center gap-1 ml-auto hover:text-gray-900">
+                          Qtd{indicadorSkuOrdenacao('qtdVendida')}
+                        </button>
+                      </th>
+                      <th className="text-right px-3 py-2 font-medium text-blue-700 bg-blue-50/60 whitespace-nowrap">
+                        <button onClick={() => ordenarSkuPor('cmvUnitario')} className="flex items-center gap-1 ml-auto hover:text-blue-900">
+                          CMV Unit.{indicadorSkuOrdenacao('cmvUnitario')}
+                        </button>
+                      </th>
                       <th className="text-right px-3 py-2 font-medium text-gray-600 whitespace-nowrap">
                         <button onClick={() => ordenarSkuPor('cmv')} className="flex items-center gap-1 ml-auto hover:text-gray-900">
                           CMV{indicadorSkuOrdenacao('cmv')}
+                        </button>
+                      </th>
+                      <th className="text-right px-3 py-2 font-medium text-blue-700 bg-blue-50/60 whitespace-nowrap">
+                        <button onClick={() => ordenarSkuPor('vlVendaUnitario')} className="flex items-center gap-1 ml-auto hover:text-blue-900">
+                          Venda Unit.{indicadorSkuOrdenacao('vlVendaUnitario')}
                         </button>
                       </th>
                       <th className="text-right px-3 py-2 font-medium text-gray-600 whitespace-nowrap">
@@ -822,18 +861,26 @@ export default function CmvDetalhadoPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {skuDados.itens.map((item, idx) => (
-                      <tr key={`${item.cdEmpresa}-${item.referencia}-${item.cor}-${item.tamanho}-${idx}`} className={`${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'} hover:bg-rose-50 transition-colors`}>
-                        <td className="px-4 py-2 text-gray-500 whitespace-nowrap">{item.loja}</td>
-                        <td className="px-4 py-2 text-gray-500 whitespace-nowrap">{item.referencia}</td>
-                        <td className="px-4 py-2 text-gray-800">{item.descricao}</td>
-                        <td className="px-3 py-2 text-gray-600 whitespace-nowrap">{item.cor || '-'}</td>
-                        <td className="px-3 py-2 text-gray-600 whitespace-nowrap">{item.tamanho || '-'}</td>
-                        <td className="px-3 py-2 text-right text-gray-700 whitespace-nowrap">{formatarValor(item.cmv)}</td>
-                        <td className="px-3 py-2 text-right text-gray-700 whitespace-nowrap">{formatarValor(item.vlVenda)}</td>
-                        <td className="px-4 py-2 text-right font-semibold text-gray-900 bg-gray-50 whitespace-nowrap">{formatarPct(item.percentualCmv)}</td>
-                      </tr>
-                    ))}
+                    {skuDados.itens.map((item, idx) => {
+                      const corFundo = idx % 2 === 0 ? 'bg-white' : 'bg-gray-50';
+                      return (
+                        <tr key={`${item.cdEmpresa}-${item.referencia}-${item.cor}-${item.tamanho}-${idx}`} className={`${corFundo} hover:bg-rose-50 transition-colors`}>
+                          <td className={`px-4 py-2 text-gray-500 whitespace-nowrap sticky left-0 z-10 ${corFundo}`}>{item.loja}</td>
+                          <td className={`px-4 py-2 text-gray-500 whitespace-nowrap sticky left-[92px] z-10 ${corFundo}`}>{item.referencia}</td>
+                          <td className="px-4 py-2 text-gray-800">{item.descricao}</td>
+                          <td className="px-3 py-2 text-gray-600 whitespace-nowrap">{item.cor || '-'}</td>
+                          <td className="px-3 py-2 text-gray-600 whitespace-nowrap">{item.tamanho || '-'}</td>
+                          <td className="px-3 py-2 text-gray-600 whitespace-nowrap">{item.linha || '-'}</td>
+                          <td className="px-3 py-2 text-gray-600 whitespace-nowrap">{item.familia || '-'}</td>
+                          <td className="px-3 py-2 text-right text-gray-700 whitespace-nowrap">{formatarQtd(item.qtdVendida)}</td>
+                          <td className="px-3 py-2 text-right text-blue-900 bg-blue-50/30 whitespace-nowrap">{formatarValorOuTraco(item.cmvUnitario)}</td>
+                          <td className="px-3 py-2 text-right text-gray-700 whitespace-nowrap">{formatarValor(item.cmv)}</td>
+                          <td className="px-3 py-2 text-right text-blue-900 bg-blue-50/30 whitespace-nowrap">{formatarValorOuTraco(item.vlVendaUnitario)}</td>
+                          <td className="px-3 py-2 text-right text-gray-700 whitespace-nowrap">{formatarValor(item.vlVenda)}</td>
+                          <td className="px-4 py-2 text-right font-semibold text-gray-900 bg-gray-50 whitespace-nowrap">{formatarPct(item.percentualCmv)}</td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
