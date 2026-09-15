@@ -1150,6 +1150,28 @@ def get_dre_por_empresa(
             devolucoes_brutas[emp_key] = devolucoes_brutas.get(emp_key, 0) + valor
         _merge_valores_empresa('02.01.03', devolucoes_brutas)
 
+        # RECEITA DE FRETE (01.02.01) - repasse de frete cobrado do cliente,
+        # via nota fiscal (vr_fis_nf), nao via vr_tra_transacao - mesma
+        # consulta do /api/dre/unificada. So existe pro e-commerce
+        # (cd_empfat=120), entao so calcula quando 120 esta no escopo.
+        if 120 in empresas_dre:
+            receita_frete = _init_valores_empresa()
+            query_frete = """
+                SELECT COALESCE(SUM(vl_frete), 0) AS valor
+                FROM public.vr_fis_nf
+                WHERE cd_empfat = '120'
+                  AND tp_situacaonf = 'E'
+                  AND tp_operacao = 'S'
+                  AND tp_modalidade = '4'
+                  AND dt_emissao >= %s
+                  AND dt_emissao <= %s
+                  AND tp_frete = '2'
+            """
+            result_frete = execute_query(query_frete, (dataInicio, dataFim))
+            if result_frete:
+                receita_frete['120'] = float(result_frete[0]['valor'] or 0)
+            _merge_valores_empresa('01.02.01', receita_frete)
+
         # =====================================================================
         # CMV - Mesma lógica da analítica
         # =====================================================================
@@ -2876,6 +2898,13 @@ def _calcular_valores_unificada(
                 raise HTTPException(status_code=400, detail="Nenhuma loja valida selecionada")
 
             ccustos = ccustos_lojas
+            # Ccusto 49 nao tem "empresa propria" - despesas dele (ex: DIFAL
+            # GNRE) sempre caem no ecommerce (120), mesma regra ja usada em
+            # _agrupar_ccusto_dre_por_empresa/DRE Por Empresa. So inclui o 49
+            # quando o 120 estiver no filtro, pra nao ficar faltando essas
+            # despesas so nessa tela.
+            if CCUSTO_ECOMMERCE_AGRUPADO in ccustos:
+                ccustos = list(set(ccustos) | set(CCUSTOS_ECOMMERCE))
             nome_filtro = f"{len(ccustos_lojas)} LOJAS"
             tipo_filtro = "loja"
             usar_cmv_fab = False
@@ -2886,6 +2915,9 @@ def _calcular_valores_unificada(
                 cd_ccusto = int(filtro)
                 if cd_ccusto in CCUSTOS_LOJAS:
                     ccustos = [cd_ccusto]
+                    # Idem: 49 sempre junto do 120 (ver comentario acima).
+                    if cd_ccusto == CCUSTO_ECOMMERCE_AGRUPADO:
+                        ccustos = list(CCUSTOS_ECOMMERCE)
                     nome_filtro = CCUSTOS_LOJAS[cd_ccusto]
                     tipo_filtro = "loja"
                     usar_cmv_fab = False
@@ -4044,7 +4076,10 @@ def get_dre_unificada_sintetico(
 
         incluir_fabrica = filtro in ("consolidado", "fabrica")
         lojas_filtradas = list(CCUSTOS_LOJAS.keys()) if filtro == "consolidado" else []
-        ccustos_extras_sintetico = [49, 515] if filtro == "consolidado" else []
+        # Ccusto 49 NAO entra aqui - ele nao tem "empresa propria" (despesas
+        # como DIFAL GNRE), sempre cai junto do ecommerce (120), somado no
+        # item da loja 120 mais abaixo. So diretoria (515) fica em "outros".
+        ccustos_extras_sintetico = [515] if filtro == "consolidado" else []
         if filtro not in ("consolidado", "fabrica"):
             try:
                 lojas_solicitadas = [int(item.strip()) for item in filtro.split(",") if item.strip()]
@@ -4142,17 +4177,22 @@ def get_dre_unificada_sintetico(
 
         # Adicionar cada loja
         for cd_ccusto in sorted(lojas_filtradas):
+            # Ccusto 49 (sem empresa propria) sempre junto do ecommerce
+            # (120) - mesma regra do /api/dre/unificada e do Por Empresa.
+            ccustos_item = [cd_ccusto]
+            if cd_ccusto == CCUSTO_ECOMMERCE_AGRUPADO:
+                ccustos_item = list(CCUSTOS_ECOMMERCE)
             todos_ccustos.append({
                 "codigo": str(cd_ccusto),
                 "nome": CCUSTOS_LOJAS[cd_ccusto],
-                "ccustos": [cd_ccusto],
+                "ccustos": ccustos_item,
                 "tipo": "loja"
             })
 
         if ccustos_extras_sintetico:
             todos_ccustos.append({
                 "codigo": "outros",
-                "nome": "ECOMMERCE / DIRETORIA",
+                "nome": "DIRETORIA",
                 "ccustos": ccustos_extras_sintetico,
                 "tipo": "outros"
             })
@@ -4298,6 +4338,12 @@ def get_dre_unificada_sintetico(
                 ccustos_despesas.extend(CCUSTOS_FABRICA)
             ccustos_despesas.extend(lojas_filtradas)
             ccustos_despesas.extend(ccustos_extras_sintetico)
+            # Ccusto 49 nao entra em lojas_filtradas nem em
+            # ccustos_extras_sintetico (ver comentario mais acima) - busca
+            # junto quando 120 esta no escopo, pra nao ficar de fora so nas
+            # janelas de 3/6/12 meses.
+            if CCUSTO_ECOMMERCE_AGRUPADO in lojas_filtradas:
+                ccustos_despesas.append(49)
             ccustos_despesas = list(set(ccustos_despesas))
             if not ccustos_despesas:
                 return {}, {}, {}
@@ -4335,6 +4381,8 @@ def get_dre_unificada_sintetico(
                     codigo_item = "fabrica"
                 elif cd_ccusto in CCUSTOS_LOJAS:
                     codigo_item = str(cd_ccusto)
+                elif cd_ccusto == 49:
+                    codigo_item = str(CCUSTO_ECOMMERCE_AGRUPADO)  # sempre junto do 120
                 elif cd_ccusto in ccustos_extras_sintetico:
                     codigo_item = "outros"
                 else:
@@ -4432,6 +4480,10 @@ def get_dre_unificada_sintetico(
             "resultadoNaoOperacional": 0,
             "despesasFinanceiras": 0,
             "despesasTributarias": 0,
+            "receitaFrete": 0,
+            "creditoInadimplencia": 0,
+            "debitoInadimplencia": 0,
+            "resultadoInadimplencia": 0,
             # Despesas detalhadas
             "despOcupacao": 0,
             "despAdministrativas": 0,
@@ -4553,7 +4605,11 @@ def get_dre_unificada_sintetico(
             elif item["tipo"] == "outros":
                 empresas_filtro = []
             else:
-                empresas_filtro = [c for c in ccustos if c not in EMPRESAS_EXCLUIDAS]
+                # 49 fica de fora daqui (vendas/devolucoes/inadimplencia) -
+                # ele nao tem venda propria em vr_tra_transacao, so despesa
+                # (a query de despesas la em cima ja usa "ccustos" com 49
+                # incluso). Mesma regra do /api/dre/por-empresa.
+                empresas_filtro = [c for c in ccustos if c not in EMPRESAS_EXCLUIDAS and c != 49]
 
             if empresas_filtro:
                 empresa_placeholders = ",".join(["%s"] * len(empresas_filtro))
@@ -4588,6 +4644,45 @@ def get_dre_unificada_sintetico(
                 if result_devolucoes:
                     devolucoes = abs(float(result_devolucoes[0]['devolucoes'] or 0))
 
+            # RECEITA DE FRETE (01.02.01) - repasse de frete cobrado do
+            # cliente, via nota fiscal (vr_fis_nf), nao via vr_tra_transacao -
+            # mesma consulta do /api/dre/unificada. So existe pro e-commerce
+            # (cd_empfat=120), entao so calcula quando 120 esta no escopo
+            # deste item (a loja "ECOMMERCE" em si, ou um filtro que a inclua).
+            receita_frete = 0.0
+            if 120 in ccustos:
+                query_frete = """
+                    SELECT COALESCE(SUM(vl_frete), 0) AS valor
+                    FROM public.vr_fis_nf
+                    WHERE cd_empfat = '120'
+                      AND tp_situacaonf = 'E'
+                      AND tp_operacao = 'S'
+                      AND tp_modalidade = '4'
+                      AND dt_emissao >= %s
+                      AND dt_emissao <= %s
+                      AND tp_frete = '2'
+                """
+                result_frete = execute_query(query_frete, (dataInicio, dataFim))
+                if result_frete:
+                    receita_frete = float(result_frete[0]['valor'] or 0)
+            receita_bruta += receita_frete
+
+            # CREDITO/DEBITO INADIMPLENCIA (10.01.04 / 10.03.07) - faturas
+            # vencidas ha mais de 365 dias, via vr_fcr_faturai (contas a
+            # receber) - mesmas funcoes usadas no /api/dre/unificada e
+            # /api/dre/por-empresa. Fabrica usa EMPRESAS_FABRICA (a
+            # cd_empresa da fatura, nao os ccustos internos 500-514); loja e
+            # "outros" usam o proprio codigo do ccusto (mesmo numero da
+            # cd_empresa, convencao ja usada no resto desta tela).
+            empresas_inadimplencia = EMPRESAS_FABRICA if item["tipo"] == "fabrica" else ccustos
+            credito_inadimplencia_item = sum(
+                linha['valor'] for linha in _buscar_credito_inadimplencia(dataInicio, dataFim, empresas_inadimplencia)
+            )
+            debito_inadimplencia_item = abs(sum(
+                linha['valor'] for linha in _buscar_debito_inadimplencia(dataInicio, dataFim, empresas_inadimplencia)
+            ))
+            resultado_inadimplencia = credito_inadimplencia_item - debito_inadimplencia_item
+
             # CMV - usar os valores pre-calculados (mesma logica do analitico)
             if item["tipo"] == "fabrica":
                 cmv = cmv_fabrica_total
@@ -4604,7 +4699,7 @@ def get_dre_unificada_sintetico(
             margem_contribuicao = receita_liquida - custos_variaveis
             lucro_operacional_bruto = margem_contribuicao - custos_fixos
             ebitda = lucro_operacional_bruto - despesas_operacionais
-            lucro_liquido = ebitda - despesas_financeiras - despesas_tributarias
+            lucro_liquido = ebitda - despesas_financeiras - despesas_tributarias + resultado_inadimplencia
 
             margem_pct = (margem_contribuicao / receita_liquida * 100) if receita_liquida > 0 else 0
             ebitda_pct = (ebitda / receita_liquida * 100) if receita_liquida > 0 else 0
@@ -4614,6 +4709,7 @@ def get_dre_unificada_sintetico(
                 "nome": item["nome"],
                 "tipo": item["tipo"],
                 "receitaBruta": receita_bruta,
+                "receitaFrete": receita_frete,
                 "devolucoes": devolucoes_total,
                 "receitaLiquida": receita_liquida,
                 "cmv": custos_variaveis,
@@ -4630,6 +4726,9 @@ def get_dre_unificada_sintetico(
                 "resultadoNaoOperacional": despesas_financeiras,
                 "despesasFinanceiras": despesas_financeiras,
                 "despesasTributarias": despesas_tributarias,
+                "creditoInadimplencia": credito_inadimplencia_item,
+                "debitoInadimplencia": debito_inadimplencia_item,
+                "resultadoInadimplencia": resultado_inadimplencia,
                 # Despesas detalhadas
                 "despOcupacao": desp_ocupacao,
                 "despAdministrativas": desp_administrativas,
@@ -4666,6 +4765,10 @@ def get_dre_unificada_sintetico(
             totais["resultadoNaoOperacional"] += despesas_financeiras
             totais["despesasFinanceiras"] += despesas_financeiras
             totais["despesasTributarias"] += despesas_tributarias
+            totais["receitaFrete"] += receita_frete
+            totais["creditoInadimplencia"] += credito_inadimplencia_item
+            totais["debitoInadimplencia"] += debito_inadimplencia_item
+            totais["resultadoInadimplencia"] += resultado_inadimplencia
             # Despesas detalhadas
             totais["despOcupacao"] += desp_ocupacao
             totais["despAdministrativas"] += desp_administrativas
