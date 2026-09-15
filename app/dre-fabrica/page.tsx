@@ -29,8 +29,10 @@ import {
   EyeOff,
   Sparkles,
   ShoppingCart,
+  Download,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
+import * as XLSX from 'xlsx';
 
 import { PLANO_CONTAS_DRE_FABRICA, type ContaDRE } from './planoContasDREFabrica';
 import { formatarValor } from '../utils/formatters';
@@ -1074,6 +1076,86 @@ export default function DREPage() {
     if (!dataStr) return '-';
     const [ano, mes, dia] = dataStr.split('T')[0].split('-');
     return `${dia}/${mes}/${ano}`;
+  }
+
+  // Achata a arvore de contas (mesma logica de achatarContas do
+  // dreCalculos.ts, so que preservando nivel/tipo/pendente - precisa disso
+  // pra reconstruir a indentacao e o agrupamento por quebra no Excel) -
+  // exporta a mesma lista que esta na tela (dadosAnaliticaExibicao ja
+  // aplica os filtros de Extras/despesa/alerta).
+  function achatarParaExportacao(
+    contas: ContaDREValores[]
+  ): { codigo: string; nome: string; nivel: number; tipo: string; pendente?: boolean; total: number; valores: Record<string, number> }[] {
+    const linhas: { codigo: string; nome: string; nivel: number; tipo: string; pendente?: boolean; total: number; valores: Record<string, number> }[] = [];
+    for (const conta of contas) {
+      linhas.push({
+        codigo: conta.codigoExibicao || conta.codigo,
+        nome: nomesCustomizados[conta.codigo] ?? conta.nome,
+        nivel: conta.nivel,
+        tipo: conta.tipo,
+        pendente: conta.pendente,
+        total: conta.total,
+        valores: conta.valores,
+      });
+      if (conta.filhos?.length) {
+        linhas.push(...achatarParaExportacao(conta.filhos));
+      }
+    }
+    return linhas;
+  }
+
+  // Exporta a DRE Analitica pra Excel com as "quebras" da hierarquia de
+  // contas (01, 02, 03=subtotal, 04, 05=subtotal...) preservadas como
+  // grupos de linha recolhiveis nativos do Excel (Dados > Agrupar/
+  // Esboco) - abre com tudo expandido, mas da pra clicar no "-" a
+  // esquerda pra recolher ate o nivel de subtotal que quiser, igual a
+  // tela. Numeros vao como numero de verdade (nao texto), com formato
+  // de moeda, pra dar pra somar/whatever direto no Excel.
+  function exportarAnaliticaExcel() {
+    const linhas = achatarParaExportacao(dadosAnaliticaExibicao);
+    if (linhas.length === 0) return;
+
+    const cabecalho = ['Código', 'Conta', ...periodos.map((p) => p.label), 'Total'];
+    const corpo = linhas.map((l) => [
+      l.codigo,
+      `${'  '.repeat(Math.max(0, l.nivel - 1))}${l.nome}${l.pendente ? ' (PENDENTE)' : ''}`,
+      ...periodos.map((p) => l.valores[p.key] || 0),
+      l.total,
+    ]);
+
+    const ws = XLSX.utils.aoa_to_sheet([cabecalho, ...corpo]);
+
+    // Formato numerico (moeda) nas colunas de valor - da coluna C em
+    // diante (A=Codigo, B=Conta).
+    const numFmt = '#,##0.00;[Red]-#,##0.00';
+    for (let r = 0; r < corpo.length; r++) {
+      for (let c = 2; c < cabecalho.length; c++) {
+        const endereco = XLSX.utils.encode_cell({ r: r + 1, c });
+        if (ws[endereco]) ws[endereco].z = numFmt;
+      }
+    }
+
+    // Agrupamento por nivel (esboco do Excel) - nivel 1 fica sempre
+    // visivel (sao os subtotais principais), do 2 em diante vira grupo
+    // recolhivel. outlineLevel do Excel comeca em 0. "!rows" e indexado
+    // pela linha da PLANILHA (0 = cabecalho), entao a linha 0 precisa
+    // ficar sem nivel - senao os niveis saem desalinhados 1 linha pra
+    // cima (bug pego testando: cabecalho herdava o nivel da 1a conta).
+    ws['!rows'] = [{}, ...linhas.map((l) => ({ level: Math.max(0, l.nivel - 1) }))];
+    ws['!outline'] = { above: false, left: false };
+
+    ws['!cols'] = [
+      { wch: 10 },
+      { wch: 42 },
+      ...periodos.map(() => ({ wch: 14 })),
+      { wch: 16 },
+    ];
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'DRE Analítica');
+
+    const nomeArquivo = `DRE_Analitica_${filtroLabel.replace(/[^a-zA-Z0-9]+/g, '_')}_${dataInicio}_a_${dataFim}.xlsx`;
+    XLSX.writeFile(wb, nomeArquivo);
   }
 
   // Atalhos de periodo (Mes Anterior/Atual/Ultimos N Meses/Ano Atual/2025)
@@ -2162,6 +2244,15 @@ export default function DREPage() {
                 Só com problema
               </button>
               <div className="w-px h-6 bg-gray-300 mx-2" />
+              <button
+                onClick={exportarAnaliticaExcel}
+                disabled={!consultaExecutada || dadosAnaliticaExibicao.length === 0}
+                title="Exportar essa visão para Excel, com as quebras da hierarquia de contas agrupadas (recolhíveis)"
+                className="flex items-center gap-2 px-3 py-2 rounded-md bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                <Download className="w-4 h-4" />
+                Exportar Excel
+              </button>
               <button
                 onClick={gerarAnaliseExecutiva}
                 disabled={!consultaExecutada || dadosDRE.length === 0}
