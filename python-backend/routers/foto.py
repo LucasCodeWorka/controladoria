@@ -31,15 +31,6 @@ _TIMEOUT_SEGUNDOS = 5  # loja lenta/fora do ar nao pode travar nossa tela
 _cache_foto: dict = {}
 
 
-def _redimensionar(url: str) -> str:
-    """A VTEX devolve a imagem original em alta resolucao (.../ids/{id}-
-    {largura}-{altura}/arquivo.jpg) - troca pra uma versao ja redimensionada
-    (320px), deixando o primeiro carregamento do tooltip mais leve. So
-    mexe quando a URL bate exatamente com esse padrao; caso contrario
-    devolve sem alterar (mais seguro que forcar e quebrar a URL)."""
-    return re.sub(r"-\d+-\d+/(?=[^/]+$)", "-320-auto/", url, count=1)
-
-
 @router.get("/api/foto")
 def buscar_foto(ref: str = Query(..., description="Codigo de referencia do produto")):
     ref = ref.strip()
@@ -64,9 +55,12 @@ def buscar_foto(ref: str = Query(..., description="Codigo de referencia do produ
             itens = dados[0].get("items") or []
             imagens = itens[0].get("images") if itens else []
             if imagens:
-                bruta = imagens[0].get("imageUrl")
-                if bruta:
-                    url_foto = _redimensionar(bruta)
+                # Devolve a URL original da VTEX sem reescrever - o
+                # redimensionamento (-320-auto) as vezes cai numa variante
+                # que a VTEX nao gera de verdade e a foto quebra ("?" no
+                # tooltip). Original sempre existe (foi ela que apareceu
+                # na resposta da API), e o CSS ja limita o tamanho exibido.
+                url_foto = imagens[0].get("imageUrl") or None
     except Exception as e:
         print(f"[FOTO] Indisponivel pra ref '{ref}': {e}")
 

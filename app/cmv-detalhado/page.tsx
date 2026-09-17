@@ -320,7 +320,7 @@ export default function CmvDetalhadoPage() {
   // ref (nao state, pra nao re-renderizar a cada foto buscada) e a
   // referencia em hover tambem em ref, pra descartar resposta atrasada se
   // o mouse ja passou pra outra linha antes da foto chegar.
-  const [fotoTooltip, setFotoTooltip] = useState<{ referencia: string; url: string | null; carregando: boolean; x: number; y: number } | null>(null);
+  const [fotoTooltip, setFotoTooltip] = useState<{ referencia: string; url: string | null; carregando: boolean; erro: boolean; x: number; y: number } | null>(null);
   const cacheFotoRef = useRef<Map<string, string | null>>(new Map());
   const hoverFotoRef = useRef<string | null>(null);
 
@@ -328,10 +328,10 @@ export default function CmvDetalhadoPage() {
     hoverFotoRef.current = referencia;
     const emCache = cacheFotoRef.current.get(referencia);
     if (emCache !== undefined) {
-      setFotoTooltip({ referencia, url: emCache, carregando: false, x, y });
+      setFotoTooltip({ referencia, url: emCache, carregando: false, erro: false, x, y });
       return;
     }
-    setFotoTooltip({ referencia, url: null, carregando: true, x, y });
+    setFotoTooltip({ referencia, url: null, carregando: true, erro: false, x, y });
     fetch(`/api/foto?ref=${encodeURIComponent(referencia)}`, { cache: 'no-store' })
       .then((r) => r.json())
       .then((data) => {
@@ -353,6 +353,13 @@ export default function CmvDetalhadoPage() {
 
   function moverFotoRef(referencia: string, x: number, y: number) {
     setFotoTooltip((atual) => (atual && atual.referencia === referencia ? { ...atual, x, y } : atual));
+  }
+
+  // Foto achada na API mas o arquivo em si nao carrega (link quebrado/
+  // expirado do lado da loja) - mostra um aviso em vez do "?" de imagem
+  // quebrada do navegador.
+  function imagemFalhou(referencia: string) {
+    setFotoTooltip((atual) => (atual && atual.referencia === referencia ? { ...atual, erro: true } : atual));
   }
 
   function esconderFotoRef() {
@@ -1011,19 +1018,20 @@ export default function CmvDetalhadoPage() {
               style={{ left: fotoTooltip.x + 12, top: fotoTooltip.y + 12 }}
             >
               {fotoTooltip.carregando ? (
-                <div className="w-[200px] h-[100px] flex items-center justify-center text-xs text-gray-400">
+                <div className="w-[400px] h-[200px] flex items-center justify-center text-xs text-gray-400">
                   Carregando...
                 </div>
-              ) : fotoTooltip.url ? (
+              ) : fotoTooltip.url && !fotoTooltip.erro ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
                   src={fotoTooltip.url}
                   alt={fotoTooltip.referencia}
-                  className="block w-[200px] h-[200px] object-contain rounded"
+                  className="block w-[400px] h-[400px] object-contain rounded"
+                  onError={() => imagemFalhou(fotoTooltip.referencia)}
                 />
               ) : (
-                <div className="w-[200px] h-[100px] flex items-center justify-center text-center text-xs text-gray-400">
-                  Sem foto na loja
+                <div className="w-[400px] h-[200px] flex items-center justify-center text-center text-xs text-gray-400">
+                  {fotoTooltip.erro ? 'Não foi possível carregar a imagem' : 'Sem foto na loja'}
                 </div>
               )}
             </div>
