@@ -206,8 +206,8 @@ export default function AnalisadorDrePage() {
         <h1 className="text-2xl font-bold text-gray-800">Analisador de DRE por Empresa</h1>
       </div>
       <p className="text-sm text-gray-500 mb-6">
-        Análise de Controller/CFO com IA para uma loja física: rentabilidade, eficiência, materialidade,
-        oportunidades e plano de ação.
+        Análise automática (regras/aritmética, sem IA, sem custo por execução) de uma loja física:
+        rentabilidade, eficiência, materialidade, oportunidades e plano de ação.
       </p>
 
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-5 mb-6">
@@ -260,7 +260,7 @@ export default function AnalisadorDrePage() {
             className="flex items-center gap-2 px-5 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white rounded-lg transition-colors font-medium"
           >
             {loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-            {loading ? 'Analisando...' : 'Analisar'}
+          {loading ? 'Analisando...' : 'Analisar'}
           </button>
         </div>
 
@@ -279,7 +279,7 @@ export default function AnalisadorDrePage() {
       {loading && (
         <div className="flex flex-col items-center justify-center py-16 text-gray-500 gap-3">
           <RefreshCw className="w-8 h-8 animate-spin text-indigo-600" />
-          <span>Gerando análise da loja (10 etapas) — pode levar alguns minutos...</span>
+          <span>Gerando análise da loja (10 etapas)...</span>
         </div>
       )}
 
