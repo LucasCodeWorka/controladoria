@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database import close_all_connections
 
-from routers import health, indicadores, dre, classificacao, analise_executiva, cmv_detalhado, giro, estoque_tempo, foto
+from routers import health, indicadores, dre, classificacao, analise_executiva, cmv_detalhado, giro, estoque_tempo, foto, analisador_dre
 
 app = FastAPI(
     title="Liebe DRE API",
@@ -46,6 +46,7 @@ app.include_router(cmv_detalhado.router)
 app.include_router(giro.router)
 app.include_router(estoque_tempo.router)
 app.include_router(foto.router)
+app.include_router(analisador_dre.router)
 
 
 @app.on_event("shutdown")

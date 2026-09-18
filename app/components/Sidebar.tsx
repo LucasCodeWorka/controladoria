@@ -19,6 +19,7 @@ import {
   Boxes,
   RotateCw,
   Clock,
+  Sparkles,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -65,6 +66,11 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
       name: 'Estoque por Tempo',
       href: '/estoque-tempo',
       icon: Clock,
+    },
+    {
+      name: 'Analisador DRE',
+      href: '/analisador-dre',
+      icon: Sparkles,
     },
   ];
 
