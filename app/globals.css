@@ -30,4 +30,14 @@ body {
     size: A4;
     margin: 16mm 14mm;
   }
+
+  table {
+    break-inside: auto;
+  }
+  tr {
+    break-inside: avoid;
+  }
+  h1, h2, h3, h4 {
+    break-after: avoid;
+  }
 }

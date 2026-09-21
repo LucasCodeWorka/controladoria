@@ -10,6 +10,7 @@ import {
   FileDown,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 import { PLANO_CONTAS_DRE_FABRICA } from '../dre-fabrica/planoContasDREFabrica';
 import AtalhosPeriodo from '../components/filtros/AtalhosPeriodo';
@@ -359,8 +360,8 @@ export default function AnalisadorDrePage() {
             </button>
           </div>
 
-          <div className="prose prose-sm max-w-none prose-headings:font-bold prose-headings:text-gray-800 prose-p:text-gray-700 prose-li:text-gray-700 prose-strong:text-gray-900 prose-table:text-xs">
-            <ReactMarkdown>{texto}</ReactMarkdown>
+          <div className="prose prose-sm max-w-none prose-headings:font-bold prose-headings:text-gray-800 prose-p:text-gray-700 prose-li:text-gray-700 prose-strong:text-gray-900 prose-table:text-xs prose-th:whitespace-nowrap prose-td:align-top">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{texto}</ReactMarkdown>
           </div>
         </div>
       )}
