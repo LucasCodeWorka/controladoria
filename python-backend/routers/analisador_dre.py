@@ -19,6 +19,7 @@ numeros como base de verdade e concentra o raciocinio nas etapas 4, 6, 7, 8,
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Any, Dict, List, Optional
+import hashlib
 import json
 import os
 import threading
@@ -35,6 +36,25 @@ router = APIRouter()
 # em memoria por job_id; o frontend faz polling.
 _jobs: Dict[str, Dict[str, Any]] = {}
 _JOBS_TTL_SEGUNDOS = 2 * 60 * 60
+
+# Cada chamada a IA custa de verdade (Opus 5 + thinking + effort alto fica
+# entre ~US$0,50 e ~US$1,50 por analise) - cacheia o resultado por payload
+# (loja+periodo+contas) pra nao cobrar de novo por reload de pagina, duplo
+# clique ou re-teste do mesmo recorte, e deduplica chamadas em voo pra nao
+# disparar duas analises iguais em paralelo.
+_resultado_cache: Dict[str, Dict[str, Any]] = {}
+_CACHE_TTL_SEGUNDOS = 24 * 60 * 60
+_job_id_por_chave: Dict[str, str] = {}
+
+
+def _chave_cache(payload: "AnalisadorDreLojaRequest") -> str:
+    base = {
+        "loja": payload.loja.codigo,
+        "periodo": payload.periodo,
+        "contas": [(c.get("codigo"), c.get("total"), c.get("valores")) for c in payload.contas],
+    }
+    bruto = json.dumps(base, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(bruto.encode("utf-8")).hexdigest()
 
 MODEL = "claude-opus-5"
 
@@ -428,9 +448,12 @@ def _limpar_jobs_antigos() -> None:
     expirados = [jid for jid, job in _jobs.items() if agora - job["criadoEm"] > _JOBS_TTL_SEGUNDOS]
     for jid in expirados:
         _jobs.pop(jid, None)
+    expiradas = [chave for chave, item in _resultado_cache.items() if agora - item["criadoEm"] > _CACHE_TTL_SEGUNDOS]
+    for chave in expiradas:
+        _resultado_cache.pop(chave, None)
 
 
-def _executar_analise(job_id: str, payload: AnalisadorDreLojaRequest, api_key: str) -> None:
+def _executar_analise(job_id: str, payload: AnalisadorDreLojaRequest, api_key: str, chave_cache: str) -> None:
     criado_em = _jobs[job_id]["criadoEm"]
     try:
         # Timeout default do SDK (10min) e curto demais pra uma analise de 10
@@ -465,6 +488,7 @@ def _executar_analise(job_id: str, payload: AnalisadorDreLojaRequest, api_key: s
             return
 
         _jobs[job_id] = {"status": "concluido", "analise": texto, "criadoEm": criado_em}
+        _resultado_cache[chave_cache] = {"analise": texto, "criadoEm": time.time()}
     except anthropic.APIError as e:
         _jobs[job_id] = {"status": "erro", "erro": f"Erro ao chamar a API da Anthropic: {e}", "criadoEm": criado_em}
     except Exception as e:
@@ -481,10 +505,23 @@ def iniciar_analise_loja(payload: AnalisadorDreLojaRequest):
         )
 
     _limpar_jobs_antigos()
+    chave = _chave_cache(payload)
+
+    resultado_em_cache = _resultado_cache.get(chave)
+    if resultado_em_cache:
+        job_id = str(uuid.uuid4())
+        _jobs[job_id] = {"status": "concluido", "analise": resultado_em_cache["analise"], "criadoEm": time.time()}
+        return {"jobId": job_id}
+
+    job_id_em_voo = _job_id_por_chave.get(chave)
+    if job_id_em_voo and _jobs.get(job_id_em_voo, {}).get("status") == "processando":
+        return {"jobId": job_id_em_voo}
+
     job_id = str(uuid.uuid4())
     _jobs[job_id] = {"status": "processando", "criadoEm": time.time()}
+    _job_id_por_chave[chave] = job_id
 
-    threading.Thread(target=_executar_analise, args=(job_id, payload, api_key), daemon=True).start()
+    threading.Thread(target=_executar_analise, args=(job_id, payload, api_key, chave), daemon=True).start()
 
     return {"jobId": job_id}
 
