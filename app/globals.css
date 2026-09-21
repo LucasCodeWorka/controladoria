@@ -14,3 +14,20 @@ body {
   -moz-osx-font-smoothing: grayscale;
   background-color: #f5f5f5;
 }
+
+/* Layout principal (Sidebar + header) usa altura fixa (h-screen) com
+   overflow escondido pro scroll interno funcionar na tela - impressao
+   precisa do oposto (altura livre, sem corte), senao so a parte visivel
+   na viewport sai no PDF. Paginas com botao de "Baixar PDF" escondem
+   Sidebar/header via print:hidden e usam essas regras pro conteudo fluir. */
+@media print {
+  html, body {
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  @page {
+    size: A4;
+    margin: 16mm 14mm;
+  }
+}

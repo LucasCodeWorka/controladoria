@@ -111,15 +111,17 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
   const pct = total > 0 ? Math.round((progresso / total) * 100) : 0;
 
   return (
-    <div className="flex h-screen overflow-hidden">
-      <Sidebar isOpen={sidebarOpen} setIsOpen={setSidebarOpen} />
+    <div className="flex h-screen overflow-hidden print:h-auto print:overflow-visible print:block">
+      <div className="print:hidden">
+        <Sidebar isOpen={sidebarOpen} setIsOpen={setSidebarOpen} />
+      </div>
 
       <div
-        className={`flex-1 flex flex-col overflow-hidden transition-all duration-300 ${
+        className={`flex-1 flex flex-col overflow-hidden transition-all duration-300 print:ml-0 print:overflow-visible print:block ${
           sidebarOpen ? 'ml-64' : 'ml-20'
         }`}
       >
-        <header className="bg-brand-primary shadow-sm z-10">
+        <header className="bg-brand-primary shadow-sm z-10 print:hidden">
           <div className="px-4 py-2 flex items-center justify-between gap-4">
             <button
               onClick={() => setSidebarOpen(!sidebarOpen)}
@@ -159,7 +161,7 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
           </div>
         </header>
 
-        <main className="flex-1 overflow-auto bg-gray-50">
+        <main className="flex-1 overflow-auto bg-gray-50 print:overflow-visible print:bg-white">
           {children}
         </main>
       </div>

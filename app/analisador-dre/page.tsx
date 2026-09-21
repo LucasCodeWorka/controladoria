@@ -7,6 +7,7 @@ import {
   Sparkles,
   RefreshCw,
   AlertCircle,
+  FileDown,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 
@@ -218,7 +219,11 @@ export default function AnalisadorDrePage() {
         const data = await resp.json();
 
         if (!resp.ok) {
-          setErro(data.detail || data.error || 'Erro ao consultar o status da análise.');
+          if (resp.status === 404) {
+            setErro('O servidor reiniciou enquanto a análise estava em andamento e perdeu o progresso. Clique em "Analisar" novamente.');
+          } else {
+            setErro(data.detail || data.error || 'Erro ao consultar o status da análise.');
+          }
           setLoading(false);
           return;
         }
@@ -250,16 +255,16 @@ export default function AnalisadorDrePage() {
 
   return (
     <div className="p-6 max-w-5xl mx-auto">
-      <div className="flex items-center gap-3 mb-1">
+      <div className="flex items-center gap-3 mb-1 print:hidden">
         <Sparkles className="w-7 h-7 text-indigo-600" />
         <h1 className="text-2xl font-bold text-gray-800">Analisador de DRE por Empresa</h1>
       </div>
-      <p className="text-sm text-gray-500 mb-6">
+      <p className="text-sm text-gray-500 mb-6 print:hidden">
         Análise de Controller/CFO com IA para uma loja física: rentabilidade, eficiência, materialidade,
         oportunidades e plano de ação.
       </p>
 
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-5 mb-6">
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-5 mb-6 print:hidden">
         <div className="flex flex-wrap items-end gap-4">
           <div className="flex flex-col gap-1">
             <label className="text-xs font-semibold text-gray-500 uppercase flex items-center gap-1">
@@ -319,27 +324,41 @@ export default function AnalisadorDrePage() {
       </div>
 
       {erro && (
-        <div className="flex items-start gap-2 bg-red-50 border border-red-200 text-red-700 rounded-lg p-4 mb-6">
+        <div className="flex items-start gap-2 bg-red-50 border border-red-200 text-red-700 rounded-lg p-4 mb-6 print:hidden">
           <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
           <span>{erro}</span>
         </div>
       )}
 
       {loading && (
-        <div className="flex flex-col items-center justify-center py-16 text-gray-500 gap-3">
+        <div className="flex flex-col items-center justify-center py-16 text-gray-500 gap-3 print:hidden">
           <RefreshCw className="w-8 h-8 animate-spin text-indigo-600" />
           <span>Gerando análise da loja (10 etapas) — geralmente leva poucos minutos, mas em alguns casos pode passar de 20-30 minutos. Não feche esta aba.</span>
         </div>
       )}
 
       {!loading && texto && (
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-          {analisadoPara && (
-            <p className="text-xs text-gray-500 mb-4 pb-4 border-b border-gray-100">
-              Loja: <span className="font-semibold text-gray-700">{analisadoPara.loja}</span> · Período:{' '}
-              {formatarDataBR(analisadoPara.dataInicio)} a {formatarDataBR(analisadoPara.dataFim)}
-            </p>
-          )}
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 print:border-none print:shadow-none print:p-0">
+          <div className="hidden print:block mb-4 pb-4 border-b border-gray-300">
+            <h1 className="text-xl font-bold text-gray-900">Analisador de DRE por Empresa</h1>
+          </div>
+
+          <div className="flex items-center justify-between gap-4 mb-4 pb-4 border-b border-gray-100 print:border-gray-300">
+            {analisadoPara && (
+              <p className="text-xs text-gray-500">
+                Loja: <span className="font-semibold text-gray-700">{analisadoPara.loja}</span> · Período:{' '}
+                {formatarDataBR(analisadoPara.dataInicio)} a {formatarDataBR(analisadoPara.dataFim)}
+              </p>
+            )}
+            <button
+              onClick={() => window.print()}
+              className="flex items-center gap-2 px-4 py-2 bg-gray-700 hover:bg-gray-800 text-white rounded-lg transition-colors font-medium text-sm print:hidden"
+            >
+              <FileDown className="w-4 h-4" />
+              Baixar PDF
+            </button>
+          </div>
+
           <div className="prose prose-sm max-w-none prose-headings:font-bold prose-headings:text-gray-800 prose-p:text-gray-700 prose-li:text-gray-700 prose-strong:text-gray-900 prose-table:text-xs">
             <ReactMarkdown>{texto}</ReactMarkdown>
           </div>
