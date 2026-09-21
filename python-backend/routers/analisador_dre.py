@@ -21,9 +21,20 @@ from pydantic import BaseModel
 from typing import Any, Dict, List, Optional
 import json
 import os
+import threading
+import time
+import uuid
 import anthropic
 
 router = APIRouter()
+
+# Job assincrono (iniciar + status) em vez de uma unica requisicao longa: a
+# analise leva de 1 a poucos minutos (thinking + ~30-40k tokens de saida), e
+# isso estoura o timeout de proxy/reverse-proxy de varios ambientes de deploy
+# (ex: Render) muito antes da API da Anthropic terminar. Guarda o resultado
+# em memoria por job_id; o frontend faz polling.
+_jobs: Dict[str, Dict[str, Any]] = {}
+_JOBS_TTL_SEGUNDOS = 2 * 60 * 60
 
 MODEL = "claude-opus-5"
 
@@ -263,6 +274,13 @@ veio no JSON ou que não é calculável a partir dele, diga isso explicitamente 
 
 Analise todos os meses disponíveis no período recebido.
 
+Se o período recebido tiver só 1 mês (ou poucos meses), isso não é um erro nem uma limitação sua - é só o \
+recorte que o usuário escolheu. Nesse caso, pule de forma direta (uma frase) qualquer comparação que \
+dependa de mais histórico (mês anterior, mesmo mês do ano anterior, médias móveis, meses de faturamento \
+semelhante) e concentre a análise no que o(s) mês(es) recebido(s) permite(m): composição das despesas, \
+peso de cada conta sobre a receita, e qualquer desvio interno visível nos dados fornecidos. Não gaste \
+raciocínio tentando reconstruir histórico que não foi enviado.
+
 Siga rigorosamente as 10 etapas abaixo, nesta ordem, como estrutura da sua resposta em markdown (use os \
 títulos de etapa como cabeçalhos ## ). Pule uma etapa (ou parte dela) apenas quando os dados realmente não \
 permitirem, explicando o motivo em uma linha.
@@ -405,30 +423,28 @@ class AnalisadorDreLojaRequest(BaseModel):
     contas: List[Dict[str, Any]]
 
 
-@router.post("/api/dre/analisador-loja")
-def gerar_analise_loja(payload: AnalisadorDreLojaRequest):
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise HTTPException(
-            status_code=503,
-            detail="ANTHROPIC_API_KEY não configurada no backend. Configure a variável de ambiente para habilitar o Analisador de DRE.",
-        )
+def _limpar_jobs_antigos() -> None:
+    agora = time.time()
+    expirados = [jid for jid, job in _jobs.items() if agora - job["criadoEm"] > _JOBS_TTL_SEGUNDOS]
+    for jid in expirados:
+        _jobs.pop(jid, None)
 
-    client = anthropic.Anthropic(api_key=api_key)
 
-    periodos: List[str] = payload.periodo.get("periodos") or []
-    dados_pre_calculados = calcular_dados_pre_calculados(payload.contas, periodos)
-
-    user_content = {
-        "loja": payload.loja.model_dump(),
-        "periodo": payload.periodo,
-        "contas": payload.contas,
-        "dadosPreCalculados": dados_pre_calculados,
-    }
-
+def _executar_analise(job_id: str, payload: AnalisadorDreLojaRequest, api_key: str) -> None:
+    criado_em = _jobs[job_id]["criadoEm"]
     try:
-        # As 10 etapas geram uma resposta longa (max_tokens alto) - usa streaming
-        # pra evitar timeout de requisicao, so devolvendo o texto completo no final.
+        # Timeout default do SDK (10min) e curto demais pra uma analise de 10
+        # etapas com thinking + effort alto - já vimos passar disso.
+        client = anthropic.Anthropic(api_key=api_key, timeout=1800.0)
+        periodos: List[str] = payload.periodo.get("periodos") or []
+        dados_pre_calculados = calcular_dados_pre_calculados(payload.contas, periodos)
+        user_content = {
+            "loja": payload.loja.model_dump(),
+            "periodo": payload.periodo,
+            "contas": payload.contas,
+            "dadosPreCalculados": dados_pre_calculados,
+        }
+
         with client.messages.stream(
             model=MODEL,
             max_tokens=48000,
@@ -438,15 +454,44 @@ def gerar_analise_loja(payload: AnalisadorDreLojaRequest):
             messages=[{"role": "user", "content": json.dumps(user_content, ensure_ascii=False)}],
         ) as stream:
             response = stream.get_final_message()
+
+        if response.stop_reason == "refusal":
+            _jobs[job_id] = {"status": "erro", "erro": "A análise não pôde ser gerada para estes dados.", "criadoEm": criado_em}
+            return
+
+        texto = "".join(block.text for block in response.content if block.type == "text").strip()
+        if not texto:
+            _jobs[job_id] = {"status": "erro", "erro": "A API retornou uma resposta vazia.", "criadoEm": criado_em}
+            return
+
+        _jobs[job_id] = {"status": "concluido", "analise": texto, "criadoEm": criado_em}
     except anthropic.APIError as e:
-        raise HTTPException(status_code=502, detail=f"Erro ao chamar a API da Anthropic: {e}")
+        _jobs[job_id] = {"status": "erro", "erro": f"Erro ao chamar a API da Anthropic: {e}", "criadoEm": criado_em}
+    except Exception as e:
+        _jobs[job_id] = {"status": "erro", "erro": f"Erro inesperado ao gerar a análise: {e}", "criadoEm": criado_em}
 
-    if response.stop_reason == "refusal":
-        raise HTTPException(status_code=422, detail="A análise não pôde ser gerada para estes dados.")
 
-    texto = "".join(block.text for block in response.content if block.type == "text").strip()
+@router.post("/api/dre/analisador-loja/iniciar")
+def iniciar_analise_loja(payload: AnalisadorDreLojaRequest):
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="ANTHROPIC_API_KEY não configurada no backend. Configure a variável de ambiente para habilitar o Analisador de DRE.",
+        )
 
-    if not texto:
-        raise HTTPException(status_code=502, detail="A API retornou uma resposta vazia.")
+    _limpar_jobs_antigos()
+    job_id = str(uuid.uuid4())
+    _jobs[job_id] = {"status": "processando", "criadoEm": time.time()}
 
-    return {"analise": texto}
+    threading.Thread(target=_executar_analise, args=(job_id, payload, api_key), daemon=True).start()
+
+    return {"jobId": job_id}
+
+
+@router.get("/api/dre/analisador-loja/status/{job_id}")
+def status_analise_loja(job_id: str):
+    job = _jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Análise não encontrada (pode ter expirado).")
+    return job

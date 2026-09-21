@@ -176,27 +176,76 @@ export default function AnalisadorDrePage() {
         contas: contasAchatadas,
       };
 
-      const respAnalise = await fetch('/api/dre/analisador-loja', {
+      const respIniciar = await fetch('/api/dre/analisador-loja/iniciar', {
         method: 'POST',
         cache: 'no-store',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
-      const dataAnalise = await respAnalise.json();
+      const dataIniciar = await respIniciar.json();
 
-      if (!respAnalise.ok) {
-        setErro(dataAnalise.detail || dataAnalise.error || 'Erro ao gerar a análise da loja.');
+      if (!respIniciar.ok) {
+        setErro(dataIniciar.detail || dataIniciar.error || 'Erro ao iniciar a análise da loja.');
+        setLoading(false);
         return;
       }
 
-      setTexto(dataAnalise.analise || '');
-      setAnalisadoPara({ loja: lojaLabel, dataInicio, dataFim });
+      await aguardarResultado(dataIniciar.jobId, lojaLabel);
     } catch (error) {
       console.error('Erro ao analisar loja:', error);
       setErro('Erro ao analisar a loja.');
-    } finally {
       setLoading(false);
     }
+  }
+
+  async function aguardarResultado(jobId: string, lojaLabel: string) {
+    // A analise leva de 1 a alguns minutos (a IA gera as 10 etapas com
+    // thinking) - faz polling em vez de segurar uma unica requisicao aberta,
+    // que estoura timeout de proxy em varios ambientes de deploy antes da
+    // API da Anthropic terminar.
+    const POLL_INTERVALO_MS = 5000;
+    // Na pratica a maioria das analises fica pronta em poucos minutos, mas
+    // ja observamos casos passando de 30min (thinking com effort alto varia
+    // bastante de duracao) - a janela e generosa pra nao desistir com o
+    // backend ainda processando (o job continua rodando de qualquer forma,
+    // so o frontend teria descartado o resultado).
+    const POLL_MAX_TENTATIVAS = 420; // ~35 minutos de polling
+
+    for (let tentativa = 0; tentativa < POLL_MAX_TENTATIVAS; tentativa++) {
+      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVALO_MS));
+      try {
+        const resp = await fetch(`/api/dre/analisador-loja/status/${jobId}`, { cache: 'no-store' });
+        const data = await resp.json();
+
+        if (!resp.ok) {
+          setErro(data.detail || data.error || 'Erro ao consultar o status da análise.');
+          setLoading(false);
+          return;
+        }
+
+        if (data.status === 'concluido') {
+          setTexto(data.analise || '');
+          setAnalisadoPara({ loja: lojaLabel, dataInicio, dataFim });
+          setLoading(false);
+          return;
+        }
+
+        if (data.status === 'erro') {
+          setErro(data.erro || 'Erro ao gerar a análise da loja.');
+          setLoading(false);
+          return;
+        }
+        // status 'processando' -> continua aguardando
+      } catch (error) {
+        console.error('Erro ao consultar status da analise:', error);
+        setErro('Erro ao consultar o status da análise.');
+        setLoading(false);
+        return;
+      }
+    }
+
+    setErro('A análise demorou mais do que o esperado. Tente novamente em instantes.');
+    setLoading(false);
   }
 
   return (
@@ -279,7 +328,7 @@ export default function AnalisadorDrePage() {
       {loading && (
         <div className="flex flex-col items-center justify-center py-16 text-gray-500 gap-3">
           <RefreshCw className="w-8 h-8 animate-spin text-indigo-600" />
-          <span>Gerando análise da loja (10 etapas) — pode levar alguns minutos...</span>
+          <span>Gerando análise da loja (10 etapas) — geralmente leva poucos minutos, mas em alguns casos pode passar de 20-30 minutos. Não feche esta aba.</span>
         </div>
       )}
 
