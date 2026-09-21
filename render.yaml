@@ -17,6 +17,8 @@ services:
         sync: false
       - key: DB_PASSWORD
         sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
 
   # Frontend Next.js
   - type: web
