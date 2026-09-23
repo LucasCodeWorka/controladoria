@@ -94,6 +94,9 @@ interface ItemCmvSku {
   cmvUnitario: number | null;
   vlVendaUnitario: number | null;
   percentualCmv: number | null;
+  precoFabrica: number | null;
+  precoAtacado: number | null;
+  precoVarejo: number | null;
 }
 
 interface RespostaCmvSku {
@@ -939,6 +942,21 @@ export default function CmvDetalhadoPage() {
                           Família{indicadorSkuOrdenacao('familia')}
                         </button>
                       </th>
+                      <th className="text-right px-3 py-2 font-medium text-amber-700 bg-amber-50/60 whitespace-nowrap">
+                        <button onClick={() => ordenarSkuPor('precoFabrica')} className="flex items-center gap-1 ml-auto hover:text-amber-900">
+                          Preço Fábrica{indicadorSkuOrdenacao('precoFabrica')}
+                        </button>
+                      </th>
+                      <th className="text-right px-3 py-2 font-medium text-amber-700 bg-amber-50/60 whitespace-nowrap">
+                        <button onClick={() => ordenarSkuPor('precoAtacado')} className="flex items-center gap-1 ml-auto hover:text-amber-900">
+                          Preço Atacado{indicadorSkuOrdenacao('precoAtacado')}
+                        </button>
+                      </th>
+                      <th className="text-right px-3 py-2 font-medium text-amber-700 bg-amber-50/60 whitespace-nowrap">
+                        <button onClick={() => ordenarSkuPor('precoVarejo')} className="flex items-center gap-1 ml-auto hover:text-amber-900">
+                          Preço Varejo{indicadorSkuOrdenacao('precoVarejo')}
+                        </button>
+                      </th>
                       <th className="text-right px-3 py-2 font-medium text-gray-600 whitespace-nowrap">
                         <button onClick={() => ordenarSkuPor('qtdVendida')} className="flex items-center gap-1 ml-auto hover:text-gray-900">
                           Qtd{indicadorSkuOrdenacao('qtdVendida')}
@@ -991,6 +1009,9 @@ export default function CmvDetalhadoPage() {
                           <td className="px-3 py-2 text-gray-600 whitespace-nowrap">{item.status || '-'}</td>
                           <td className="px-3 py-2 text-gray-600 whitespace-nowrap">{item.linha || '-'}</td>
                           <td className="px-3 py-2 text-gray-600 whitespace-nowrap">{item.familia || '-'}</td>
+                          <td className="px-3 py-2 text-right text-amber-900 bg-amber-50/30 whitespace-nowrap">{formatarValorOuTraco(item.precoFabrica)}</td>
+                          <td className="px-3 py-2 text-right text-amber-900 bg-amber-50/30 whitespace-nowrap">{formatarValorOuTraco(item.precoAtacado)}</td>
+                          <td className="px-3 py-2 text-right text-amber-900 bg-amber-50/30 whitespace-nowrap">{formatarValorOuTraco(item.precoVarejo)}</td>
                           <td className="px-3 py-2 text-right text-gray-700 whitespace-nowrap">{formatarQtd(item.qtdVendida)}</td>
                           <td className="px-3 py-2 text-right text-blue-900 bg-blue-50/30 whitespace-nowrap">{formatarValorOuTraco(item.cmvUnitario)}</td>
                           <td className="px-3 py-2 text-right text-gray-700 whitespace-nowrap">{formatarValor(item.cmv)}</td>

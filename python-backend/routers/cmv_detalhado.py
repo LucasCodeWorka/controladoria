@@ -38,6 +38,37 @@ def _eh_fabrica(cd_empresa: int) -> bool:
     return cd_empresa in EMPRESAS_FABRICA
 
 
+# Cache em memoria de preco por cd_produto - {cd_produto: {"precoFabrica":...,
+# "precoAtacado":..., "precoVarejo":...}}. Mesmo padrao/funcao de banco do
+# Giro (routers/giro.py: _obter_precos_produtos) - duplicado aqui (em vez de
+# importado de la) porque giro.py ja importa deste modulo, e importar de
+# volta criaria import circular.
+_cache_preco_produto: dict = {}
+
+
+def _obter_precos_produtos(cd_produtos: list) -> dict:
+    """Preco fabrica/atacado/varejo pra uma lista de cd_produto, via a funcao
+    public.f_dic_prd_valorprod(cd_produto, 'P', cd_valor) - 1=fabrica,
+    2=atacado, 3=varejo."""
+    faltantes = [cd for cd in set(cd_produtos) if cd is not None and cd not in _cache_preco_produto]
+    if faltantes:
+        placeholders = ",".join(["(%s)"] * len(faltantes))
+        linhas = execute_query(f"""
+            SELECT t.cd_produto,
+                public.f_dic_prd_valorprod(t.cd_produto, 'P', 1) AS preco_fabrica,
+                public.f_dic_prd_valorprod(t.cd_produto, 'P', 2) AS preco_atacado,
+                public.f_dic_prd_valorprod(t.cd_produto, 'P', 3) AS preco_varejo
+            FROM (VALUES {placeholders}) AS t(cd_produto)
+        """, tuple(faltantes)) or []
+        for r in linhas:
+            _cache_preco_produto[r["cd_produto"]] = {
+                "precoFabrica": r["preco_fabrica"],
+                "precoAtacado": r["preco_atacado"],
+                "precoVarejo": r["preco_varejo"],
+            }
+    return {cd: _cache_preco_produto.get(cd) for cd in cd_produtos}
+
+
 def _parse_empresas(empresas: Optional[str]) -> list:
     """'empresas' e uma lista opcional de cd_empresa separados por virgula.
     Sem o parametro, usa todas (fabrica + todas as lojas)."""
@@ -876,6 +907,7 @@ def cmv_por_sku(
                     "cmvUnitario": (custo / qtd) if qtd > 0 else None,
                     "vlVendaUnitario": (receita / qtd) if qtd > 0 else None,
                     "percentualCmv": _cmv_percentual(custo, receita),
+                    "_cdProduto": cd_produto,
                     "_categorias": categorias,
                 })
             _cache_sku_loja[chave_cache] = itens_completos
@@ -897,16 +929,33 @@ def cmv_por_sku(
         total_paginas = max(1, -(-total_itens // porPagina))
 
         colunas_texto = {"loja", "referencia", "descricao", "cor", "tamanho", "status", "linha", "familia"}
-        colunas_validas = colunas_texto | {"cmv", "vlVenda", "qtdVendida", "cmvUnitario", "vlVendaUnitario", "percentualCmv"}
+        colunas_validas = colunas_texto | {"cmv", "vlVenda", "qtdVendida", "cmvUnitario", "vlVendaUnitario", "percentualCmv", "precoFabrica", "precoAtacado", "precoVarejo"}
         if ordenarPor not in colunas_validas:
             raise HTTPException(status_code=400, detail=f"ordenarPor invalido: {ordenarPor}. Use uma de: {sorted(colunas_validas)}")
 
         desc = ordem == "desc"
 
+        # Preco (fabrica/atacado/varejo) NAO fica no item cacheado - o
+        # universo de produtos do CMV por SKU passa de 4 mil distintos num
+        # mes so (todas as lojas), e f_dic_prd_valorprod e uma chamada por
+        # produto: buscar pra tudo de uma vez ja estourou statement_timeout
+        # do banco num teste. So busca em lote quando for ordenar por preco
+        # (precisa do valor de todo mundo pra ordenar certo - mesmo padrao
+        # do Giro), e senao busca so pra pagina atual la embaixo.
+        CHAVES_PRECO_SKU = {"precoFabrica", "precoAtacado", "precoVarejo"}
+        if ordenarPor in CHAVES_PRECO_SKU:
+            precos_para_ordenar = _obter_precos_produtos([i["_cdProduto"] for i in itens_completos])
+
+            def _valor_ordenacao(item):
+                return (precos_para_ordenar.get(item["_cdProduto"]) or {}).get(ordenarPor)
+        else:
+            def _valor_ordenacao(item):
+                return item.get(ordenarPor)
+
         # Nulos (ex: percentualCmv sem venda) sempre por ultimo, em
         # qualquer direcao - mesmo padrao ja usado no Giro.
         def _chave_ordenacao(item):
-            v = item.get(ordenarPor)
+            v = _valor_ordenacao(item)
             if v is None:
                 return (1, 0)
             if isinstance(v, str):
@@ -917,8 +966,21 @@ def cmv_por_sku(
         itens_ordenados = sorted(itens_completos, key=_chave_ordenacao, reverse=reverse_str)
 
         offset = (pagina - 1) * porPagina
-        # _categorias e so uso interno (filtro) - nao serializa pro front.
-        itens_pagina = [{k: v for k, v in item.items() if k != "_categorias"} for item in itens_ordenados[offset:offset + porPagina]]
+        itens_pagina_brutos = itens_ordenados[offset:offset + porPagina]
+
+        # Preco so pra pagina atual (tipicamente <= porPagina produtos) -
+        # rapido e fica no cache por cd_produto pra proximas paginas/trocas
+        # de ordenacao nao buscarem de novo.
+        precos_pagina = _obter_precos_produtos([i["_cdProduto"] for i in itens_pagina_brutos])
+        itens_pagina = []
+        for item in itens_pagina_brutos:
+            preco = precos_pagina.get(item["_cdProduto"]) or {}
+            # _categorias/_cdProduto sao so uso interno - nao serializa pro front.
+            linha = {k: v for k, v in item.items() if k not in ("_categorias", "_cdProduto")}
+            linha["precoFabrica"] = preco.get("precoFabrica")
+            linha["precoAtacado"] = preco.get("precoAtacado")
+            linha["precoVarejo"] = preco.get("precoVarejo")
+            itens_pagina.append(linha)
 
         return {
             "itens": itens_pagina,
