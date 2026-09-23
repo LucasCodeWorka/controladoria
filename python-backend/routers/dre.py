@@ -43,7 +43,7 @@ def _somar_dias_uteis(data, dias: int):
 def _criar_tabela_estoque_cache():
     execute_insert("""
         CREATE TABLE IF NOT EXISTS dfc_estoque_cache (
-            dt_referencia DATE PRIMARY KEY,
+            dt_referencia DATE NOT NULL,
             valor_estoque NUMERIC,
             qt_estoque NUMERIC,
             dt_calculado TIMESTAMP DEFAULT NOW()
@@ -55,18 +55,46 @@ def _criar_tabela_estoque_cache():
         execute_insert("ALTER TABLE dfc_estoque_cache ADD COLUMN IF NOT EXISTS qt_estoque NUMERIC")
     except Exception as e:
         print(f"[PME] Aviso ao migrar cache de estoque: {e}")
+    # Migracao: cache era global (1 linha por data, sempre fabrica+todas as
+    # lojas) - agora o PME respeita o filtro de loja da tela, entao cada
+    # combinacao de (data, conjunto de empresas) precisa da propria linha.
+    # Troca a PK antiga (so dt_referencia) por um indice unico
+    # (dt_referencia, chave_empresas) - tudo com IF EXISTS/IF NOT EXISTS,
+    # seguro chamar de novo a cada request.
+    try:
+        execute_insert("ALTER TABLE dfc_estoque_cache ADD COLUMN IF NOT EXISTS chave_empresas TEXT NOT NULL DEFAULT ''")
+    except Exception as e:
+        print(f"[PME] Aviso ao migrar cache de estoque (chave_empresas): {e}")
+    try:
+        execute_insert("ALTER TABLE dfc_estoque_cache DROP CONSTRAINT IF EXISTS dfc_estoque_cache_pkey")
+    except Exception as e:
+        print(f"[PME] Aviso ao migrar cache de estoque (drop pk): {e}")
+    try:
+        execute_insert("CREATE UNIQUE INDEX IF NOT EXISTS dfc_estoque_cache_uidx ON dfc_estoque_cache (dt_referencia, chave_empresas)")
+    except Exception as e:
+        print(f"[PME] Aviso ao migrar cache de estoque (indice unico): {e}")
 
 
-def _buscar_estoque_total(data_referencia: str) -> dict:
-    """Retorna {'valor': ..., 'quantidade': ...} do estoque total na data de
-    referencia. As duas metricas vem da MESMA query (a leitura de
-    prd_prdsaldo e cara - 20-70s sem cache), por isso sao calculadas e
-    cacheadas juntas mesmo o PME hoje so usando quantidade."""
+def _buscar_estoque_total(data_referencia: str, empresas_filtro: list) -> dict:
+    """Retorna {'valor': ..., 'quantidade': ...} do estoque das empresas em
+    empresas_filtro na data de referencia. As duas metricas vem da MESMA
+    query (a leitura de prd_prdsaldo e cara - 20-70s sem cache), por isso sao
+    calculadas e cacheadas juntas mesmo o PME hoje so usando quantidade.
+
+    prd_prdsaldo tem uma linha por (cd_produto, cd_empresa) - nao uma linha
+    global por produto (confirmado direto no banco: o mesmo cd_produto
+    aparece com varios cd_empresa diferentes). A versao anterior desta
+    funcao fazia DISTINCT ON (cd_produto) sem considerar cd_empresa, o que
+    pegava so a linha de UMA empresa qualquer (a de dt_saldo mais recente)
+    em vez de somar todas - subcontava estoque de produto que existe em
+    mais de uma empresa. Corrigido pra DISTINCT ON (cd_produto, cd_empresa),
+    igual ao padrao ja usado e testado em routers/giro.py."""
     _criar_tabela_estoque_cache()
+    chave_empresas = ",".join(str(e) for e in sorted(set(empresas_filtro)))
     try:
         cache = execute_query(
-            "SELECT valor_estoque, qt_estoque FROM dfc_estoque_cache WHERE dt_referencia = %s AND qt_estoque IS NOT NULL",
-            (data_referencia,)
+            "SELECT valor_estoque, qt_estoque FROM dfc_estoque_cache WHERE dt_referencia = %s AND chave_empresas = %s AND qt_estoque IS NOT NULL",
+            (data_referencia, chave_empresas)
         )
         if cache:
             return {
@@ -76,23 +104,28 @@ def _buscar_estoque_total(data_referencia: str) -> dict:
     except Exception as e:
         print(f"[PME] Aviso ao ler cache de estoque: {e}")
 
+    if not empresas_filtro:
+        return {'valor': 0.0, 'quantidade': 0.0}
+
     query = """
         WITH saldo_final AS (
-            SELECT DISTINCT ON (ps.cd_produto)
+            SELECT DISTINCT ON (ps.cd_produto, ps.cd_empresa)
                    ps.cd_produto,
+                   ps.cd_empresa,
                    ps.dt_saldo,
                    ps.qt_saldo
             FROM public.prd_prdsaldo ps
             WHERE ps.cd_saldo = '1'
               AND ps.dt_saldo <= %s
               AND ps.cd_produto <= 1000000
-            ORDER BY ps.cd_produto, ps.dt_saldo DESC
+              AND ps.cd_empresa = ANY(%s)
+            ORDER BY ps.cd_produto, ps.cd_empresa, ps.dt_saldo DESC
         ),
         base AS (
             SELECT
-                p.cd_produto,
+                s.cd_produto,
                 s.qt_saldo,
-                COALESCE(public.f_prd_valor_produto2('1', '1', 'P', '1', p.cd_produto, %s), 0) AS vl_produto
+                COALESCE(public.f_prd_valor_produto2('1', '1', 'P', '1', s.cd_produto, %s), 0) AS vl_produto
             FROM saldo_final s
             JOIN VR_PRD_PRDS p ON p.cd_produto = s.cd_produto
             JOIN public.prd_produtoclas pc ON pc.cd_produto = p.cd_produto AND pc.cd_tipoclas = 20
@@ -105,19 +138,19 @@ def _buscar_estoque_total(data_referencia: str) -> dict:
             COALESCE(SUM(qt_saldo), 0) AS qt_total_estoque
         FROM base
     """
-    rows = execute_query(query, (data_referencia, data_referencia))
+    rows = execute_query(query, (data_referencia, empresas_filtro, data_referencia))
     valor = float(rows[0]['valor_total_estoque'] or 0) if rows else 0.0
     quantidade = float(rows[0]['qt_total_estoque'] or 0) if rows else 0.0
 
     try:
         execute_insert("""
-            INSERT INTO dfc_estoque_cache (dt_referencia, valor_estoque, qt_estoque, dt_calculado)
-            VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
-            ON CONFLICT (dt_referencia) DO UPDATE SET
+            INSERT INTO dfc_estoque_cache (dt_referencia, chave_empresas, valor_estoque, qt_estoque, dt_calculado)
+            VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
+            ON CONFLICT (dt_referencia, chave_empresas) DO UPDATE SET
                 valor_estoque = EXCLUDED.valor_estoque,
                 qt_estoque = EXCLUDED.qt_estoque,
                 dt_calculado = CURRENT_TIMESTAMP
-        """, (data_referencia, valor, quantidade))
+        """, (data_referencia, chave_empresas, valor, quantidade))
     except Exception as e:
         print(f"[PME] Aviso ao gravar cache de estoque: {e}")
 
@@ -145,24 +178,25 @@ def _calcular_quantidade_faturada_periodo(data_inicio: str, data_fim: str, empre
     return float(rows[0]['quantidade'] or 0) if rows else 0.0
 
 
-def _calcular_prazo_medio_estocagem(dataInicio: str, dataFim: str) -> Optional[float]:
+def _calcular_prazo_medio_estocagem(dataInicio: str, dataFim: str, empresas_filtro: list) -> Optional[float]:
     """PME = quantidade media em estoque do periodo do filtro inteiro (1o dia
     de dataInicio + ultimo dia de dataFim, dividido por 2) / quantidade
-    faturada no periodo inteiro (todas as lojas, vr_tra_transacao) * dias do
-    periodo inteiro (dataFim - dataInicio + 1). Antes usava so o ultimo mes
-    do filtro (ignorando dataInicio) - agora usa o range completo, igual ao
-    resto do DFC (PMR/PMP)."""
+    faturada no periodo inteiro (empresas em empresas_filtro,
+    vr_tra_transacao) * dias do periodo inteiro (dataFim - dataInicio + 1).
+
+    empresas_filtro decide o escopo (fabrica/loja especifica/consolidado) -
+    antes vinha sempre hardcoded pra fabrica+todas as lojas, ignorando o
+    filtro selecionado na tela."""
     try:
         data_inicio_dt = datetime.strptime(dataInicio, '%Y-%m-%d')
         data_fim_dt = datetime.strptime(dataFim, '%Y-%m-%d')
         dias_periodo = (data_fim_dt - data_inicio_dt).days + 1
 
-        qtd_estoque_primeiro = _buscar_estoque_total(dataInicio)['quantidade']
-        qtd_estoque_ultimo = _buscar_estoque_total(dataFim)['quantidade']
+        qtd_estoque_primeiro = _buscar_estoque_total(dataInicio, empresas_filtro)['quantidade']
+        qtd_estoque_ultimo = _buscar_estoque_total(dataFim, empresas_filtro)['quantidade']
         qtd_estoque_medio = (qtd_estoque_primeiro + qtd_estoque_ultimo) / 2
 
-        empresas_todas_lojas = [e for e in ([1] + list(CCUSTOS_LOJAS.keys())) if e not in EMPRESAS_EXCLUIDAS]
-        qtd_faturada_periodo = _calcular_quantidade_faturada_periodo(dataInicio, dataFim, empresas_todas_lojas)
+        qtd_faturada_periodo = _calcular_quantidade_faturada_periodo(dataInicio, dataFim, empresas_filtro)
 
         if qtd_faturada_periodo <= 0:
             return None
@@ -1966,7 +2000,7 @@ def _calcular_valores_dfc(dataInicio: str, dataFim: str, filtro: str, sem_anteci
             for scodigo, acc in pmp_por_subgrupo.items()
             if acc['valor'] > 0
         }
-        prazo_medio_estocagem = _calcular_prazo_medio_estocagem(dataInicio, dataFim)
+        prazo_medio_estocagem = _calcular_prazo_medio_estocagem(dataInicio, dataFim, empresas_filtro)
 
         return {
             "periodos": periodos_response,
@@ -2264,7 +2298,11 @@ def _calcular_dfc_por_centro_custo(dataInicio: str, dataFim: str):
 
         prazo_medio_pagamento = (pmp_acc['dias'] / pmp_acc['valor']) if pmp_acc['valor'] > 0 else None
         prazo_medio_recebimento = (pmr_acc['dias'] / pmr_acc['valor']) if pmr_acc['valor'] > 0 else None
-        prazo_medio_estocagem = _calcular_prazo_medio_estocagem(dataInicio, dataFim)
+        # Esta view pivota TODAS as lojas como colunas - nao tem um "filtro
+        # de uma loja" pra respeitar aqui (ver docstring da funcao: PME fica
+        # global de proposito, pros cards do topo sempre virem preenchidos).
+        empresas_todas_lojas = [e for e in ([1] + list(CCUSTOS_LOJAS.keys())) if e not in EMPRESAS_EXCLUIDAS]
+        prazo_medio_estocagem = _calcular_prazo_medio_estocagem(dataInicio, dataFim, empresas_todas_lojas)
 
         return {
             "centrosCusto": entidades,
