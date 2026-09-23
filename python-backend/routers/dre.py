@@ -145,28 +145,29 @@ def _calcular_quantidade_faturada_periodo(data_inicio: str, data_fim: str, empre
     return float(rows[0]['quantidade'] or 0) if rows else 0.0
 
 
-def _calcular_prazo_medio_estocagem(dataFim: str) -> Optional[float]:
-    """PME = quantidade media em estoque do ultimo mes do filtro (1o dia +
-    ultimo dia, dividido por 2) / quantidade faturada no mesmo mes (todas as
-    lojas, vr_tra_transacao) * dias do mes."""
+def _calcular_prazo_medio_estocagem(dataInicio: str, dataFim: str) -> Optional[float]:
+    """PME = quantidade media em estoque do periodo do filtro inteiro (1o dia
+    de dataInicio + ultimo dia de dataFim, dividido por 2) / quantidade
+    faturada no periodo inteiro (todas as lojas, vr_tra_transacao) * dias do
+    periodo inteiro (dataFim - dataInicio + 1). Antes usava so o ultimo mes
+    do filtro (ignorando dataInicio) - agora usa o range completo, igual ao
+    resto do DFC (PMR/PMP)."""
     try:
+        data_inicio_dt = datetime.strptime(dataInicio, '%Y-%m-%d')
         data_fim_dt = datetime.strptime(dataFim, '%Y-%m-%d')
-        ano, mes = data_fim_dt.year, data_fim_dt.month
-        ultimo_dia_num = calendar.monthrange(ano, mes)[1]
-        primeiro_dia_mes = f"{ano:04d}-{mes:02d}-01"
-        ultimo_dia_mes = f"{ano:04d}-{mes:02d}-{ultimo_dia_num:02d}"
+        dias_periodo = (data_fim_dt - data_inicio_dt).days + 1
 
-        qtd_estoque_primeiro = _buscar_estoque_total(primeiro_dia_mes)['quantidade']
-        qtd_estoque_ultimo = _buscar_estoque_total(ultimo_dia_mes)['quantidade']
+        qtd_estoque_primeiro = _buscar_estoque_total(dataInicio)['quantidade']
+        qtd_estoque_ultimo = _buscar_estoque_total(dataFim)['quantidade']
         qtd_estoque_medio = (qtd_estoque_primeiro + qtd_estoque_ultimo) / 2
 
         empresas_todas_lojas = [e for e in ([1] + list(CCUSTOS_LOJAS.keys())) if e not in EMPRESAS_EXCLUIDAS]
-        qtd_faturada_mes = _calcular_quantidade_faturada_periodo(primeiro_dia_mes, ultimo_dia_mes, empresas_todas_lojas)
+        qtd_faturada_periodo = _calcular_quantidade_faturada_periodo(dataInicio, dataFim, empresas_todas_lojas)
 
-        if qtd_faturada_mes <= 0:
+        if qtd_faturada_periodo <= 0:
             return None
 
-        return (qtd_estoque_medio / qtd_faturada_mes) * ultimo_dia_num
+        return (qtd_estoque_medio / qtd_faturada_periodo) * dias_periodo
     except Exception as e:
         print(f"[PME] Erro ao calcular prazo medio de estocagem: {e}")
         import traceback
@@ -1965,7 +1966,7 @@ def _calcular_valores_dfc(dataInicio: str, dataFim: str, filtro: str, sem_anteci
             for scodigo, acc in pmp_por_subgrupo.items()
             if acc['valor'] > 0
         }
-        prazo_medio_estocagem = _calcular_prazo_medio_estocagem(dataFim)
+        prazo_medio_estocagem = _calcular_prazo_medio_estocagem(dataInicio, dataFim)
 
         return {
             "periodos": periodos_response,
@@ -2263,7 +2264,7 @@ def _calcular_dfc_por_centro_custo(dataInicio: str, dataFim: str):
 
         prazo_medio_pagamento = (pmp_acc['dias'] / pmp_acc['valor']) if pmp_acc['valor'] > 0 else None
         prazo_medio_recebimento = (pmr_acc['dias'] / pmr_acc['valor']) if pmr_acc['valor'] > 0 else None
-        prazo_medio_estocagem = _calcular_prazo_medio_estocagem(dataFim)
+        prazo_medio_estocagem = _calcular_prazo_medio_estocagem(dataInicio, dataFim)
 
         return {
             "centrosCusto": entidades,
