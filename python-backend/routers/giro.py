@@ -493,6 +493,19 @@ def _obter_promocoes_produtos(cd_produtos: list, cd_empresas_filtro: list) -> di
     return resultado
 
 
+def _promo_prioritaria(promo: dict):
+    """A coluna "Preco Promo" e uma so - quando mais de um tipo esta em
+    promocao ao mesmo tempo pro mesmo produto, prioriza varejo (preco de
+    cliente final) > atacado > fabrica. Retorna (promo_escolhida, tipoPromo)."""
+    if promo.get("varejo"):
+        return promo["varejo"], "Varejo"
+    if promo.get("atacado"):
+        return promo["atacado"], "Atacado"
+    if promo.get("fabrica"):
+        return promo["fabrica"], "Fábrica"
+    return None, None
+
+
 def _status_produto_disponiveis() -> list:
     """Valores distintos de status de produto (mv_prd_referencia_produto) -
     pro filtro de status do Giro. Rapida (materialized view)."""
@@ -703,7 +716,7 @@ def matriz_produtos_giro(
     empresas: Optional[str] = Query(None, description="Lista de cd_empresa separados por virgula (default: todas)"),
     pagina: int = Query(1, ge=1, description="Pagina (comeca em 1)"),
     porPagina: int = Query(50, ge=1, le=200, description="Produtos por pagina"),
-    ordenarPor: str = Query("referencia", description="'referencia', 'nome', 'total', 'estoque', 'totalVenda', 'precoFabrica', 'precoAtacado', 'precoVarejo', ou um cd_empresa (ex: '3')"),
+    ordenarPor: str = Query("referencia", description="'referencia', 'nome', 'total', 'estoque', 'totalVenda', 'precoFabrica', 'precoAtacado', 'precoVarejo', 'precoPromo', ou um cd_empresa (ex: '3')"),
     ordem: str = Query("asc", description="'asc' ou 'desc'"),
     giroMinimo: Optional[float] = Query(None, description="So retorna referencias com giro TOTAL maior que esse valor (referencias sem giro - SV-3M/sem estoque - ficam de fora)")
 ):
@@ -771,6 +784,17 @@ def matriz_produtos_giro(
             chave_preco = CHAVES_PRECO[ordenarPor]
             precos_completos = _obter_precos_produtos([i["cdProdutoPreco"] for i in dados_completos])
             extrair = lambda i: (precos_completos.get(i["cdProdutoPreco"]) or {}).get(chave_preco)
+        elif ordenarPor == "precoPromo":
+            # Mesmo motivo do bloco de preco acima: pra ordenar direito
+            # precisa do promo de TODAS as referencias, nao so da pagina.
+            promocoes_completas = _obter_promocoes_produtos([i["cdProdutoPreco"] for i in dados_completos], cd_empresas)
+
+            def _extrair_promo(i):
+                promo = promocoes_completas.get(i["cdProdutoPreco"]) or {"fabrica": None, "atacado": None, "varejo": None}
+                escolhida, _ = _promo_prioritaria(promo)
+                return escolhida["precoPromo"] if escolhida else None
+
+            extrair = _extrair_promo
         else:
             try:
                 cd_empresa_ord = int(ordenarPor)
@@ -808,18 +832,7 @@ def matriz_produtos_giro(
         for item in itens_pagina:
             preco = precos.get(item["cdProdutoPreco"]) or {"precoFabrica": None, "precoAtacado": None, "precoVarejo": None}
             promo = promocoes.get(item["cdProdutoPreco"]) or {"fabrica": None, "atacado": None, "varejo": None}
-            # Coluna "Preco Promo" e uma so - prioridade varejo (preco de
-            # cliente final) > atacado > fabrica quando mais de um tipo
-            # estiver em promocao ao mesmo tempo pro mesmo produto.
-            promo_escolhida = promo["varejo"] or promo["atacado"] or promo["fabrica"]
-            if promo["varejo"]:
-                tipo_promo = "Varejo"
-            elif promo["atacado"]:
-                tipo_promo = "Atacado"
-            elif promo["fabrica"]:
-                tipo_promo = "Fábrica"
-            else:
-                tipo_promo = None
+            promo_escolhida, tipo_promo = _promo_prioritaria(promo)
             itens_resposta.append({
                 "referencia": item["referencia"],
                 "nome": item["nome"],

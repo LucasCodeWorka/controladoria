@@ -994,7 +994,9 @@ export default function GiroPage() {
                         </button>
                       </th>
                       <th className="text-right px-3 py-2 font-medium text-amber-700 bg-amber-50/60 whitespace-nowrap">
-                        Preço Promo
+                        <button onClick={() => ordenarMatrizPor('precoPromo')} className="flex items-center gap-1 ml-auto hover:text-amber-900">
+                          Preço Promo{indicadorOrdenacao('precoPromo')}
+                        </button>
                       </th>
                       {matriz.empresas.map((e) => (
                         <th key={e.cdEmpresa} className="text-right px-3 py-2 font-medium text-gray-600 whitespace-nowrap">
