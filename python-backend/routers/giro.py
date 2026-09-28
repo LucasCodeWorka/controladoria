@@ -438,6 +438,61 @@ def _obter_precos_produtos(cd_produtos: list) -> dict:
     return {cd: _cache_preco_produto.get(cd) for cd in cd_produtos}
 
 
+# cd_valor da promocao usa o MESMO codigo do preco (1=fabrica, 2=atacado,
+# 3=varejo, ver _obter_precos_produtos). Empresa 1 (Fabrica no cadastro) e
+# quem registra promocao "geral" (confirmado no banco: HOJE toda promocao
+# de varejo ativa esta em cd_empresa=1, nao existe nenhuma em 2 - a
+# suposicao inicial do usuario era que fosse a empresa 002, mas os dados
+# mostram 001) - promocao de atacado pode ser geral (cd_empresa=1) OU
+# especifica de uma loja (ex: cd_empresa=2 pra liquidacao so da Maraponga).
+_CD_VALOR_TIPO_PROMO = {1: "fabrica", 2: "atacado", 3: "varejo"}
+
+
+def _obter_promocoes_produtos(cd_produtos: list, cd_empresas_filtro: list) -> dict:
+    """Promocao ATIVA HOJE (dt_inicio <= hoje <= dt_final) por cd_produto,
+    olhando a empresa 1 (geral - cobre varejo e promocoes gerais de
+    atacado) mais as empresas do filtro atual do Giro (pega promocao de
+    atacado especifica de loja, ex: so Maraponga). Retorna
+    {cd_produto: {"varejo": {"precoPromo","precoAnterior"} | None,
+    "atacado": {...} | None, "fabrica": {...} | None}}. Quando mais de uma
+    linha bate pro mesmo tipo (ex: geral E da loja ativas ao mesmo tempo),
+    fica com a de MENOR preco (a promocao mais agressiva)."""
+    cd_produtos = [cd for cd in set(cd_produtos) if cd is not None]
+    resultado = {cd: {"fabrica": None, "atacado": None, "varejo": None} for cd in cd_produtos}
+    if not cd_produtos:
+        return resultado
+
+    cd_empresas_checar = sorted(set([1] + list(cd_empresas_filtro)))
+    placeholders_produtos = ",".join(["%s"] * len(cd_produtos))
+    placeholders_empresas = ",".join(["%s"] * len(cd_empresas_checar))
+    linhas = execute_query(f"""
+        SELECT cd_produto, cd_valor, vl_promocao, vl_anterior
+        FROM public.vr_prd_promocao
+        WHERE cd_produto IN ({placeholders_produtos})
+          AND cd_valor IN (1, 2, 3)
+          AND cd_empresa IN ({placeholders_empresas})
+          AND dt_inicio <= CURRENT_DATE
+          AND (dt_final IS NULL OR dt_final >= CURRENT_DATE)
+    """, (*cd_produtos, *cd_empresas_checar)) or []
+
+    for r in linhas:
+        tipo = _CD_VALOR_TIPO_PROMO.get(r["cd_valor"])
+        if not tipo:
+            continue
+        cd_produto = r["cd_produto"]
+        preco_promo = float(r["vl_promocao"]) if r["vl_promocao"] is not None else None
+        if preco_promo is None:
+            continue
+        atual = resultado.setdefault(cd_produto, {"fabrica": None, "atacado": None, "varejo": None})
+        existente = atual.get(tipo)
+        if existente is None or preco_promo < existente["precoPromo"]:
+            atual[tipo] = {
+                "precoPromo": preco_promo,
+                "precoAnterior": float(r["vl_anterior"]) if r["vl_anterior"] is not None else None,
+            }
+    return resultado
+
+
 def _status_produto_disponiveis() -> list:
     """Valores distintos de status de produto (mv_prd_referencia_produto) -
     pro filtro de status do Giro. Rapida (materialized view)."""
@@ -748,9 +803,23 @@ def matriz_produtos_giro(
         # _cache_matriz_referencia (dados_completos) - monta dict novo pra
         # cada linha da resposta em vez de mutar o item cacheado.
         precos = _obter_precos_produtos([i["cdProdutoPreco"] for i in itens_pagina])
+        promocoes = _obter_promocoes_produtos([i["cdProdutoPreco"] for i in itens_pagina], cd_empresas)
         itens_resposta = []
         for item in itens_pagina:
             preco = precos.get(item["cdProdutoPreco"]) or {"precoFabrica": None, "precoAtacado": None, "precoVarejo": None}
+            promo = promocoes.get(item["cdProdutoPreco"]) or {"fabrica": None, "atacado": None, "varejo": None}
+            # Coluna "Preco Promo" e uma so - prioridade varejo (preco de
+            # cliente final) > atacado > fabrica quando mais de um tipo
+            # estiver em promocao ao mesmo tempo pro mesmo produto.
+            promo_escolhida = promo["varejo"] or promo["atacado"] or promo["fabrica"]
+            if promo["varejo"]:
+                tipo_promo = "Varejo"
+            elif promo["atacado"]:
+                tipo_promo = "Atacado"
+            elif promo["fabrica"]:
+                tipo_promo = "Fábrica"
+            else:
+                tipo_promo = None
             itens_resposta.append({
                 "referencia": item["referencia"],
                 "nome": item["nome"],
@@ -761,6 +830,8 @@ def matriz_produtos_giro(
                 "precoFabrica": preco["precoFabrica"],
                 "precoAtacado": preco["precoAtacado"],
                 "precoVarejo": preco["precoVarejo"],
+                "precoPromo": promo_escolhida["precoPromo"] if promo_escolhida else None,
+                "tipoPromo": tipo_promo,
             })
 
         return {

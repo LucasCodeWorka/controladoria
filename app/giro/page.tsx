@@ -106,6 +106,8 @@ interface ItemMatrizGiro {
   precoFabrica: number | null;
   precoAtacado: number | null;
   precoVarejo: number | null;
+  precoPromo: number | null;
+  tipoPromo: 'Fábrica' | 'Atacado' | 'Varejo' | null;
 }
 
 interface MatrizGiro {
@@ -991,6 +993,9 @@ export default function GiroPage() {
                           Varejo{indicadorOrdenacao('precoVarejo')}
                         </button>
                       </th>
+                      <th className="text-right px-3 py-2 font-medium text-amber-700 bg-amber-50/60 whitespace-nowrap">
+                        Preço Promo
+                      </th>
                       {matriz.empresas.map((e) => (
                         <th key={e.cdEmpresa} className="text-right px-3 py-2 font-medium text-gray-600 whitespace-nowrap">
                           <button
@@ -1032,6 +1037,16 @@ export default function GiroPage() {
                         <td className="px-3 py-2 text-right text-blue-900 bg-blue-50/30 whitespace-nowrap">
                           <div className="text-[10px] text-blue-400 leading-tight">{formatarVariacao(variacaoPercentual(item.precoFabrica, item.precoVarejo))}</div>
                           {formatarPreco(item.precoVarejo)}
+                        </td>
+                        <td className="px-3 py-2 text-right text-amber-900 bg-amber-50/30 whitespace-nowrap">
+                          {item.precoPromo !== null ? (
+                            <>
+                              <div className="text-[10px] text-amber-600 leading-tight">🏷️ {item.tipoPromo}</div>
+                              {formatarPreco(item.precoPromo)}
+                            </>
+                          ) : (
+                            <span className="text-gray-300">-</span>
+                          )}
                         </td>
                         {matriz.empresas.map((e) => {
                           const dados = item.porLoja[String(e.cdEmpresa)];
