@@ -353,13 +353,20 @@ def _obter_matriz_agregada(mes_referencia: str, cd_empresas: list, status_filtro
             por_ref[ref] = {
                 "nomeBase": None, "nomeBaseFallback": None, "porLoja": {}, "estoqueTotal": 0.0, "vendaTotal": 0.0,
                 "cdProdutoPreco": None, "cdProdutoFallback": None, "temLeveDefeito": False,
-                "categorias": None, "categoriasFallback": None,
+                "categorias": None, "categoriasFallback": None, "cores": set(),
             }
         d = por_ref[ref]
         nome_sem_variante = _nome_base_referencia(r["nome"], r["ds_cor"], r["ds_tamanho"])
         variante_desconsiderada = _eh_variante_preco_desconsiderada(r["status"], r["familia"])
         if r["status"] == "LEVE DEFEITO":
             d["temLeveDefeito"] = True
+        # Cor "de verdade" pra mostrar como tag - fora variante leve
+        # defeito/doacao, ja que o cadastro as vezes usa o proprio campo de
+        # cor pra registrar isso (confirmado: ds_cor = "LEVE DEFEITO" em
+        # produtos reais), o que poluiria a lista de cores com algo que nao
+        # e cor nenhuma.
+        if r["ds_cor"] and r["ds_cor"].strip() and not variante_desconsiderada:
+            d["cores"].add(r["ds_cor"].strip())
         # Categoria (grupo/linha/familia/colecao/status) pro filtro por
         # clique no grafico "Giro por dimensao" - pega da mesma variante
         # "normal" usada pro preco (nao leve defeito/doacao), com fallback
@@ -419,6 +426,7 @@ def _obter_matriz_agregada(mes_referencia: str, cd_empresas: list, status_filtro
             "cdProdutoPreco": d["cdProdutoPreco"] or d["cdProdutoFallback"],
             "temLeveDefeito": d["temLeveDefeito"],
             "categorias": d["categorias"] or d["categoriasFallback"] or {},
+            "cores": sorted(d["cores"]),
         }
         for ref, d in por_ref.items()
         # Fora as referencias totalmente mortas (zero estoque e zero venda
@@ -897,6 +905,7 @@ def matriz_produtos_giro(
                 "precoVarejo": preco["precoVarejo"],
                 "promocoes": _promos_ativas_lista(promo),
                 "temLeveDefeito": item["temLeveDefeito"],
+                "cores": item["cores"],
             })
 
         return {

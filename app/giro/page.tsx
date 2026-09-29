@@ -110,6 +110,7 @@ interface ItemMatrizGiro {
   precoVarejo: number | null;
   promocoes?: { tipo: 'Fábrica' | 'Atacado' | 'Varejo'; precoPromo: number; precoAnterior: number | null }[];
   temLeveDefeito?: boolean;
+  cores?: string[];
 }
 
 interface MatrizGiro {
@@ -1181,6 +1182,9 @@ export default function GiroPage() {
                           Produto{indicadorOrdenacao('nome')}
                         </button>
                       </th>
+                      <th className="text-left px-3 py-2 font-medium text-black whitespace-nowrap min-w-[150px]">
+                        Cores
+                      </th>
                       <th className="text-right px-3 py-2 font-medium text-blue-700 bg-blue-50/60 whitespace-nowrap">
                         <button onClick={() => ordenarMatrizPor('precoFabrica')} className="flex items-center gap-1 ml-auto hover:text-blue-900">
                           Fábrica{indicadorOrdenacao('precoFabrica')}
@@ -1251,6 +1255,27 @@ export default function GiroPage() {
                           </div>
                         </td>
                         <td className="px-4 py-2 text-black sticky left-[100px] bg-inherit z-10">{item.nome}</td>
+                        <td className="px-3 py-2 whitespace-nowrap">
+                          {item.cores && item.cores.length > 0 ? (
+                            <div className="flex flex-wrap gap-1 max-w-[160px]">
+                              {item.cores.slice(0, 3).map((cor) => (
+                                <span key={cor} className="px-1.5 py-0.5 text-[10px] font-medium bg-gray-100 text-black border border-gray-200 rounded" title={cor}>
+                                  {cor}
+                                </span>
+                              ))}
+                              {item.cores.length > 3 && (
+                                <span
+                                  className="px-1.5 py-0.5 text-[10px] font-medium bg-gray-200 text-black border border-gray-300 rounded cursor-help"
+                                  title={item.cores.slice(3).join(', ')}
+                                >
+                                  +{item.cores.length - 3}
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-black">-</span>
+                          )}
+                        </td>
                         <td className="px-3 py-2 text-right text-blue-900 bg-blue-50/30 whitespace-nowrap">{formatarPreco(item.precoFabrica)}</td>
                         <td className="px-3 py-2 text-right text-blue-900 bg-blue-50/30 whitespace-nowrap">
                           <div className="text-[10px] text-blue-400 leading-tight">{formatarVariacao(variacaoPercentual(item.precoFabrica, item.precoAtacado))}</div>
