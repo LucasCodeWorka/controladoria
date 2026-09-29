@@ -787,7 +787,7 @@ def matriz_produtos_giro(
     empresas: Optional[str] = Query(None, description="Lista de cd_empresa separados por virgula (default: todas)"),
     pagina: int = Query(1, ge=1, description="Pagina (comeca em 1)"),
     porPagina: int = Query(50, ge=1, le=200, description="Produtos por pagina"),
-    ordenarPor: str = Query("referencia", description="'referencia', 'nome', 'total', 'estoque', 'totalVenda', 'precoFabrica', 'precoAtacado', 'precoVarejo', 'precoPromo', ou um cd_empresa (ex: '3')"),
+    ordenarPor: str = Query("referencia", description="'referencia', 'nome', 'total', 'estoque', 'totalVenda', 'precoFabrica', 'precoAtacado', 'precoVarejo', 'precoPromo', 'mesesOportunidade', ou um cd_empresa (ex: '3')"),
     ordem: str = Query("asc", description="'asc' ou 'desc'"),
     giroMinimo: Optional[float] = Query(None, description="So retorna referencias com giro TOTAL maior que esse valor (referencias sem giro - SV-3M/sem estoque - ficam de fora)"),
     status: Optional[str] = Query(None, description="Lista de status de produto separados por virgula (default: todos) - mesmo filtro usado no resto do Giro"),
@@ -879,6 +879,19 @@ def matriz_produtos_giro(
                 return escolhida["precoPromo"] if escolhida else None
 
             extrair = _extrair_promo
+        elif ordenarPor == "mesesOportunidade":
+            # Mesmo motivo dos blocos acima: pra ordenar direito precisa da
+            # data de TODAS as referencias, nao so da pagina.
+            primeiras_completas = _obter_primeira_oportunidade([i["referencia"] for i in dados_completos])
+
+            def _extrair_meses(i):
+                dt_primeira = primeiras_completas.get(i["referencia"])
+                if not dt_primeira:
+                    return None
+                hoje = date.today()
+                return (hoje.year - dt_primeira.year) * 12 + (hoje.month - dt_primeira.month)
+
+            extrair = _extrair_meses
         else:
             try:
                 cd_empresa_ord = int(ordenarPor)

@@ -1196,7 +1196,9 @@ export default function GiroPage() {
                         Cores
                       </th>
                       <th className="text-right px-3 py-2 font-medium text-orange-700 bg-orange-50/60 whitespace-nowrap">
-                        Meses FL
+                        <button onClick={() => ordenarMatrizPor('mesesOportunidade')} className="flex items-center gap-1 ml-auto hover:text-orange-900">
+                          Meses FL{indicadorOrdenacao('mesesOportunidade')}
+                        </button>
                       </th>
                       <th className="text-right px-3 py-2 font-medium text-blue-700 bg-blue-50/60 whitespace-nowrap">
                         <button onClick={() => ordenarMatrizPor('precoFabrica')} className="flex items-center gap-1 ml-auto hover:text-blue-900">
