@@ -761,7 +761,7 @@ def matriz_produtos_giro(
     giroMinimo: Optional[float] = Query(None, description="So retorna referencias com giro TOTAL maior que esse valor (referencias sem giro - SV-3M/sem estoque - ficam de fora)"),
     status: Optional[str] = Query(None, description="Lista de status de produto separados por virgula (default: todos) - mesmo filtro usado no resto do Giro"),
     dimensaoFiltro: Optional[str] = Query(None, description="grupo, linha, familia, colecao ou status - filtra so as referencias dessa categoria (ex: clicou numa barra do grafico por dimensao)"),
-    categoriaFiltro: Optional[str] = Query(None, description="Valor da categoria (ex: 'BODY', 'SEM CLASSIFICACAO') - exige dimensaoFiltro junto. Nao filtra pelo bucket 'OUTROS' do grafico (top 12 + resto).")
+    categoriaFiltro: Optional[str] = Query(None, description="Valor da categoria (ex: 'BODY', 'SEM CLASSIFICACAO') - exige dimensaoFiltro junto.")
 ):
     """
     Giro por REFERENCIA (nao por SKU/cor/tamanho individual) e empresa, numa
@@ -925,9 +925,6 @@ DIMENSOES_GIRO = {
     "colecao": "colecao",
     "status": "status",
 }
-TOP_N_DIMENSAO_GIRO = 12
-
-
 @router.get("/api/giro/por-dimensao")
 def giro_por_dimensao(
     dimensao: str = Query(..., description="grupo, linha, familia, colecao ou status"),
@@ -942,9 +939,8 @@ def giro_por_dimensao(
     produto. Le direto do cache giro_produto_snapshot (rapido - so um
     GROUP BY em cima de dado ja calculado, sem custo extra).
 
-    Top N categorias por tamanho de estoque, resto agrupado em 'OUTROS'
-    (mesmo padrao do CMV por dimensao) - sem isso, uma dimensao com muitas
-    categorias pequenas (ex: familia) deixaria o grafico ilegivel.
+    Mostra TODAS as categorias (sem cortar num top N + "OUTROS") - por
+    pedido explicito do usuario (mesmo padrao ja usado no CMV por dimensao).
     """
     try:
         coluna = DIMENSOES_GIRO.get(dimensao)
@@ -973,16 +969,6 @@ def giro_por_dimensao(
             key=lambda i: i["estoqueTotal"],
             reverse=True,
         )
-
-        if len(itens) > TOP_N_DIMENSAO_GIRO:
-            principais = itens[:TOP_N_DIMENSAO_GIRO]
-            resto = itens[TOP_N_DIMENSAO_GIRO:]
-            principais.append({
-                "chave": "OUTROS",
-                "estoqueTotal": sum(i["estoqueTotal"] for i in resto),
-                "vendaTotal": sum(i["vendaTotal"] for i in resto),
-            })
-            itens = principais
 
         for item in itens:
             item["giro"] = (item["estoqueTotal"] / item["vendaTotal"]) if item["vendaTotal"] > 0 else None

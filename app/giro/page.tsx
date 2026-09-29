@@ -302,8 +302,7 @@ function TooltipBarra({ active, payload }: PayloadTooltipBarra) {
 // estilo dos graficos de % do CMV Detalhado, so que o eixo/rotulo mostra um
 // numero com 2 casas em vez de %. onBarClick e opcional - so o grafico "por
 // dimensao" usa, pra filtrar a tabela de referencia/loja ao clicar numa
-// barra (o bucket "OUTROS" nao e clicavel - representa varias categorias
-// juntas, nao da pra filtrar por ele).
+// barra.
 function GraficoGiro({ dados, onBarClick }: { dados: BarraDado[]; onBarClick?: (chave: string | number) => void }) {
   if (dados.length === 0) {
     return <p className="text-sm text-gray-400 py-8 text-center">Sem giro calculado ainda.</p>;
@@ -337,7 +336,7 @@ function GraficoGiro({ dados, onBarClick }: { dados: BarraDado[]; onBarClick?: (
             radius={[4, 4, 0, 0]}
             maxBarSize={56}
             cursor={onBarClick ? 'pointer' : undefined}
-            onClick={onBarClick ? (data: any) => data?.payload?.chave !== undefined && data.payload.chave !== 'OUTROS' && onBarClick(data.payload.chave) : undefined}
+            onClick={onBarClick ? (data: any) => data?.payload?.chave !== undefined && onBarClick(data.payload.chave) : undefined}
           >
             <LabelList
               dataKey="valor"
@@ -919,7 +918,7 @@ export default function GiroPage() {
               </div>
             </div>
             <p className="text-xs text-gray-500 mb-3">
-              Giro (estoque somado ÷ venda média somada) por {DIMENSOES_GIRO.find((d) => d.chave === dimensaoSelecionada)?.label.toLowerCase()} do produto, somando todas as empresas do filtro — top {12} categorias por estoque, resto agrupado em &quot;OUTROS&quot;.
+              Giro (estoque somado ÷ venda média somada) por {DIMENSOES_GIRO.find((d) => d.chave === dimensaoSelecionada)?.label.toLowerCase()} do produto, somando todas as empresas do filtro — clique numa barra pra filtrar a tabela abaixo.
             </p>
             <GraficoGiro
               dados={(dadosPorDimensao[dimensaoSelecionada]?.itens || [])
