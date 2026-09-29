@@ -554,26 +554,42 @@ def _promos_ativas_lista(promo: dict) -> list:
     ]
 
 
-def _obter_primeira_oportunidade(referencias: list) -> dict:
+def _obter_primeira_oportunidade(referencias: list, status_filtro: Optional[list] = None) -> dict:
     """Data mais antiga (dt_inicio) entre os SKUs de cada referencia que
     estao HOJE (atual=true) em algum status "OPORTUNIDADE..." - via
     hist_dproduto, historico tipo SCD (uma linha por trecho de tempo que o
-    produto ficou com aquele conjunto de atributos). ILIKE por causa do
-    espaco duplo no cadastro ("OPORTUNIDADE  ATE 1 ANO", confirmado no
-    banco). SKU que ja foi oportunidade e voltou pra EM LINHA nao conta
-    (combinado com o usuario - so quem esta oportunidade agora)."""
+    produto ficou com aquele conjunto de atributos). SKU que ja foi
+    oportunidade e voltou pra EM LINHA nao conta (so quem esta oportunidade
+    agora).
+
+    Quando a tela tem um filtro de status ativo, so considera os SKUs que
+    TAMBEM passam nesse filtro - como status e um valor so por SKU (nao da
+    pra ser "EM LINHA" e "OPORTUNIDADE" ao mesmo tempo), filtrar so por
+    "EM LINHA" por exemplo faz essa funcao nao achar nada pra ninguem, o
+    que e o correto (pedido do usuario: analisar so os SKUs do filtro)."""
     referencias = list(set(referencias))
     if not referencias:
         return {}
+
+    if status_filtro:
+        status_oportunidade = [s for s in status_filtro if s.strip().upper().startswith("OPORTUNIDADE")]
+        if not status_oportunidade:
+            return {}
+        clausula_status = " AND status = ANY(%s)"
+        params_status: tuple = (status_oportunidade,)
+    else:
+        clausula_status = " AND status ILIKE 'OPORTUNIDADE%%'"
+        params_status = ()
+
     placeholders = ",".join(["%s"] * len(referencias))
     rows = execute_query(f"""
         SELECT referencia, MIN(dt_inicio) AS dt_primeira
         FROM hist_dproduto
         WHERE referencia IN ({placeholders})
           AND atual = true
-          AND status ILIKE 'OPORTUNIDADE%%'
+          {clausula_status}
         GROUP BY referencia
-    """, tuple(referencias)) or []
+    """, (*referencias, *params_status)) or []
     return {r["referencia"]: r["dt_primeira"] for r in rows}
 
 
@@ -882,7 +898,7 @@ def matriz_produtos_giro(
         elif ordenarPor == "mesesOportunidade":
             # Mesmo motivo dos blocos acima: pra ordenar direito precisa da
             # data de TODAS as referencias, nao so da pagina.
-            primeiras_completas = _obter_primeira_oportunidade([i["referencia"] for i in dados_completos])
+            primeiras_completas = _obter_primeira_oportunidade([i["referencia"] for i in dados_completos], status_filtro)
 
             def _extrair_meses(i):
                 dt_primeira = primeiras_completas.get(i["referencia"])
@@ -925,7 +941,7 @@ def matriz_produtos_giro(
         # cada linha da resposta em vez de mutar o item cacheado.
         precos = _obter_precos_produtos([i["cdProdutoPreco"] for i in itens_pagina])
         promocoes = _obter_promocoes_produtos([i["cdProdutoPreco"] for i in itens_pagina], cd_empresas)
-        primeiras_oportunidades = _obter_primeira_oportunidade([i["referencia"] for i in itens_pagina])
+        primeiras_oportunidades = _obter_primeira_oportunidade([i["referencia"] for i in itens_pagina], status_filtro)
         hoje = date.today()
         itens_resposta = []
         for item in itens_pagina:
