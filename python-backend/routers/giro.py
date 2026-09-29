@@ -449,10 +449,10 @@ _CD_VALOR_TIPO_PROMO = {1: "fabrica", 2: "atacado", 3: "varejo"}
 
 
 def _obter_promocoes_produtos(cd_produtos: list, cd_empresas_filtro: list) -> dict:
-    """Promocao ATIVA HOJE (dt_inicio <= hoje <= dt_final) por cd_produto,
-    olhando a empresa 1 (geral - cobre varejo e promocoes gerais de
-    atacado) mais as empresas do filtro atual do Giro (pega promocao de
-    atacado especifica de loja, ex: so Maraponga). Retorna
+    """Promocao ATIVA HOJE (dt_inicio <= hoje <= dt_final, tp_situacao='A')
+    por cd_produto, olhando a empresa 1 (geral - cobre varejo e promocoes
+    gerais de atacado) mais as empresas do filtro atual do Giro (pega
+    promocao de atacado especifica de loja, ex: so Maraponga). Retorna
     {cd_produto: {"varejo": {"precoPromo","precoAnterior"} | None,
     "atacado": {...} | None, "fabrica": {...} | None}}. Quando mais de uma
     linha bate pro mesmo tipo (ex: geral E da loja ativas ao mesmo tempo),
@@ -471,6 +471,7 @@ def _obter_promocoes_produtos(cd_produtos: list, cd_empresas_filtro: list) -> di
         WHERE cd_produto IN ({placeholders_produtos})
           AND cd_valor IN (1, 2, 3)
           AND cd_empresa IN ({placeholders_empresas})
+          AND tp_situacao = 'A'
           AND dt_inicio <= CURRENT_DATE
           AND (dt_final IS NULL OR dt_final >= CURRENT_DATE)
     """, (*cd_produtos, *cd_empresas_checar)) or []
