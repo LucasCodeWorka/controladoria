@@ -362,7 +362,7 @@ export const PLANO_CONTAS_DRE_FABRICA: ContaDRE[] = [
   },
   {
     codigo: '10',
-    nome: 'RESULTADO NAO OPERACIONAL',
+    nome: 'RESULTADO FINANCEIRO',
     nivel: 1,
     tipo: 'grupo',
     filhos: [
