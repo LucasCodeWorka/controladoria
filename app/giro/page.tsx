@@ -1042,12 +1042,17 @@ export default function GiroPage() {
                         <td className="px-3 py-2 text-right text-amber-900 bg-amber-50/30 whitespace-nowrap">
                           {(item.promocoes?.length ?? 0) > 0 ? (
                             <div className="flex items-start justify-end gap-3">
-                              {item.promocoes!.map((p) => (
-                                <div key={p.tipo}>
-                                  <div className="text-[10px] text-amber-600 leading-tight">🏷️ {p.tipo}</div>
-                                  {formatarPreco(p.precoPromo)}
-                                </div>
-                              ))}
+                              {item.promocoes!.map((p) => {
+                                const precoCheio = p.tipo === 'Varejo' ? item.precoVarejo : p.tipo === 'Atacado' ? item.precoAtacado : item.precoFabrica;
+                                const percentualDesconto = variacaoPercentual(precoCheio, p.precoPromo);
+                                return (
+                                  <div key={p.tipo}>
+                                    <div className="text-[10px] text-amber-500 leading-tight">{formatarVariacao(percentualDesconto)}</div>
+                                    <div className="text-[10px] text-amber-600 leading-tight">🏷️ {p.tipo}</div>
+                                    {formatarPreco(p.precoPromo)}
+                                  </div>
+                                );
+                              })}
                             </div>
                           ) : (
                             <span className="text-gray-300">-</span>
