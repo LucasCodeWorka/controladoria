@@ -386,6 +386,53 @@ export default function GiroPage() {
   const [matrizOrdem, setMatrizOrdem] = useState<'asc' | 'desc'>('asc');
   const MATRIZ_POR_PAGINA = 50;
 
+  // Tooltip com foto do produto ao passar o mouse na referencia - mesmo
+  // padrao/endpoint ja usado no CMV Detalhado (API publica da VTEX via
+  // /api/foto, cacheada). Guarda a referencia em hover tambem em ref, pra
+  // descartar resposta atrasada se o mouse ja passou pra outra linha antes
+  // da foto chegar.
+  const [fotoTooltip, setFotoTooltip] = useState<{ referencia: string; url: string | null; carregando: boolean; erro: boolean; x: number; y: number } | null>(null);
+  const cacheFotoRef = useRef<Map<string, string | null>>(new Map());
+  const hoverFotoRef = useRef<string | null>(null);
+
+  function mostrarFotoRef(referencia: string, x: number, y: number) {
+    hoverFotoRef.current = referencia;
+    const emCache = cacheFotoRef.current.get(referencia);
+    if (emCache !== undefined) {
+      setFotoTooltip({ referencia, url: emCache, carregando: false, erro: false, x, y });
+      return;
+    }
+    setFotoTooltip({ referencia, url: null, carregando: true, erro: false, x, y });
+    fetch(`/api/foto?ref=${encodeURIComponent(referencia)}`, { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((data) => {
+        const url = data?.url ?? null;
+        cacheFotoRef.current.set(referencia, url);
+        if (hoverFotoRef.current === referencia) {
+          setFotoTooltip((atual) => (atual && atual.referencia === referencia ? { ...atual, url, carregando: false } : atual));
+        }
+      })
+      .catch(() => {
+        cacheFotoRef.current.set(referencia, null);
+        if (hoverFotoRef.current === referencia) {
+          setFotoTooltip((atual) => (atual && atual.referencia === referencia ? { ...atual, url: null, carregando: false } : atual));
+        }
+      });
+  }
+
+  function moverFotoRef(referencia: string, x: number, y: number) {
+    setFotoTooltip((atual) => (atual && atual.referencia === referencia ? { ...atual, x, y } : atual));
+  }
+
+  function imagemFalhou(referencia: string) {
+    setFotoTooltip((atual) => (atual && atual.referencia === referencia ? { ...atual, erro: true } : atual));
+  }
+
+  function esconderFotoRef() {
+    hoverFotoRef.current = null;
+    setFotoTooltip(null);
+  }
+
   // Giro por dimensao do produto (grupo/linha/familia/status/colecao) - as
   // 5 vem juntas na consulta, trocar de aba so troca qual ja veio (sem
   // refazer a busca).
@@ -1032,7 +1079,12 @@ export default function GiroPage() {
                   <tbody className="divide-y divide-gray-100">
                     {matriz.itens.map((item, idx) => (
                       <tr key={item.referencia} className={`${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'} hover:bg-rose-50 transition-colors`}>
-                        <td className="px-4 py-2 text-gray-500 sticky left-0 bg-inherit z-10">
+                        <td
+                          className="px-4 py-2 text-gray-500 sticky left-0 bg-inherit z-10 cursor-help"
+                          onMouseEnter={(ev) => mostrarFotoRef(item.referencia, ev.clientX, ev.clientY)}
+                          onMouseMove={(ev) => moverFotoRef(item.referencia, ev.clientX, ev.clientY)}
+                          onMouseLeave={esconderFotoRef}
+                        >
                           <div className="flex items-center gap-1.5">
                             {item.referencia}
                             {item.temLeveDefeito && (
@@ -1127,6 +1179,31 @@ export default function GiroPage() {
               </p>
             )}
           </div>
+
+          {fotoTooltip && (
+            <div
+              className="fixed z-50 bg-white border border-gray-200 rounded-lg shadow-xl p-1.5 pointer-events-none"
+              style={{ left: fotoTooltip.x + 12, top: fotoTooltip.y + 12 }}
+            >
+              {fotoTooltip.carregando ? (
+                <div className="w-[400px] h-[200px] flex items-center justify-center text-xs text-gray-400">
+                  Carregando...
+                </div>
+              ) : fotoTooltip.url && !fotoTooltip.erro ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={fotoTooltip.url}
+                  alt={fotoTooltip.referencia}
+                  className="block w-[400px] h-[400px] object-contain rounded"
+                  onError={() => imagemFalhou(fotoTooltip.referencia)}
+                />
+              ) : (
+                <div className="w-[400px] h-[200px] flex items-center justify-center text-center text-xs text-gray-400">
+                  {fotoTooltip.erro ? 'Não foi possível carregar a imagem' : 'Sem foto na loja'}
+                </div>
+              )}
+            </div>
+          )}
         </>
       )}
     </div>
