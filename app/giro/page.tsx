@@ -159,7 +159,7 @@ function CelulaGiro({ estoque, giro }: { estoque: number; giro: number | null })
     );
   }
   return (
-    <span className="inline-block px-1.5 py-0.5 text-[10px] font-semibold rounded bg-gray-100 text-gray-500 border border-gray-200">
+    <span className="inline-block px-1.5 py-0.5 text-[10px] font-semibold rounded bg-gray-100 text-black border border-gray-200">
       SE-SV
     </span>
   );
@@ -323,7 +323,7 @@ const COR_ACIMA_META = '#dc2626';
 // fora, alem da cor.
 function GraficoGiro({ dados, onBarClick, chaveAtiva }: { dados: BarraDado[]; onBarClick?: (chave: string | number) => void; chaveAtiva?: string | number | null }) {
   if (dados.length === 0) {
-    return <p className="text-sm text-gray-400 py-8 text-center">Sem giro calculado ainda.</p>;
+    return <p className="text-sm text-black py-8 text-center">Sem giro calculado ainda.</p>;
   }
   const muitasCategorias = dados.length > 8;
 
@@ -334,7 +334,7 @@ function GraficoGiro({ dados, onBarClick, chaveAtiva }: { dados: BarraDado[]; on
           <CartesianGrid strokeDasharray="3 3" stroke="#e1e0d9" vertical={false} />
           <XAxis
             dataKey="label"
-            tick={{ fontSize: 11, fill: '#52514e' }}
+            tick={{ fontSize: 11, fill: '#000000' }}
             interval={0}
             angle={muitasCategorias ? -35 : 0}
             textAnchor={muitasCategorias ? 'end' : 'middle'}
@@ -342,7 +342,7 @@ function GraficoGiro({ dados, onBarClick, chaveAtiva }: { dados: BarraDado[]; on
             tickLine={false}
           />
           <YAxis
-            tick={{ fontSize: 11, fill: '#898781' }}
+            tick={{ fontSize: 11, fill: '#000000' }}
             axisLine={false}
             tickLine={false}
             width={36}
@@ -356,7 +356,7 @@ function GraficoGiro({ dados, onBarClick, chaveAtiva }: { dados: BarraDado[]; on
             stroke="#57534e"
             strokeDasharray="5 4"
             strokeWidth={1.5}
-            label={{ value: `Meta: ${META_GIRO}`, position: 'insideTopRight', fontSize: 11, fill: '#57534e', fontWeight: 600 }}
+            label={{ value: `Meta: ${META_GIRO}`, position: 'insideTopRight', fontSize: 11, fill: '#000000', fontWeight: 600 }}
           />
           <Bar
             dataKey="valor"
@@ -374,7 +374,7 @@ function GraficoGiro({ dados, onBarClick, chaveAtiva }: { dados: BarraDado[]; on
               dataKey="valor"
               position="top"
               formatter={(v: React.ReactNode) => formatarGiro(v as number)}
-              style={{ fontSize: 11, fontWeight: 700, fill: '#0b0b0b' }}
+              style={{ fontSize: 11, fontWeight: 700, fill: '#000000' }}
             />
           </Bar>
         </BarChart>
@@ -386,11 +386,11 @@ function GraficoGiro({ dados, onBarClick, chaveAtiva }: { dados: BarraDado[]; on
 function CardConsolidado({ titulo, dado }: { titulo: string; dado: Consolidado | null }) {
   return (
     <div className="bg-white rounded-lg shadow-lg p-5">
-      <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">{titulo}</p>
-      <p className="text-3xl font-bold text-gray-900 mt-1">{dado ? formatarGiro(dado.giro) : '-'}</p>
-      <p className="text-xs text-gray-400 mt-0.5">meses de cobertura</p>
+      <p className="text-xs font-medium text-black uppercase tracking-wide">{titulo}</p>
+      <p className="text-3xl font-bold text-black mt-1">{dado ? formatarGiro(dado.giro) : '-'}</p>
+      <p className="text-xs text-black mt-0.5">meses de cobertura</p>
       {dado && (
-        <div className="flex justify-between text-xs text-gray-500 mt-3 pt-3 border-t border-gray-100">
+        <div className="flex justify-between text-xs text-black mt-3 pt-3 border-t border-gray-100">
           <span>Estoque: {formatarQtd(dado.estoqueAtual)} un.</span>
           <span>Venda média/mês: {formatarQtd(dado.vendaMedia3m)} un.</span>
         </div>
@@ -829,7 +829,7 @@ export default function GiroPage() {
           </div>
           <div>
             <h1 className="text-2xl font-bold text-brand-dark">Giro</h1>
-            <p className="text-sm text-gray-500">Estoque no mês x venda média dos 3 meses cheios anteriores, por loja, fábrica e consolidado.</p>
+            <p className="text-sm text-black">Estoque no mês x venda média dos 3 meses cheios anteriores, por loja, fábrica e consolidado.</p>
           </div>
         </div>
       </div>
@@ -840,7 +840,7 @@ export default function GiroPage() {
           <h2 className="text-base font-semibold text-brand-dark">Período</h2>
         </div>
         <div className="flex items-center gap-3 flex-wrap">
-          <label className="text-sm text-gray-500">Mês de referência</label>
+          <label className="text-sm text-black">Mês de referência</label>
           <select
             value={mesReferencia}
             onChange={(e) => setMesReferencia(e.target.value)}
@@ -859,7 +859,7 @@ export default function GiroPage() {
               className="min-w-[160px] flex items-center justify-between gap-2 px-3 py-2 border border-gray-300 rounded-md text-sm bg-white hover:bg-gray-50"
             >
               Lojas ({empresasSelecionadas.size}/{empresasDisponiveis.length})
-              <ChevronDown className="w-4 h-4 text-gray-500" />
+              <ChevronDown className="w-4 h-4 text-black" />
             </button>
             {filtroLojasAberto && (
               <div className="absolute z-30 mt-1 w-64 max-h-80 overflow-auto bg-white border border-gray-200 rounded-lg shadow-xl p-2">
@@ -870,7 +870,7 @@ export default function GiroPage() {
                   >
                     Todas
                   </button>
-                  <button className="text-xs font-medium text-gray-600 hover:text-gray-900" onClick={() => setEmpresasSelecionadas(new Set())}>
+                  <button className="text-xs font-medium text-black hover:text-black" onClick={() => setEmpresasSelecionadas(new Set())}>
                     Nenhuma
                   </button>
                 </div>
@@ -894,7 +894,7 @@ export default function GiroPage() {
               className="min-w-[160px] flex items-center justify-between gap-2 px-3 py-2 border border-gray-300 rounded-md text-sm bg-white hover:bg-gray-50"
             >
               Status ({statusSelecionados.size === 0 ? 'todos' : statusSelecionados.size})
-              <ChevronDown className="w-4 h-4 text-gray-500" />
+              <ChevronDown className="w-4 h-4 text-black" />
             </button>
             {filtroStatusAberto && (
               <div className="absolute z-30 mt-1 w-72 max-h-80 overflow-auto bg-white border border-gray-200 rounded-lg shadow-xl p-2">
@@ -905,7 +905,7 @@ export default function GiroPage() {
                   >
                     Todos
                   </button>
-                  <button className="text-xs font-medium text-gray-600 hover:text-gray-900" onClick={() => setStatusSelecionados(new Set())}>
+                  <button className="text-xs font-medium text-black hover:text-black" onClick={() => setStatusSelecionados(new Set())}>
                     Limpar
                   </button>
                 </div>
@@ -932,7 +932,7 @@ export default function GiroPage() {
         </div>
 
         {dados?.dtCalculado && (
-          <p className="text-xs text-gray-400 mt-3">
+          <p className="text-xs text-black mt-3">
             Último cálculo em {new Date(dados.dtCalculado).toLocaleString('pt-BR')}
             {dados.mesIni && dados.mesFim && <> — venda média referente a {labelMes(dados.mesIni)} a {labelMes(dados.mesFim)}</>}
           </p>
@@ -944,12 +944,12 @@ export default function GiroPage() {
       {carregandoInicial && (
         <div className="flex items-center justify-center py-16">
           <Loader2 className="w-6 h-6 animate-spin text-rose-600" />
-          <span className="ml-3 text-gray-600">Carregando...</span>
+          <span className="ml-3 text-black">Carregando...</span>
         </div>
       )}
 
       {!carregandoInicial && !consultaExecutada && (
-        <div className="bg-white rounded-lg shadow border border-gray-200 p-8 text-center text-gray-500">
+        <div className="bg-white rounded-lg shadow border border-gray-200 p-8 text-center text-black">
           Escolha o mês de referência e as lojas e clique em Consultar.
         </div>
       )}
@@ -973,7 +973,7 @@ export default function GiroPage() {
       )}
 
       {!carregandoInicial && consultaExecutada && !temDados && !recalculando && dados?.empresasFaltantes.length === 0 && (
-        <div className="bg-white rounded-lg shadow border border-gray-200 p-8 text-center text-gray-500">
+        <div className="bg-white rounded-lg shadow border border-gray-200 p-8 text-center text-black">
           Nenhuma empresa selecionada.
         </div>
       )}
@@ -987,8 +987,8 @@ export default function GiroPage() {
           </div>
 
           <div className="bg-white rounded-lg shadow-lg p-5">
-            <h2 className="text-base font-semibold text-gray-800 mb-1">Giro por loja e fábrica</h2>
-            <p className="text-xs text-gray-500 mb-3">
+            <h2 className="text-base font-semibold text-black mb-1">Giro por loja e fábrica</h2>
+            <p className="text-xs text-black mb-3">
               Giro = estoque no mês ÷ venda média mensal dos 3 meses cheios anteriores — meses de cobertura do estoque no ritmo de venda (quanto menor, mais rápido o giro). Escala logarítmica no eixo, pra uma barra bem mais alta que as outras não achatar o gráfico.
             </p>
             <GraficoGiro
@@ -1007,7 +1007,7 @@ export default function GiroPage() {
 
           <div className="bg-white rounded-lg shadow-lg p-5">
             <div className="flex items-center justify-between flex-wrap gap-3 mb-1">
-              <h2 className="text-base font-semibold text-gray-800">Giro por {DIMENSOES_GIRO.find((d) => d.chave === dimensaoSelecionada)?.label.toLowerCase()}</h2>
+              <h2 className="text-base font-semibold text-black">Giro por {DIMENSOES_GIRO.find((d) => d.chave === dimensaoSelecionada)?.label.toLowerCase()}</h2>
               <div className="flex items-center gap-1.5 flex-wrap">
                 {DIMENSOES_GIRO.map((d) => (
                   <button
@@ -1016,7 +1016,7 @@ export default function GiroPage() {
                     className={`px-2.5 py-1 text-xs rounded-md transition-colors ${
                       dimensaoSelecionada === d.chave
                         ? 'bg-rose-600 text-white'
-                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                        : 'bg-gray-100 text-black hover:bg-gray-200'
                     }`}
                   >
                     {d.label}
@@ -1024,7 +1024,7 @@ export default function GiroPage() {
                 ))}
               </div>
             </div>
-            <p className="text-xs text-gray-500 mb-3">
+            <p className="text-xs text-black mb-3">
               Giro (estoque somado ÷ venda média somada) por {DIMENSOES_GIRO.find((d) => d.chave === dimensaoSelecionada)?.label.toLowerCase()} do produto, somando todas as empresas do filtro — clique numa barra pra filtrar a tabela abaixo. Escala logarítmica no eixo, pra uma barra bem mais alta que as outras não achatar o gráfico.
             </p>
             <GraficoGiro
@@ -1043,7 +1043,7 @@ export default function GiroPage() {
 
           <div className="bg-white rounded-lg shadow-lg overflow-hidden">
             <div className="px-4 pt-3 flex items-center gap-2 text-sm flex-wrap">
-              <label htmlFor="giro-minimo" className="text-gray-600">Giro maior que:</label>
+              <label htmlFor="giro-minimo" className="text-black">Giro maior que:</label>
               <input
                 id="giro-minimo"
                 type="number"
@@ -1058,7 +1058,7 @@ export default function GiroPage() {
               <button
                 onClick={aplicarFiltroGiroMinimo}
                 disabled={matrizCarregando}
-                className="px-3 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md text-xs disabled:opacity-40 transition-colors"
+                className="px-3 py-1 bg-gray-100 hover:bg-gray-200 text-black rounded-md text-xs disabled:opacity-40 transition-colors"
               >
                 Aplicar
               </button>
@@ -1066,7 +1066,7 @@ export default function GiroPage() {
                 <button
                   onClick={limparFiltroGiroMinimo}
                   disabled={matrizCarregando}
-                  className="text-xs text-gray-400 hover:text-gray-600 underline disabled:opacity-40"
+                  className="text-xs text-black hover:text-black underline disabled:opacity-40"
                 >
                   Limpar
                 </button>
@@ -1074,13 +1074,13 @@ export default function GiroPage() {
             </div>
             <div className="p-4 pb-2 flex items-center justify-between flex-wrap gap-3">
               <div>
-                <h2 className="text-base font-semibold text-gray-800">Giro por referência e loja</h2>
-                <p className="text-xs text-gray-500">
+                <h2 className="text-base font-semibold text-black">Giro por referência e loja</h2>
+                <p className="text-xs text-black">
                   Cada linha é uma referência (soma de todas as cores/tamanhos dela) — uma coluna de giro por
                   loja/fábrica selecionada, e o giro total no final (estoque somado ÷ venda média somada de todas as
                   empresas do filtro).
                 </p>
-                <div className="flex items-center gap-3 mt-1 text-[11px] text-gray-500">
+                <div className="flex items-center gap-3 mt-1 text-[11px] text-black">
                   <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500" /> Giro rápido</span>
                   <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500" /> Atenção</span>
                   <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-rose-500" /> Estoque parado</span>
@@ -1089,7 +1089,7 @@ export default function GiroPage() {
                     Tem estoque mas sem venda nos últimos 3 meses
                   </span>
                   <span className="flex items-center gap-1">
-                    <span className="px-1 py-0.5 text-[10px] font-semibold rounded bg-gray-100 text-gray-500 border border-gray-200">SE-SV</span>
+                    <span className="px-1 py-0.5 text-[10px] font-semibold rounded bg-gray-100 text-black border border-gray-200">SE-SV</span>
                     Sem estoque e sem venda nessa loja
                   </span>
                 </div>
@@ -1099,17 +1099,17 @@ export default function GiroPage() {
                   <button
                     onClick={() => trocarPaginaMatriz(matrizPagina - 1)}
                     disabled={matrizCarregando || matrizPagina <= 1}
-                    className="px-2.5 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md disabled:opacity-40 transition-colors"
+                    className="px-2.5 py-1 bg-gray-100 hover:bg-gray-200 text-black rounded-md disabled:opacity-40 transition-colors"
                   >
                     ← Anterior
                   </button>
-                  <span className="text-gray-500 text-xs whitespace-nowrap">
+                  <span className="text-black text-xs whitespace-nowrap">
                     Página {matriz.pagina} de {matriz.totalPaginas} ({formatarQtd(matriz.totalProdutos)} produtos)
                   </span>
                   <button
                     onClick={() => trocarPaginaMatriz(matrizPagina + 1)}
                     disabled={matrizCarregando || matrizPagina >= matriz.totalPaginas}
-                    className="px-2.5 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md disabled:opacity-40 transition-colors"
+                    className="px-2.5 py-1 bg-gray-100 hover:bg-gray-200 text-black rounded-md disabled:opacity-40 transition-colors"
                   >
                     Próxima →
                   </button>
@@ -1141,12 +1141,12 @@ export default function GiroPage() {
             {matrizCarregando && (
               <div className="flex items-center justify-center py-12">
                 <Loader2 className="w-5 h-5 animate-spin text-rose-600" />
-                <span className="ml-3 text-gray-500 text-sm">Carregando...</span>
+                <span className="ml-3 text-black text-sm">Carregando...</span>
               </div>
             )}
 
             {!matrizCarregando && matriz && matriz.itens.length === 0 && (
-              <p className="text-sm text-gray-400 py-8 text-center">Nenhum produto encontrado.</p>
+              <p className="text-sm text-black py-8 text-center">Nenhum produto encontrado.</p>
             )}
 
             {!matrizCarregando && matriz && matriz.itens.length > 0 && (
@@ -1154,13 +1154,13 @@ export default function GiroPage() {
                 <table className="w-full text-sm">
                   <thead className="bg-gray-50 border-b border-gray-200">
                     <tr>
-                      <th className="text-left px-4 py-2 font-medium text-gray-600 sticky left-0 bg-gray-50 z-10 min-w-[100px]">
-                        <button onClick={() => ordenarMatrizPor('referencia')} className="flex items-center gap-1 hover:text-gray-900">
+                      <th className="text-left px-4 py-2 font-medium text-black sticky left-0 bg-gray-50 z-10 min-w-[100px]">
+                        <button onClick={() => ordenarMatrizPor('referencia')} className="flex items-center gap-1 hover:text-black">
                           Referência{indicadorOrdenacao('referencia')}
                         </button>
                       </th>
-                      <th className="text-left px-4 py-2 font-medium text-gray-600 sticky left-[100px] bg-gray-50 z-10 min-w-[220px]">
-                        <button onClick={() => ordenarMatrizPor('nome')} className="flex items-center gap-1 hover:text-gray-900">
+                      <th className="text-left px-4 py-2 font-medium text-black sticky left-[100px] bg-gray-50 z-10 min-w-[220px]">
+                        <button onClick={() => ordenarMatrizPor('nome')} className="flex items-center gap-1 hover:text-black">
                           Produto{indicadorOrdenacao('nome')}
                         </button>
                       </th>
@@ -1185,10 +1185,10 @@ export default function GiroPage() {
                         </button>
                       </th>
                       {matriz.empresas.map((e) => (
-                        <th key={e.cdEmpresa} className="text-right px-3 py-2 font-medium text-gray-600 whitespace-nowrap">
+                        <th key={e.cdEmpresa} className="text-right px-3 py-2 font-medium text-black whitespace-nowrap">
                           <button
                             onClick={() => ordenarMatrizPor(String(e.cdEmpresa))}
-                            className="flex items-center gap-1 ml-auto hover:text-gray-900"
+                            className="flex items-center gap-1 ml-auto hover:text-black"
                             title={e.nome}
                           >
                             {nomeColunaLoja(e.nome)}{indicadorOrdenacao(String(e.cdEmpresa))}
@@ -1205,8 +1205,8 @@ export default function GiroPage() {
                           Total Venda{indicadorOrdenacao('totalVenda')}
                         </button>
                       </th>
-                      <th className="text-right px-4 py-2 font-semibold text-gray-800 bg-gray-200/70 border-l-2 border-gray-300 whitespace-nowrap">
-                        <button onClick={() => ordenarMatrizPor('total')} className="flex items-center gap-1 ml-auto hover:text-gray-600">
+                      <th className="text-right px-4 py-2 font-semibold text-black bg-gray-200/70 border-l-2 border-gray-300 whitespace-nowrap">
+                        <button onClick={() => ordenarMatrizPor('total')} className="flex items-center gap-1 ml-auto hover:text-black">
                           Total{indicadorOrdenacao('total')}
                         </button>
                       </th>
@@ -1216,7 +1216,7 @@ export default function GiroPage() {
                     {matriz.itens.map((item, idx) => (
                       <tr key={item.referencia} className={`${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'} hover:bg-rose-50 transition-colors`}>
                         <td
-                          className="px-4 py-2 text-gray-500 sticky left-0 bg-inherit z-10 cursor-help"
+                          className="px-4 py-2 text-black sticky left-0 bg-inherit z-10 cursor-help"
                           onMouseEnter={(ev) => mostrarFotoRef(item.referencia, ev.clientX, ev.clientY)}
                           onMouseMove={(ev) => moverFotoRef(item.referencia, ev.clientX, ev.clientY)}
                           onMouseLeave={esconderFotoRef}
@@ -1233,7 +1233,7 @@ export default function GiroPage() {
                             )}
                           </div>
                         </td>
-                        <td className="px-4 py-2 text-gray-800 sticky left-[100px] bg-inherit z-10">{item.nome}</td>
+                        <td className="px-4 py-2 text-black sticky left-[100px] bg-inherit z-10">{item.nome}</td>
                         <td className="px-3 py-2 text-right text-blue-900 bg-blue-50/30 whitespace-nowrap">{formatarPreco(item.precoFabrica)}</td>
                         <td className="px-3 py-2 text-right text-blue-900 bg-blue-50/30 whitespace-nowrap">
                           <div className="text-[10px] text-blue-400 leading-tight">{formatarVariacao(variacaoPercentual(item.precoFabrica, item.precoAtacado))}</div>
@@ -1259,7 +1259,7 @@ export default function GiroPage() {
                               })}
                             </div>
                           ) : (
-                            <span className="text-gray-300">-</span>
+                            <span className="text-black">-</span>
                           )}
                         </td>
                         {matriz.empresas.map((e) => {
@@ -1322,7 +1322,7 @@ export default function GiroPage() {
               style={{ left: fotoTooltip.x + 12, top: fotoTooltip.y + 12 }}
             >
               {fotoTooltip.carregando ? (
-                <div className="w-[400px] h-[200px] flex items-center justify-center text-xs text-gray-400">
+                <div className="w-[400px] h-[200px] flex items-center justify-center text-xs text-black">
                   Carregando...
                 </div>
               ) : fotoTooltip.url && !fotoTooltip.erro ? (
@@ -1334,7 +1334,7 @@ export default function GiroPage() {
                   onError={() => imagemFalhou(fotoTooltip.referencia)}
                 />
               ) : (
-                <div className="w-[400px] h-[200px] flex items-center justify-center text-center text-xs text-gray-400">
+                <div className="w-[400px] h-[200px] flex items-center justify-center text-center text-xs text-black">
                   {fotoTooltip.erro ? 'Não foi possível carregar a imagem' : 'Sem foto na loja'}
                 </div>
               )}
