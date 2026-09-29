@@ -242,12 +242,14 @@ const APELIDOS_COLUNA_LOJA: Record<string, string> = {
 // nenhum outro lugar da tela (filtro de lojas, tabela principal), so no
 // cabecalho de coluna, onde o espaco e curto.
 function nomeColunaLoja(nome: string): string {
-  if (APELIDOS_COLUNA_LOJA[nome]) return APELIDOS_COLUNA_LOJA[nome];
-  const limpo = nome
+  const base = APELIDOS_COLUNA_LOJA[nome] || nome
     .replace(/\s*SHOPPING\s*/gi, ' ')
     .replace(/\s*-\s*[A-Z]{2}\s*$/i, '')
-    .trim();
-  return nomeCurto(limpo || nome);
+    .trim() || nome;
+  // Maximo 5 caracteres no cabecalho da coluna (espaco curto demais pra
+  // nome completo com muitas lojas lado a lado) - o nome completo continua
+  // no title do botao (tooltip ao passar o mouse).
+  return base.length > 5 ? base.slice(0, 5) : base;
 }
 
 function mesAtual(): string {
@@ -1151,8 +1153,8 @@ export default function GiroPage() {
                         </button>
                       </th>
                       <th className="text-right px-3 py-2 font-medium text-amber-700 bg-amber-50/60 whitespace-nowrap">
-                        <button onClick={() => ordenarMatrizPor('precoPromo')} className="flex items-center gap-1 ml-auto hover:text-amber-900">
-                          Preço Promo{indicadorOrdenacao('precoPromo')}
+                        <button onClick={() => ordenarMatrizPor('precoPromo')} className="flex items-center gap-1 ml-auto hover:text-amber-900" title="Preço Promo">
+                          Promo{indicadorOrdenacao('precoPromo')}
                         </button>
                       </th>
                       {matriz.empresas.map((e) => (
