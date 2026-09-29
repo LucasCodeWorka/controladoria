@@ -494,9 +494,11 @@ def _obter_promocoes_produtos(cd_produtos: list, cd_empresas_filtro: list) -> di
 
 
 def _promo_prioritaria(promo: dict):
-    """A coluna "Preco Promo" e uma so - quando mais de um tipo esta em
-    promocao ao mesmo tempo pro mesmo produto, prioriza varejo (preco de
-    cliente final) > atacado > fabrica. Retorna (promo_escolhida, tipoPromo)."""
+    """Usado so pra ORDENAR pela coluna "Preco Promo" (precisa de um unico
+    valor por item pra comparar) - prioriza varejo (preco de cliente final)
+    > atacado > fabrica quando mais de um tipo esta em promocao ao mesmo
+    tempo. Retorna (promo_escolhida, tipoPromo). A EXIBICAO na tela mostra
+    todos os tipos ativos (ver _promos_ativas_lista), essa funcao nao."""
     if promo.get("varejo"):
         return promo["varejo"], "Varejo"
     if promo.get("atacado"):
@@ -504,6 +506,18 @@ def _promo_prioritaria(promo: dict):
     if promo.get("fabrica"):
         return promo["fabrica"], "Fábrica"
     return None, None
+
+
+def _promos_ativas_lista(promo: dict) -> list:
+    """Todos os tipos de promocao ativos pro produto (nao so o prioritario) -
+    pra exibir Varejo E Atacado juntos quando os dois estiverem em promocao
+    ao mesmo tempo, em vez de esconder um deles."""
+    ordem = [("varejo", "Varejo"), ("atacado", "Atacado"), ("fabrica", "Fábrica")]
+    return [
+        {"tipo": label, "precoPromo": promo[chave]["precoPromo"], "precoAnterior": promo[chave]["precoAnterior"]}
+        for chave, label in ordem
+        if promo.get(chave)
+    ]
 
 
 def _status_produto_disponiveis() -> list:
@@ -832,7 +846,6 @@ def matriz_produtos_giro(
         for item in itens_pagina:
             preco = precos.get(item["cdProdutoPreco"]) or {"precoFabrica": None, "precoAtacado": None, "precoVarejo": None}
             promo = promocoes.get(item["cdProdutoPreco"]) or {"fabrica": None, "atacado": None, "varejo": None}
-            promo_escolhida, tipo_promo = _promo_prioritaria(promo)
             itens_resposta.append({
                 "referencia": item["referencia"],
                 "nome": item["nome"],
@@ -843,8 +856,7 @@ def matriz_produtos_giro(
                 "precoFabrica": preco["precoFabrica"],
                 "precoAtacado": preco["precoAtacado"],
                 "precoVarejo": preco["precoVarejo"],
-                "precoPromo": promo_escolhida["precoPromo"] if promo_escolhida else None,
-                "tipoPromo": tipo_promo,
+                "promocoes": _promos_ativas_lista(promo),
             })
 
         return {
