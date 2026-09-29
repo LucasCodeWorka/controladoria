@@ -593,8 +593,13 @@ export default function DREPage() {
   }
 
   const dadosAnaliticaExibicao = useMemo(() => {
-    if (!despesaFiltroSelecionada && !mostrarApenasComAlerta) return dadosDREFiltrados;
-    return filtrarAnalitica(dadosDREFiltrados);
+    const base = !despesaFiltroSelecionada && !mostrarApenasComAlerta
+      ? dadosDREFiltrados
+      : filtrarAnalitica(dadosDREFiltrados);
+    // "05 MARGEM CONTRIBUICAO" nao aparece mais como linha propria no topo -
+    // ela "desce" e reaparece recalculada dentro do grupo 08, entre despesas
+    // variaveis e fixas (continua em dadosDRE, so pra alimentar esse calculo).
+    return base.filter((conta) => conta.codigo !== '05');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dadosDREFiltrados, despesaFiltroSelecionada, mostrarApenasComAlerta, celulasAlertadas, periodos]);
 
