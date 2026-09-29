@@ -754,13 +754,8 @@ export default function GiroPage() {
   }
 
   const temDados = !!dados && dados.itens.length > 0;
-  const itensOrdenados = dados
-    ? [...dados.itens].sort((a, b) => (b.giro ?? -1) - (a.giro ?? -1))
-    : [];
-  // So pro grafico "Giro por loja e fabrica" - por pedido do usuario, os
-  // graficos (esse e o de dimensao, que ja vem ordenado assim do backend)
-  // ordenam por estoque decrescente, nao por giro. A tabela Empresa/Tipo/
-  // Estoque/Venda/Giro embaixo continua por giro (itensOrdenados).
+  // Grafico "Giro por loja e fabrica" ordenado por estoque decrescente
+  // (pedido do usuario) - o grafico de dimensao ja vem assim do backend.
   const itensPorEstoqueDesc = dados
     ? [...dados.itens].sort((a, b) => b.estoqueAtual - a.estoqueAtual)
     : [];
@@ -985,34 +980,6 @@ export default function GiroPage() {
               chaveAtiva={filtroDimensaoMatriz?.dimensao === dimensaoSelecionada ? filtroDimensaoMatriz.categoria : null}
             />
           </div>
-
-          <div className="bg-white rounded-lg shadow-lg overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-gray-50 border-b border-gray-200">
-                  <tr>
-                    <th className="text-left px-4 py-2.5 font-medium text-gray-600">Empresa</th>
-                    <th className="text-left px-4 py-2.5 font-medium text-gray-600">Tipo</th>
-                    <th className="text-right px-4 py-2.5 font-medium text-gray-600">Estoque Atual</th>
-                    <th className="text-right px-4 py-2.5 font-medium text-gray-600">Venda Média 3m</th>
-                    <th className="text-right px-4 py-2.5 font-medium text-gray-600">Giro</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {itensOrdenados.map((item) => (
-                    <tr key={item.cdEmpresa} className="hover:bg-gray-50">
-                      <td className="px-4 py-2 text-gray-800">{item.nome}</td>
-                      <td className="px-4 py-2 text-gray-500 capitalize">{item.tipo}</td>
-                      <td className="px-4 py-2 text-right text-gray-700">{formatarQtd(item.estoqueAtual)}</td>
-                      <td className="px-4 py-2 text-right text-gray-700">{formatarQtd(item.vendaMedia3m)}</td>
-                      <td className="px-4 py-2 text-right font-medium text-gray-900">{formatarGiro(item.giro)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
 
           <div className="bg-white rounded-lg shadow-lg overflow-hidden">
             <div className="px-4 pt-3 flex items-center gap-2 text-sm flex-wrap">
