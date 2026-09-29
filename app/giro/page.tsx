@@ -612,6 +612,25 @@ export default function GiroPage() {
     buscarDimensoes(mesReferencia, empresasParam);
   }
 
+  // Clique numa barra do grafico "Giro por loja e fabrica" - troca a
+  // selecao de empresas pra so essa loja/fabrica e reconsulta tudo. NAO
+  // reseta o filtro de dimensao (grupo/linha/...) se ja tiver um ativo -
+  // assim da pra combinar os dois (ex: clicar na loja TABOSA e depois no
+  // grupo SUTIA mostra o giro de sutias so na Tabosa), filtro cruzado.
+  function filtrarPorLojaGrafico(cdEmpresa: string | number) {
+    const cd = Number(cdEmpresa);
+    if (Number.isNaN(cd)) return;
+    setErro(null);
+    setCarregandoInicial(true);
+    const empresasParam = String(cd);
+    setEmpresasSelecionadas(new Set([cd]));
+    buscarSnapshot(mesReferencia, empresasParam, Array.from(statusSelecionados).join(','))
+      .then(() => setConsultaExecutada(true))
+      .finally(() => setCarregandoInicial(false));
+    buscarMatriz(mesReferencia, empresasParam, 1, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','), filtroDimensaoMatriz);
+    buscarDimensoes(mesReferencia, empresasParam);
+  }
+
   function trocarPaginaMatriz(novaPagina: number) {
     buscarMatriz(mesReferencia, Array.from(empresasSelecionadas).join(','), novaPagina, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','), filtroDimensaoMatriz);
   }
@@ -893,8 +912,9 @@ export default function GiroPage() {
                   chave: i.cdEmpresa,
                   label: nomeCurto(i.nome),
                   valor: i.giro as number,
-                  tooltip: `${i.nome}: ${formatarGiro(i.giro)} meses de cobertura (estoque ${formatarQtd(i.estoqueAtual)} un. / venda média ${formatarQtd(i.vendaMedia3m)} un./mês)`,
+                  tooltip: `${i.nome}: ${formatarGiro(i.giro)} meses de cobertura (estoque ${formatarQtd(i.estoqueAtual)} un. / venda média ${formatarQtd(i.vendaMedia3m)} un./mês) — clique pra ver só essa loja`,
                 }))}
+              onBarClick={filtrarPorLojaGrafico}
             />
           </div>
 
