@@ -594,6 +594,34 @@ export default function GiroPage() {
 
   // Busca as 5 dimensoes juntas (paralelo) - trocar de aba depois so troca
   // qual delas ja veio, sem refazer a busca a cada clique.
+  // Giro por loja recalculado pra uma categoria especifica (filtro cruzado:
+  // clicou numa barra do grafico "por dimensao") - separado de `dados`
+  // (que alimenta os cards consolidados/recalculo e NAO deve mudar so
+  // porque o usuario clicou numa categoria). null = sem filtro de
+  // dimensao ativo, o grafico de loja usa itensPorEstoqueDesc normal.
+  const [giroPorLojaFiltrado, setGiroPorLojaFiltrado] = useState<ItemGiro[] | null>(null);
+
+  async function buscarGiroPorLoja(mesRef: string, empresasParam: string, filtroDimensao: { dimensao: DimensaoGiro; categoria: string } | null) {
+    if (!filtroDimensao) {
+      setGiroPorLojaFiltrado(null);
+      return;
+    }
+    try {
+      const params = new URLSearchParams({
+        mesReferencia: mesRef,
+        empresas: empresasParam,
+        dimensaoFiltro: filtroDimensao.dimensao,
+        categoriaFiltro: filtroDimensao.categoria,
+      });
+      const response = await fetch(`/api/giro/por-loja?${params.toString()}`, { cache: 'no-store' });
+      const data = await response.json();
+      if (!response.ok || data.error) return;
+      setGiroPorLojaFiltrado(data.itens || []);
+    } catch (error) {
+      console.error('Erro ao buscar giro por loja (filtro cruzado):', error);
+    }
+  }
+
   async function buscarDimensoes(mesRef: string, empresasParam: string) {
     try {
       const respostas = await Promise.all(
@@ -631,16 +659,18 @@ export default function GiroPage() {
     setMatrizOrdem('asc');
     setFiltroDimensaoMatriz(null);
     setFiltroLojaMatriz(null);
+    setGiroPorLojaFiltrado(null);
     buscarMatriz(mesReferencia, empresasParam, 1, 'referencia', 'asc', matrizGiroMinimo, Array.from(statusSelecionados).join(','), null);
     buscarDimensoes(mesReferencia, empresasParam);
   }
 
-  // Clique numa barra do grafico "Giro por loja e fabrica" - filtra so a
-  // tabela "Giro por referencia e loja" pra essa loja (mesmo padrao do
-  // clique por dimensao: NAO re-busca/encolhe os graficos, que continuam
-  // mostrando todas as barras - so a clicada muda de cor). Clicar de novo
-  // na mesma barra remove o filtro. Combina com o filtro de dimensao se ja
-  // tiver um ativo (filtro cruzado: loja + grupo, por exemplo).
+  // Clique numa barra do grafico "Giro por loja e fabrica" - filtra a
+  // tabela "Giro por referencia e loja" pra essa loja E recalcula o
+  // grafico "por dimensao" so com os dados dela (filtro cruzado) - sem
+  // nenhum dos dois graficos perder barras, so a clicada muda de cor.
+  // Clicar de novo na mesma barra remove o filtro. Combina com o filtro de
+  // dimensao se ja tiver um ativo (mostra "sutia da Iguatemi", por
+  // exemplo, quando os dois estao selecionados).
   function filtrarPorLojaGrafico(cdEmpresa: string | number) {
     const cd = Number(cdEmpresa);
     if (Number.isNaN(cd)) return;
@@ -648,6 +678,7 @@ export default function GiroPage() {
     setFiltroLojaMatriz(novoFiltro);
     const empresasParam = novoFiltro !== null ? String(novoFiltro) : Array.from(empresasSelecionadas).join(',');
     buscarMatriz(mesReferencia, empresasParam, 1, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','), filtroDimensaoMatriz);
+    buscarDimensoes(mesReferencia, empresasParam);
   }
 
   function trocarPaginaMatriz(novaPagina: number) {
@@ -676,8 +707,12 @@ export default function GiroPage() {
   }
 
   // Clique numa barra do grafico "Giro por dimensao" - filtra a tabela de
-  // referencia/loja por essa categoria. Clicar de novo na mesma categoria
-  // (ou no botao "Limpar filtro") remove o filtro.
+  // referencia/loja por essa categoria E recalcula o grafico "por loja e
+  // fabrica" so com produtos dessa categoria (filtro cruzado), usando
+  // TODAS as lojas selecionadas no topo (nao so a que estiver com filtro
+  // de loja ativo - esse so destaca a cor, o grafico de loja sempre mostra
+  // todas as lojas). Clicar de novo na mesma categoria (ou no botao
+  // "Limpar filtro") remove o filtro.
   function filtrarMatrizPorDimensao(dimensao: DimensaoGiro, categoria: string | number) {
     const categoriaStr = String(categoria);
     const novoFiltro = filtroDimensaoMatriz?.dimensao === dimensao && filtroDimensaoMatriz?.categoria === categoriaStr
@@ -685,16 +720,19 @@ export default function GiroPage() {
       : { dimensao, categoria: categoriaStr };
     setFiltroDimensaoMatriz(novoFiltro);
     buscarMatriz(mesReferencia, empresasParaMatriz(), 1, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','), novoFiltro);
+    buscarGiroPorLoja(mesReferencia, Array.from(empresasSelecionadas).join(','), novoFiltro);
   }
 
   function limparFiltroDimensaoMatriz() {
     setFiltroDimensaoMatriz(null);
     buscarMatriz(mesReferencia, empresasParaMatriz(), 1, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','), null);
+    setGiroPorLojaFiltrado(null);
   }
 
   function limparFiltroLojaMatriz() {
     setFiltroLojaMatriz(null);
     buscarMatriz(mesReferencia, Array.from(empresasSelecionadas).join(','), 1, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','), filtroDimensaoMatriz);
+    buscarDimensoes(mesReferencia, Array.from(empresasSelecionadas).join(','));
   }
 
   function indicadorOrdenacao(coluna: string): string {
@@ -756,9 +794,11 @@ export default function GiroPage() {
   const temDados = !!dados && dados.itens.length > 0;
   // Grafico "Giro por loja e fabrica" ordenado por estoque decrescente
   // (pedido do usuario) - o grafico de dimensao ja vem assim do backend.
-  const itensPorEstoqueDesc = dados
-    ? [...dados.itens].sort((a, b) => b.estoqueAtual - a.estoqueAtual)
-    : [];
+  // Usa giroPorLojaFiltrado (recalculado pra categoria clicada) quando o
+  // filtro cruzado de dimensao esta ativo, senao os dados normais.
+  const itensPorEstoqueDesc = (giroPorLojaFiltrado ?? dados?.itens ?? [])
+    .slice()
+    .sort((a, b) => b.estoqueAtual - a.estoqueAtual);
 
   return (
     <div className="max-w-[98%] mx-auto py-6 px-4 space-y-6">

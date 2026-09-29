@@ -981,3 +981,69 @@ def giro_por_dimensao(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Erro ao buscar giro por dimensao: {str(e)}")
+
+
+@router.get("/api/giro/por-loja")
+def giro_por_loja(
+    mesReferencia: Optional[str] = Query(None, description="Mes de referencia YYYY-MM (default: mes atual)"),
+    empresas: Optional[str] = Query(None, description="Lista de cd_empresa separados por virgula (default: todas)"),
+    dimensaoFiltro: Optional[str] = Query(None, description="grupo, linha, familia, colecao ou status"),
+    categoriaFiltro: Optional[str] = Query(None, description="Valor da categoria (ex: 'SUTIA') - exige dimensaoFiltro junto")
+):
+    """
+    Giro por empresa (mesma ideia do /api/giro, so que agregado na hora a
+    partir do snapshot por produto, com filtro OPCIONAL por dimensao do
+    produto) - usado pro filtro cruzado do grafico "Giro por loja e
+    fabrica": quando o usuario clica numa barra do grafico "por dimensao"
+    (ex: SUTIA), esse endpoint recalcula o giro de CADA loja considerando
+    so produtos daquela categoria, sem mexer nos cards consolidados/top
+    produtos da tela (que continuam vindo do /api/giro normal, sem filtro).
+    """
+    try:
+        mes_ref = mesReferencia or _mes_atual()
+        cd_empresas = _parse_empresas_giro(empresas)
+        placeholders = ",".join(["%s"] * len(cd_empresas))
+
+        clausula_dimensao = ""
+        params_dimensao: tuple = ()
+        if dimensaoFiltro is not None:
+            coluna = DIMENSOES_GIRO.get(dimensaoFiltro)
+            if not coluna:
+                raise HTTPException(status_code=400, detail=f"dimensaoFiltro invalida: {dimensaoFiltro}. Use uma de: {list(DIMENSOES_GIRO.keys())}")
+            if categoriaFiltro is None:
+                raise HTTPException(status_code=400, detail="categoriaFiltro e obrigatorio junto com dimensaoFiltro")
+            clausula_dimensao = f" AND COALESCE(p.{coluna}, 'SEM CLASSIFICACAO') = %s"
+            params_dimensao = (categoriaFiltro,)
+
+        rows = execute_query(f"""
+            SELECT g.cd_empresa, SUM(g.estoque_atual) AS estoque, SUM(g.venda_media_3m) AS venda
+            FROM giro_produto_snapshot g
+            LEFT JOIN mv_prd_referencia_produto p ON p.cd_produto = g.cd_produto
+            WHERE g.mes_referencia = %s AND g.cd_empresa IN ({placeholders}){clausula_dimensao}
+            GROUP BY 1
+        """, (mes_ref, *cd_empresas, *params_dimensao)) or []
+
+        def _giro(estoque: float, venda: float):
+            return (estoque / venda) if venda > 0 else None
+
+        valores = {r["cd_empresa"]: (float(r["estoque"] or 0), float(r["venda"] or 0)) for r in rows}
+        itens = []
+        for cd_empresa in cd_empresas:
+            estoque, venda = valores.get(cd_empresa, (0.0, 0.0))
+            itens.append({
+                "cdEmpresa": cd_empresa,
+                "nome": _nome_empresa_cmv(cd_empresa),
+                "tipo": "fabrica" if _eh_fabrica(cd_empresa) else "loja",
+                "estoqueAtual": estoque,
+                "vendaMedia3m": venda,
+                "giro": _giro(estoque, venda),
+            })
+
+        return {"itens": itens, "mesReferencia": mes_ref}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[ERROR] Erro ao buscar giro por loja: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Erro ao buscar giro por loja: {str(e)}")
