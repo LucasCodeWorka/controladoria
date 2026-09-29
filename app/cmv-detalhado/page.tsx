@@ -732,8 +732,8 @@ export default function CmvDetalhadoPage() {
             <GraficoBarrasPercentual
               ariaLabel="CMV percentual por loja"
               dados={[...totais]
-                .sort((a, b) => (b.cmvPercentual || 0) - (a.cmvPercentual || 0))
                 .filter((d) => d.cmvPercentual !== null)
+                .sort((a, b) => (b.receita || 0) - (a.receita || 0))
                 .map((d) => ({
                   chave: d.cdEmpresa,
                   label: nomeCurto(d.nome),
@@ -789,6 +789,7 @@ export default function CmvDetalhadoPage() {
               chaveSelecionada={filtroSku && filtroSku.dimensao === dimensaoSelecionada ? filtroSku.chave : null}
               dados={(dadosPorDimensao[dimensaoSelecionada]?.itens || [])
                 .filter((item) => item.percentual !== null)
+                .sort((a, b) => (b.receita || 0) - (a.receita || 0))
                 .map((item) => ({
                   chave: item.chave,
                   label: nomeCurtoDimensao(item.chave),
