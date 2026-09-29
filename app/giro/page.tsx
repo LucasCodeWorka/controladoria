@@ -111,6 +111,8 @@ interface ItemMatrizGiro {
   promocoes?: { tipo: 'Fábrica' | 'Atacado' | 'Varejo'; precoPromo: number; precoAnterior: number | null }[];
   temLeveDefeito?: boolean;
   cores?: string[];
+  dtPrimeiraOportunidade?: string | null;
+  mesesOportunidade?: number | null;
 }
 
 interface MatrizGiro {
@@ -126,6 +128,14 @@ interface MatrizGiro {
 
 function formatarQtd(valor: number): string {
   return valor.toLocaleString('pt-BR', { maximumFractionDigits: 0 });
+}
+
+// Data ISO (YYYY-MM-DD) -> DD/MM/AAAA sem passar por Date() - Date() com
+// string so-de-data interpreta como UTC meia-noite, o que pode voltar um
+// dia no fuso local (mesmo bug ja visto em outras telas deste app).
+function formatarDataBR(dataIso: string): string {
+  const [ano, mes, dia] = dataIso.split('-');
+  return `${dia}/${mes}/${ano}`;
 }
 
 function formatarGiro(valor: number | null): string {
@@ -1185,6 +1195,9 @@ export default function GiroPage() {
                       <th className="text-left px-3 py-2 font-medium text-black whitespace-nowrap min-w-[150px]">
                         Cores
                       </th>
+                      <th className="text-right px-3 py-2 font-medium text-orange-700 bg-orange-50/60 whitespace-nowrap">
+                        Meses FL
+                      </th>
                       <th className="text-right px-3 py-2 font-medium text-blue-700 bg-blue-50/60 whitespace-nowrap">
                         <button onClick={() => ordenarMatrizPor('precoFabrica')} className="flex items-center gap-1 ml-auto hover:text-blue-900">
                           Fábrica{indicadorOrdenacao('precoFabrica')}
@@ -1277,6 +1290,14 @@ export default function GiroPage() {
                           ) : (
                             <span className="text-black">-</span>
                           )}
+                        </td>
+                        <td
+                          className="px-3 py-2 text-right text-orange-900 bg-orange-50/30 whitespace-nowrap cursor-help"
+                          onMouseEnter={(ev) => item.dtPrimeiraOportunidade && setTooltipCelula({ texto: `Virou oportunidade em ${formatarDataBR(item.dtPrimeiraOportunidade)} (SKU mais antigo ainda em oportunidade hoje)`, x: ev.clientX, y: ev.clientY })}
+                          onMouseMove={(ev) => item.dtPrimeiraOportunidade && setTooltipCelula({ texto: `Virou oportunidade em ${formatarDataBR(item.dtPrimeiraOportunidade)} (SKU mais antigo ainda em oportunidade hoje)`, x: ev.clientX, y: ev.clientY })}
+                          onMouseLeave={() => setTooltipCelula(null)}
+                        >
+                          {item.mesesOportunidade !== null && item.mesesOportunidade !== undefined ? item.mesesOportunidade : <span className="text-black">-</span>}
                         </td>
                         <td className="px-3 py-2 text-right text-blue-900 bg-blue-50/30 whitespace-nowrap">{formatarPreco(item.precoFabrica)}</td>
                         <td className="px-3 py-2 text-right text-blue-900 bg-blue-50/30 whitespace-nowrap">

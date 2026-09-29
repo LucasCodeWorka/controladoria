@@ -554,6 +554,29 @@ def _promos_ativas_lista(promo: dict) -> list:
     ]
 
 
+def _obter_primeira_oportunidade(referencias: list) -> dict:
+    """Data mais antiga (dt_inicio) entre os SKUs de cada referencia que
+    estao HOJE (atual=true) em algum status "OPORTUNIDADE..." - via
+    hist_dproduto, historico tipo SCD (uma linha por trecho de tempo que o
+    produto ficou com aquele conjunto de atributos). ILIKE por causa do
+    espaco duplo no cadastro ("OPORTUNIDADE  ATE 1 ANO", confirmado no
+    banco). SKU que ja foi oportunidade e voltou pra EM LINHA nao conta
+    (combinado com o usuario - so quem esta oportunidade agora)."""
+    referencias = list(set(referencias))
+    if not referencias:
+        return {}
+    placeholders = ",".join(["%s"] * len(referencias))
+    rows = execute_query(f"""
+        SELECT referencia, MIN(dt_inicio) AS dt_primeira
+        FROM hist_dproduto
+        WHERE referencia IN ({placeholders})
+          AND atual = true
+          AND status ILIKE 'OPORTUNIDADE%%'
+        GROUP BY referencia
+    """, tuple(referencias)) or []
+    return {r["referencia"]: r["dt_primeira"] for r in rows}
+
+
 def _status_produto_disponiveis() -> list:
     """Valores distintos de status de produto (mv_prd_referencia_produto) -
     pro filtro de status do Giro. Rapida (materialized view)."""
@@ -889,10 +912,16 @@ def matriz_produtos_giro(
         # cada linha da resposta em vez de mutar o item cacheado.
         precos = _obter_precos_produtos([i["cdProdutoPreco"] for i in itens_pagina])
         promocoes = _obter_promocoes_produtos([i["cdProdutoPreco"] for i in itens_pagina], cd_empresas)
+        primeiras_oportunidades = _obter_primeira_oportunidade([i["referencia"] for i in itens_pagina])
+        hoje = date.today()
         itens_resposta = []
         for item in itens_pagina:
             preco = precos.get(item["cdProdutoPreco"]) or {"precoFabrica": None, "precoAtacado": None, "precoVarejo": None}
             promo = promocoes.get(item["cdProdutoPreco"]) or {"fabrica": None, "atacado": None, "varejo": None}
+            dt_primeira_oportunidade = primeiras_oportunidades.get(item["referencia"])
+            meses_oportunidade = None
+            if dt_primeira_oportunidade:
+                meses_oportunidade = (hoje.year - dt_primeira_oportunidade.year) * 12 + (hoje.month - dt_primeira_oportunidade.month)
             itens_resposta.append({
                 "referencia": item["referencia"],
                 "nome": item["nome"],
@@ -906,6 +935,8 @@ def matriz_produtos_giro(
                 "promocoes": _promos_ativas_lista(promo),
                 "temLeveDefeito": item["temLeveDefeito"],
                 "cores": item["cores"],
+                "dtPrimeiraOportunidade": dt_primeira_oportunidade.isoformat() if dt_primeira_oportunidade else None,
+                "mesesOportunidade": meses_oportunidade,
             })
 
         return {
