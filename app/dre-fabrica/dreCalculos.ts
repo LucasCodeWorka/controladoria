@@ -157,7 +157,7 @@ export function calcularLinhasOrdenadas(
   );
 
   const lucroOperacionalBrutoApi = contasTotalizadoras['07'];
-  const lucroOperacionalBruto = lucroOperacionalBrutoApi ? { ...lucroOperacionalBrutoApi, nome: 'LUCRO OPERACIONAL BRUTO' } : criarContaCalculada(
+  const lucroOperacionalBruto = lucroOperacionalBrutoApi ? { ...lucroOperacionalBrutoApi, nome: 'LUCRO BRUTO' } : criarContaCalculada(
     '07',
     'LUCRO OPERACIONAL BRUTO',
     periodos,
@@ -166,7 +166,7 @@ export function calcularLinhasOrdenadas(
   );
 
   const ebitdaApi = contasTotalizadoras['09'];
-  const ebitda = ebitdaApi ? { ...ebitdaApi, nome: 'LUCRO OPERACIONAL LIQUIDO (EBITDA)' } : criarContaCalculada(
+  const ebitda = ebitdaApi ? { ...ebitdaApi, nome: 'LUCRO OPERACIONAL (EBITDA)' } : criarContaCalculada(
     '09',
     'LUCRO OPERACIONAL LIQUIDO (EBITDA)',
     periodos,
@@ -175,7 +175,7 @@ export function calcularLinhasOrdenadas(
   );
 
   const lucroBrutoApi = contasTotalizadoras['11'];
-  const lucroBruto = lucroBrutoApi ? { ...lucroBrutoApi, nome: 'LUCRO BRUTO' } : criarContaCalculada(
+  const lucroBruto = lucroBrutoApi ? { ...lucroBrutoApi, nome: 'LUCRO ANTES DO IR/CSLL' } : criarContaCalculada(
     '11',
     'LUCRO BRUTO',
     periodos,
