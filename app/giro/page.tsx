@@ -423,8 +423,11 @@ export default function GiroPage() {
   const [matriz, setMatriz] = useState<MatrizGiro | null>(null);
   const [matrizPagina, setMatrizPagina] = useState(1);
   const [matrizCarregando, setMatrizCarregando] = useState(false);
-  const [matrizOrdenarPor, setMatrizOrdenarPor] = useState('referencia');
-  const [matrizOrdem, setMatrizOrdem] = useState<'asc' | 'desc'>('asc');
+  // Padrao: Total (giro), do pior (maior = mais meses de estoque parado)
+  // pro melhor - pedido do usuario. Continua ordenavel por qualquer coluna
+  // clicando no cabecalho, isso e so o estado inicial.
+  const [matrizOrdenarPor, setMatrizOrdenarPor] = useState('total');
+  const [matrizOrdem, setMatrizOrdem] = useState<'asc' | 'desc'>('desc');
   const MATRIZ_POR_PAGINA = 50;
   // Filtro da tabela "Giro por referencia e loja" ao clicar numa barra do
   // grafico "Giro por dimensao" (grupo/linha/familia/colecao/status).
@@ -675,12 +678,12 @@ export default function GiroPage() {
     buscarSnapshot(mesReferencia, empresasParam, Array.from(statusSelecionados).join(','))
       .then(() => setConsultaExecutada(true))
       .finally(() => setCarregandoInicial(false));
-    setMatrizOrdenarPor('referencia');
-    setMatrizOrdem('asc');
+    setMatrizOrdenarPor('total');
+    setMatrizOrdem('desc');
     setFiltroDimensaoMatriz(null);
     setFiltroLojaMatriz(null);
     setGiroPorLojaFiltrado(null);
-    buscarMatriz(mesReferencia, empresasParam, 1, 'referencia', 'asc', matrizGiroMinimo, Array.from(statusSelecionados).join(','), null);
+    buscarMatriz(mesReferencia, empresasParam, 1, 'total', 'desc', matrizGiroMinimo, Array.from(statusSelecionados).join(','), null);
     buscarDimensoes(mesReferencia, empresasParam);
   }
 
