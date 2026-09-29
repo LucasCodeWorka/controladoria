@@ -337,7 +337,7 @@ def _obter_matriz_agregada(mes_referencia: str, cd_empresas: list, status_filtro
     linhas = execute_query(f"""
         SELECT g.cd_empresa, g.cd_produto, g.estoque_atual, g.venda_media_3m,
             COALESCE(p.referencia, g.cd_produto::text) AS referencia, p.produto AS nome,
-            p.ds_cor, p.ds_tamanho, p.status, p.familia
+            p.ds_cor, p.ds_tamanho, p.status, p.familia, p.grupo, p.linha, p.colecao
         FROM giro_produto_snapshot g
         LEFT JOIN mv_prd_referencia_produto p ON p.cd_produto = g.cd_produto
         WHERE g.mes_referencia = %s AND g.cd_empresa IN ({placeholders}){clausula_status}
@@ -353,12 +353,31 @@ def _obter_matriz_agregada(mes_referencia: str, cd_empresas: list, status_filtro
             por_ref[ref] = {
                 "nomeBase": None, "nomeBaseFallback": None, "porLoja": {}, "estoqueTotal": 0.0, "vendaTotal": 0.0,
                 "cdProdutoPreco": None, "cdProdutoFallback": None, "temLeveDefeito": False,
+                "categorias": None, "categoriasFallback": None,
             }
         d = por_ref[ref]
         nome_sem_variante = _nome_base_referencia(r["nome"], r["ds_cor"], r["ds_tamanho"])
         variante_desconsiderada = _eh_variante_preco_desconsiderada(r["status"], r["familia"])
         if r["status"] == "LEVE DEFEITO":
             d["temLeveDefeito"] = True
+        # Categoria (grupo/linha/familia/colecao/status) pro filtro por
+        # clique no grafico "Giro por dimensao" - pega da mesma variante
+        # "normal" usada pro preco (nao leve defeito/doacao), com fallback
+        # pra qualquer uma se so sobrar variante assim. Sao atributos do
+        # design do produto (nao da cor/tamanho especifico), entao sao
+        # praticamente sempre iguais entre as variantes de uma referencia -
+        # excecao e "status", que pode divergir (ver tag "LD" na tela).
+        categoria_linha = {
+            "grupo": r["grupo"] or "SEM CLASSIFICACAO",
+            "linha": r["linha"] or "SEM CLASSIFICACAO",
+            "familia": r["familia"] or "SEM CLASSIFICACAO",
+            "colecao": r["colecao"] or "SEM CLASSIFICACAO",
+            "status": r["status"] or "SEM CLASSIFICACAO",
+        }
+        if d["categorias"] is None and not variante_desconsiderada:
+            d["categorias"] = categoria_linha
+        if d["categoriasFallback"] is None:
+            d["categoriasFallback"] = categoria_linha
         # Descricao da referencia: tira cor/tamanho do nome do SKU (ex:
         # "SUTIA MINI CHOCOLATE U" -> "SUTIA MINI") pra nao mostrar a
         # descricao de uma unica variante como se fosse da referencia
@@ -399,6 +418,7 @@ def _obter_matriz_agregada(mes_referencia: str, cd_empresas: list, status_filtro
             "giroTotal": _giro(d["estoqueTotal"], d["vendaTotal"]),
             "cdProdutoPreco": d["cdProdutoPreco"] or d["cdProdutoFallback"],
             "temLeveDefeito": d["temLeveDefeito"],
+            "categorias": d["categorias"] or d["categoriasFallback"] or {},
         }
         for ref, d in por_ref.items()
         # Fora as referencias totalmente mortas (zero estoque e zero venda
@@ -739,7 +759,9 @@ def matriz_produtos_giro(
     ordenarPor: str = Query("referencia", description="'referencia', 'nome', 'total', 'estoque', 'totalVenda', 'precoFabrica', 'precoAtacado', 'precoVarejo', 'precoPromo', ou um cd_empresa (ex: '3')"),
     ordem: str = Query("asc", description="'asc' ou 'desc'"),
     giroMinimo: Optional[float] = Query(None, description="So retorna referencias com giro TOTAL maior que esse valor (referencias sem giro - SV-3M/sem estoque - ficam de fora)"),
-    status: Optional[str] = Query(None, description="Lista de status de produto separados por virgula (default: todos) - mesmo filtro usado no resto do Giro")
+    status: Optional[str] = Query(None, description="Lista de status de produto separados por virgula (default: todos) - mesmo filtro usado no resto do Giro"),
+    dimensaoFiltro: Optional[str] = Query(None, description="grupo, linha, familia, colecao ou status - filtra so as referencias dessa categoria (ex: clicou numa barra do grafico por dimensao)"),
+    categoriaFiltro: Optional[str] = Query(None, description="Valor da categoria (ex: 'BODY', 'SEM CLASSIFICACAO') - exige dimensaoFiltro junto. Nao filtra pelo bucket 'OUTROS' do grafico (top 12 + resto).")
 ):
     """
     Giro por REFERENCIA (nao por SKU/cor/tamanho individual) e empresa, numa
@@ -775,6 +797,15 @@ def matriz_produtos_giro(
 
         status_filtro = [s.strip() for s in status.split(",") if s.strip()] if status else None
         dados_completos = _obter_matriz_agregada(mes_ref, cd_empresas, status_filtro)
+
+        DIMENSOES_FILTRAVEIS = {"grupo", "linha", "familia", "colecao", "status"}
+        if dimensaoFiltro is not None:
+            if dimensaoFiltro not in DIMENSOES_FILTRAVEIS:
+                raise HTTPException(status_code=400, detail=f"dimensaoFiltro invalida: {dimensaoFiltro}. Use uma de: {sorted(DIMENSOES_FILTRAVEIS)}")
+            if categoriaFiltro is None:
+                raise HTTPException(status_code=400, detail="categoriaFiltro e obrigatorio junto com dimensaoFiltro")
+            dados_completos = [i for i in dados_completos if i["categorias"].get(dimensaoFiltro) == categoriaFiltro]
+
         if giroMinimo is not None:
             # Giro null (SV-3M ou sem estoque/venda nenhum) nunca passa no
             # filtro "giro maior que X" - nao da pra comparar "sem giro" com

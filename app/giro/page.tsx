@@ -300,8 +300,11 @@ function TooltipBarra({ active, payload }: PayloadTooltipBarra) {
 
 // Barras do giro (razao estoque/venda media, "meses de cobertura") - mesmo
 // estilo dos graficos de % do CMV Detalhado, so que o eixo/rotulo mostra um
-// numero com 2 casas em vez de %.
-function GraficoGiro({ dados }: { dados: BarraDado[] }) {
+// numero com 2 casas em vez de %. onBarClick e opcional - so o grafico "por
+// dimensao" usa, pra filtrar a tabela de referencia/loja ao clicar numa
+// barra (o bucket "OUTROS" nao e clicavel - representa varias categorias
+// juntas, nao da pra filtrar por ele).
+function GraficoGiro({ dados, onBarClick }: { dados: BarraDado[]; onBarClick?: (chave: string | number) => void }) {
   if (dados.length === 0) {
     return <p className="text-sm text-gray-400 py-8 text-center">Sem giro calculado ainda.</p>;
   }
@@ -328,7 +331,14 @@ function GraficoGiro({ dados }: { dados: BarraDado[] }) {
             width={36}
           />
           <Tooltip content={<TooltipBarra />} cursor={{ fill: 'rgba(11,11,11,0.04)' }} />
-          <Bar dataKey="valor" fill={COR_BARRA} radius={[4, 4, 0, 0]} maxBarSize={56}>
+          <Bar
+            dataKey="valor"
+            fill={COR_BARRA}
+            radius={[4, 4, 0, 0]}
+            maxBarSize={56}
+            cursor={onBarClick ? 'pointer' : undefined}
+            onClick={onBarClick ? (data: any) => data?.payload?.chave !== undefined && data.payload.chave !== 'OUTROS' && onBarClick(data.payload.chave) : undefined}
+          >
             <LabelList
               dataKey="valor"
               position="top"
@@ -385,6 +395,9 @@ export default function GiroPage() {
   const [matrizOrdenarPor, setMatrizOrdenarPor] = useState('referencia');
   const [matrizOrdem, setMatrizOrdem] = useState<'asc' | 'desc'>('asc');
   const MATRIZ_POR_PAGINA = 50;
+  // Filtro da tabela "Giro por referencia e loja" ao clicar numa barra do
+  // grafico "Giro por dimensao" (grupo/linha/familia/colecao/status).
+  const [filtroDimensaoMatriz, setFiltroDimensaoMatriz] = useState<{ dimensao: DimensaoGiro; categoria: string } | null>(null);
 
   // Tooltip com foto do produto ao passar o mouse na referencia - mesmo
   // padrao/endpoint ja usado no CMV Detalhado (API publica da VTEX via
@@ -520,7 +533,7 @@ export default function GiroPage() {
   }
 
   // Nao consulta sozinho ao abrir a tela - so no clique em "Consultar".
-  async function buscarMatriz(mesRef: string, empresasParam: string, pagina: number, ordenarPor: string, ordem: 'asc' | 'desc', giroMinimo: string, statusParam: string) {
+  async function buscarMatriz(mesRef: string, empresasParam: string, pagina: number, ordenarPor: string, ordem: 'asc' | 'desc', giroMinimo: string, statusParam: string, filtroDimensao: { dimensao: DimensaoGiro; categoria: string } | null = null) {
     setMatrizCarregando(true);
     try {
       const params = new URLSearchParams({
@@ -534,6 +547,10 @@ export default function GiroPage() {
       const giroMinimoNum = Number(giroMinimo.trim().replace(',', '.'));
       if (giroMinimo.trim() !== '' && !Number.isNaN(giroMinimoNum)) {
         params.set('giroMinimo', String(giroMinimoNum));
+      }
+      if (filtroDimensao) {
+        params.set('dimensaoFiltro', filtroDimensao.dimensao);
+        params.set('categoriaFiltro', filtroDimensao.categoria);
       }
       if (statusParam) {
         params.set('status', statusParam);
@@ -591,12 +608,13 @@ export default function GiroPage() {
       .finally(() => setCarregandoInicial(false));
     setMatrizOrdenarPor('referencia');
     setMatrizOrdem('asc');
-    buscarMatriz(mesReferencia, empresasParam, 1, 'referencia', 'asc', matrizGiroMinimo, Array.from(statusSelecionados).join(','));
+    setFiltroDimensaoMatriz(null);
+    buscarMatriz(mesReferencia, empresasParam, 1, 'referencia', 'asc', matrizGiroMinimo, Array.from(statusSelecionados).join(','), null);
     buscarDimensoes(mesReferencia, empresasParam);
   }
 
   function trocarPaginaMatriz(novaPagina: number) {
-    buscarMatriz(mesReferencia, Array.from(empresasSelecionadas).join(','), novaPagina, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','));
+    buscarMatriz(mesReferencia, Array.from(empresasSelecionadas).join(','), novaPagina, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','), filtroDimensaoMatriz);
   }
 
   // Clicar numa coluna ja ordenada inverte o sentido; numa coluna nova,
@@ -606,18 +624,35 @@ export default function GiroPage() {
     const novoOrdem: 'asc' | 'desc' = matrizOrdenarPor === coluna && matrizOrdem === 'asc' ? 'desc' : 'asc';
     setMatrizOrdenarPor(coluna);
     setMatrizOrdem(novoOrdem);
-    buscarMatriz(mesReferencia, Array.from(empresasSelecionadas).join(','), 1, coluna, novoOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','));
+    buscarMatriz(mesReferencia, Array.from(empresasSelecionadas).join(','), 1, coluna, novoOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','), filtroDimensaoMatriz);
   }
 
   // Aplica o filtro "giro maior que X" digitado - volta pra pagina 1
   // mantendo a ordenacao atual.
   function aplicarFiltroGiroMinimo() {
-    buscarMatriz(mesReferencia, Array.from(empresasSelecionadas).join(','), 1, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','));
+    buscarMatriz(mesReferencia, Array.from(empresasSelecionadas).join(','), 1, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','), filtroDimensaoMatriz);
   }
 
   function limparFiltroGiroMinimo() {
     setMatrizGiroMinimo('');
-    buscarMatriz(mesReferencia, Array.from(empresasSelecionadas).join(','), 1, matrizOrdenarPor, matrizOrdem, '', Array.from(statusSelecionados).join(','));
+    buscarMatriz(mesReferencia, Array.from(empresasSelecionadas).join(','), 1, matrizOrdenarPor, matrizOrdem, '', Array.from(statusSelecionados).join(','), filtroDimensaoMatriz);
+  }
+
+  // Clique numa barra do grafico "Giro por dimensao" - filtra a tabela de
+  // referencia/loja por essa categoria. Clicar de novo na mesma categoria
+  // (ou no botao "Limpar filtro") remove o filtro.
+  function filtrarMatrizPorDimensao(dimensao: DimensaoGiro, categoria: string | number) {
+    const categoriaStr = String(categoria);
+    const novoFiltro = filtroDimensaoMatriz?.dimensao === dimensao && filtroDimensaoMatriz?.categoria === categoriaStr
+      ? null
+      : { dimensao, categoria: categoriaStr };
+    setFiltroDimensaoMatriz(novoFiltro);
+    buscarMatriz(mesReferencia, Array.from(empresasSelecionadas).join(','), 1, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','), novoFiltro);
+  }
+
+  function limparFiltroDimensaoMatriz() {
+    setFiltroDimensaoMatriz(null);
+    buscarMatriz(mesReferencia, Array.from(empresasSelecionadas).join(','), 1, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','), null);
   }
 
   function indicadorOrdenacao(coluna: string): string {
@@ -647,7 +682,7 @@ export default function GiroPage() {
       }
       const empresasParam = Array.from(empresasSelecionadas).join(',');
       await buscarSnapshot(mesReferencia, empresasParam, Array.from(statusSelecionados).join(','));
-      await buscarMatriz(mesReferencia, empresasParam, matrizPagina, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','));
+      await buscarMatriz(mesReferencia, empresasParam, matrizPagina, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','), filtroDimensaoMatriz);
       await buscarDimensoes(mesReferencia, empresasParam);
     } catch (error) {
       console.error('Erro ao calcular giro:', error);
@@ -893,8 +928,9 @@ export default function GiroPage() {
                   chave: item.chave,
                   label: nomeCurtoDimensao(item.chave),
                   valor: item.giro as number,
-                  tooltip: `${item.chave}: ${formatarGiro(item.giro)} meses de cobertura (estoque ${formatarQtd(item.estoqueTotal)} un. / venda média ${formatarQtd(item.vendaTotal)} un./mês)`,
+                  tooltip: `${item.chave}: ${formatarGiro(item.giro)} meses de cobertura (estoque ${formatarQtd(item.estoqueTotal)} un. / venda média ${formatarQtd(item.vendaTotal)} un./mês) — clique pra filtrar a tabela abaixo`,
                 }))}
+              onBarClick={(chave) => filtrarMatrizPorDimensao(dimensaoSelecionada, chave)}
             />
           </div>
 
@@ -1001,6 +1037,17 @@ export default function GiroPage() {
                 </div>
               )}
             </div>
+
+            {filtroDimensaoMatriz && (
+              <div className="px-4 pb-2 flex items-center gap-2">
+                <span className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium bg-rose-50 text-rose-700 border border-rose-200 rounded-md">
+                  Filtrando por {DIMENSOES_GIRO.find((d) => d.chave === filtroDimensaoMatriz.dimensao)?.label}: {filtroDimensaoMatriz.categoria}
+                  <button onClick={limparFiltroDimensaoMatriz} className="hover:text-rose-900 font-bold ml-0.5" title="Limpar filtro">
+                    ×
+                  </button>
+                </span>
+              </div>
+            )}
 
             {matrizCarregando && (
               <div className="flex items-center justify-center py-12">
