@@ -8,6 +8,7 @@ import {
   CartesianGrid,
   Cell,
   LabelList,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -121,8 +122,6 @@ interface MatrizGiro {
   empresasFaltantes: EmpresaFaltante[];
   mesReferencia: string;
 }
-
-const COR_BARRA = '#2a78d6';
 
 function formatarQtd(valor: number): string {
   return valor.toLocaleString('pt-BR', { maximumFractionDigits: 0 });
@@ -301,18 +300,27 @@ function TooltipBarra({ active, payload }: PayloadTooltipBarra) {
   );
 }
 
-// Cor da barra clicada/filtrada - bem mais escura que COR_BARRA, pra ficar
-// obvio qual esta ativa sem sumir com as outras (o usuario quer ver todas
-// as barras sempre, so a selecionada muda de cor).
+// Cor da barra clicada/filtrada - bem mais escura, pra ficar obvio qual
+// esta ativa sem sumir com as outras (o usuario quer ver todas as barras
+// sempre, so a selecionada muda de cor) - tem prioridade sobre a cor de
+// meta abaixo.
 const COR_BARRA_ATIVA = '#8b1739';
+// Meta de giro (meses de cobertura) - combinada com o usuario: ate 3 esta
+// dentro da meta (verde), acima de 3 esta fora (vermelho). Vale pros dois
+// graficos (loja e dimensao), que usam o mesmo componente.
+const META_GIRO = 3;
+const COR_DENTRO_META = '#16a34a';
+const COR_ACIMA_META = '#dc2626';
 
 // Barras do giro (razao estoque/venda media, "meses de cobertura") - mesmo
 // estilo dos graficos de % do CMV Detalhado, so que o eixo/rotulo mostra um
 // numero com 2 casas em vez de %. onBarClick e opcional - so o grafico "por
 // dimensao" e o "por loja e fabrica" usam, pra filtrar a tabela de
 // referencia/loja ao clicar numa barra. chaveAtiva pinta a barra clicada
-// com COR_BARRA_ATIVA, mantendo as demais em COR_BARRA - nenhuma barra
-// desaparece do grafico so por causa do filtro.
+// com COR_BARRA_ATIVA, mantendo as demais coloridas por meta (verde/
+// vermelho) - nenhuma barra desaparece do grafico so por causa do filtro.
+// Linha tracejada em META_GIRO deixa visualmente claro quem esta dentro/
+// fora, alem da cor.
 function GraficoGiro({ dados, onBarClick, chaveAtiva }: { dados: BarraDado[]; onBarClick?: (chave: string | number) => void; chaveAtiva?: string | number | null }) {
   if (dados.length === 0) {
     return <p className="text-sm text-gray-400 py-8 text-center">Sem giro calculado ainda.</p>;
@@ -340,6 +348,13 @@ function GraficoGiro({ dados, onBarClick, chaveAtiva }: { dados: BarraDado[]; on
             width={36}
           />
           <Tooltip content={<TooltipBarra />} cursor={{ fill: 'rgba(11,11,11,0.04)' }} />
+          <ReferenceLine
+            y={META_GIRO}
+            stroke="#57534e"
+            strokeDasharray="5 4"
+            strokeWidth={1.5}
+            label={{ value: `Meta: ${META_GIRO}`, position: 'insideTopRight', fontSize: 11, fill: '#57534e', fontWeight: 600 }}
+          />
           <Bar
             dataKey="valor"
             radius={[4, 4, 0, 0]}
@@ -347,9 +362,11 @@ function GraficoGiro({ dados, onBarClick, chaveAtiva }: { dados: BarraDado[]; on
             cursor={onBarClick ? 'pointer' : undefined}
             onClick={onBarClick ? (data: any) => data?.payload?.chave !== undefined && onBarClick(data.payload.chave) : undefined}
           >
-            {dados.map((d) => (
-              <Cell key={d.chave} fill={chaveAtiva !== null && chaveAtiva !== undefined && String(d.chave) === String(chaveAtiva) ? COR_BARRA_ATIVA : COR_BARRA} />
-            ))}
+            {dados.map((d) => {
+              const ativa = chaveAtiva !== null && chaveAtiva !== undefined && String(d.chave) === String(chaveAtiva);
+              const cor = ativa ? COR_BARRA_ATIVA : d.valor <= META_GIRO ? COR_DENTRO_META : COR_ACIMA_META;
+              return <Cell key={d.chave} fill={cor} />;
+            })}
             <LabelList
               dataKey="valor"
               position="top"
