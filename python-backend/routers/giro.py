@@ -289,12 +289,13 @@ def _calcular_giro(mes_referencia: str, cd_empresas: list) -> dict:
 TOP_N_PRODUTOS_GIRO = 10
 
 # Cache em memoria (nao no banco - e derivado, barato de refazer) da matriz
-# ja agregada por REFERENCIA - {(mes_referencia, tuple(cd_empresas ordenado)):
-# [itens]}. Ordenar por uma coluna qualquer (loja ou total) precisa do giro
-# de TODAS as referencias, nao so da pagina - buscar e agregar tudo direto
-# do banco a cada clique de ordenar levaria uns 8-10s (220 mil linhas no mes
-# cheio); cacheado, so a primeira vez custa isso, depois e instantaneo.
-# Limpo em _calcular_giro (dado novo invalida o cache).
+# ja agregada por REFERENCIA - {(mes_referencia, tuple(cd_empresas ordenado),
+# tuple(status_filtro ordenado)): [itens]}. Ordenar por uma coluna qualquer
+# (loja ou total) precisa do giro de TODAS as referencias, nao so da pagina -
+# buscar e agregar tudo direto do banco a cada clique de ordenar levaria uns
+# 8-10s (220 mil linhas no mes cheio); cacheado, so a primeira vez custa
+# isso, depois e instantaneo. Limpo em _calcular_giro (dado novo invalida o
+# cache).
 _cache_matriz_referencia: dict = {}
 
 
@@ -326,20 +327,21 @@ def _nome_base_referencia(produto: Optional[str], ds_cor: Optional[str], ds_tama
     return produto
 
 
-def _obter_matriz_agregada(mes_referencia: str, cd_empresas: list) -> list:
-    chave = (mes_referencia, tuple(sorted(cd_empresas)))
+def _obter_matriz_agregada(mes_referencia: str, cd_empresas: list, status_filtro: Optional[list] = None) -> list:
+    chave = (mes_referencia, tuple(sorted(cd_empresas)), tuple(sorted(status_filtro)) if status_filtro else ())
     if chave in _cache_matriz_referencia:
         return _cache_matriz_referencia[chave]
 
     placeholders = ",".join(["%s"] * len(cd_empresas))
+    clausula_status, params_status = _clausula_status(status_filtro)
     linhas = execute_query(f"""
         SELECT g.cd_empresa, g.cd_produto, g.estoque_atual, g.venda_media_3m,
             COALESCE(p.referencia, g.cd_produto::text) AS referencia, p.produto AS nome,
             p.ds_cor, p.ds_tamanho, p.status, p.familia
         FROM giro_produto_snapshot g
         LEFT JOIN mv_prd_referencia_produto p ON p.cd_produto = g.cd_produto
-        WHERE g.mes_referencia = %s AND g.cd_empresa IN ({placeholders})
-    """, (mes_referencia, *cd_empresas)) or []
+        WHERE g.mes_referencia = %s AND g.cd_empresa IN ({placeholders}){clausula_status}
+    """, (mes_referencia, *cd_empresas, *params_status)) or []
 
     def _giro(estoque: float, venda: float):
         return (estoque / venda) if venda > 0 else None
@@ -350,11 +352,13 @@ def _obter_matriz_agregada(mes_referencia: str, cd_empresas: list) -> list:
         if ref not in por_ref:
             por_ref[ref] = {
                 "nomeBase": None, "nomeBaseFallback": None, "porLoja": {}, "estoqueTotal": 0.0, "vendaTotal": 0.0,
-                "cdProdutoPreco": None, "cdProdutoFallback": None,
+                "cdProdutoPreco": None, "cdProdutoFallback": None, "temLeveDefeito": False,
             }
         d = por_ref[ref]
         nome_sem_variante = _nome_base_referencia(r["nome"], r["ds_cor"], r["ds_tamanho"])
         variante_desconsiderada = _eh_variante_preco_desconsiderada(r["status"], r["familia"])
+        if r["status"] == "LEVE DEFEITO":
+            d["temLeveDefeito"] = True
         # Descricao da referencia: tira cor/tamanho do nome do SKU (ex:
         # "SUTIA MINI CHOCOLATE U" -> "SUTIA MINI") pra nao mostrar a
         # descricao de uma unica variante como se fosse da referencia
@@ -394,6 +398,7 @@ def _obter_matriz_agregada(mes_referencia: str, cd_empresas: list) -> list:
             "vendaTotal": d["vendaTotal"],
             "giroTotal": _giro(d["estoqueTotal"], d["vendaTotal"]),
             "cdProdutoPreco": d["cdProdutoPreco"] or d["cdProdutoFallback"],
+            "temLeveDefeito": d["temLeveDefeito"],
         }
         for ref, d in por_ref.items()
         # Fora as referencias totalmente mortas (zero estoque e zero venda
@@ -733,7 +738,8 @@ def matriz_produtos_giro(
     porPagina: int = Query(50, ge=1, le=200, description="Produtos por pagina"),
     ordenarPor: str = Query("referencia", description="'referencia', 'nome', 'total', 'estoque', 'totalVenda', 'precoFabrica', 'precoAtacado', 'precoVarejo', 'precoPromo', ou um cd_empresa (ex: '3')"),
     ordem: str = Query("asc", description="'asc' ou 'desc'"),
-    giroMinimo: Optional[float] = Query(None, description="So retorna referencias com giro TOTAL maior que esse valor (referencias sem giro - SV-3M/sem estoque - ficam de fora)")
+    giroMinimo: Optional[float] = Query(None, description="So retorna referencias com giro TOTAL maior que esse valor (referencias sem giro - SV-3M/sem estoque - ficam de fora)"),
+    status: Optional[str] = Query(None, description="Lista de status de produto separados por virgula (default: todos) - mesmo filtro usado no resto do Giro")
 ):
     """
     Giro por REFERENCIA (nao por SKU/cor/tamanho individual) e empresa, numa
@@ -767,7 +773,8 @@ def matriz_produtos_giro(
         empresas_faltantes = [{"cdEmpresa": e, "nome": _nome_empresa_cmv(e)} for e in cd_empresas if e not in calculadas]
         empresas_colunas = [{"cdEmpresa": e, "nome": _nome_empresa_cmv(e)} for e in cd_empresas]
 
-        dados_completos = _obter_matriz_agregada(mes_ref, cd_empresas)
+        status_filtro = [s.strip() for s in status.split(",") if s.strip()] if status else None
+        dados_completos = _obter_matriz_agregada(mes_ref, cd_empresas, status_filtro)
         if giroMinimo is not None:
             # Giro null (SV-3M ou sem estoque/venda nenhum) nunca passa no
             # filtro "giro maior que X" - nao da pra comparar "sem giro" com
@@ -858,6 +865,7 @@ def matriz_produtos_giro(
                 "precoAtacado": preco["precoAtacado"],
                 "precoVarejo": preco["precoVarejo"],
                 "promocoes": _promos_ativas_lista(promo),
+                "temLeveDefeito": item["temLeveDefeito"],
             })
 
         return {

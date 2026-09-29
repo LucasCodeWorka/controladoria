@@ -107,6 +107,7 @@ interface ItemMatrizGiro {
   precoAtacado: number | null;
   precoVarejo: number | null;
   promocoes?: { tipo: 'Fábrica' | 'Atacado' | 'Varejo'; precoPromo: number; precoAnterior: number | null }[];
+  temLeveDefeito?: boolean;
 }
 
 interface MatrizGiro {
@@ -472,7 +473,7 @@ export default function GiroPage() {
   }
 
   // Nao consulta sozinho ao abrir a tela - so no clique em "Consultar".
-  async function buscarMatriz(mesRef: string, empresasParam: string, pagina: number, ordenarPor: string, ordem: 'asc' | 'desc', giroMinimo: string) {
+  async function buscarMatriz(mesRef: string, empresasParam: string, pagina: number, ordenarPor: string, ordem: 'asc' | 'desc', giroMinimo: string, statusParam: string) {
     setMatrizCarregando(true);
     try {
       const params = new URLSearchParams({
@@ -486,6 +487,9 @@ export default function GiroPage() {
       const giroMinimoNum = Number(giroMinimo.trim().replace(',', '.'));
       if (giroMinimo.trim() !== '' && !Number.isNaN(giroMinimoNum)) {
         params.set('giroMinimo', String(giroMinimoNum));
+      }
+      if (statusParam) {
+        params.set('status', statusParam);
       }
       const response = await fetch(`/api/giro/matriz-produtos?${params.toString()}`, { cache: 'no-store' });
       const data = await response.json();
@@ -540,12 +544,12 @@ export default function GiroPage() {
       .finally(() => setCarregandoInicial(false));
     setMatrizOrdenarPor('referencia');
     setMatrizOrdem('asc');
-    buscarMatriz(mesReferencia, empresasParam, 1, 'referencia', 'asc', matrizGiroMinimo);
+    buscarMatriz(mesReferencia, empresasParam, 1, 'referencia', 'asc', matrizGiroMinimo, Array.from(statusSelecionados).join(','));
     buscarDimensoes(mesReferencia, empresasParam);
   }
 
   function trocarPaginaMatriz(novaPagina: number) {
-    buscarMatriz(mesReferencia, Array.from(empresasSelecionadas).join(','), novaPagina, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo);
+    buscarMatriz(mesReferencia, Array.from(empresasSelecionadas).join(','), novaPagina, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','));
   }
 
   // Clicar numa coluna ja ordenada inverte o sentido; numa coluna nova,
@@ -555,18 +559,18 @@ export default function GiroPage() {
     const novoOrdem: 'asc' | 'desc' = matrizOrdenarPor === coluna && matrizOrdem === 'asc' ? 'desc' : 'asc';
     setMatrizOrdenarPor(coluna);
     setMatrizOrdem(novoOrdem);
-    buscarMatriz(mesReferencia, Array.from(empresasSelecionadas).join(','), 1, coluna, novoOrdem, matrizGiroMinimo);
+    buscarMatriz(mesReferencia, Array.from(empresasSelecionadas).join(','), 1, coluna, novoOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','));
   }
 
   // Aplica o filtro "giro maior que X" digitado - volta pra pagina 1
   // mantendo a ordenacao atual.
   function aplicarFiltroGiroMinimo() {
-    buscarMatriz(mesReferencia, Array.from(empresasSelecionadas).join(','), 1, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo);
+    buscarMatriz(mesReferencia, Array.from(empresasSelecionadas).join(','), 1, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','));
   }
 
   function limparFiltroGiroMinimo() {
     setMatrizGiroMinimo('');
-    buscarMatriz(mesReferencia, Array.from(empresasSelecionadas).join(','), 1, matrizOrdenarPor, matrizOrdem, '');
+    buscarMatriz(mesReferencia, Array.from(empresasSelecionadas).join(','), 1, matrizOrdenarPor, matrizOrdem, '', Array.from(statusSelecionados).join(','));
   }
 
   function indicadorOrdenacao(coluna: string): string {
@@ -596,7 +600,7 @@ export default function GiroPage() {
       }
       const empresasParam = Array.from(empresasSelecionadas).join(',');
       await buscarSnapshot(mesReferencia, empresasParam, Array.from(statusSelecionados).join(','));
-      await buscarMatriz(mesReferencia, empresasParam, matrizPagina, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo);
+      await buscarMatriz(mesReferencia, empresasParam, matrizPagina, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','));
       await buscarDimensoes(mesReferencia, empresasParam);
     } catch (error) {
       console.error('Erro ao calcular giro:', error);
@@ -1028,7 +1032,19 @@ export default function GiroPage() {
                   <tbody className="divide-y divide-gray-100">
                     {matriz.itens.map((item, idx) => (
                       <tr key={item.referencia} className={`${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'} hover:bg-rose-50 transition-colors`}>
-                        <td className="px-4 py-2 text-gray-500 sticky left-0 bg-inherit z-10">{item.referencia}</td>
+                        <td className="px-4 py-2 text-gray-500 sticky left-0 bg-inherit z-10">
+                          <div className="flex items-center gap-1.5">
+                            {item.referencia}
+                            {item.temLeveDefeito && (
+                              <span
+                                className="px-1 py-0.5 text-[9px] font-medium bg-orange-100 text-orange-700 rounded"
+                                title="Alguma cor/tamanho dessa referência está classificado como Leve Defeito"
+                              >
+                                LD
+                              </span>
+                            )}
+                          </div>
+                        </td>
                         <td className="px-4 py-2 text-gray-800 sticky left-[100px] bg-inherit z-10">{item.nome}</td>
                         <td className="px-3 py-2 text-right text-blue-900 bg-blue-50/30 whitespace-nowrap">{formatarPreco(item.precoFabrica)}</td>
                         <td className="px-3 py-2 text-right text-blue-900 bg-blue-50/30 whitespace-nowrap">
