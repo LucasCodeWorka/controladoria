@@ -1402,7 +1402,96 @@ export default function DREPage() {
           }
         };
 
+        const margemContribuicaoConta = dadosDRE.find((c) => c.codigo === '05');
+        const despesasVariaveisTotal = filhosVariaveis.reduce((acc, item) => acc + (item.total || 0), 0);
+        const margemAposVariaveisTotal = (margemContribuicaoConta?.total || 0) + despesasVariaveisTotal;
+
+        const renderizarLinhaMargemAposVariaveis = () => {
+          if (filhosVariaveis.length === 0) return;
+
+          linhas.push(
+            <tr key={`margem-apos-variaveis-${conta.codigo}`} className="bg-green-50 font-bold text-green-800">
+              <td
+                className="px-4 py-1.5 border-b border-gray-200 sticky left-0 bg-green-50 z-10"
+                style={{ paddingLeft: `${(nivel + 1) * 16}px` }}
+              >
+                <span className="text-[11px] font-bold tracking-wide">
+                  MARGEM DE CONTRIBUIÇÃO APÓS DESPESAS OPERACIONAIS VARIÁVEIS
+                </span>
+              </td>
+              {periodos.map((periodo) => {
+                const periodoAnoAnteriorKey = anoAnteriorDe(periodo.key);
+                const margemPeriodo = margemContribuicaoConta?.valores[periodo.key] || 0;
+                const variaveisPeriodo = filhosVariaveis.reduce(
+                  (acc, item) => acc + (item.valores[periodo.key] || 0),
+                  0
+                );
+                const valorPeriodo = margemPeriodo + variaveisPeriodo;
+
+                const margemAnoAnteriorPeriodo = valoresAnoAnterior['05']?.[periodoAnoAnteriorKey] || 0;
+                const variaveisAnoAnteriorPeriodo = filhosVariaveis.reduce(
+                  (acc, item) => acc + (valoresAnoAnterior[item.codigo]?.[periodoAnoAnteriorKey] || 0),
+                  0
+                );
+                const valorAnoAnteriorPeriodo = margemAnoAnteriorPeriodo + variaveisAnoAnteriorPeriodo;
+
+                return (
+                  <React.Fragment key={periodo.key}>
+                    {compararAnoAnterior && (
+                      <>
+                        <td
+                          className={`px-2 py-1.5 border-b border-gray-200 bg-green-100 text-right text-xs font-bold ${
+                            valorAnoAnteriorPeriodo < 0 ? 'text-red-600' : 'text-green-800'
+                          }`}
+                        >
+                          {formatarValor(valorAnoAnteriorPeriodo)}
+                        </td>
+                        <td
+                          className={`px-2 py-1.5 border-b border-gray-200 bg-green-100 text-right text-[11px] ${
+                            valorAnoAnteriorPeriodo < 0 ? 'text-red-500' : 'text-green-700'
+                          }`}
+                        >
+                          {calcularAVAnoAnterior(valorAnoAnteriorPeriodo, periodoAnoAnteriorKey)}
+                        </td>
+                      </>
+                    )}
+                    <td
+                      className={`px-2 py-1.5 border-b border-gray-200 bg-green-50 text-right text-xs font-bold ${
+                        valorPeriodo < 0 ? 'text-red-600' : 'text-green-800'
+                      }`}
+                    >
+                      {formatarValor(valorPeriodo)}
+                    </td>
+                    <td
+                      className={`px-2 py-1.5 border-b border-gray-200 bg-green-50 text-right text-[11px] ${
+                        valorPeriodo < 0 ? 'text-red-500' : 'text-green-700'
+                      }`}
+                    >
+                      {calcularAVPeriodo(valorPeriodo, periodo.key)}
+                    </td>
+                  </React.Fragment>
+                );
+              })}
+              <td
+                className={`px-3 py-1.5 border-b border-gray-200 bg-green-50 text-right text-xs font-bold ${
+                  margemAposVariaveisTotal < 0 ? 'text-red-600' : 'text-green-800'
+                }`}
+              >
+                {formatarValor(margemAposVariaveisTotal)}
+              </td>
+              <td
+                className={`px-3 py-1.5 border-b border-gray-200 bg-green-50 text-right text-[11px] ${
+                  margemAposVariaveisTotal < 0 ? 'text-red-500' : 'text-green-700'
+                }`}
+              >
+                {calcularAV(margemAposVariaveisTotal)}
+              </td>
+            </tr>
+          );
+        };
+
         renderizarSubgrupo('DESPESAS VARIÁVEIS', 'text-orange-700', filhosVariaveis);
+        renderizarLinhaMargemAposVariaveis();
         renderizarSubgrupo('DESPESAS FIXAS', 'text-blue-700', filhosFixos);
         renderizarSubgrupo('NÃO CLASSIFICADO', 'text-gray-400', filhosSemClassificacao);
       } else {
