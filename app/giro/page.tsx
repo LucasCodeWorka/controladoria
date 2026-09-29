@@ -1266,7 +1266,9 @@ export default function GiroPage() {
                               {item.cores.length > 3 && (
                                 <span
                                   className="px-1.5 py-0.5 text-[10px] font-medium bg-gray-200 text-black border border-gray-300 rounded cursor-help"
-                                  title={item.cores.slice(3).join(', ')}
+                                  onMouseEnter={(ev) => setTooltipCelula({ texto: item.cores!.slice(3).join(', '), x: ev.clientX, y: ev.clientY })}
+                                  onMouseMove={(ev) => setTooltipCelula({ texto: item.cores!.slice(3).join(', '), x: ev.clientX, y: ev.clientY })}
+                                  onMouseLeave={() => setTooltipCelula(null)}
                                 >
                                   +{item.cores.length - 3}
                                 </span>
