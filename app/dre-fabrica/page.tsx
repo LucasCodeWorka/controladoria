@@ -1402,8 +1402,8 @@ export default function DREPage() {
           }
         };
 
-        renderizarSubgrupo('DESPESAS FIXAS', 'text-blue-700', filhosFixos);
         renderizarSubgrupo('DESPESAS VARIÁVEIS', 'text-orange-700', filhosVariaveis);
+        renderizarSubgrupo('DESPESAS FIXAS', 'text-blue-700', filhosFixos);
         renderizarSubgrupo('NÃO CLASSIFICADO', 'text-gray-400', filhosSemClassificacao);
       } else {
         for (const filho of conta.filhos || []) {
