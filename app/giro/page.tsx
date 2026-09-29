@@ -346,6 +346,9 @@ function GraficoGiro({ dados, onBarClick, chaveAtiva }: { dados: BarraDado[]; on
             axisLine={false}
             tickLine={false}
             width={36}
+            scale="log"
+            domain={[0.1, 'auto']}
+            allowDataOverflow={false}
           />
           <Tooltip content={<TooltipBarra />} cursor={{ fill: 'rgba(11,11,11,0.04)' }} />
           <ReferenceLine
@@ -986,7 +989,7 @@ export default function GiroPage() {
           <div className="bg-white rounded-lg shadow-lg p-5">
             <h2 className="text-base font-semibold text-gray-800 mb-1">Giro por loja e fábrica</h2>
             <p className="text-xs text-gray-500 mb-3">
-              Giro = estoque no mês ÷ venda média mensal dos 3 meses cheios anteriores — meses de cobertura do estoque no ritmo de venda (quanto menor, mais rápido o giro).
+              Giro = estoque no mês ÷ venda média mensal dos 3 meses cheios anteriores — meses de cobertura do estoque no ritmo de venda (quanto menor, mais rápido o giro). Escala logarítmica no eixo, pra uma barra bem mais alta que as outras não achatar o gráfico.
             </p>
             <GraficoGiro
               dados={itensPorEstoqueDesc
@@ -1022,7 +1025,7 @@ export default function GiroPage() {
               </div>
             </div>
             <p className="text-xs text-gray-500 mb-3">
-              Giro (estoque somado ÷ venda média somada) por {DIMENSOES_GIRO.find((d) => d.chave === dimensaoSelecionada)?.label.toLowerCase()} do produto, somando todas as empresas do filtro — clique numa barra pra filtrar a tabela abaixo.
+              Giro (estoque somado ÷ venda média somada) por {DIMENSOES_GIRO.find((d) => d.chave === dimensaoSelecionada)?.label.toLowerCase()} do produto, somando todas as empresas do filtro — clique numa barra pra filtrar a tabela abaixo. Escala logarítmica no eixo, pra uma barra bem mais alta que as outras não achatar o gráfico.
             </p>
             <GraficoGiro
               dados={(dadosPorDimensao[dimensaoSelecionada]?.itens || [])
