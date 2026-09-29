@@ -6,6 +6,7 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  Cell,
   LabelList,
   ResponsiveContainer,
   Tooltip,
@@ -298,12 +299,19 @@ function TooltipBarra({ active, payload }: PayloadTooltipBarra) {
   );
 }
 
+// Cor da barra clicada/filtrada - bem mais escura que COR_BARRA, pra ficar
+// obvio qual esta ativa sem sumir com as outras (o usuario quer ver todas
+// as barras sempre, so a selecionada muda de cor).
+const COR_BARRA_ATIVA = '#8b1739';
+
 // Barras do giro (razao estoque/venda media, "meses de cobertura") - mesmo
 // estilo dos graficos de % do CMV Detalhado, so que o eixo/rotulo mostra um
 // numero com 2 casas em vez de %. onBarClick e opcional - so o grafico "por
-// dimensao" usa, pra filtrar a tabela de referencia/loja ao clicar numa
-// barra.
-function GraficoGiro({ dados, onBarClick }: { dados: BarraDado[]; onBarClick?: (chave: string | number) => void }) {
+// dimensao" e o "por loja e fabrica" usam, pra filtrar a tabela de
+// referencia/loja ao clicar numa barra. chaveAtiva pinta a barra clicada
+// com COR_BARRA_ATIVA, mantendo as demais em COR_BARRA - nenhuma barra
+// desaparece do grafico so por causa do filtro.
+function GraficoGiro({ dados, onBarClick, chaveAtiva }: { dados: BarraDado[]; onBarClick?: (chave: string | number) => void; chaveAtiva?: string | number | null }) {
   if (dados.length === 0) {
     return <p className="text-sm text-gray-400 py-8 text-center">Sem giro calculado ainda.</p>;
   }
@@ -332,12 +340,14 @@ function GraficoGiro({ dados, onBarClick }: { dados: BarraDado[]; onBarClick?: (
           <Tooltip content={<TooltipBarra />} cursor={{ fill: 'rgba(11,11,11,0.04)' }} />
           <Bar
             dataKey="valor"
-            fill={COR_BARRA}
             radius={[4, 4, 0, 0]}
             maxBarSize={56}
             cursor={onBarClick ? 'pointer' : undefined}
             onClick={onBarClick ? (data: any) => data?.payload?.chave !== undefined && onBarClick(data.payload.chave) : undefined}
           >
+            {dados.map((d) => (
+              <Cell key={d.chave} fill={chaveAtiva !== null && chaveAtiva !== undefined && String(d.chave) === String(chaveAtiva) ? COR_BARRA_ATIVA : COR_BARRA} />
+            ))}
             <LabelList
               dataKey="valor"
               position="top"
@@ -397,6 +407,16 @@ export default function GiroPage() {
   // Filtro da tabela "Giro por referencia e loja" ao clicar numa barra do
   // grafico "Giro por dimensao" (grupo/linha/familia/colecao/status).
   const [filtroDimensaoMatriz, setFiltroDimensaoMatriz] = useState<{ dimensao: DimensaoGiro; categoria: string } | null>(null);
+  // Filtro da mesma tabela ao clicar numa barra do grafico "Giro por loja e
+  // fabrica" - SEPARADO de empresasSelecionadas (o filtro la de cima) de
+  // proposito: clicar numa barra so filtra a tabela, sem re-buscar/encolher
+  // os graficos pra 1 loja so (o usuario quer ver todas as barras sempre,
+  // so a clicada muda de cor).
+  const [filtroLojaMatriz, setFiltroLojaMatriz] = useState<number | null>(null);
+
+  function empresasParaMatriz(): string {
+    return filtroLojaMatriz !== null ? String(filtroLojaMatriz) : Array.from(empresasSelecionadas).join(',');
+  }
 
   // Tooltip com foto do produto ao passar o mouse na referencia - mesmo
   // padrao/endpoint ja usado no CMV Detalhado (API publica da VTEX via
@@ -608,31 +628,28 @@ export default function GiroPage() {
     setMatrizOrdenarPor('referencia');
     setMatrizOrdem('asc');
     setFiltroDimensaoMatriz(null);
+    setFiltroLojaMatriz(null);
     buscarMatriz(mesReferencia, empresasParam, 1, 'referencia', 'asc', matrizGiroMinimo, Array.from(statusSelecionados).join(','), null);
     buscarDimensoes(mesReferencia, empresasParam);
   }
 
-  // Clique numa barra do grafico "Giro por loja e fabrica" - troca a
-  // selecao de empresas pra so essa loja/fabrica e reconsulta tudo. NAO
-  // reseta o filtro de dimensao (grupo/linha/...) se ja tiver um ativo -
-  // assim da pra combinar os dois (ex: clicar na loja TABOSA e depois no
-  // grupo SUTIA mostra o giro de sutias so na Tabosa), filtro cruzado.
+  // Clique numa barra do grafico "Giro por loja e fabrica" - filtra so a
+  // tabela "Giro por referencia e loja" pra essa loja (mesmo padrao do
+  // clique por dimensao: NAO re-busca/encolhe os graficos, que continuam
+  // mostrando todas as barras - so a clicada muda de cor). Clicar de novo
+  // na mesma barra remove o filtro. Combina com o filtro de dimensao se ja
+  // tiver um ativo (filtro cruzado: loja + grupo, por exemplo).
   function filtrarPorLojaGrafico(cdEmpresa: string | number) {
     const cd = Number(cdEmpresa);
     if (Number.isNaN(cd)) return;
-    setErro(null);
-    setCarregandoInicial(true);
-    const empresasParam = String(cd);
-    setEmpresasSelecionadas(new Set([cd]));
-    buscarSnapshot(mesReferencia, empresasParam, Array.from(statusSelecionados).join(','))
-      .then(() => setConsultaExecutada(true))
-      .finally(() => setCarregandoInicial(false));
+    const novoFiltro = filtroLojaMatriz === cd ? null : cd;
+    setFiltroLojaMatriz(novoFiltro);
+    const empresasParam = novoFiltro !== null ? String(novoFiltro) : Array.from(empresasSelecionadas).join(',');
     buscarMatriz(mesReferencia, empresasParam, 1, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','), filtroDimensaoMatriz);
-    buscarDimensoes(mesReferencia, empresasParam);
   }
 
   function trocarPaginaMatriz(novaPagina: number) {
-    buscarMatriz(mesReferencia, Array.from(empresasSelecionadas).join(','), novaPagina, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','), filtroDimensaoMatriz);
+    buscarMatriz(mesReferencia, empresasParaMatriz(), novaPagina, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','), filtroDimensaoMatriz);
   }
 
   // Clicar numa coluna ja ordenada inverte o sentido; numa coluna nova,
@@ -642,18 +659,18 @@ export default function GiroPage() {
     const novoOrdem: 'asc' | 'desc' = matrizOrdenarPor === coluna && matrizOrdem === 'asc' ? 'desc' : 'asc';
     setMatrizOrdenarPor(coluna);
     setMatrizOrdem(novoOrdem);
-    buscarMatriz(mesReferencia, Array.from(empresasSelecionadas).join(','), 1, coluna, novoOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','), filtroDimensaoMatriz);
+    buscarMatriz(mesReferencia, empresasParaMatriz(), 1, coluna, novoOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','), filtroDimensaoMatriz);
   }
 
   // Aplica o filtro "giro maior que X" digitado - volta pra pagina 1
   // mantendo a ordenacao atual.
   function aplicarFiltroGiroMinimo() {
-    buscarMatriz(mesReferencia, Array.from(empresasSelecionadas).join(','), 1, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','), filtroDimensaoMatriz);
+    buscarMatriz(mesReferencia, empresasParaMatriz(), 1, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','), filtroDimensaoMatriz);
   }
 
   function limparFiltroGiroMinimo() {
     setMatrizGiroMinimo('');
-    buscarMatriz(mesReferencia, Array.from(empresasSelecionadas).join(','), 1, matrizOrdenarPor, matrizOrdem, '', Array.from(statusSelecionados).join(','), filtroDimensaoMatriz);
+    buscarMatriz(mesReferencia, empresasParaMatriz(), 1, matrizOrdenarPor, matrizOrdem, '', Array.from(statusSelecionados).join(','), filtroDimensaoMatriz);
   }
 
   // Clique numa barra do grafico "Giro por dimensao" - filtra a tabela de
@@ -665,12 +682,17 @@ export default function GiroPage() {
       ? null
       : { dimensao, categoria: categoriaStr };
     setFiltroDimensaoMatriz(novoFiltro);
-    buscarMatriz(mesReferencia, Array.from(empresasSelecionadas).join(','), 1, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','), novoFiltro);
+    buscarMatriz(mesReferencia, empresasParaMatriz(), 1, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','), novoFiltro);
   }
 
   function limparFiltroDimensaoMatriz() {
     setFiltroDimensaoMatriz(null);
-    buscarMatriz(mesReferencia, Array.from(empresasSelecionadas).join(','), 1, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','), null);
+    buscarMatriz(mesReferencia, empresasParaMatriz(), 1, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','), null);
+  }
+
+  function limparFiltroLojaMatriz() {
+    setFiltroLojaMatriz(null);
+    buscarMatriz(mesReferencia, Array.from(empresasSelecionadas).join(','), 1, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','), filtroDimensaoMatriz);
   }
 
   function indicadorOrdenacao(coluna: string): string {
@@ -700,7 +722,7 @@ export default function GiroPage() {
       }
       const empresasParam = Array.from(empresasSelecionadas).join(',');
       await buscarSnapshot(mesReferencia, empresasParam, Array.from(statusSelecionados).join(','));
-      await buscarMatriz(mesReferencia, empresasParam, matrizPagina, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','), filtroDimensaoMatriz);
+      await buscarMatriz(mesReferencia, empresasParaMatriz(), matrizPagina, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','), filtroDimensaoMatriz);
       await buscarDimensoes(mesReferencia, empresasParam);
     } catch (error) {
       console.error('Erro ao calcular giro:', error);
@@ -922,6 +944,7 @@ export default function GiroPage() {
                   tooltip: `${i.nome}: ${formatarGiro(i.giro)} meses de cobertura (estoque ${formatarQtd(i.estoqueAtual)} un. / venda média ${formatarQtd(i.vendaMedia3m)} un./mês) — clique pra ver só essa loja`,
                 }))}
               onBarClick={filtrarPorLojaGrafico}
+              chaveAtiva={filtroLojaMatriz}
             />
           </div>
 
@@ -957,6 +980,7 @@ export default function GiroPage() {
                   tooltip: `${item.chave}: ${formatarGiro(item.giro)} meses de cobertura (estoque ${formatarQtd(item.estoqueTotal)} un. / venda média ${formatarQtd(item.vendaTotal)} un./mês) — clique pra filtrar a tabela abaixo`,
                 }))}
               onBarClick={(chave) => filtrarMatrizPorDimensao(dimensaoSelecionada, chave)}
+              chaveAtiva={filtroDimensaoMatriz?.dimensao === dimensaoSelecionada ? filtroDimensaoMatriz.categoria : null}
             />
           </div>
 
@@ -1064,14 +1088,24 @@ export default function GiroPage() {
               )}
             </div>
 
-            {filtroDimensaoMatriz && (
-              <div className="px-4 pb-2 flex items-center gap-2">
-                <span className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium bg-rose-50 text-rose-700 border border-rose-200 rounded-md">
-                  Filtrando por {DIMENSOES_GIRO.find((d) => d.chave === filtroDimensaoMatriz.dimensao)?.label}: {filtroDimensaoMatriz.categoria}
-                  <button onClick={limparFiltroDimensaoMatriz} className="hover:text-rose-900 font-bold ml-0.5" title="Limpar filtro">
-                    ×
-                  </button>
-                </span>
+            {(filtroDimensaoMatriz || filtroLojaMatriz !== null) && (
+              <div className="px-4 pb-2 flex items-center gap-2 flex-wrap">
+                {filtroLojaMatriz !== null && (
+                  <span className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium bg-rose-50 text-rose-700 border border-rose-200 rounded-md">
+                    Filtrando por Loja: {empresasDisponiveis.find((e) => e.cdEmpresa === filtroLojaMatriz)?.nome || filtroLojaMatriz}
+                    <button onClick={limparFiltroLojaMatriz} className="hover:text-rose-900 font-bold ml-0.5" title="Limpar filtro">
+                      ×
+                    </button>
+                  </span>
+                )}
+                {filtroDimensaoMatriz && (
+                  <span className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium bg-rose-50 text-rose-700 border border-rose-200 rounded-md">
+                    Filtrando por {DIMENSOES_GIRO.find((d) => d.chave === filtroDimensaoMatriz.dimensao)?.label}: {filtroDimensaoMatriz.categoria}
+                    <button onClick={limparFiltroDimensaoMatriz} className="hover:text-rose-900 font-bold ml-0.5" title="Limpar filtro">
+                      ×
+                    </button>
+                  </span>
+                )}
               </div>
             )}
 
