@@ -733,6 +733,13 @@ export default function GiroPage() {
   const itensOrdenados = dados
     ? [...dados.itens].sort((a, b) => (b.giro ?? -1) - (a.giro ?? -1))
     : [];
+  // So pro grafico "Giro por loja e fabrica" - por pedido do usuario, os
+  // graficos (esse e o de dimensao, que ja vem ordenado assim do backend)
+  // ordenam por estoque decrescente, nao por giro. A tabela Empresa/Tipo/
+  // Estoque/Venda/Giro embaixo continua por giro (itensOrdenados).
+  const itensPorEstoqueDesc = dados
+    ? [...dados.itens].sort((a, b) => b.estoqueAtual - a.estoqueAtual)
+    : [];
 
   return (
     <div className="max-w-[98%] mx-auto py-6 px-4 space-y-6">
@@ -906,7 +913,7 @@ export default function GiroPage() {
               Giro = estoque no mês ÷ venda média mensal dos 3 meses cheios anteriores — meses de cobertura do estoque no ritmo de venda (quanto menor, mais rápido o giro).
             </p>
             <GraficoGiro
-              dados={itensOrdenados
+              dados={itensPorEstoqueDesc
                 .filter((i) => i.giro !== null)
                 .map((i) => ({
                   chave: i.cdEmpresa,
