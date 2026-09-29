@@ -1416,7 +1416,7 @@ export default function DREPage() {
                 style={{ paddingLeft: `${(nivel + 1) * 16}px` }}
               >
                 <span className="text-[11px] font-bold tracking-wide">
-                  MARGEM DE CONTRIBUIÇÃO APÓS DESPESAS OPERACIONAIS VARIÁVEIS
+                  MARGEM CONTRIBUICAO
                 </span>
               </td>
               {periodos.map((periodo) => {
