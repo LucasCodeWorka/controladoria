@@ -281,9 +281,22 @@ function opcoesMesReferencia(): string[] {
 interface BarraDado {
   chave: string | number;
   label: string;
+  // Valor usado pra ALTURA da barra - precisa ser > 0 (escala log nao
+  // aceita zero: log(0) e indefinido e quebra o grafico inteiro, nao so
+  // essa barra - ja aconteceu com "familia", que tem categoria com estoque
+  // zerado mas venda no periodo, ex: giro = 0). Quem monta o BarraDado deve
+  // usar Math.max(giroReal, EPSILON_GIRO), nunca o giro cru.
   valor: number;
+  // Texto de verdade pra mostrar em cima da barra (ex: "0,00") - separado
+  // de `valor` porque `valor` pode estar "inflado" pro epsilon acima.
+  labelTexto: string;
   tooltip?: string;
 }
+
+// Piso pra escala log (Y axis usa domain [EPSILON_GIRO, 'auto']) - qualquer
+// giro real <= 0 vira essa altura minima na barra, mas o rotulo em cima
+// continua mostrando o valor real (labelTexto), nao o piso.
+const EPSILON_GIRO = 0.05;
 
 interface PayloadTooltipBarra {
   active?: boolean;
@@ -347,7 +360,7 @@ function GraficoGiro({ dados, onBarClick, chaveAtiva }: { dados: BarraDado[]; on
             tickLine={false}
             width={36}
             scale="log"
-            domain={[0.1, 'auto']}
+            domain={[EPSILON_GIRO, 'auto']}
             allowDataOverflow={false}
           />
           <Tooltip content={<TooltipBarra />} cursor={{ fill: 'rgba(11,11,11,0.04)' }} />
@@ -371,9 +384,8 @@ function GraficoGiro({ dados, onBarClick, chaveAtiva }: { dados: BarraDado[]; on
               return <Cell key={d.chave} fill={cor} />;
             })}
             <LabelList
-              dataKey="valor"
+              dataKey="labelTexto"
               position="top"
-              formatter={(v: React.ReactNode) => formatarGiro(v as number)}
               style={{ fontSize: 11, fontWeight: 700, fill: '#000000' }}
             />
           </Bar>
@@ -1000,7 +1012,8 @@ export default function GiroPage() {
                 .map((i) => ({
                   chave: i.cdEmpresa,
                   label: nomeCurto(i.nome),
-                  valor: i.giro as number,
+                  valor: Math.max(i.giro as number, EPSILON_GIRO),
+                  labelTexto: formatarGiro(i.giro),
                   tooltip: `${i.nome}: ${formatarGiro(i.giro)} meses de cobertura (estoque ${formatarQtd(i.estoqueAtual)} un. / venda média ${formatarQtd(i.vendaMedia3m)} un./mês) — clique pra ver só essa loja`,
                 }))}
               onBarClick={filtrarPorLojaGrafico}
@@ -1036,7 +1049,8 @@ export default function GiroPage() {
                 .map((item) => ({
                   chave: item.chave,
                   label: nomeCurtoDimensao(item.chave),
-                  valor: item.giro as number,
+                  valor: Math.max(item.giro as number, EPSILON_GIRO),
+                  labelTexto: formatarGiro(item.giro),
                   tooltip: `${item.chave}: ${formatarGiro(item.giro)} meses de cobertura (estoque ${formatarQtd(item.estoqueTotal)} un. / venda média ${formatarQtd(item.vendaTotal)} un./mês) — clique pra filtrar a tabela abaixo`,
                 }))}
               onBarClick={(chave) => filtrarMatrizPorDimensao(dimensaoSelecionada, chave)}
