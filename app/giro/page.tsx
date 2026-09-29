@@ -106,7 +106,7 @@ interface ItemMatrizGiro {
   precoFabrica: number | null;
   precoAtacado: number | null;
   precoVarejo: number | null;
-  promocoes: { tipo: 'Fábrica' | 'Atacado' | 'Varejo'; precoPromo: number; precoAnterior: number | null }[];
+  promocoes?: { tipo: 'Fábrica' | 'Atacado' | 'Varejo'; precoPromo: number; precoAnterior: number | null }[];
 }
 
 interface MatrizGiro {
@@ -1040,8 +1040,8 @@ export default function GiroPage() {
                           {formatarPreco(item.precoVarejo)}
                         </td>
                         <td className="px-3 py-2 text-right text-amber-900 bg-amber-50/30 whitespace-nowrap">
-                          {item.promocoes.length > 0 ? (
-                            item.promocoes.map((p) => (
+                          {(item.promocoes?.length ?? 0) > 0 ? (
+                            item.promocoes!.map((p) => (
                               <div key={p.tipo}>
                                 <div className="text-[10px] text-amber-600 leading-tight">🏷️ {p.tipo}</div>
                                 {formatarPreco(p.precoPromo)}
