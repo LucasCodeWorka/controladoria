@@ -1,8 +1,8 @@
 'use client';
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { Search, RefreshCw, Scale } from 'lucide-react';
-import { PLANO_ATIVOS, PLANO_PASSIVO } from '../../balanco-patrimonial/planoContasBalanco';
+import { Search, RefreshCw, Scale, ChevronDown, ChevronRight, X } from 'lucide-react';
+import { PLANO_ATIVOS, PLANO_PASSIVO, type ContaBalanco } from '../../balanco-patrimonial/planoContasBalanco';
 
 interface DespesaBalanco {
   cd_despesaitem: number;
@@ -20,6 +20,118 @@ function opcoesContas(): { codigo: string; label: string }[] {
   return opcoes;
 }
 
+function SeletorConta({
+  value,
+  onChange,
+  opcoes,
+  className,
+}: {
+  value: string;
+  onChange: (valor: string) => void;
+  opcoes: { codigo: string; label: string }[];
+  className?: string;
+}) {
+  return (
+    <select value={value} onChange={(e) => onChange(e.target.value)} className={className}>
+      <option value="">— Não classificado —</option>
+      <optgroup label="Ativos">
+        {opcoes
+          .filter((o) => o.codigo.startsWith('A'))
+          .map((o) => (
+            <option key={o.codigo} value={o.codigo}>
+              {o.label}
+            </option>
+          ))}
+      </optgroup>
+      <optgroup label="Passivo">
+        {opcoes
+          .filter((o) => o.codigo.startsWith('P'))
+          .map((o) => (
+            <option key={o.codigo} value={o.codigo}>
+              {o.label}
+            </option>
+          ))}
+      </optgroup>
+    </select>
+  );
+}
+
+interface ContaConfigCardProps {
+  conta: ContaBalanco;
+  despesasDaConta: DespesaBalanco[];
+  expandido: boolean;
+  onToggleExpandir: () => void;
+  mesesAtual: number;
+  mesesEditando: string;
+  onEditarMeses: (valor: string) => void;
+  onSalvarJanela: () => void;
+  onRemover: (cd_despesaitem: number, ds_despesaitem: string) => void;
+}
+
+function ContaConfigCard({
+  conta,
+  despesasDaConta,
+  expandido,
+  onToggleExpandir,
+  mesesAtual,
+  mesesEditando,
+  onEditarMeses,
+  onSalvarJanela,
+  onRemover,
+}: ContaConfigCardProps) {
+  return (
+    <div className="border border-gray-200 rounded-md">
+      <div className="flex items-center justify-between gap-3 px-3 py-2">
+        <button onClick={onToggleExpandir} className="flex items-center gap-2 text-sm text-black flex-1 text-left min-w-0">
+          {expandido ? <ChevronDown className="w-4 h-4 shrink-0" /> : <ChevronRight className="w-4 h-4 shrink-0" />}
+          <span className="truncate" title={conta.nome}>
+            {conta.nome}
+          </span>
+          <span className="text-xs text-gray-400 shrink-0">({despesasDaConta.length})</span>
+        </button>
+        <div className="flex items-center gap-2 shrink-0" onClick={(e) => e.stopPropagation()}>
+          <input
+            type="number"
+            min={1}
+            placeholder={String(mesesAtual)}
+            value={mesesEditando}
+            onChange={(e) => onEditarMeses(e.target.value)}
+            className="w-16 px-2 py-1 border border-gray-300 rounded text-sm text-black text-right"
+          />
+          <button onClick={onSalvarJanela} className="px-2 py-1 bg-brand-primary text-white rounded text-xs hover:opacity-90">
+            Salvar
+          </button>
+        </div>
+      </div>
+      {expandido && (
+        <div className="border-t border-gray-100 px-3 py-2 bg-gray-50 max-h-56 overflow-y-auto">
+          {despesasDaConta.length === 0 ? (
+            <p className="text-xs text-gray-400">Nenhuma despesa aplicada nessa conta ainda.</p>
+          ) : (
+            <ul className="space-y-1">
+              {despesasDaConta.map((d) => (
+                <li key={d.cd_despesaitem} className="flex items-center justify-between gap-2 text-xs text-black">
+                  <span className="truncate">
+                    {d.ds_despesaitem} <span className="text-gray-400">#{d.cd_despesaitem}</span>
+                  </span>
+                  <button
+                    onClick={() => onRemover(d.cd_despesaitem, d.ds_despesaitem)}
+                    className="text-red-500 hover:underline shrink-0 flex items-center gap-0.5"
+                    title="Remover dessa conta"
+                  >
+                    <X className="w-3 h-3" />
+                    remover
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ConfigBalancoPage() {
   const [despesas, setDespesas] = useState<DespesaBalanco[]>([]);
   const [loading, setLoading] = useState(false);
@@ -28,6 +140,10 @@ export default function ConfigBalancoPage() {
   const [mesesJanela, setMesesJanela] = useState<Record<string, number>>({});
   const [mesesJanelaEditando, setMesesJanelaEditando] = useState<Record<string, string>>({});
   const [mensagem, setMensagem] = useState<string | null>(null);
+  const [gruposExpandidos, setGruposExpandidos] = useState<Set<string>>(new Set());
+  const [selecionados, setSelecionados] = useState<Set<number>>(new Set());
+  const [ultimoIndiceClicado, setUltimoIndiceClicado] = useState<number | null>(null);
+  const [contaLote, setContaLote] = useState('');
 
   const opcoes = useMemo(() => opcoesContas(), []);
   const todasAsContas = useMemo(() => [...PLANO_ATIVOS, ...PLANO_PASSIVO].flatMap((g) => g.filhos || []), []);
@@ -65,21 +181,34 @@ export default function ConfigBalancoPage() {
     setTimeout(() => setMensagem(null), 2500);
   }
 
-  async function salvarClassificacao(cd_despesaitem: number, ds_despesaitem: string, conta_balanco: string) {
-    setDespesas((prev) => prev.map((d) => (d.cd_despesaitem === cd_despesaitem ? { ...d, conta_balanco } : d)));
+  async function enviarClassificacoes(itens: { cd_despesaitem: number; ds_despesaitem: string; conta_balanco: string }[]) {
     try {
       await fetch('/api/classificacao-despesas-balanco', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          classificacoes: [{ cd_despesaitem, ds_despesaitem, conta_balanco }],
-          usuario: 'config_balanco',
-        }),
+        body: JSON.stringify({ classificacoes: itens, usuario: 'config_balanco' }),
       });
-      mostrarMensagem('Classificação salva.');
     } catch (error) {
       console.error('Erro ao salvar classificação:', error);
     }
+  }
+
+  async function salvarClassificacao(cd_despesaitem: number, ds_despesaitem: string, conta_balanco: string) {
+    setDespesas((prev) => prev.map((d) => (d.cd_despesaitem === cd_despesaitem ? { ...d, conta_balanco } : d)));
+    await enviarClassificacoes([{ cd_despesaitem, ds_despesaitem, conta_balanco }]);
+    mostrarMensagem('Classificação salva.');
+  }
+
+  async function aplicarEmLote() {
+    if (selecionados.size === 0 || !contaLote) return;
+    const itens = despesas
+      .filter((d) => selecionados.has(d.cd_despesaitem))
+      .map((d) => ({ cd_despesaitem: d.cd_despesaitem, ds_despesaitem: d.ds_despesaitem, conta_balanco: contaLote }));
+    setDespesas((prev) => prev.map((d) => (selecionados.has(d.cd_despesaitem) ? { ...d, conta_balanco: contaLote } : d)));
+    await enviarClassificacoes(itens);
+    mostrarMensagem(`${itens.length} despesas aplicadas.`);
+    setSelecionados(new Set());
+    setContaLote('');
   }
 
   async function salvarJanela(codigo: string) {
@@ -100,6 +229,15 @@ export default function ConfigBalancoPage() {
     }
   }
 
+  function toggleExpandirGrupo(codigo: string) {
+    setGruposExpandidos((prev) => {
+      const novo = new Set(prev);
+      if (novo.has(codigo)) novo.delete(codigo);
+      else novo.add(codigo);
+      return novo;
+    });
+  }
+
   const despesasFiltradas = useMemo(() => {
     let lista = despesas;
     if (apenasSemClassificacao) lista = lista.filter((d) => !d.conta_balanco);
@@ -111,6 +249,50 @@ export default function ConfigBalancoPage() {
     }
     return lista;
   }, [despesas, busca, apenasSemClassificacao]);
+
+  const despesasPorConta = useMemo(() => {
+    const mapa: Record<string, DespesaBalanco[]> = {};
+    for (const d of despesas) {
+      if (!d.conta_balanco) continue;
+      (mapa[d.conta_balanco] ??= []).push(d);
+    }
+    return mapa;
+  }, [despesas]);
+
+  const todosFiltradosSelecionados =
+    despesasFiltradas.length > 0 && despesasFiltradas.every((d) => selecionados.has(d.cd_despesaitem));
+
+  function toggleSelecionarTodosFiltrados() {
+    setSelecionados((prev) => {
+      const idsFiltrados = despesasFiltradas.map((d) => d.cd_despesaitem);
+      if (todosFiltradosSelecionados) {
+        const novo = new Set(prev);
+        idsFiltrados.forEach((id) => novo.delete(id));
+        return novo;
+      }
+      const novo = new Set(prev);
+      idsFiltrados.forEach((id) => novo.add(id));
+      return novo;
+    });
+  }
+
+  function handleCheckboxClick(cd_despesaitem: number, index: number, shiftKey: boolean) {
+    setSelecionados((prev) => {
+      const novo = new Set(prev);
+      if (shiftKey && ultimoIndiceClicado !== null) {
+        const [ini, fim] = [ultimoIndiceClicado, index].sort((a, b) => a - b);
+        for (let i = ini; i <= fim; i++) {
+          novo.add(despesasFiltradas[i].cd_despesaitem);
+        }
+      } else if (novo.has(cd_despesaitem)) {
+        novo.delete(cd_despesaitem);
+      } else {
+        novo.add(cd_despesaitem);
+      }
+      return novo;
+    });
+    setUltimoIndiceClicado(index);
+  }
 
   return (
     <div className="p-6 space-y-6">
@@ -129,34 +311,26 @@ export default function ConfigBalancoPage() {
       )}
 
       <div className="bg-white rounded-lg shadow-lg p-5">
-        <h2 className="text-base font-semibold text-black mb-1">Janela por conta</h2>
+        <h2 className="text-base font-semibold text-black mb-1">Contas do Balanço</h2>
         <p className="text-xs text-gray-500 mb-3">
-          Quantidade de meses, a partir do 1º dia do mês filtrado na tela do Balanço, usada pra somar duplicatas por
-          vencimento. Sem configurar, o padrão é 12 meses (o placeholder do campo mostra o valor atual).
+          Janela = quantos meses a partir do 1º dia do mês filtrado na tela do Balanço, usada pra somar duplicatas por
+          vencimento (sem configurar, o padrão é 12 - o placeholder do campo mostra o valor atual). Clique no nome da
+          conta pra ver quais despesas já estão aplicadas nela.
         </p>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div className="space-y-2">
           {todasAsContas.map((conta) => (
-            <div key={conta.codigo} className="flex items-center justify-between gap-3 border border-gray-200 rounded-md px-3 py-2">
-              <span className="text-sm text-black truncate" title={conta.nome}>
-                {conta.nome}
-              </span>
-              <div className="flex items-center gap-2 shrink-0">
-                <input
-                  type="number"
-                  min={1}
-                  placeholder={String(mesesJanela[conta.codigo] ?? 12)}
-                  value={mesesJanelaEditando[conta.codigo] ?? ''}
-                  onChange={(e) => setMesesJanelaEditando((prev) => ({ ...prev, [conta.codigo]: e.target.value }))}
-                  className="w-16 px-2 py-1 border border-gray-300 rounded text-sm text-black text-right"
-                />
-                <button
-                  onClick={() => salvarJanela(conta.codigo)}
-                  className="px-2 py-1 bg-brand-primary text-white rounded text-xs hover:opacity-90"
-                >
-                  Salvar
-                </button>
-              </div>
-            </div>
+            <ContaConfigCard
+              key={conta.codigo}
+              conta={conta}
+              despesasDaConta={despesasPorConta[conta.codigo] || []}
+              expandido={gruposExpandidos.has(conta.codigo)}
+              onToggleExpandir={() => toggleExpandirGrupo(conta.codigo)}
+              mesesAtual={mesesJanela[conta.codigo] ?? 12}
+              mesesEditando={mesesJanelaEditando[conta.codigo] ?? ''}
+              onEditarMeses={(valor) => setMesesJanelaEditando((prev) => ({ ...prev, [conta.codigo]: valor }))}
+              onSalvarJanela={() => salvarJanela(conta.codigo)}
+              onRemover={(cd_despesaitem, ds_despesaitem) => salvarClassificacao(cd_despesaitem, ds_despesaitem, '')}
+            />
           ))}
         </div>
       </div>
@@ -193,46 +367,66 @@ export default function ConfigBalancoPage() {
           </span>
         </div>
 
+        {selecionados.size > 0 && (
+          <div className="px-4 py-2.5 bg-amber-50 border-b border-amber-200 flex items-center gap-3 flex-wrap">
+            <span className="text-sm text-amber-800 font-medium">{selecionados.size} selecionadas</span>
+            <SeletorConta
+              value={contaLote}
+              onChange={setContaLote}
+              opcoes={opcoes}
+              className="px-2 py-1 border border-amber-300 rounded text-sm text-black min-w-[260px]"
+            />
+            <button
+              onClick={aplicarEmLote}
+              disabled={!contaLote}
+              className="px-3 py-1.5 bg-brand-primary text-white rounded-md text-sm hover:opacity-90 disabled:opacity-50"
+            >
+              Aplicar ao grupo
+            </button>
+            <button onClick={() => setSelecionados(new Set())} className="text-sm text-amber-700 hover:underline">
+              Limpar seleção
+            </button>
+            <span className="text-xs text-amber-600">
+              Dica: marque uma despesa, segure Shift e marque outra pra selecionar o intervalo entre as duas.
+            </span>
+          </div>
+        )}
+
         <div className="overflow-y-auto max-h-[600px]">
           <table className="w-full text-sm">
             <thead className="bg-gray-50 border-b border-gray-200 sticky top-0">
               <tr>
+                <th className="px-4 py-2 w-8">
+                  <input type="checkbox" checked={todosFiltradosSelecionados} onChange={toggleSelecionarTodosFiltrados} />
+                </th>
                 <th className="text-left px-4 py-2 font-medium text-black w-24">Código</th>
                 <th className="text-left px-4 py-2 font-medium text-black">Descrição</th>
                 <th className="text-left px-4 py-2 font-medium text-black w-72">Conta do Balanço</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {despesasFiltradas.map((d) => (
-                <tr key={d.cd_despesaitem} className="hover:bg-gray-50">
+              {despesasFiltradas.map((d, index) => (
+                <tr
+                  key={d.cd_despesaitem}
+                  className={`hover:bg-gray-50 ${selecionados.has(d.cd_despesaitem) ? 'bg-amber-50' : ''}`}
+                >
+                  <td className="px-4 py-1.5">
+                    <input
+                      type="checkbox"
+                      checked={selecionados.has(d.cd_despesaitem)}
+                      onClick={(e) => handleCheckboxClick(d.cd_despesaitem, index, e.shiftKey)}
+                      onChange={() => {}}
+                    />
+                  </td>
                   <td className="px-4 py-1.5 text-black font-mono text-xs">{d.cd_despesaitem}</td>
                   <td className="px-4 py-1.5 text-black">{d.ds_despesaitem}</td>
                   <td className="px-4 py-1.5">
-                    <select
+                    <SeletorConta
                       value={d.conta_balanco || ''}
-                      onChange={(e) => salvarClassificacao(d.cd_despesaitem, d.ds_despesaitem, e.target.value)}
+                      onChange={(valor) => salvarClassificacao(d.cd_despesaitem, d.ds_despesaitem, valor)}
+                      opcoes={opcoes}
                       className="w-full px-2 py-1 border border-gray-300 rounded text-sm text-black"
-                    >
-                      <option value="">— Não classificado —</option>
-                      <optgroup label="Ativos">
-                        {opcoes
-                          .filter((o) => o.codigo.startsWith('A'))
-                          .map((o) => (
-                            <option key={o.codigo} value={o.codigo}>
-                              {o.label}
-                            </option>
-                          ))}
-                      </optgroup>
-                      <optgroup label="Passivo">
-                        {opcoes
-                          .filter((o) => o.codigo.startsWith('P'))
-                          .map((o) => (
-                            <option key={o.codigo} value={o.codigo}>
-                              {o.label}
-                            </option>
-                          ))}
-                      </optgroup>
-                    </select>
+                    />
                   </td>
                 </tr>
               ))}
