@@ -223,6 +223,32 @@ _QUERY_QTD_VENDIDA = """
 """
 
 
+def _janela_venda_fl(mes_referencia: str, mes_fim: str) -> tuple:
+    """Janelas especiais de venda pra referencias em oportunidade (Mes FL),
+    por pedido do usuario:
+    - Mes FL == 0: so o ultimo mes fechado (o mesmo mes_fim da regra padrao),
+      dividido por 1 - substitui a media de 3 meses.
+    - Mes FL > 0: soma dos meses JA FECHADOS do semestre do mes de
+      referencia (jan-jun ou jul-dez), dividida pela QUANTIDADE desses meses
+      fechados - nunca fixo em 6, senao o giro cai artificialmente quando
+      faltam meses fechar no semestre (ex: mes de referencia = outubro ->
+      so jul/ago/set fecharam, soma / 3, nao / 6).
+
+    Retorna (data_inicio_1m, data_inicio_sem, meses_fechados_sem) - data_fim
+    e sempre a mesma da janela padrao (fim do ultimo mes fechado), entao nao
+    precisa ser recalculada aqui.
+    """
+    ano_fim, mes_fim_n = (int(p) for p in mes_fim.split("-"))
+    data_inicio_1m = date(ano_fim, mes_fim_n, 1).isoformat()
+
+    ano_ref, mes_ref_n = (int(p) for p in mes_referencia.split("-"))
+    mes_inicio_sem = 1 if mes_ref_n <= 6 else 7
+    meses_fechados_sem = mes_ref_n - mes_inicio_sem
+    data_inicio_sem = date(ano_ref, mes_inicio_sem, 1).isoformat()
+
+    return data_inicio_1m, data_inicio_sem, meses_fechados_sem
+
+
 def _calcular_giro(mes_referencia: str, cd_empresas: list) -> dict:
     _criar_tabela_giro()
     dt_corte_estoque, data_inicio, data_fim, mes_ini, mes_fim = _datas_periodo(mes_referencia)
@@ -230,7 +256,7 @@ def _calcular_giro(mes_referencia: str, cd_empresas: list) -> dict:
     padroes_excluidos = _padroes_produto_excluidos()
     produtos_sem_classificacao = _produtos_sem_status_e_marca()
     linhas_estoque = execute_query(_QUERY_ESTOQUE_ATUAL, (produtos_sem_classificacao, dt_corte_estoque, cd_empresas, padroes_excluidos)) or []
-    linhas_venda = execute_query(_QUERY_QTD_VENDIDA, (produtos_sem_classificacao, cd_empresas, data_inicio, data_fim, padroes_excluidos)) or []
+    linhas_venda_3m = execute_query(_QUERY_QTD_VENDIDA, (produtos_sem_classificacao, cd_empresas, data_inicio, data_fim, padroes_excluidos)) or []
 
     estoque_por_empresa: dict = {}
     estoque_por_produto: dict = {}
@@ -239,16 +265,86 @@ def _calcular_giro(mes_referencia: str, cd_empresas: list) -> dict:
         estoque_por_empresa[r["cd_empresa"]] = estoque_por_empresa.get(r["cd_empresa"], 0.0) + v
         estoque_por_produto[(r["cd_empresa"], r["cd_produto"])] = v
 
-    qtd_por_empresa: dict = {}
-    qtd_por_produto: dict = {}
-    for r in linhas_venda:
-        v = float(r["qt_vendida"] or 0)
-        qtd_por_empresa[r["cd_empresa"]] = qtd_por_empresa.get(r["cd_empresa"], 0.0) + v
-        qtd_por_produto[(r["cd_empresa"], r["cd_produto"])] = v
+    qtd_3m_por_produto: dict = {}
+    for r in linhas_venda_3m:
+        qtd_3m_por_produto[(r["cd_empresa"], r["cd_produto"])] = float(r["qt_vendida"] or 0)
+
+    chaves_produto = set(estoque_por_produto.keys()) | set(qtd_3m_por_produto.keys())
+
+    # --- Janela especial de venda pra quem esta em oportunidade (Mes FL) ---
+    produtos_todos = sorted({cd_produto for _, cd_produto in chaves_produto})
+    produto_referencia_oportunidade: dict = {}
+    if produtos_todos:
+        linhas_status = execute_query("""
+            SELECT cd_produto, referencia
+            FROM mv_prd_referencia_produto
+            WHERE cd_produto = ANY(%s) AND status ILIKE 'OPORTUNIDADE%%'
+        """, (produtos_todos,)) or []
+        for r in linhas_status:
+            produto_referencia_oportunidade[r["cd_produto"]] = r["referencia"]
+
+    meses_fl_por_referencia: dict = {}
+    if produto_referencia_oportunidade:
+        referencias_oportunidade = list(set(produto_referencia_oportunidade.values()))
+        primeiras = _obter_primeira_oportunidade(referencias_oportunidade)
+        hoje = date.today()
+        for ref, dt_primeira in primeiras.items():
+            if dt_primeira:
+                meses_fl_por_referencia[ref] = (hoje.year - dt_primeira.year) * 12 + (hoje.month - dt_primeira.month)
+
+    data_inicio_1m, data_inicio_sem, meses_fechados_sem = _janela_venda_fl(mes_referencia, mes_fim)
+
+    produtos_bucket_1m = set()   # Mes FL == 0
+    produtos_bucket_sem = set()  # Mes FL > 0, com mes fechado no semestre
+    for cd_produto, referencia in produto_referencia_oportunidade.items():
+        meses_fl = meses_fl_por_referencia.get(referencia)
+        if meses_fl is None:
+            continue
+        if meses_fl == 0:
+            produtos_bucket_1m.add(cd_produto)
+        elif meses_fechados_sem > 0:
+            produtos_bucket_sem.add(cd_produto)
+        else:
+            # Mes de referencia e o 1o mes do semestre (jan ou jul) - ainda
+            # nao fechou nenhum mes nele, cai pra regra do ultimo mes
+            # fechado (mesmo tratamento do Mes FL == 0) pra nao dividir por
+            # zero.
+            produtos_bucket_1m.add(cd_produto)
+
+    qtd_1m_por_produto: dict = {}
+    if produtos_bucket_1m:
+        linhas_venda_1m = execute_query(_QUERY_QTD_VENDIDA, (produtos_sem_classificacao, cd_empresas, data_inicio_1m, data_fim, padroes_excluidos)) or []
+        for r in linhas_venda_1m:
+            if r["cd_produto"] in produtos_bucket_1m:
+                qtd_1m_por_produto[(r["cd_empresa"], r["cd_produto"])] = float(r["qt_vendida"] or 0)
+
+    qtd_sem_por_produto: dict = {}
+    if produtos_bucket_sem:
+        linhas_venda_sem = execute_query(_QUERY_QTD_VENDIDA, (produtos_sem_classificacao, cd_empresas, data_inicio_sem, data_fim, padroes_excluidos)) or []
+        for r in linhas_venda_sem:
+            if r["cd_produto"] in produtos_bucket_sem:
+                qtd_sem_por_produto[(r["cd_empresa"], r["cd_produto"])] = float(r["qt_vendida"] or 0)
+
+    # Venda media final por produto: janela padrao (3 meses, /3) pra quem
+    # nao esta em oportunidade, ou a janela especial (1 mes fechado, /1; ou
+    # semestre com N meses fechados, /N) pra quem esta.
+    venda_media_por_produto: dict = {}
+    for chave in chaves_produto:
+        _, cd_produto = chave
+        if cd_produto in produtos_bucket_1m:
+            venda_media_por_produto[chave] = qtd_1m_por_produto.get(chave, 0.0)
+        elif cd_produto in produtos_bucket_sem:
+            venda_media_por_produto[chave] = qtd_sem_por_produto.get(chave, 0.0) / meses_fechados_sem
+        else:
+            venda_media_por_produto[chave] = qtd_3m_por_produto.get(chave, 0.0) / 3.0
+
+    venda_media_por_empresa: dict = {}
+    for (cd_empresa, _cd_produto), venda in venda_media_por_produto.items():
+        venda_media_por_empresa[cd_empresa] = venda_media_por_empresa.get(cd_empresa, 0.0) + venda
 
     for cd_empresa in cd_empresas:
         estoque = estoque_por_empresa.get(cd_empresa, 0.0)
-        venda_media_3m = qtd_por_empresa.get(cd_empresa, 0.0) / 3.0
+        venda_media_3m = venda_media_por_empresa.get(cd_empresa, 0.0)
         execute_insert("""
             INSERT INTO giro_snapshot (cd_empresa, mes_referencia, estoque_atual, venda_media_3m, mes_ini, mes_fim, dt_calculado)
             VALUES (%s, %s, %s, %s, %s, %s, NOW())
@@ -266,10 +362,9 @@ def _calcular_giro(mes_referencia: str, cd_empresas: list) -> dict:
         "DELETE FROM giro_produto_snapshot WHERE mes_referencia = %s AND cd_empresa = ANY(%s)",
         (mes_referencia, cd_empresas)
     )
-    chaves_produto = set(estoque_por_produto.keys()) | set(qtd_por_produto.keys())
     linhas_para_gravar = [
         (cd_empresa, cd_produto, mes_referencia, estoque_por_produto.get((cd_empresa, cd_produto), 0.0),
-         qtd_por_produto.get((cd_empresa, cd_produto), 0.0) / 3.0)
+         venda_media_por_produto.get((cd_empresa, cd_produto), 0.0))
         for cd_empresa, cd_produto in chaves_produto
     ]
     lista_chaves = list(linhas_para_gravar)
