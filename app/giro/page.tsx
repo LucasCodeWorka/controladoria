@@ -176,14 +176,22 @@ function CelulaGiro({ estoque, giro }: { estoque: number; giro: number | null })
   );
 }
 
-// Descreve qual janela de venda entrou na conta do giro (memoria de
-// calculo): regra padrao (3 meses cheios antes do mes filtrado) pra quem
-// nao esta em oportunidade, ou a janela especial de Mes FL (so o ultimo mes
-// fechado quando Mes FL = 0; soma dos meses JA FECHADOS do semestre do mes
-// filtrado, dividida pela quantidade deles, quando Mes FL > 0) - mesma
-// regra aplicada no backend em _janela_venda_fl (giro.py).
-function descricaoJanelaGiro(mesReferencia: string, mesesOportunidade: number | null | undefined): string {
+const NOMES_MES_CURTO_GIRO = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+
+function labelMesCurtoGiro(mesChave: string): string {
+  const [ano, mes] = mesChave.split('-').map(Number);
+  return `${NOMES_MES_CURTO_GIRO[mes - 1]}/${String(ano).slice(2)}`;
+}
+
+// Meses (chave "YYYY-MM", do mais antigo pro mais novo) que entram na janela
+// de venda usada pro giro - mesma regra do backend (_janela_venda_fl em
+// giro.py): 3 meses cheios antes do mes filtrado por padrao; so o ultimo mes
+// fechado quando Mes FL = 0; os meses JA FECHADOS do semestre do mes
+// filtrado quando Mes FL > 0 (caindo pro ultimo mes fechado se o mes
+// filtrado for o 1o do semestre, sem nenhum mes fechado ainda).
+function mesesDaJanelaGiro(mesReferencia: string, mesesOportunidade: number | null | undefined): string[] {
   const [anoRef, mesRefN] = mesReferencia.split('-').map(Number);
+  const mesChave = (ano: number, mes: number) => `${ano}-${String(mes).padStart(2, '0')}`;
 
   let anoFim = anoRef;
   let mesFimN = mesRefN - 1;
@@ -191,50 +199,109 @@ function descricaoJanelaGiro(mesReferencia: string, mesesOportunidade: number | 
     mesFimN += 12;
     anoFim -= 1;
   }
-  const mesFimLabel = `${String(mesFimN).padStart(2, '0')}/${anoFim}`;
 
   if (mesesOportunidade === null || mesesOportunidade === undefined) {
-    let anoIni = anoRef;
-    let mesIniN = mesRefN - 3;
-    while (mesIniN <= 0) {
-      mesIniN += 12;
-      anoIni -= 1;
+    const meses: string[] = [];
+    let ano = anoFim;
+    let mes = mesFimN;
+    for (let i = 0; i < 3; i++) {
+      meses.unshift(mesChave(ano, mes));
+      mes -= 1;
+      if (mes <= 0) {
+        mes += 12;
+        ano -= 1;
+      }
     }
-    const mesIniLabel = `${String(mesIniN).padStart(2, '0')}/${anoIni}`;
-    return `Venda média = 3 meses cheios antes do mês filtrado (${mesIniLabel} a ${mesFimLabel}) ÷ 3`;
+    return meses;
   }
 
   if (mesesOportunidade === 0) {
-    return `Meses FL = 0: venda média = só o último mês fechado (${mesFimLabel}) ÷ 1`;
+    return [mesChave(anoFim, mesFimN)];
   }
 
   const mesInicioSem = mesRefN <= 6 ? 1 : 7;
   const mesesFechadosSem = mesRefN - mesInicioSem;
   if (mesesFechadosSem <= 0) {
-    return `Meses FL = ${mesesOportunidade}, mas o mês filtrado é o 1º do semestre (nenhum mês fechado ainda): venda média = só o último mês fechado (${mesFimLabel}) ÷ 1`;
+    return [mesChave(anoFim, mesFimN)];
   }
-  const inicioSemLabel = `${String(mesInicioSem).padStart(2, '0')}/${anoRef}`;
-  const plural = mesesFechadosSem === 1 ? 'mês fechado' : 'meses fechados';
-  return `Meses FL = ${mesesOportunidade}: venda média = soma de ${inicioSemLabel} a ${mesFimLabel} (${mesesFechadosSem} ${plural} do semestre) ÷ ${mesesFechadosSem}`;
+  const meses: string[] = [];
+  for (let m = mesInicioSem; m < mesRefN; m++) {
+    meses.push(mesChave(anoRef, m));
+  }
+  return meses;
+}
+
+// Descreve qual janela de venda entrou na conta do giro (memoria de
+// calculo): regra padrao (3 meses cheios antes do mes filtrado) pra quem
+// nao esta em oportunidade, ou a janela especial de Mes FL (so o ultimo mes
+// fechado quando Mes FL = 0; soma dos meses JA FECHADOS do semestre do mes
+// filtrado, dividida pela quantidade deles, quando Mes FL > 0).
+function descricaoJanelaGiro(mesReferencia: string, mesesOportunidade: number | null | undefined): string {
+  const meses = mesesDaJanelaGiro(mesReferencia, mesesOportunidade);
+  const mesIniLabel = labelMesCurtoGiro(meses[0]);
+  const mesFimLabel = labelMesCurtoGiro(meses[meses.length - 1]);
+
+  if (mesesOportunidade === null || mesesOportunidade === undefined) {
+    return `Venda média = 3 meses cheios antes do mês filtrado (${mesIniLabel} a ${mesFimLabel}) ÷ 3`;
+  }
+  if (mesesOportunidade === 0 || meses.length === 1) {
+    const motivoUnico = mesesOportunidade > 0 ? ', mas o mês filtrado é o 1º do semestre (nenhum mês fechado ainda)' : '';
+    return `Meses FL = ${mesesOportunidade}${motivoUnico}: venda média = só o último mês fechado (${mesFimLabel}) ÷ 1`;
+  }
+  const plural = meses.length === 1 ? 'mês fechado' : 'meses fechados';
+  return `Meses FL = ${mesesOportunidade}: venda média = soma de ${mesIniLabel} a ${mesFimLabel} (${meses.length} ${plural} do semestre) ÷ ${meses.length}`;
+}
+
+// Detalhe "venda de cada mes" - so mostra quando a janela tem mais de 1 mes
+// (senao seria repetir o mesmo numero da venda media).
+function detalheVendaMensalGiro(meses: string[], vendaPorMes: Record<string, number> | undefined): string {
+  if (meses.length <= 1) return '';
+  const partes = meses.map((m) => `${labelMesCurtoGiro(m)}: ${formatarQtd(vendaPorMes?.[m] ?? 0)}`);
+  return `Venda por mês: ${partes.join(' | ')}`;
 }
 
 // Tooltip da matriz por referencia: mostra a conta que chegou naquele giro
-// (estoque atual / venda media do periodo) e a memoria de calculo de qual
-// janela de venda foi usada, tanto por loja quanto no total.
+// (estoque atual / venda media do periodo), a memoria de calculo de qual
+// janela de venda foi usada, e a venda de cada mes quando a janela tem mais
+// de 1 mes - tanto por loja quanto no total.
 function tooltipGiro(
   estoque: number,
   venda: number,
   giro: number | null,
   mesReferencia: string,
-  mesesOportunidade: number | null | undefined
+  mesesOportunidade: number | null | undefined,
+  vendaPorMes?: Record<string, number>
 ): string {
   const vendaFmt = venda.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const meses = mesesDaJanelaGiro(mesReferencia, mesesOportunidade);
   const janela = descricaoJanelaGiro(mesReferencia, mesesOportunidade);
-  if (giro === null) {
-    const motivo = estoque > 0 ? 'sem venda no período (SV-3M)' : 'sem estoque e sem venda no período';
-    return `Estoque: ${formatarQtd(estoque)} ÷ Venda média: ${vendaFmt} = ${motivo}\n${janela}`;
+  const detalheMensal = detalheVendaMensalGiro(meses, vendaPorMes);
+  const linhas = [
+    giro === null
+      ? `Estoque: ${formatarQtd(estoque)} ÷ Venda média: ${vendaFmt} = ${estoque > 0 ? 'sem venda no período (SV-3M)' : 'sem estoque e sem venda no período'}`
+      : `Estoque: ${formatarQtd(estoque)} ÷ Venda média: ${vendaFmt} = ${formatarGiro(giro)}`,
+    janela,
+  ];
+  if (detalheMensal) linhas.push(detalheMensal);
+  return linhas.join('\n');
+}
+
+// Soma a venda mes a mes de uma referencia, atraves de varias lojas (usado
+// no tooltip da coluna Total) - a partir do mapa page-scoped ja carregado.
+function vendaMensalTotalReferencia(
+  referencia: string,
+  empresas: { cdEmpresa: number }[],
+  vendaMensalPorReferencia: Record<string, Record<string, Record<string, number>>>
+): Record<string, number> {
+  const porEmpresa = vendaMensalPorReferencia[referencia] || {};
+  const total: Record<string, number> = {};
+  for (const e of empresas) {
+    const porMes = porEmpresa[String(e.cdEmpresa)] || {};
+    for (const mes of Object.keys(porMes)) {
+      total[mes] = (total[mes] || 0) + porMes[mes];
+    }
   }
-  return `Estoque: ${formatarQtd(estoque)} ÷ Venda média: ${vendaFmt} = ${formatarGiro(giro)}\n${janela}`;
+  return total;
 }
 
 // Tooltip da coluna Estoque (total): abre o estoque em cada loja do filtro
@@ -517,6 +584,10 @@ export default function GiroPage() {
   const [matriz, setMatriz] = useState<MatrizGiro | null>(null);
   const [matrizPagina, setMatrizPagina] = useState(1);
   const [matrizCarregando, setMatrizCarregando] = useState(false);
+  // Venda mes a mes por referencia (so das referencias da pagina atual, ja
+  // carregada) - alimenta o detalhe "venda de cada mes" no tooltip do giro.
+  // referencia -> cdEmpresa (string) -> "YYYY-MM" -> qtd vendida.
+  const [vendaMensalPorReferencia, setVendaMensalPorReferencia] = useState<Record<string, Record<string, Record<string, number>>>>({});
   // Padrao: Total (giro), do pior (maior = mais meses de estoque parado)
   // pro melhor - pedido do usuario. Continua ordenavel por qualquer coluna
   // clicando no cabecalho, isso e so o estado inicial.
@@ -701,11 +772,37 @@ export default function GiroPage() {
       }
       setMatriz(data);
       setMatrizPagina(pagina);
+      buscarVendaMensalReferencias(mesRef, empresasParam, (data.itens || []).map((i: ItemMatrizGiro) => i.referencia));
     } catch (error) {
       console.error('Erro ao buscar matriz de giro:', error);
       setErro('Erro ao buscar a matriz por loja.');
     } finally {
       setMatrizCarregando(false);
+    }
+  }
+
+  // Busca a venda mes a mes so das referencias que estao na pagina atual
+  // (mesmo padrao "so o que esta na tela" ja usado pra preco/promo/Meses
+  // FL) - so enriquece o tooltip do giro, nao bloqueia o carregamento da
+  // matriz nem trava a tela se falhar.
+  async function buscarVendaMensalReferencias(mesRef: string, empresasParam: string, referencias: string[]) {
+    if (referencias.length === 0) {
+      setVendaMensalPorReferencia({});
+      return;
+    }
+    try {
+      const params = new URLSearchParams({
+        referencias: referencias.join(','),
+        empresas: empresasParam,
+        mesReferencia: mesRef,
+      });
+      const response = await fetch(`/api/giro/venda-mensal-referencias?${params.toString()}`, { cache: 'no-store' });
+      const data = await response.json();
+      if (response.ok && !data.error) {
+        setVendaMensalPorReferencia(data);
+      }
+    } catch (error) {
+      console.error('Erro ao buscar venda mensal por referência:', error);
     }
   }
 
@@ -1457,8 +1554,8 @@ export default function GiroPage() {
                             <td
                               key={e.cdEmpresa}
                               className="px-3 py-2 text-right cursor-default"
-                              onMouseEnter={(ev) => dados && setTooltipCelula({ texto: tooltipGiro(dados.estoque, dados.venda, dados.giro, mesReferencia, item.mesesOportunidade), x: ev.clientX, y: ev.clientY })}
-                              onMouseMove={(ev) => dados && setTooltipCelula({ texto: tooltipGiro(dados.estoque, dados.venda, dados.giro, mesReferencia, item.mesesOportunidade), x: ev.clientX, y: ev.clientY })}
+                              onMouseEnter={(ev) => dados && setTooltipCelula({ texto: tooltipGiro(dados.estoque, dados.venda, dados.giro, mesReferencia, item.mesesOportunidade, vendaMensalPorReferencia[item.referencia]?.[String(e.cdEmpresa)]), x: ev.clientX, y: ev.clientY })}
+                              onMouseMove={(ev) => dados && setTooltipCelula({ texto: tooltipGiro(dados.estoque, dados.venda, dados.giro, mesReferencia, item.mesesOportunidade, vendaMensalPorReferencia[item.referencia]?.[String(e.cdEmpresa)]), x: ev.clientX, y: ev.clientY })}
                               onMouseLeave={() => setTooltipCelula(null)}
                             >
                               <CelulaGiro estoque={dados?.estoque ?? 0} giro={dados?.giro ?? null} />
@@ -1476,8 +1573,8 @@ export default function GiroPage() {
                         <td className="px-3 py-2 text-right text-slate-700 bg-slate-50/50 whitespace-nowrap">{formatarGiro(item.vendaTotal)}</td>
                         <td
                           className="px-4 py-2 text-right font-semibold bg-gray-100/70 border-l-2 border-gray-200 cursor-default"
-                          onMouseEnter={(ev) => setTooltipCelula({ texto: tooltipGiro(item.estoqueTotal, item.vendaTotal, item.giroTotal, mesReferencia, item.mesesOportunidade), x: ev.clientX, y: ev.clientY })}
-                          onMouseMove={(ev) => setTooltipCelula({ texto: tooltipGiro(item.estoqueTotal, item.vendaTotal, item.giroTotal, mesReferencia, item.mesesOportunidade), x: ev.clientX, y: ev.clientY })}
+                          onMouseEnter={(ev) => setTooltipCelula({ texto: tooltipGiro(item.estoqueTotal, item.vendaTotal, item.giroTotal, mesReferencia, item.mesesOportunidade, vendaMensalTotalReferencia(item.referencia, matriz.empresas, vendaMensalPorReferencia)), x: ev.clientX, y: ev.clientY })}
+                          onMouseMove={(ev) => setTooltipCelula({ texto: tooltipGiro(item.estoqueTotal, item.vendaTotal, item.giroTotal, mesReferencia, item.mesesOportunidade, vendaMensalTotalReferencia(item.referencia, matriz.empresas, vendaMensalPorReferencia)), x: ev.clientX, y: ev.clientY })}
                           onMouseLeave={() => setTooltipCelula(null)}
                         >
                           <CelulaGiro estoque={item.estoqueTotal} giro={item.giroTotal} />

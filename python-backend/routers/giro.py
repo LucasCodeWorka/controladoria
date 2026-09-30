@@ -1211,3 +1211,70 @@ def giro_por_loja(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Erro ao buscar giro por loja: {str(e)}")
+
+
+@router.get("/api/giro/venda-mensal-referencias")
+def venda_mensal_referencias(
+    referencias: str = Query(..., description="Referencias separadas por virgula"),
+    empresas: Optional[str] = Query(None, description="Lista de cd_empresa separados por virgula (default: todas)"),
+    mesReferencia: Optional[str] = Query(None, description="Mes de referencia YYYY-MM (default: mes atual)")
+):
+    """
+    Venda vendida por referencia, por empresa e por mes, dos ultimos 6 meses
+    fechados antes do mes de referencia - cobre qualquer janela usada no
+    calculo do giro (padrao de 3 meses, ultimo mes fechado quando Mes FL=0,
+    ou semestre de ate 6 meses quando Mes FL>0). So pra alimentar o detalhe
+    "venda de cada mes" no tooltip do giro - pedido pontual, roda so pras
+    referencias que estao na pagina atual (mesmo padrao ja usado pra
+    preco/promo/Meses FL), nao pro catalogo inteiro.
+    """
+    try:
+        lista_referencias = [r.strip() for r in referencias.split(",") if r.strip()]
+        if not lista_referencias:
+            return {}
+
+        cd_empresas = _parse_empresas_giro(empresas)
+        mes_ref = mesReferencia or _mes_atual()
+        ano_ref, mes_ref_n = (int(p) for p in mes_ref.split("-"))
+
+        ano_ini, mes_ini_n = _somar_meses(ano_ref, mes_ref_n, -6)
+        data_inicio = date(ano_ini, mes_ini_n, 1).isoformat()
+        ano_fim, mes_fim_n = _somar_meses(ano_ref, mes_ref_n, -1)
+        ano_prox, mes_prox = _somar_meses(ano_fim, mes_fim_n, 1)
+        data_fim = (date(ano_prox, mes_prox, 1) - timedelta(days=1)).isoformat()
+
+        placeholders_ref = ",".join(["%s"] * len(lista_referencias))
+        rows = execute_query(f"""
+            SELECT p.referencia, t.cd_empresa, TO_CHAR(t.dt_transacao, 'YYYY-MM') AS mes,
+                SUM(
+                    CASE
+                        WHEN t.tp_modalidade::text IN ('4','8') AND t.tp_operacao::text = 'S' THEN i.qt_solicitada
+                        WHEN t.tp_modalidade::text = '3' AND t.tp_operacao::text = 'E' THEN -i.qt_solicitada
+                        ELSE 0
+                    END
+                ) AS qt_vendida
+            FROM vr_tra_transacao t
+            JOIN vr_tra_transitem i ON t.nr_transacao = i.nr_transacao AND t.cd_empresa = i.cd_empresa
+            JOIN mv_prd_referencia_produto p ON p.cd_produto = i.cd_produto
+            WHERE t.tp_situacao = 4
+              AND t.cd_empresa = ANY(%s)
+              AND t.dt_transacao >= %s AND t.dt_transacao <= %s
+              AND ((t.tp_modalidade::text IN ('4','8') AND t.tp_operacao::text = 'S') OR (t.tp_modalidade::text = '3' AND t.tp_operacao::text = 'E'))
+              AND p.referencia IN ({placeholders_ref})
+            GROUP BY 1, 2, 3
+        """, (cd_empresas, data_inicio, data_fim, *lista_referencias)) or []
+
+        resultado: dict = {}
+        for r in rows:
+            por_empresa = resultado.setdefault(r["referencia"], {})
+            por_mes = por_empresa.setdefault(str(r["cd_empresa"]), {})
+            por_mes[r["mes"]] = float(r["qt_vendida"] or 0)
+
+        return resultado
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[ERROR] Erro ao buscar venda mensal por referencia: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Erro ao buscar venda mensal por referencia: {str(e)}")
