@@ -50,8 +50,8 @@ def get_balanco_patrimonial(
         # plano de contas do DFC, com VENCIMENTO dentro da janela de 12
         # meses a partir do mes filtrado (nao emissao, que e o que a DRE
         # usa - aqui e o que ainda esta/vai ficar em aberto pra pagar).
-        # "Todas as empresas" = sem filtro de ccusto, a nao ser que
-        # "empresas" seja passado explicitamente.
+        # Respeita o filtro de empresas da tela - sem "empresas" (ou lista
+        # vazia), soma todas (mesmo efeito de nenhum filtro de ccusto).
         rows_classificacao = execute_query(
             "SELECT cd_despesaitem FROM classificacao_despesas_dfc WHERE conta_dfc IN ('OP.01', 'OP.02')", ()
         ) or []

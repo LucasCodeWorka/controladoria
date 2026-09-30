@@ -203,7 +203,7 @@ export default function BalancoPatrimonialPage() {
     setValoresAtivos(valoresZerados(PLANO_ATIVOS));
     setValoresPassivo(valoresZerados(PLANO_PASSIVO));
     try {
-      const params = new URLSearchParams({ mesReferencia });
+      const params = new URLSearchParams({ mesReferencia, empresas: Array.from(empresasSelecionadas).join(',') });
       const response = await fetch(`/api/balanco-patrimonial/dados?${params.toString()}`, { cache: 'no-store' });
       const data = await response.json();
       if (response.ok && !data.error && data.valores) {
