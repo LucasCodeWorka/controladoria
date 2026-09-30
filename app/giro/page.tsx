@@ -219,13 +219,16 @@ function formatarVariacao(pct: number | null): string {
 
 // Regra de desconto pra sugestao de campanha, com base no Giro Total (do
 // filtro de loja atual) e em ha quantos meses a referencia esta em FL
-// (oportunidade). A faixa de "meses como FL" manda mais que a faixa de giro
-// simples quando as duas batem (pedido explicito do usuario).
+// (oportunidade). So se aplica a quem tem Meses FL preenchido (>= 0, ou
+// seja, esta em oportunidade agora) - quem nao esta em FL nao entra na
+// campanha, mesmo com giro baixo (pedido explicito do usuario). A faixa de
+// "meses como FL" manda mais que a faixa de giro simples quando as duas
+// batem.
 function calcularPercentualCampanha(giroTotal: number | null, mesesOportunidade: number | null | undefined): number {
   if (giroTotal === null) return 0;
-  const temMesesFL = mesesOportunidade !== null && mesesOportunidade !== undefined;
-  if (giroTotal > 6 && temMesesFL && mesesOportunidade! >= 24) return 70;
-  if (giroTotal > 6 && temMesesFL && mesesOportunidade! >= 12) return 60;
+  if (mesesOportunidade === null || mesesOportunidade === undefined || mesesOportunidade < 0) return 0;
+  if (giroTotal > 6 && mesesOportunidade >= 24) return 70;
+  if (giroTotal > 6 && mesesOportunidade >= 12) return 60;
   if (giroTotal > 6) return 50;
   if (giroTotal >= 4) return 30;
   return 0;
