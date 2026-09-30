@@ -217,6 +217,25 @@ function formatarVariacao(pct: number | null): string {
   return `${sinal}${pct.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
 }
 
+// Regra de desconto pra sugestao de campanha, com base no Giro Total (do
+// filtro de loja atual) e em ha quantos meses a referencia esta em FL
+// (oportunidade). A faixa de "meses como FL" manda mais que a faixa de giro
+// simples quando as duas batem (pedido explicito do usuario).
+function calcularPercentualCampanha(giroTotal: number | null, mesesOportunidade: number | null | undefined): number {
+  if (giroTotal === null) return 0;
+  const temMesesFL = mesesOportunidade !== null && mesesOportunidade !== undefined;
+  if (giroTotal > 6 && temMesesFL && mesesOportunidade! >= 24) return 70;
+  if (giroTotal > 6 && temMesesFL && mesesOportunidade! >= 12) return 60;
+  if (giroTotal > 6) return 50;
+  if (giroTotal >= 4) return 30;
+  return 0;
+}
+
+function calcularPrecoCampanha(precoBase: number | null, percentual: number): number | null {
+  if (precoBase === null || percentual <= 0) return null;
+  return precoBase * (1 - percentual / 100);
+}
+
 function labelMes(anoMes: string): string {
   const [ano, mes] = anoMes.split('-');
   const nomes = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
@@ -1220,6 +1239,12 @@ export default function GiroPage() {
                           Promo{indicadorOrdenacao('precoPromo')}
                         </button>
                       </th>
+                      <th
+                        className="text-right px-3 py-2 font-medium text-rose-700 bg-rose-50/60 whitespace-nowrap"
+                        title="Sugestão de desconto pro Giro Total do filtro atual: <4 giro=0%, 4-6=30%, >6=50%, >6 e 12+ meses FL=60%, >6 e 24+ meses FL=70%"
+                      >
+                        Sugestão Campanha
+                      </th>
                       {matriz.empresas.map((e) => (
                         <th key={e.cdEmpresa} className="text-right px-3 py-2 font-medium text-black whitespace-nowrap">
                           <button
@@ -1328,6 +1353,28 @@ export default function GiroPage() {
                           ) : (
                             <span className="text-black">-</span>
                           )}
+                        </td>
+                        <td className="px-3 py-2 text-right text-rose-900 bg-rose-50/30 whitespace-nowrap">
+                          {(() => {
+                            const percentual = calcularPercentualCampanha(item.giroTotal, item.mesesOportunidade);
+                            const precoVarejoCampanha = calcularPrecoCampanha(item.precoVarejo, percentual);
+                            const precoAtacadoCampanha = calcularPrecoCampanha(item.precoAtacado, percentual);
+                            if (percentual <= 0 || (precoVarejoCampanha === null && precoAtacadoCampanha === null)) {
+                              return <span className="text-black">-</span>;
+                            }
+                            return (
+                              <div className="flex items-start justify-end gap-3">
+                                <div>
+                                  <div className="text-[10px] text-rose-500 leading-tight">Varejo -{percentual}%</div>
+                                  {formatarPreco(precoVarejoCampanha)}
+                                </div>
+                                <div>
+                                  <div className="text-[10px] text-rose-500 leading-tight">Atacado -{percentual}%</div>
+                                  {formatarPreco(precoAtacadoCampanha)}
+                                </div>
+                              </div>
+                            );
+                          })()}
                         </td>
                         {matriz.empresas.map((e) => {
                           const dados = item.porLoja[String(e.cdEmpresa)];
