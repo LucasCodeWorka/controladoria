@@ -1236,14 +1236,25 @@ export default function GiroPage() {
                       </th>
                       <th className="text-right px-3 py-2 font-medium text-amber-700 bg-amber-50/60 whitespace-nowrap">
                         <button onClick={() => ordenarMatrizPor('precoPromo')} className="flex items-center gap-1 ml-auto hover:text-amber-900" title="Preço Promo">
-                          Promo{indicadorOrdenacao('precoPromo')}
+                          Promo Atac{indicadorOrdenacao('precoPromo')}
+                        </button>
+                      </th>
+                      <th className="text-right px-3 py-2 font-medium text-amber-700 bg-amber-50/60 whitespace-nowrap">
+                        <button onClick={() => ordenarMatrizPor('precoPromo')} className="flex items-center gap-1 ml-auto hover:text-amber-900" title="Preço Promo">
+                          Promo Var{indicadorOrdenacao('precoPromo')}
                         </button>
                       </th>
                       <th
                         className="text-right px-3 py-2 font-medium text-rose-700 bg-rose-50/60 whitespace-nowrap"
                         title="Sugestão de desconto pro Giro Total do filtro atual: <4 giro=0%, 4-6=30%, >6=50%, >6 e 12+ meses FL=60%, >6 e 24+ meses FL=70%"
                       >
-                        Sugestão Campanha
+                        Camp Atac
+                      </th>
+                      <th
+                        className="text-right px-3 py-2 font-medium text-rose-700 bg-rose-50/60 whitespace-nowrap"
+                        title="Sugestão de desconto pro Giro Total do filtro atual: <4 giro=0%, 4-6=30%, >6=50%, >6 e 12+ meses FL=60%, >6 e 24+ meses FL=70%"
+                      >
+                        Camp Var
                       </th>
                       {matriz.empresas.map((e) => (
                         <th key={e.cdEmpresa} className="text-right px-3 py-2 font-medium text-black whitespace-nowrap">
@@ -1335,47 +1346,59 @@ export default function GiroPage() {
                           <div className="text-[10px] text-blue-400 leading-tight">{formatarVariacao(variacaoPercentual(item.precoFabrica, item.precoVarejo))}</div>
                           {formatarPreco(item.precoVarejo)}
                         </td>
-                        <td className="px-3 py-2 text-right text-amber-900 bg-amber-50/30 whitespace-nowrap">
-                          {(item.promocoes?.length ?? 0) > 0 ? (
-                            <div className="flex items-start justify-end gap-3">
-                              {item.promocoes!.map((p) => {
-                                const precoCheio = p.tipo === 'Varejo' ? item.precoVarejo : p.tipo === 'Atacado' ? item.precoAtacado : item.precoFabrica;
-                                const percentualDesconto = variacaoPercentual(precoCheio, p.precoPromo);
-                                return (
-                                  <div key={p.tipo}>
-                                    <div className="text-[10px] text-amber-500 leading-tight">{formatarVariacao(percentualDesconto)}</div>
-                                    <div className="text-[10px] text-amber-600 leading-tight">🏷️ {p.tipo}</div>
-                                    {formatarPreco(p.precoPromo)}
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          ) : (
-                            <span className="text-black">-</span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2 text-right text-rose-900 bg-rose-50/30 whitespace-nowrap">
-                          {(() => {
-                            const percentual = calcularPercentualCampanha(item.giroTotal, item.mesesOportunidade);
-                            const precoVarejoCampanha = calcularPrecoCampanha(item.precoVarejo, percentual);
-                            const precoAtacadoCampanha = calcularPrecoCampanha(item.precoAtacado, percentual);
-                            if (percentual <= 0 || (precoVarejoCampanha === null && precoAtacadoCampanha === null)) {
-                              return <span className="text-black">-</span>;
-                            }
-                            return (
-                              <div className="flex items-start justify-end gap-3">
-                                <div>
-                                  <div className="text-[10px] text-rose-500 leading-tight">Varejo -{percentual}%</div>
-                                  {formatarPreco(precoVarejoCampanha)}
-                                </div>
-                                <div>
-                                  <div className="text-[10px] text-rose-500 leading-tight">Atacado -{percentual}%</div>
-                                  {formatarPreco(precoAtacadoCampanha)}
-                                </div>
-                              </div>
-                            );
-                          })()}
-                        </td>
+                        {(() => {
+                          const promoAtacado = item.promocoes?.find((p) => p.tipo === 'Atacado');
+                          const promoVarejo = item.promocoes?.find((p) => p.tipo === 'Varejo');
+                          const pctPromoAtacado = promoAtacado ? variacaoPercentual(item.precoAtacado, promoAtacado.precoPromo) : null;
+                          const pctPromoVarejo = promoVarejo ? variacaoPercentual(item.precoVarejo, promoVarejo.precoPromo) : null;
+                          const percentualCampanha = calcularPercentualCampanha(item.giroTotal, item.mesesOportunidade);
+                          const precoAtacadoCampanha = calcularPrecoCampanha(item.precoAtacado, percentualCampanha);
+                          const precoVarejoCampanha = calcularPrecoCampanha(item.precoVarejo, percentualCampanha);
+                          return (
+                            <>
+                              <td className="px-3 py-2 text-right text-amber-900 bg-amber-50/30 whitespace-nowrap">
+                                {promoAtacado ? (
+                                  <>
+                                    <div className="text-[10px] text-amber-500 leading-tight">{formatarVariacao(pctPromoAtacado)}</div>
+                                    {formatarPreco(promoAtacado.precoPromo)}
+                                  </>
+                                ) : (
+                                  <span className="text-black">-</span>
+                                )}
+                              </td>
+                              <td className="px-3 py-2 text-right text-amber-900 bg-amber-50/30 whitespace-nowrap">
+                                {promoVarejo ? (
+                                  <>
+                                    <div className="text-[10px] text-amber-500 leading-tight">{formatarVariacao(pctPromoVarejo)}</div>
+                                    {formatarPreco(promoVarejo.precoPromo)}
+                                  </>
+                                ) : (
+                                  <span className="text-black">-</span>
+                                )}
+                              </td>
+                              <td className="px-3 py-2 text-right text-rose-900 bg-rose-50/30 whitespace-nowrap">
+                                {precoAtacadoCampanha !== null ? (
+                                  <>
+                                    <div className="text-[10px] text-rose-500 leading-tight">-{percentualCampanha}%</div>
+                                    {formatarPreco(precoAtacadoCampanha)}
+                                  </>
+                                ) : (
+                                  <span className="text-black">-</span>
+                                )}
+                              </td>
+                              <td className="px-3 py-2 text-right text-rose-900 bg-rose-50/30 whitespace-nowrap">
+                                {precoVarejoCampanha !== null ? (
+                                  <>
+                                    <div className="text-[10px] text-rose-500 leading-tight">-{percentualCampanha}%</div>
+                                    {formatarPreco(precoVarejoCampanha)}
+                                  </>
+                                ) : (
+                                  <span className="text-black">-</span>
+                                )}
+                              </td>
+                            </>
+                          );
+                        })()}
                         {matriz.empresas.map((e) => {
                           const dados = item.porLoja[String(e.cdEmpresa)];
                           return (
