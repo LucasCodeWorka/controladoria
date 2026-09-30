@@ -1217,7 +1217,8 @@ def giro_por_loja(
 def venda_mensal_referencias(
     referencias: str = Query(..., description="Referencias separadas por virgula"),
     empresas: Optional[str] = Query(None, description="Lista de cd_empresa separados por virgula (default: todas)"),
-    mesReferencia: Optional[str] = Query(None, description="Mes de referencia YYYY-MM (default: mes atual)")
+    mesReferencia: Optional[str] = Query(None, description="Mes de referencia YYYY-MM (default: mes atual)"),
+    status: Optional[str] = Query(None, description="Filtro de status (mesmo da matriz) - so soma os SKUs que passam nesse filtro")
 ):
     """
     Venda vendida por referencia, por empresa e por mes, dos ultimos 6 meses
@@ -1227,7 +1228,13 @@ def venda_mensal_referencias(
     "venda de cada mes" no tooltip do giro - pedido pontual, roda so pras
     referencias que estao na pagina atual (mesmo padrao ja usado pra
     preco/promo/Meses FL), nao pro catalogo inteiro.
-    """
+
+    Recebe o MESMO filtro de status que a matriz esta usando - uma
+    referencia pode ter cores com status diferentes (ex: 2 cores FL e o
+    resto EM LINHA), e o giro mostrado na tela ja so soma os SKUs que
+    passam nesse filtro (_obter_matriz_agregada usa a mesma clausula) - sem
+    isso, o detalhe mes a mes somaria TODAS as cores, nao batendo com o
+    numero filtrado que esta na tela (pedido explicito do usuario)."""
     try:
         lista_referencias = [r.strip() for r in referencias.split(",") if r.strip()]
         if not lista_referencias:
@@ -1236,6 +1243,7 @@ def venda_mensal_referencias(
         cd_empresas = _parse_empresas_giro(empresas)
         mes_ref = mesReferencia or _mes_atual()
         ano_ref, mes_ref_n = (int(p) for p in mes_ref.split("-"))
+        status_filtro = [s.strip() for s in status.split(",") if s.strip()] if status else None
 
         ano_ini, mes_ini_n = _somar_meses(ano_ref, mes_ref_n, -6)
         data_inicio = date(ano_ini, mes_ini_n, 1).isoformat()
@@ -1243,6 +1251,7 @@ def venda_mensal_referencias(
         ano_prox, mes_prox = _somar_meses(ano_fim, mes_fim_n, 1)
         data_fim = (date(ano_prox, mes_prox, 1) - timedelta(days=1)).isoformat()
 
+        clausula_status, params_status = _clausula_status(status_filtro)
         placeholders_ref = ",".join(["%s"] * len(lista_referencias))
         rows = execute_query(f"""
             SELECT p.referencia, t.cd_empresa, TO_CHAR(t.dt_transacao, 'YYYY-MM') AS mes,
@@ -1260,9 +1269,9 @@ def venda_mensal_referencias(
               AND t.cd_empresa = ANY(%s)
               AND t.dt_transacao >= %s AND t.dt_transacao <= %s
               AND ((t.tp_modalidade::text IN ('4','8') AND t.tp_operacao::text = 'S') OR (t.tp_modalidade::text = '3' AND t.tp_operacao::text = 'E'))
-              AND p.referencia IN ({placeholders_ref})
+              AND p.referencia IN ({placeholders_ref}){clausula_status}
             GROUP BY 1, 2, 3
-        """, (cd_empresas, data_inicio, data_fim, *lista_referencias)) or []
+        """, (cd_empresas, data_inicio, data_fim, *lista_referencias, *params_status)) or []
 
         resultado: dict = {}
         for r in rows:

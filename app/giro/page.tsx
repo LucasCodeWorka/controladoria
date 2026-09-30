@@ -772,7 +772,7 @@ export default function GiroPage() {
       }
       setMatriz(data);
       setMatrizPagina(pagina);
-      buscarVendaMensalReferencias(mesRef, empresasParam, (data.itens || []).map((i: ItemMatrizGiro) => i.referencia));
+      buscarVendaMensalReferencias(mesRef, empresasParam, (data.itens || []).map((i: ItemMatrizGiro) => i.referencia), statusParam);
     } catch (error) {
       console.error('Erro ao buscar matriz de giro:', error);
       setErro('Erro ao buscar a matriz por loja.');
@@ -785,7 +785,7 @@ export default function GiroPage() {
   // (mesmo padrao "so o que esta na tela" ja usado pra preco/promo/Meses
   // FL) - so enriquece o tooltip do giro, nao bloqueia o carregamento da
   // matriz nem trava a tela se falhar.
-  async function buscarVendaMensalReferencias(mesRef: string, empresasParam: string, referencias: string[]) {
+  async function buscarVendaMensalReferencias(mesRef: string, empresasParam: string, referencias: string[], statusParam: string) {
     if (referencias.length === 0) {
       setVendaMensalPorReferencia({});
       return;
@@ -796,6 +796,9 @@ export default function GiroPage() {
         empresas: empresasParam,
         mesReferencia: mesRef,
       });
+      if (statusParam) {
+        params.set('status', statusParam);
+      }
       const response = await fetch(`/api/giro/venda-mensal-referencias?${params.toString()}`, { cache: 'no-store' });
       const data = await response.json();
       if (response.ok && !data.error) {
