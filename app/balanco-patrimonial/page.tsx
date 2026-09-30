@@ -203,7 +203,17 @@ export default function BalancoPatrimonialPage() {
     setValoresAtivos(valoresZerados(PLANO_ATIVOS));
     setValoresPassivo(valoresZerados(PLANO_PASSIVO));
     try {
-      const params = new URLSearchParams({ mesReferencia, empresas: Array.from(empresasSelecionadas).join(',') });
+      const params = new URLSearchParams({ mesReferencia });
+      // So manda o filtro de empresas quando o usuario de fato excluiu
+      // alguma - com "todas" marcadas, manda sem filtro nenhum (soma TUDO
+      // no banco). A lista de empresas dessa tela e so lojas/fabrica (17
+      // codigos); as duplicatas reais de MP/emprestimo ficam em centros de
+      // custo internos (ex: fabrica 500-514, diretoria/financeiro 513) que
+      // nao estao nessa lista - mandar a lista completa como filtro
+      // excluiria a maior parte dos lancamentos por engano.
+      if (empresasDisponiveis.length > 0 && empresasSelecionadas.size < empresasDisponiveis.length) {
+        params.set('empresas', Array.from(empresasSelecionadas).join(','));
+      }
       const response = await fetch(`/api/balanco-patrimonial/dados?${params.toString()}`, { cache: 'no-store' });
       const data = await response.json();
       if (response.ok && !data.error && data.valores) {
