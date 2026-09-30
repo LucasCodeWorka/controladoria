@@ -176,16 +176,65 @@ function CelulaGiro({ estoque, giro }: { estoque: number; giro: number | null })
   );
 }
 
-// Tooltip da matriz por referencia: mostra a conta que chegou naquele giro
-// (estoque atual / venda media dos ultimos 3 meses), tanto por loja quanto
-// no total.
-function tooltipGiro(estoque: number, venda: number, giro: number | null): string {
-  const vendaFmt = venda.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  if (giro === null) {
-    const motivo = estoque > 0 ? 'sem venda nos últimos 3 meses (SV-3M)' : 'sem estoque e sem venda no período';
-    return `Estoque: ${formatarQtd(estoque)} ÷ Venda média: ${vendaFmt} = ${motivo}`;
+// Descreve qual janela de venda entrou na conta do giro (memoria de
+// calculo): regra padrao (3 meses cheios antes do mes filtrado) pra quem
+// nao esta em oportunidade, ou a janela especial de Mes FL (so o ultimo mes
+// fechado quando Mes FL = 0; soma dos meses JA FECHADOS do semestre do mes
+// filtrado, dividida pela quantidade deles, quando Mes FL > 0) - mesma
+// regra aplicada no backend em _janela_venda_fl (giro.py).
+function descricaoJanelaGiro(mesReferencia: string, mesesOportunidade: number | null | undefined): string {
+  const [anoRef, mesRefN] = mesReferencia.split('-').map(Number);
+
+  let anoFim = anoRef;
+  let mesFimN = mesRefN - 1;
+  if (mesFimN <= 0) {
+    mesFimN += 12;
+    anoFim -= 1;
   }
-  return `Estoque: ${formatarQtd(estoque)} ÷ Venda média: ${vendaFmt} = ${formatarGiro(giro)}`;
+  const mesFimLabel = `${String(mesFimN).padStart(2, '0')}/${anoFim}`;
+
+  if (mesesOportunidade === null || mesesOportunidade === undefined) {
+    let anoIni = anoRef;
+    let mesIniN = mesRefN - 3;
+    while (mesIniN <= 0) {
+      mesIniN += 12;
+      anoIni -= 1;
+    }
+    const mesIniLabel = `${String(mesIniN).padStart(2, '0')}/${anoIni}`;
+    return `Venda média = 3 meses cheios antes do mês filtrado (${mesIniLabel} a ${mesFimLabel}) ÷ 3`;
+  }
+
+  if (mesesOportunidade === 0) {
+    return `Meses FL = 0: venda média = só o último mês fechado (${mesFimLabel}) ÷ 1`;
+  }
+
+  const mesInicioSem = mesRefN <= 6 ? 1 : 7;
+  const mesesFechadosSem = mesRefN - mesInicioSem;
+  if (mesesFechadosSem <= 0) {
+    return `Meses FL = ${mesesOportunidade}, mas o mês filtrado é o 1º do semestre (nenhum mês fechado ainda): venda média = só o último mês fechado (${mesFimLabel}) ÷ 1`;
+  }
+  const inicioSemLabel = `${String(mesInicioSem).padStart(2, '0')}/${anoRef}`;
+  const plural = mesesFechadosSem === 1 ? 'mês fechado' : 'meses fechados';
+  return `Meses FL = ${mesesOportunidade}: venda média = soma de ${inicioSemLabel} a ${mesFimLabel} (${mesesFechadosSem} ${plural} do semestre) ÷ ${mesesFechadosSem}`;
+}
+
+// Tooltip da matriz por referencia: mostra a conta que chegou naquele giro
+// (estoque atual / venda media do periodo) e a memoria de calculo de qual
+// janela de venda foi usada, tanto por loja quanto no total.
+function tooltipGiro(
+  estoque: number,
+  venda: number,
+  giro: number | null,
+  mesReferencia: string,
+  mesesOportunidade: number | null | undefined
+): string {
+  const vendaFmt = venda.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const janela = descricaoJanelaGiro(mesReferencia, mesesOportunidade);
+  if (giro === null) {
+    const motivo = estoque > 0 ? 'sem venda no período (SV-3M)' : 'sem estoque e sem venda no período';
+    return `Estoque: ${formatarQtd(estoque)} ÷ Venda média: ${vendaFmt} = ${motivo}\n${janela}`;
+  }
+  return `Estoque: ${formatarQtd(estoque)} ÷ Venda média: ${vendaFmt} = ${formatarGiro(giro)}\n${janela}`;
 }
 
 // Tooltip da coluna Estoque (total): abre o estoque em cada loja do filtro
@@ -1408,8 +1457,8 @@ export default function GiroPage() {
                             <td
                               key={e.cdEmpresa}
                               className="px-3 py-2 text-right cursor-default"
-                              onMouseEnter={(ev) => dados && setTooltipCelula({ texto: tooltipGiro(dados.estoque, dados.venda, dados.giro), x: ev.clientX, y: ev.clientY })}
-                              onMouseMove={(ev) => dados && setTooltipCelula({ texto: tooltipGiro(dados.estoque, dados.venda, dados.giro), x: ev.clientX, y: ev.clientY })}
+                              onMouseEnter={(ev) => dados && setTooltipCelula({ texto: tooltipGiro(dados.estoque, dados.venda, dados.giro, mesReferencia, item.mesesOportunidade), x: ev.clientX, y: ev.clientY })}
+                              onMouseMove={(ev) => dados && setTooltipCelula({ texto: tooltipGiro(dados.estoque, dados.venda, dados.giro, mesReferencia, item.mesesOportunidade), x: ev.clientX, y: ev.clientY })}
                               onMouseLeave={() => setTooltipCelula(null)}
                             >
                               <CelulaGiro estoque={dados?.estoque ?? 0} giro={dados?.giro ?? null} />
@@ -1427,8 +1476,8 @@ export default function GiroPage() {
                         <td className="px-3 py-2 text-right text-slate-700 bg-slate-50/50 whitespace-nowrap">{formatarGiro(item.vendaTotal)}</td>
                         <td
                           className="px-4 py-2 text-right font-semibold bg-gray-100/70 border-l-2 border-gray-200 cursor-default"
-                          onMouseEnter={(ev) => setTooltipCelula({ texto: tooltipGiro(item.estoqueTotal, item.vendaTotal, item.giroTotal), x: ev.clientX, y: ev.clientY })}
-                          onMouseMove={(ev) => setTooltipCelula({ texto: tooltipGiro(item.estoqueTotal, item.vendaTotal, item.giroTotal), x: ev.clientX, y: ev.clientY })}
+                          onMouseEnter={(ev) => setTooltipCelula({ texto: tooltipGiro(item.estoqueTotal, item.vendaTotal, item.giroTotal, mesReferencia, item.mesesOportunidade), x: ev.clientX, y: ev.clientY })}
+                          onMouseMove={(ev) => setTooltipCelula({ texto: tooltipGiro(item.estoqueTotal, item.vendaTotal, item.giroTotal, mesReferencia, item.mesesOportunidade), x: ev.clientX, y: ev.clientY })}
                           onMouseLeave={() => setTooltipCelula(null)}
                         >
                           <CelulaGiro estoque={item.estoqueTotal} giro={item.giroTotal} />
