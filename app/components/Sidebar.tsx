@@ -91,6 +91,11 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
       href: '/configuracoes/plano-contas-dfc',
       icon: Wallet,
     },
+    {
+      name: 'Config Balanço',
+      href: '/configuracoes/plano-contas-balanco',
+      icon: Scale,
+    },
   ];
 
   const isActive = (href: string) => pathname.startsWith(href);
