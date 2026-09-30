@@ -40,6 +40,18 @@ function valoresZerados(plano: ContaBalanco[]): Record<string, number> {
   return valores;
 }
 
+// A API devolve um dict unico (codigos de Ativos e Passivo misturados) -
+// filtra so os codigos que pertencem a este plano especifico antes de
+// aplicar por cima dos valores zerados.
+function filtrarPorPlano(valoresApi: Record<string, number>, plano: ContaBalanco[]): Record<string, number> {
+  const codigosDoPlano = new Set(plano.flatMap((grupo) => (grupo.filhos || []).map((f) => f.codigo)));
+  const filtrado: Record<string, number> = {};
+  for (const [codigo, valor] of Object.entries(valoresApi)) {
+    if (codigosDoPlano.has(codigo)) filtrado[codigo] = valor;
+  }
+  return filtrado;
+}
+
 function formatarPercentual(valor: number, total: number): string {
   if (total === 0) return '-';
   return `${((valor / total) * 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
@@ -134,10 +146,12 @@ export default function BalancoPatrimonialPage() {
     new Set([...PLANO_ATIVOS, ...PLANO_PASSIVO].map((g) => g.codigo))
   );
 
-  // Valores zerados por enquanto - as consultas reais (por empresa/mes)
-  // serao plugadas aqui depois, substituindo esses placeholders.
-  const [valoresAtivos] = useState<Record<string, number>>(() => valoresZerados(PLANO_ATIVOS));
-  const [valoresPassivo] = useState<Record<string, number>>(() => valoresZerados(PLANO_PASSIVO));
+  // Valores zerados por padrao - linhas com consulta real ja ligada (ex:
+  // PC.2) vem do endpoint /api/balanco-patrimonial/dados e sobrescrevem o
+  // zero aqui; o resto continua zerado ate ser implementado.
+  const [valoresAtivos, setValoresAtivos] = useState<Record<string, number>>(() => valoresZerados(PLANO_ATIVOS));
+  const [valoresPassivo, setValoresPassivo] = useState<Record<string, number>>(() => valoresZerados(PLANO_PASSIVO));
+  const [carregando, setCarregando] = useState(false);
 
   useEffect(() => {
     fetch('/api/cmv-detalhado/empresas', { cache: 'no-store' })
@@ -181,11 +195,26 @@ export default function BalancoPatrimonialPage() {
     });
   }
 
-  function consultar() {
-    // Por enquanto so marca que a consulta foi "executada" pra mostrar as
-    // tabelas - os valores continuam zerados ate as consultas reais serem
-    // plugadas aqui.
+  async function consultar() {
     setConsultaExecutada(true);
+    setCarregando(true);
+    // Reseta pro zerado antes de aplicar o que a API devolver - linhas sem
+    // consulta ligada ainda ficam em 0.
+    setValoresAtivos(valoresZerados(PLANO_ATIVOS));
+    setValoresPassivo(valoresZerados(PLANO_PASSIVO));
+    try {
+      const params = new URLSearchParams({ mesReferencia });
+      const response = await fetch(`/api/balanco-patrimonial/dados?${params.toString()}`, { cache: 'no-store' });
+      const data = await response.json();
+      if (response.ok && !data.error && data.valores) {
+        setValoresAtivos((prev) => ({ ...prev, ...filtrarPorPlano(data.valores, PLANO_ATIVOS) }));
+        setValoresPassivo((prev) => ({ ...prev, ...filtrarPorPlano(data.valores, PLANO_PASSIVO) }));
+      }
+    } catch (error) {
+      console.error('Erro ao buscar balanço patrimonial:', error);
+    } finally {
+      setCarregando(false);
+    }
   }
 
   return (
@@ -247,9 +276,10 @@ export default function BalancoPatrimonialPage() {
 
           <button
             onClick={consultar}
-            className="px-4 py-2 bg-brand-primary text-white rounded-md text-sm font-medium hover:opacity-90 flex items-center gap-2"
+            disabled={carregando}
+            className="px-4 py-2 bg-brand-primary text-white rounded-md text-sm font-medium hover:opacity-90 flex items-center gap-2 disabled:opacity-60"
           >
-            <RefreshCw className="w-4 h-4" />
+            <RefreshCw className={`w-4 h-4 ${carregando ? 'animate-spin' : ''}`} />
             Consultar
           </button>
         </div>
@@ -262,7 +292,8 @@ export default function BalancoPatrimonialPage() {
       ) : (
         <>
           <div className="bg-amber-50 border border-amber-200 rounded-md px-4 py-2.5 text-xs text-amber-700">
-            Estrutura em construção: os valores abaixo estão zerados de propósito - as consultas reais ainda serão ligadas aqui.
+            Estrutura em construção: só as linhas já ligadas trazem valor real (hoje: Passivo Circulante 2 - Obrigações de
+            Compra de MP. e Serv.) - o resto continua zerado até as consultas serem plugadas aqui.
           </div>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <TabelaBalanco
