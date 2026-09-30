@@ -20,6 +20,7 @@ import {
   RotateCw,
   Clock,
   Sparkles,
+  Scale,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -71,6 +72,11 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
       name: 'Analisador DRE',
       href: '/analisador-dre',
       icon: Sparkles,
+    },
+    {
+      name: 'Balanço Patrimonial',
+      href: '/balanco-patrimonial',
+      icon: Scale,
     },
   ];
 
