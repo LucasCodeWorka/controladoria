@@ -16,7 +16,8 @@ from fastapi import APIRouter, HTTPException, Query
 from typing import Optional
 from datetime import date, timedelta
 from database import execute_query, execute_insert
-from routers.dre import FILTRO_DUPLICATAS_EXCLUIDAS_SQL, PARAMS_DUPLICATAS_EXCLUIDAS
+from routers.dre import FILTRO_DUPLICATAS_EXCLUIDAS_SQL, PARAMS_DUPLICATAS_EXCLUIDAS, CCUSTOS_FABRICA, CCUSTOS_ECOMMERCE, CCUSTO_ECOMMERCE_AGRUPADO
+from routers.cmv_detalhado import CD_EMPRESA_FABRICA
 
 router = APIRouter()
 
@@ -59,6 +60,27 @@ def _janela_vencimento(mes_referencia: str, meses_janela: int) -> tuple:
     return data_inicio.isoformat(), data_fim.isoformat()
 
 
+def _expandir_empresas_para_ccustos(lista_empresas: list) -> list:
+    """Expande os codigos escolhidos no filtro de empresas da tela (1 por
+    loja + 1 pra fabrica) pros centros de custo REAIS de
+    vr_fcp_despduplicatai - MESMA configuracao ja usada no DRE/DFC
+    (CCUSTOS_FABRICA, CCUSTOS_ECOMMERCE): "Fabrica" (empresa 1) vira todos
+    os ccustos internos dela (500 a 514 inclusos, onde a maioria das
+    duplicatas de materia-prima e emprestimo fica lancada de verdade);
+    "Ecommerce" (empresa/ccusto 120) sempre vem junto do 49 (que nao tem
+    empresa propria). Sem isso, filtrar so por Fabrica ficava cego pros
+    ccustos internos dela."""
+    ccustos: set = set()
+    for cd in lista_empresas:
+        if cd == CD_EMPRESA_FABRICA:
+            ccustos.update(CCUSTOS_FABRICA)
+        elif cd == CCUSTO_ECOMMERCE_AGRUPADO:
+            ccustos.update(CCUSTOS_ECOMMERCE)
+        else:
+            ccustos.add(cd)
+    return list(ccustos)
+
+
 def _somar_duplicatas_por_vencimento(despesaitens: list, data_inicio: str, data_fim: str, empresas: Optional[str]) -> float:
     """Soma ABS(vl_rateio) das duplicatas (tp_situacao = 'N') de uma lista
     de cd_despesaitem, com VENCIMENTO na janela dada - respeita o filtro de
@@ -71,8 +93,9 @@ def _somar_duplicatas_por_vencimento(despesaitens: list, data_inicio: str, data_
     if empresas:
         lista_empresas = [int(e.strip()) for e in empresas.split(",") if e.strip()]
         if lista_empresas:
+            ccustos_expandidos = _expandir_empresas_para_ccustos(lista_empresas)
             clausula_empresa = " AND d.cd_ccusto = ANY(%s)"
-            params_empresa = (lista_empresas,)
+            params_empresa = (ccustos_expandidos,)
 
     row = execute_query(f"""
         SELECT SUM(ABS(d.vl_rateio)) AS total
