@@ -350,9 +350,22 @@ function calcularPercentualCampanha(giroTotal: number | null, mesesOportunidade:
   return 0;
 }
 
+// Arredondamento psicologico da sugestao de campanha (regra do usuario):
+// dentro de cada faixa de R$10 (3.01-13, 13.01-23, 23.01-33, ...), o preco
+// vira o teto da faixa terminado em ,90 (9.90, 19.90, 29.90, ...). Faixa n
+// (comecando em 0) vai de 10n+3.01 ate 10n+13, arredondando pra 10n+9.9 -
+// formula generaliza o padrao indefinidamente (a tabela que o usuario deu
+// so ia ate 293, mas a regra repete a cada R$10 pra cima).
+function arredondarPrecoCampanha(preco: number): number {
+  if (preco < 3.01) return preco;
+  const faixa = Math.floor((preco - 3.01) / 10);
+  return faixa * 10 + 9.9;
+}
+
 function calcularPrecoCampanha(precoBase: number | null, percentual: number): number | null {
   if (precoBase === null || percentual <= 0) return null;
-  return precoBase * (1 - percentual / 100);
+  const precoComDesconto = precoBase * (1 - percentual / 100);
+  return arredondarPrecoCampanha(precoComDesconto);
 }
 
 function labelMes(anoMes: string): string {
