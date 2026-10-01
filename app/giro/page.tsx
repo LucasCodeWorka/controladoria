@@ -362,9 +362,16 @@ function arredondarPrecoCampanha(preco: number): number {
   return faixa * 10 + 9.9;
 }
 
-function calcularPrecoCampanha(precoBase: number | null, percentual: number): number | null {
+// Preco com desconto SEM o arredondamento psicologico - so pro tooltip
+// (mostrar o valor "real" por baixo do preco redondo exibido na celula).
+function calcularPrecoCampanhaReal(precoBase: number | null, percentual: number): number | null {
   if (precoBase === null || percentual <= 0) return null;
-  const precoComDesconto = precoBase * (1 - percentual / 100);
+  return precoBase * (1 - percentual / 100);
+}
+
+function calcularPrecoCampanha(precoBase: number | null, percentual: number): number | null {
+  const precoComDesconto = calcularPrecoCampanhaReal(precoBase, percentual);
+  if (precoComDesconto === null) return null;
   return arredondarPrecoCampanha(precoComDesconto);
 }
 
@@ -1519,6 +1526,8 @@ export default function GiroPage() {
                           const percentualCampanha = calcularPercentualCampanha(item.giroTotal, item.mesesOportunidade);
                           const precoAtacadoCampanha = calcularPrecoCampanha(item.precoAtacado, percentualCampanha);
                           const precoVarejoCampanha = calcularPrecoCampanha(item.precoVarejo, percentualCampanha);
+                          const precoAtacadoCampanhaReal = calcularPrecoCampanhaReal(item.precoAtacado, percentualCampanha);
+                          const precoVarejoCampanhaReal = calcularPrecoCampanhaReal(item.precoVarejo, percentualCampanha);
                           return (
                             <>
                               <td className="px-3 py-2 text-right text-amber-900 bg-amber-50/30 whitespace-nowrap">
@@ -1541,7 +1550,12 @@ export default function GiroPage() {
                                   <span className="text-black">-</span>
                                 )}
                               </td>
-                              <td className="px-3 py-2 text-right text-rose-900 bg-rose-50/30 whitespace-nowrap">
+                              <td
+                                className="px-3 py-2 text-right text-rose-900 bg-rose-50/30 whitespace-nowrap cursor-help"
+                                onMouseEnter={(ev) => precoAtacadoCampanhaReal !== null && setTooltipCelula({ texto: `Preço real (sem arredondamento): ${formatarPreco(precoAtacadoCampanhaReal)}`, x: ev.clientX, y: ev.clientY })}
+                                onMouseMove={(ev) => precoAtacadoCampanhaReal !== null && setTooltipCelula({ texto: `Preço real (sem arredondamento): ${formatarPreco(precoAtacadoCampanhaReal)}`, x: ev.clientX, y: ev.clientY })}
+                                onMouseLeave={() => setTooltipCelula(null)}
+                              >
                                 {precoAtacadoCampanha !== null ? (
                                   <>
                                     <div className="text-[10px] text-rose-500 leading-tight">-{percentualCampanha}%</div>
@@ -1551,7 +1565,12 @@ export default function GiroPage() {
                                   <span className="text-black">-</span>
                                 )}
                               </td>
-                              <td className="px-3 py-2 text-right text-rose-900 bg-rose-50/30 whitespace-nowrap">
+                              <td
+                                className="px-3 py-2 text-right text-rose-900 bg-rose-50/30 whitespace-nowrap cursor-help"
+                                onMouseEnter={(ev) => precoVarejoCampanhaReal !== null && setTooltipCelula({ texto: `Preço real (sem arredondamento): ${formatarPreco(precoVarejoCampanhaReal)}`, x: ev.clientX, y: ev.clientY })}
+                                onMouseMove={(ev) => precoVarejoCampanhaReal !== null && setTooltipCelula({ texto: `Preço real (sem arredondamento): ${formatarPreco(precoVarejoCampanhaReal)}`, x: ev.clientX, y: ev.clientY })}
+                                onMouseLeave={() => setTooltipCelula(null)}
+                              >
                                 {precoVarejoCampanha !== null ? (
                                   <>
                                     <div className="text-[10px] text-rose-500 leading-tight">-{percentualCampanha}%</div>
