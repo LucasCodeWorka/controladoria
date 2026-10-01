@@ -1706,12 +1706,38 @@ export default function GiroPage() {
                 onClick={(e) => e.stopPropagation()}
               >
                 <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200 sticky top-0 bg-white">
-                  <h2 className="text-base font-semibold text-black">Regras da Sugestão Campanha</h2>
+                  <h2 className="text-base font-semibold text-black">Regras da tela de Giro</h2>
                   <button onClick={() => setRegrasAbertas(false)} className="text-black hover:text-black">
                     <X className="w-5 h-5" />
                   </button>
                 </div>
                 <div className="p-5 space-y-6">
+                  <div>
+                    <h3 className="text-sm font-semibold text-black mb-2">Estoque e venda média (cálculo do giro)</h3>
+                    <p className="text-xs text-black mb-2">
+                      <strong>Estoque:</strong> se o mês filtrado for o mês atual, usa o estoque de hoje (tempo real);
+                      se for um mês passado, usa o estoque no 1º dia daquele mês.
+                    </p>
+                    <p className="text-xs text-black mb-1"><strong>Venda média</strong> depende de cada referência:</p>
+                    <ul className="text-xs text-black list-disc pl-5 space-y-1">
+                      <li>
+                        <strong>Sem Meses FL</strong> (não está em oportunidade): média dos 3 meses cheios anteriores
+                        ao mês filtrado, soma ÷ 3.
+                      </li>
+                      <li>
+                        <strong>Meses FL = 0</strong> (virou oportunidade neste ciclo): só o último mês fechado antes
+                        do mês filtrado, sem dividir.
+                      </li>
+                      <li>
+                        <strong>Meses FL {'>'} 0</strong>: soma dos meses já fechados do semestre do mês filtrado
+                        (1º semestre = jan-jun, 2º semestre = jul-dez), dividida pela quantidade desses meses
+                        fechados — nunca fixo em 6, pra não afundar o giro quando faltam meses pra fechar o
+                        semestre. Se o mês filtrado for o 1º do semestre (jan ou jul, nenhum mês fechado ainda),
+                        cai na mesma regra do Meses FL = 0 (só o último mês fechado).
+                      </li>
+                    </ul>
+                  </div>
+
                   <div>
                     <h3 className="text-sm font-semibold text-black mb-2">Percentual de desconto (por Giro e Meses FL)</h3>
                     <table className="w-full text-sm border border-gray-200 rounded-md overflow-hidden">
