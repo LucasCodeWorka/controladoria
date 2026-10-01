@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
-import { RotateCw, Loader2, ChevronDown, Calendar } from 'lucide-react';
+import { RotateCw, Loader2, ChevronDown, Calendar, Info, X } from 'lucide-react';
 import {
   Bar,
   BarChart,
@@ -362,6 +362,29 @@ function arredondarPrecoCampanha(preco: number): number {
   return faixa * 10 + 9.9;
 }
 
+// Dados pro modal "Regras" - mesma tabela de percentual por giro/Meses FL
+// usada em calcularPercentualCampanha, e as primeiras faixas de
+// arredondamento (a regra repete a cada R$10 pra sempre, ver
+// arredondarPrecoCampanha).
+const REGRAS_PERCENTUAL_CAMPANHA: { giro: string; percentual: string }[] = [
+  { giro: 'Giro < 4', percentual: '0%' },
+  { giro: 'Giro ≥ 4 e ≤ 6', percentual: '30%' },
+  { giro: 'Giro > 6', percentual: '50%' },
+  { giro: 'Após 12 meses como FL e giro > 6', percentual: '60%' },
+  { giro: 'Após 24 meses como FL e giro > 6', percentual: '70%' },
+];
+
+const REGRAS_ARREDONDAMENTO: { de: string; ate: string; venda: string }[] = Array.from({ length: 29 }, (_, i) => {
+  const de = i * 10 + 3.01;
+  const ate = i * 10 + 13;
+  const venda = i * 10 + 9.9;
+  return {
+    de: de.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+    ate: ate.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 }),
+    venda: venda.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+  };
+});
+
 // Preco com desconto SEM o arredondamento psicologico - so pro tooltip
 // (mostrar o valor "real" por baixo do preco redondo exibido na celula).
 function calcularPrecoCampanhaReal(precoBase: number | null, percentual: number): number | null {
@@ -693,6 +716,7 @@ export default function GiroPage() {
   // usuarios nem percebem que existe, entao usa um balao proprio que segue
   // o mouse, igual ao dos graficos.
   const [tooltipCelula, setTooltipCelula] = useState<{ texto: string; x: number; y: number } | null>(null);
+  const [regrasAbertas, setRegrasAbertas] = useState(false);
 
   useEffect(() => {
     fetch('/api/cmv-detalhado/empresas', { cache: 'no-store' })
@@ -1260,6 +1284,16 @@ export default function GiroPage() {
             />
           </div>
 
+          <div className="flex justify-end">
+            <button
+              onClick={() => setRegrasAbertas(true)}
+              className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-black rounded-md text-sm flex items-center gap-1.5"
+            >
+              <Info className="w-4 h-4" />
+              Regras
+            </button>
+          </div>
+
           <div className="bg-white rounded-lg shadow-lg overflow-hidden">
             <div className="px-4 pt-3 flex items-center gap-2 text-sm flex-wrap">
               <label htmlFor="giro-minimo" className="text-black">Giro maior que:</label>
@@ -1659,6 +1693,78 @@ export default function GiroPage() {
                   {fotoTooltip.erro ? 'Não foi possível carregar a imagem' : 'Sem foto na loja'}
                 </div>
               )}
+            </div>
+          )}
+
+          {regrasAbertas && (
+            <div
+              className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4"
+              onClick={() => setRegrasAbertas(false)}
+            >
+              <div
+                className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[85vh] overflow-y-auto"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200 sticky top-0 bg-white">
+                  <h2 className="text-base font-semibold text-black">Regras da Sugestão Campanha</h2>
+                  <button onClick={() => setRegrasAbertas(false)} className="text-black hover:text-black">
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+                <div className="p-5 space-y-6">
+                  <div>
+                    <h3 className="text-sm font-semibold text-black mb-2">Percentual de desconto (por Giro e Meses FL)</h3>
+                    <table className="w-full text-sm border border-gray-200 rounded-md overflow-hidden">
+                      <thead className="bg-gray-50 border-b border-gray-200">
+                        <tr>
+                          <th className="text-left px-3 py-2 font-medium text-black">Giro</th>
+                          <th className="text-right px-3 py-2 font-medium text-black">Percentual</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {REGRAS_PERCENTUAL_CAMPANHA.map((r) => (
+                          <tr key={r.giro}>
+                            <td className="px-3 py-1.5 text-black">{r.giro}</td>
+                            <td className="px-3 py-1.5 text-right text-black">{r.percentual}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    <p className="text-xs text-black mt-2">
+                      Quando o giro bate em mais de uma faixa junto com Meses FL, a faixa de Meses FL manda mais (ex:
+                      giro {'>'} 6 com 12+ meses FL usa 60%, não 50%). Sem Meses FL preenchido (referência nunca
+                      virou oportunidade), não há sugestão de campanha.
+                    </p>
+                  </div>
+
+                  <div>
+                    <h3 className="text-sm font-semibold text-black mb-2">Arredondamento do preço (Camp Atac / Camp Var)</h3>
+                    <p className="text-xs text-black mb-2">
+                      Depois de aplicar o desconto, o preço é arredondado pro teto da faixa de R$10 em que ele cai,
+                      terminando em ,90. A regra se repete a cada R$10 indefinidamente pra cima (passe o mouse na
+                      célula da tabela pra ver o preço real, sem arredondamento).
+                    </p>
+                    <table className="w-full text-sm border border-gray-200 rounded-md overflow-hidden">
+                      <thead className="bg-gray-50 border-b border-gray-200 sticky top-0">
+                        <tr>
+                          <th className="text-left px-3 py-1.5 font-medium text-black">De</th>
+                          <th className="text-left px-3 py-1.5 font-medium text-black">Até</th>
+                          <th className="text-right px-3 py-1.5 font-medium text-black">Venda R$</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {REGRAS_ARREDONDAMENTO.map((r) => (
+                          <tr key={r.de}>
+                            <td className="px-3 py-1 text-black">{r.de}</td>
+                            <td className="px-3 py-1 text-black">{r.ate}</td>
+                            <td className="px-3 py-1 text-right text-black">{r.venda}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
             </div>
           )}
         </>
