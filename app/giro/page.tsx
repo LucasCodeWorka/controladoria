@@ -350,6 +350,26 @@ function calcularPercentualCampanha(giroTotal: number | null, mesesOportunidade:
   return 0;
 }
 
+// Oportunidade de desconto: a referencia bate na regra da Sugestao
+// Campanha (percentualCampanha > 0) E o desconto ja ativo nela (maior
+// entre promo atacado/varejo, 0 se nao tiver nenhum) e MENOR do que a
+// regra sugere - cobre tanto "nao tem desconto nenhum mas poderia ter"
+// quanto "ja tem desconto, mas da pra aumentar". So funciona dentro da
+// pagina atual, ja que promo so e buscado pra pagina carregada (mesmo
+// padrao ja usado pra preco/Meses FL).
+function temOportunidadeDesconto(item: ItemMatrizGiro): boolean {
+  const percentualCampanha = calcularPercentualCampanha(item.giroTotal, item.mesesOportunidade);
+  if (percentualCampanha <= 0) return false;
+
+  const promoAtacado = item.promocoes?.find((p) => p.tipo === 'Atacado');
+  const promoVarejo = item.promocoes?.find((p) => p.tipo === 'Varejo');
+  const pctPromoAtacado = promoAtacado ? Math.abs(variacaoPercentual(item.precoAtacado, promoAtacado.precoPromo) ?? 0) : 0;
+  const pctPromoVarejo = promoVarejo ? Math.abs(variacaoPercentual(item.precoVarejo, promoVarejo.precoPromo) ?? 0) : 0;
+  const descontoAtual = Math.max(pctPromoAtacado, pctPromoVarejo);
+
+  return percentualCampanha > descontoAtual;
+}
+
 // Arredondamento psicologico da sugestao de campanha (regra do usuario):
 // dentro de cada faixa de R$10 (3.01-13, 13.01-23, 23.01-33, ...), o preco
 // vira o teto da faixa terminado em ,90 (9.90, 19.90, 29.90, ...). Faixa n
@@ -711,6 +731,14 @@ export default function GiroPage() {
   // digito.
   const [matrizGiroMinimo, setMatrizGiroMinimo] = useState('');
 
+  // Filtro "oportunidade de desconto" - so dentro da pagina atual (o promo
+  // de cada referencia so e buscado pra pagina carregada, mesmo padrao ja
+  // usado pra preco/Meses FL): mostra so quem bate na regra da Sugestao
+  // Campanha (percentualCampanha > 0) E ainda nao tem promo ativo nesse
+  // nivel de desconto - ou seja, quem nao tem desconto nenhum mas poderia
+  // ter, ou quem ja tem um desconto menor do que a regra sugere.
+  const [mostrarApenasOportunidadeDesconto, setMostrarApenasOportunidadeDesconto] = useState(false);
+
   // Tooltip da matriz com o calculo do giro (estoque / venda = giro) - o
   // atributo title nativo do navegador demora pra aparecer e alguns
   // usuarios nem percebem que existe, entao usa um balao proprio que segue
@@ -1061,6 +1089,13 @@ export default function GiroPage() {
     .slice()
     .sort((a, b) => b.estoqueAtual - a.estoqueAtual);
 
+  // Itens da matriz exibidos na tabela - com o flag "oportunidade de
+  // desconto" ligado, filtra pra so quem bate na regra (ver
+  // temOportunidadeDesconto). So dentro da pagina atual carregada.
+  const itensMatrizExibidos = mostrarApenasOportunidadeDesconto
+    ? (matriz?.itens ?? []).filter(temOportunidadeDesconto)
+    : matriz?.itens ?? [];
+
   return (
     <div className="max-w-[98%] mx-auto py-6 px-4 space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-4">
@@ -1324,6 +1359,19 @@ export default function GiroPage() {
                   Limpar
                 </button>
               )}
+              <label className="flex items-center gap-1.5 text-sm text-black cursor-pointer ml-2">
+                <input
+                  type="checkbox"
+                  checked={mostrarApenasOportunidadeDesconto}
+                  onChange={(e) => setMostrarApenasOportunidadeDesconto(e.target.checked)}
+                />
+                Só quem pode ganhar ou aumentar desconto (nesta página)
+              </label>
+              {mostrarApenasOportunidadeDesconto && matriz && (
+                <span className="text-xs text-black">
+                  {matriz.itens.filter(temOportunidadeDesconto).length} de {matriz.itens.length} nesta página
+                </span>
+              )}
             </div>
             <div className="p-4 pb-2 flex items-center justify-between flex-wrap gap-3">
               <div>
@@ -1402,7 +1450,13 @@ export default function GiroPage() {
               <p className="text-sm text-black py-8 text-center">Nenhum produto encontrado.</p>
             )}
 
-            {!matrizCarregando && matriz && matriz.itens.length > 0 && (
+            {!matrizCarregando && matriz && matriz.itens.length > 0 && itensMatrizExibidos.length === 0 && (
+              <p className="text-sm text-black py-8 text-center">
+                Nenhuma referência nesta página bate com "pode ganhar ou aumentar desconto".
+              </p>
+            )}
+
+            {!matrizCarregando && matriz && itensMatrizExibidos.length > 0 && (
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead className="bg-gray-50 border-b border-gray-200">
@@ -1491,7 +1545,7 @@ export default function GiroPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {matriz.itens.map((item, idx) => (
+                    {itensMatrizExibidos.map((item, idx) => (
                       <tr key={item.referencia} className={`${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'} hover:bg-rose-50 transition-colors`}>
                         <td
                           className="px-4 py-2 text-black sticky left-0 bg-inherit z-10 cursor-help"
