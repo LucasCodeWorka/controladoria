@@ -1452,7 +1452,7 @@ export default function GiroPage() {
 
             {!matrizCarregando && matriz && matriz.itens.length > 0 && itensMatrizExibidos.length === 0 && (
               <p className="text-sm text-black py-8 text-center">
-                Nenhuma referência nesta página bate com "pode ganhar ou aumentar desconto".
+                Nenhuma referência nesta página bate com &ldquo;pode ganhar ou aumentar desconto&rdquo;.
               </p>
             )}
 
