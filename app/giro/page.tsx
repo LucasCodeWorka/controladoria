@@ -340,9 +340,22 @@ function formatarVariacao(pct: number | null): string {
 // campanha, mesmo com giro baixo (pedido explicito do usuario). A faixa de
 // "meses como FL" manda mais que a faixa de giro simples quando as duas
 // batem.
-function calcularPercentualCampanha(giroTotal: number | null, mesesOportunidade: number | null | undefined): number {
+//
+// Excecao que manda mais que tudo: Meses FL > 0 (ja passou pelo menos 1
+// mes como oportunidade) E nunca teve desconto (sem promo Atacado/Varejo
+// ATIVA agora - mesmo sinal ja usado em temOportunidadeDesconto) -> sempre
+// 30%, independente do giro, em vez da escada normal. "Nunca teve" aqui e
+// so sem promo ativa no momento, nao o historico completo de promocoes do
+// produto (pedido explicito do usuario, pra nao precisar de uma consulta
+// nova de historico).
+function calcularPercentualCampanha(
+  giroTotal: number | null,
+  mesesOportunidade: number | null | undefined,
+  temPromoAtiva: boolean
+): number {
   if (giroTotal === null) return 0;
   if (mesesOportunidade === null || mesesOportunidade === undefined || mesesOportunidade < 0) return 0;
+  if (mesesOportunidade > 0 && !temPromoAtiva) return 30;
   if (giroTotal > 6 && mesesOportunidade >= 24) return 70;
   if (giroTotal > 6 && mesesOportunidade >= 12) return 60;
   if (giroTotal > 6) return 50;
@@ -357,8 +370,12 @@ function calcularPercentualCampanha(giroTotal: number | null, mesesOportunidade:
 // quanto "ja tem desconto, mas da pra aumentar". So funciona dentro da
 // pagina atual, ja que promo so e buscado pra pagina carregada (mesmo
 // padrao ja usado pra preco/Meses FL).
+function temPromoAtiva(item: ItemMatrizGiro): boolean {
+  return (item.promocoes?.length ?? 0) > 0;
+}
+
 function temOportunidadeDesconto(item: ItemMatrizGiro): boolean {
-  const percentualCampanha = calcularPercentualCampanha(item.giroTotal, item.mesesOportunidade);
+  const percentualCampanha = calcularPercentualCampanha(item.giroTotal, item.mesesOportunidade, temPromoAtiva(item));
   if (percentualCampanha <= 0) return false;
 
   const promoAtacado = item.promocoes?.find((p) => p.tipo === 'Atacado');
@@ -1611,7 +1628,7 @@ export default function GiroPage() {
                           const promoVarejo = item.promocoes?.find((p) => p.tipo === 'Varejo');
                           const pctPromoAtacado = promoAtacado ? variacaoPercentual(item.precoAtacado, promoAtacado.precoPromo) : null;
                           const pctPromoVarejo = promoVarejo ? variacaoPercentual(item.precoVarejo, promoVarejo.precoPromo) : null;
-                          const percentualCampanha = calcularPercentualCampanha(item.giroTotal, item.mesesOportunidade);
+                          const percentualCampanha = calcularPercentualCampanha(item.giroTotal, item.mesesOportunidade, temPromoAtiva(item));
                           const precoAtacadoCampanha = calcularPrecoCampanha(item.precoAtacado, percentualCampanha);
                           const precoVarejoCampanha = calcularPrecoCampanha(item.precoVarejo, percentualCampanha);
                           const precoAtacadoCampanhaReal = calcularPrecoCampanhaReal(item.precoAtacado, percentualCampanha);
@@ -1814,6 +1831,11 @@ export default function GiroPage() {
                       Quando o giro bate em mais de uma faixa junto com Meses FL, a faixa de Meses FL manda mais (ex:
                       giro {'>'} 6 com 12+ meses FL usa 60%, não 50%). Sem Meses FL preenchido (referência nunca
                       virou oportunidade), não há sugestão de campanha.
+                    </p>
+                    <p className="text-xs text-black mt-2">
+                      <strong>Exceção que manda mais que tudo:</strong> Meses FL {'>'} 0 (já passou pelo menos 1 mês
+                      como oportunidade) e sem nenhuma promoção Atacado/Varejo ativa agora — sempre 30%, seja qual
+                      for o giro, em vez da escada acima.
                     </p>
                   </div>
 
