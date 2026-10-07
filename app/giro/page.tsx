@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
-import { RotateCw, Loader2, ChevronDown, Calendar, Info, X } from 'lucide-react';
+import { RotateCw, Loader2, ChevronDown, Calendar, Info, X, Eye, EyeOff } from 'lucide-react';
 import {
   Bar,
   BarChart,
@@ -764,6 +764,11 @@ export default function GiroPage() {
   const [totaisDescontoGiro, setTotaisDescontoGiro] = useState<TotaisDescontoGiro | null>(null);
   const [totaisDescontoCarregando, setTotaisDescontoCarregando] = useState(false);
 
+  // Esconde/mostra as colunas de preco cheio (Fabrica/Atacado/Varejo) da
+  // tabela - so visual, pra economizar espaco horizontal quando o usuario
+  // ja sabe os valores e quer ver so Promo/Camp.
+  const [mostrarPrecosCheios, setMostrarPrecosCheios] = useState(true);
+
   // Tooltip da matriz com o calculo do giro (estoque / venda = giro) - o
   // atributo title nativo do navegador demora pra aparecer e alguns
   // usuarios nem percebem que existe, entao usa um balao proprio que segue
@@ -1444,7 +1449,14 @@ export default function GiroPage() {
             </div>
           )}
 
-          <div className="flex justify-end">
+          <div className="flex justify-end gap-2">
+            <button
+              onClick={() => setMostrarPrecosCheios((v) => !v)}
+              className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-black rounded-md text-sm flex items-center gap-1.5"
+            >
+              {mostrarPrecosCheios ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              {mostrarPrecosCheios ? 'Ocultar preços cheios' : 'Mostrar preços cheios'}
+            </button>
             <button
               onClick={() => setRegrasAbertas(true)}
               className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-black rounded-md text-sm flex items-center gap-1.5"
@@ -1597,29 +1609,30 @@ export default function GiroPage() {
                           Produto{indicadorOrdenacao('nome')}
                         </button>
                       </th>
-                      <th className="text-left px-3 py-2 font-medium text-black whitespace-nowrap min-w-[150px]">
-                        Cores
-                      </th>
                       <th className="text-right px-3 py-2 font-medium text-orange-700 bg-orange-50/60 whitespace-nowrap">
                         <button onClick={() => ordenarMatrizPor('mesesOportunidade')} className="flex items-center gap-1 ml-auto hover:text-orange-900">
                           Meses FL{indicadorOrdenacao('mesesOportunidade')}
                         </button>
                       </th>
-                      <th className="text-right px-3 py-2 font-medium text-blue-700 bg-blue-50/60 whitespace-nowrap">
-                        <button onClick={() => ordenarMatrizPor('precoFabrica')} className="flex items-center gap-1 ml-auto hover:text-blue-900">
-                          Fábrica{indicadorOrdenacao('precoFabrica')}
-                        </button>
-                      </th>
-                      <th className="text-right px-3 py-2 font-medium text-blue-700 bg-blue-50/60 whitespace-nowrap">
-                        <button onClick={() => ordenarMatrizPor('precoAtacado')} className="flex items-center gap-1 ml-auto hover:text-blue-900">
-                          Atacado{indicadorOrdenacao('precoAtacado')}
-                        </button>
-                      </th>
-                      <th className="text-right px-3 py-2 font-medium text-blue-700 bg-blue-50/60 whitespace-nowrap">
-                        <button onClick={() => ordenarMatrizPor('precoVarejo')} className="flex items-center gap-1 ml-auto hover:text-blue-900">
-                          Varejo{indicadorOrdenacao('precoVarejo')}
-                        </button>
-                      </th>
+                      {mostrarPrecosCheios && (
+                        <>
+                          <th className="text-right px-3 py-2 font-medium text-blue-700 bg-blue-50/60 whitespace-nowrap">
+                            <button onClick={() => ordenarMatrizPor('precoFabrica')} className="flex items-center gap-1 ml-auto hover:text-blue-900">
+                              Fábrica{indicadorOrdenacao('precoFabrica')}
+                            </button>
+                          </th>
+                          <th className="text-right px-3 py-2 font-medium text-blue-700 bg-blue-50/60 whitespace-nowrap">
+                            <button onClick={() => ordenarMatrizPor('precoAtacado')} className="flex items-center gap-1 ml-auto hover:text-blue-900">
+                              Atacado{indicadorOrdenacao('precoAtacado')}
+                            </button>
+                          </th>
+                          <th className="text-right px-3 py-2 font-medium text-blue-700 bg-blue-50/60 whitespace-nowrap">
+                            <button onClick={() => ordenarMatrizPor('precoVarejo')} className="flex items-center gap-1 ml-auto hover:text-blue-900">
+                              Varejo{indicadorOrdenacao('precoVarejo')}
+                            </button>
+                          </th>
+                        </>
+                      )}
                       <th className="text-right px-3 py-2 font-medium text-amber-700 bg-amber-50/60 whitespace-nowrap">
                         <button onClick={() => ordenarMatrizPor('precoPromo')} className="flex items-center gap-1 ml-auto hover:text-amber-900" title="Preço Promo">
                           Promo Atac{indicadorOrdenacao('precoPromo')}
@@ -1691,10 +1704,10 @@ export default function GiroPage() {
                             )}
                           </div>
                         </td>
-                        <td className="px-4 py-2 text-black sticky left-[100px] bg-inherit z-10">{item.nome}</td>
-                        <td className="px-3 py-2 whitespace-nowrap">
-                          {item.cores && item.cores.length > 0 ? (
-                            <div className="flex flex-wrap gap-1 max-w-[160px]">
+                        <td className="px-4 py-2 text-black sticky left-[100px] bg-inherit z-10">
+                          <div>{item.nome}</div>
+                          {item.cores && item.cores.length > 0 && (
+                            <div className="flex flex-wrap gap-1 max-w-[220px] mt-1">
                               {item.cores.slice(0, 3).map((cor) => (
                                 <span key={cor} className="px-1.5 py-0.5 text-[10px] font-medium bg-gray-100 text-black border border-gray-200 rounded" title={cor}>
                                   {cor}
@@ -1711,8 +1724,6 @@ export default function GiroPage() {
                                 </span>
                               )}
                             </div>
-                          ) : (
-                            <span className="text-black">-</span>
                           )}
                         </td>
                         <td
@@ -1723,15 +1734,19 @@ export default function GiroPage() {
                         >
                           {item.mesesOportunidade !== null && item.mesesOportunidade !== undefined ? item.mesesOportunidade : <span className="text-black">-</span>}
                         </td>
-                        <td className="px-3 py-2 text-right text-blue-900 bg-blue-50/30 whitespace-nowrap">{formatarPreco(item.precoFabrica)}</td>
-                        <td className="px-3 py-2 text-right text-blue-900 bg-blue-50/30 whitespace-nowrap">
-                          <div className="text-[10px] text-blue-400 leading-tight">{formatarVariacao(variacaoPercentual(item.precoFabrica, item.precoAtacado))}</div>
-                          {formatarPreco(item.precoAtacado)}
-                        </td>
-                        <td className="px-3 py-2 text-right text-blue-900 bg-blue-50/30 whitespace-nowrap">
-                          <div className="text-[10px] text-blue-400 leading-tight">{formatarVariacao(variacaoPercentual(item.precoFabrica, item.precoVarejo))}</div>
-                          {formatarPreco(item.precoVarejo)}
-                        </td>
+                        {mostrarPrecosCheios && (
+                          <>
+                            <td className="px-3 py-2 text-right text-blue-900 bg-blue-50/30 whitespace-nowrap">{formatarPreco(item.precoFabrica)}</td>
+                            <td className="px-3 py-2 text-right text-blue-900 bg-blue-50/30 whitespace-nowrap">
+                              <div className="text-[10px] text-blue-400 leading-tight">{formatarVariacao(variacaoPercentual(item.precoFabrica, item.precoAtacado))}</div>
+                              {formatarPreco(item.precoAtacado)}
+                            </td>
+                            <td className="px-3 py-2 text-right text-blue-900 bg-blue-50/30 whitespace-nowrap">
+                              <div className="text-[10px] text-blue-400 leading-tight">{formatarVariacao(variacaoPercentual(item.precoFabrica, item.precoVarejo))}</div>
+                              {formatarPreco(item.precoVarejo)}
+                            </td>
+                          </>
+                        )}
                         {(() => {
                           const promoAtacado = item.promocoes?.find((p) => p.tipo === 'Atacado');
                           const promoVarejo = item.promocoes?.find((p) => p.tipo === 'Varejo');
