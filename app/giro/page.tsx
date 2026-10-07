@@ -674,7 +674,7 @@ export default function GiroPage() {
   // clicando no cabecalho, isso e so o estado inicial.
   const [matrizOrdenarPor, setMatrizOrdenarPor] = useState('total');
   const [matrizOrdem, setMatrizOrdem] = useState<'asc' | 'desc'>('desc');
-  const MATRIZ_POR_PAGINA = 50;
+  const MATRIZ_POR_PAGINA = 200;
   // Filtro da tabela "Giro por referencia e loja" ao clicar numa barra do
   // grafico "Giro por dimensao" (grupo/linha/familia/colecao/status).
   const [filtroDimensaoMatriz, setFiltroDimensaoMatriz] = useState<{ dimensao: DimensaoGiro; categoria: string } | null>(null);
