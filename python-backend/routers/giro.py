@@ -34,6 +34,11 @@ from routers.cmv_detalhado import EMPRESAS_CMV_DETALHADO, _nome_empresa_cmv, _eh
 
 router = APIRouter()
 
+# Maraponga e a unica loja que so vende no atacado (confirmado com o
+# usuario) - usado pra separar o estoque dela do resto das lojas no card de
+# "Valor do desconto sugerido" (ver totais_desconto_giro).
+CD_EMPRESA_MARAPONGA = 2
+
 
 def _criar_tabela_giro():
     # Migracao unica: a tabela antiga (so um snapshot global, sem mes de
@@ -1423,10 +1428,19 @@ def totais_desconto_giro(
             preco_atacado_campanha = _calcular_preco_campanha(preco.get("precoAtacado"), percentual)
             preco_varejo_campanha = _calcular_preco_campanha(preco.get("precoVarejo"), percentual)
 
+            # Maraponga so vende no atacado (nao tem venda de varejo la) - o
+            # estoque dela so pode entrar na conta do desconto Atacado. O
+            # resto das lojas (e fabrica) so vende no varejo pro consumidor
+            # final - o estoque delas so pode entrar na conta do desconto
+            # Varejo. Sem essa separacao, a mesma peca contava nos dois
+            # totais ao mesmo tempo (pedido explicito do usuario).
+            estoque_maraponga = (item["porLoja"].get(CD_EMPRESA_MARAPONGA) or {}).get("estoque", 0.0)
+            estoque_resto = item["estoqueTotal"] - estoque_maraponga
+
             if preco.get("precoAtacado") is not None and preco_atacado_campanha is not None:
-                total_desconto_atacado += item["estoqueTotal"] * (preco["precoAtacado"] - preco_atacado_campanha)
+                total_desconto_atacado += estoque_maraponga * (preco["precoAtacado"] - preco_atacado_campanha)
             if preco.get("precoVarejo") is not None and preco_varejo_campanha is not None:
-                total_desconto_varejo += item["estoqueTotal"] * (preco["precoVarejo"] - preco_varejo_campanha)
+                total_desconto_varejo += estoque_resto * (preco["precoVarejo"] - preco_varejo_campanha)
 
         return {
             "totalEstoque": total_estoque,
