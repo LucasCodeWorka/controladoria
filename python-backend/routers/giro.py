@@ -1427,6 +1427,8 @@ def totais_desconto_giro(
         hoje = date.today()
 
         total_estoque = 0.0
+        total_estoque_atacado = 0.0
+        total_estoque_varejo = 0.0
         total_desconto_atacado = 0.0
         total_desconto_varejo = 0.0
         total_referencias = 0
@@ -1447,19 +1449,21 @@ def totais_desconto_giro(
             total_referencias += 1
             total_estoque += item["estoqueTotal"]
 
+            # Maraponga so vende no atacado (nao tem venda de varejo la) - o
+            # estoque dela so pode entrar na conta do Atacado (estoque e
+            # desconto). O resto das lojas (e fabrica) so vende no varejo
+            # pro consumidor final - o estoque delas so pode entrar na conta
+            # do Varejo. Sem essa separacao, a mesma peca contava nos dois
+            # totais ao mesmo tempo (pedido explicito do usuario).
+            estoque_maraponga = (item["porLoja"].get(CD_EMPRESA_MARAPONGA) or {}).get("estoque", 0.0)
+            estoque_resto = item["estoqueTotal"] - estoque_maraponga
+            total_estoque_atacado += estoque_maraponga
+            total_estoque_varejo += estoque_resto
+
             tem_promo = bool(promo.get("atacado") or promo.get("varejo"))
             percentual = _calcular_percentual_campanha(item["giroTotal"], meses_oportunidade, tem_promo)
             preco_atacado_campanha = _calcular_preco_campanha(preco.get("precoAtacado"), percentual)
             preco_varejo_campanha = _calcular_preco_campanha(preco.get("precoVarejo"), percentual)
-
-            # Maraponga so vende no atacado (nao tem venda de varejo la) - o
-            # estoque dela so pode entrar na conta do desconto Atacado. O
-            # resto das lojas (e fabrica) so vende no varejo pro consumidor
-            # final - o estoque delas so pode entrar na conta do desconto
-            # Varejo. Sem essa separacao, a mesma peca contava nos dois
-            # totais ao mesmo tempo (pedido explicito do usuario).
-            estoque_maraponga = (item["porLoja"].get(CD_EMPRESA_MARAPONGA) or {}).get("estoque", 0.0)
-            estoque_resto = item["estoqueTotal"] - estoque_maraponga
 
             if preco.get("precoAtacado") is not None and preco_atacado_campanha is not None:
                 total_desconto_atacado += estoque_maraponga * (preco["precoAtacado"] - preco_atacado_campanha)
@@ -1468,6 +1472,8 @@ def totais_desconto_giro(
 
         return {
             "totalEstoque": total_estoque,
+            "totalEstoqueAtacado": total_estoque_atacado,
+            "totalEstoqueVarejo": total_estoque_varejo,
             "totalDescontoAtacado": total_desconto_atacado,
             "totalDescontoVarejo": total_desconto_varejo,
             "totalReferencias": total_referencias,

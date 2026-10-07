@@ -378,6 +378,8 @@ function temPromoAtiva(item: ItemMatrizGiro): boolean {
 // as paginas), nao so da pagina carregada na tela.
 interface TotaisDescontoGiro {
   totalEstoque: number;
+  totalEstoqueAtacado: number;
+  totalEstoqueVarejo: number;
   totalDescontoAtacado: number;
   totalDescontoVarejo: number;
   totalReferencias: number;
@@ -1399,9 +1401,20 @@ export default function GiroPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="bg-white rounded-lg shadow-lg p-4">
                 <p className="text-xs font-medium text-black uppercase tracking-wide">Estoque total (filtro inteiro, todas as páginas)</p>
-                <p className="text-2xl font-bold text-black mt-1">
-                  {totaisDescontoCarregando ? '...' : `${formatarQtd(totaisDescontoGiro?.totalEstoque ?? 0)} un.`}
-                </p>
+                <div className="flex items-center gap-6 mt-1">
+                  <div>
+                    <p className="text-[10px] text-black uppercase tracking-wide">Atacado</p>
+                    <p className="text-xl font-bold text-black">
+                      {totaisDescontoCarregando ? '...' : `${formatarQtd(totaisDescontoGiro?.totalEstoqueAtacado ?? 0)} un.`}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-black uppercase tracking-wide">Varejo</p>
+                    <p className="text-xl font-bold text-black">
+                      {totaisDescontoCarregando ? '...' : `${formatarQtd(totaisDescontoGiro?.totalEstoqueVarejo ?? 0)} un.`}
+                    </p>
+                  </div>
+                </div>
                 <p className="text-xs text-black mt-1">
                   {totaisDescontoGiro?.totalReferencias ?? 0} referência(s) no filtro
                   {mostrarApenasOportunidadeDesconto ? ' — com o filtro "oportunidade de desconto" ligado' : ''}
