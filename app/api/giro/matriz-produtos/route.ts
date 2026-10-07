@@ -17,6 +17,7 @@ export async function GET(request: NextRequest) {
     const status = searchParams.get('status');
     const dimensaoFiltro = searchParams.get('dimensaoFiltro');
     const categoriaFiltro = searchParams.get('categoriaFiltro');
+    const oportunidadeDesconto = searchParams.get('oportunidadeDesconto');
     const params = new URLSearchParams();
     if (mesReferencia) params.set('mesReferencia', mesReferencia);
     if (empresas) params.set('empresas', empresas);
@@ -28,6 +29,7 @@ export async function GET(request: NextRequest) {
     if (status) params.set('status', status);
     if (dimensaoFiltro) params.set('dimensaoFiltro', dimensaoFiltro);
     if (categoriaFiltro) params.set('categoriaFiltro', categoriaFiltro);
+    if (oportunidadeDesconto) params.set('oportunidadeDesconto', oportunidadeDesconto);
 
     const response = await fetch(`${PYTHON_API_URL}/api/giro/matriz-produtos?${params.toString()}`, {
       method: 'GET',

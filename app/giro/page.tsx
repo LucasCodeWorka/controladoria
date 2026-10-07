@@ -363,28 +363,14 @@ function calcularPercentualCampanha(
   return 0;
 }
 
-// Oportunidade de desconto: a referencia bate na regra da Sugestao
-// Campanha (percentualCampanha > 0) E o desconto ja ativo nela (maior
-// entre promo atacado/varejo, 0 se nao tiver nenhum) e MENOR do que a
-// regra sugere - cobre tanto "nao tem desconto nenhum mas poderia ter"
-// quanto "ja tem desconto, mas da pra aumentar". So funciona dentro da
-// pagina atual, ja que promo so e buscado pra pagina carregada (mesmo
-// padrao ja usado pra preco/Meses FL).
+// Se a referencia tem alguma promocao Atacado/Varejo ativa agora - usado na
+// excecao de 30% fixo (Meses FL > 0 sem desconto ainda, ver
+// calcularPercentualCampanha). O filtro "oportunidade de desconto" (mesma
+// regra, comparando com o desconto ja ativo) agora roda no backend em cima
+// do filtro inteiro - ver /api/giro/totais-desconto e o parametro
+// oportunidadeDesconto de /api/giro/matriz-produtos.
 function temPromoAtiva(item: ItemMatrizGiro): boolean {
   return (item.promocoes?.length ?? 0) > 0;
-}
-
-function temOportunidadeDesconto(item: ItemMatrizGiro): boolean {
-  const percentualCampanha = calcularPercentualCampanha(item.giroTotal, item.mesesOportunidade, temPromoAtiva(item));
-  if (percentualCampanha <= 0) return false;
-
-  const promoAtacado = item.promocoes?.find((p) => p.tipo === 'Atacado');
-  const promoVarejo = item.promocoes?.find((p) => p.tipo === 'Varejo');
-  const pctPromoAtacado = promoAtacado ? Math.abs(variacaoPercentual(item.precoAtacado, promoAtacado.precoPromo) ?? 0) : 0;
-  const pctPromoVarejo = promoVarejo ? Math.abs(variacaoPercentual(item.precoVarejo, promoVarejo.precoPromo) ?? 0) : 0;
-  const descontoAtual = Math.max(pctPromoAtacado, pctPromoVarejo);
-
-  return percentualCampanha > descontoAtual;
 }
 
 // Totais pros 2 cards acima da tabela - vem prontos do backend
@@ -849,7 +835,17 @@ export default function GiroPage() {
   }
 
   // Nao consulta sozinho ao abrir a tela - so no clique em "Consultar".
-  async function buscarMatriz(mesRef: string, empresasParam: string, pagina: number, ordenarPor: string, ordem: 'asc' | 'desc', giroMinimo: string, statusParam: string, filtroDimensao: { dimensao: DimensaoGiro; categoria: string } | null = null) {
+  async function buscarMatriz(
+    mesRef: string,
+    empresasParam: string,
+    pagina: number,
+    ordenarPor: string,
+    ordem: 'asc' | 'desc',
+    giroMinimo: string,
+    statusParam: string,
+    filtroDimensao: { dimensao: DimensaoGiro; categoria: string } | null = null,
+    oportunidadeDesconto: boolean = mostrarApenasOportunidadeDesconto
+  ) {
     setMatrizCarregando(true);
     try {
       const params = new URLSearchParams({
@@ -871,6 +867,9 @@ export default function GiroPage() {
       if (statusParam) {
         params.set('status', statusParam);
       }
+      if (oportunidadeDesconto) {
+        params.set('oportunidadeDesconto', 'true');
+      }
       const response = await fetch(`/api/giro/matriz-produtos?${params.toString()}`, { cache: 'no-store' });
       const data = await response.json();
       if (!response.ok || data.error) {
@@ -880,7 +879,7 @@ export default function GiroPage() {
       setMatriz(data);
       setMatrizPagina(pagina);
       buscarVendaMensalReferencias(mesRef, empresasParam, (data.itens || []).map((i: ItemMatrizGiro) => i.referencia), statusParam);
-      buscarTotaisDescontoGiro(mesRef, empresasParam, giroMinimo, statusParam, filtroDimensao, mostrarApenasOportunidadeDesconto);
+      buscarTotaisDescontoGiro(mesRef, empresasParam, giroMinimo, statusParam, filtroDimensao, oportunidadeDesconto);
     } catch (error) {
       console.error('Erro ao buscar matriz de giro:', error);
       setErro('Erro ao buscar a matriz por loja.');
@@ -890,12 +889,10 @@ export default function GiroPage() {
   }
 
   // Totais pros 2 cards acima da tabela (Estoque total e Valor do desconto
-  // sugerido) - em cima do FILTRO INTEIRO (todas as paginas), nao so da
-  // pagina carregada (diferente de itensMatrizExibidos/temOportunidadeDesconto,
-  // que so enxergam a pagina atual). Busca preco/promo de todas as
-  // referencias do filtro no backend - mais pesado, por isso e uma consulta
-  // separada, disparada so quando o filtro muda (mesmos momentos que
-  // buscarMatriz), nao em todo render.
+  // sugerido) - em cima do FILTRO INTEIRO (todas as paginas). Busca preco/
+  // promo de todas as referencias do filtro no backend - mais pesado, por
+  // isso e uma consulta separada, disparada so quando o filtro muda (mesmos
+  // momentos que buscarMatriz), nao em todo render.
   async function buscarTotaisDescontoGiro(
     mesRef: string,
     empresasParam: string,
@@ -1169,12 +1166,11 @@ export default function GiroPage() {
     .slice()
     .sort((a, b) => b.estoqueAtual - a.estoqueAtual);
 
-  // Itens da matriz exibidos na tabela - com o flag "oportunidade de
-  // desconto" ligado, filtra pra so quem bate na regra (ver
-  // temOportunidadeDesconto). So dentro da pagina atual carregada.
-  const itensMatrizExibidos = mostrarApenasOportunidadeDesconto
-    ? (matriz?.itens ?? []).filter(temOportunidadeDesconto)
-    : matriz?.itens ?? [];
+  // Com o flag "oportunidade de desconto" ligado, o FILTRO JA VEM PRONTO do
+  // backend (oportunidadeDesconto=true em /api/giro/matriz-produtos filtra
+  // a base inteira, todas as paginas, antes de paginar) - matriz.itens ja
+  // e so quem bate na regra, nao precisa filtrar de novo aqui.
+  const itensMatrizExibidos = matriz?.itens ?? [];
 
   return (
     <div className="max-w-[98%] mx-auto py-6 px-4 space-y-6">
@@ -1477,18 +1473,17 @@ export default function GiroPage() {
                 <input
                   type="checkbox"
                   checked={mostrarApenasOportunidadeDesconto}
+                  disabled={matrizCarregando}
                   onChange={(e) => {
                     const novoValor = e.target.checked;
                     setMostrarApenasOportunidadeDesconto(novoValor);
-                    buscarTotaisDescontoGiro(mesReferencia, empresasParaMatriz(), matrizGiroMinimo, Array.from(statusSelecionados).join(','), filtroDimensaoMatriz, novoValor);
+                    buscarMatriz(mesReferencia, empresasParaMatriz(), 1, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','), filtroDimensaoMatriz, novoValor);
                   }}
                 />
-                Só quem pode ganhar ou aumentar desconto (tabela só mostra a página atual; os cards acima somam o filtro inteiro)
+                Só quem pode ganhar ou aumentar desconto (todas as páginas)
               </label>
               {mostrarApenasOportunidadeDesconto && matriz && (
-                <span className="text-xs text-black">
-                  {matriz.itens.filter(temOportunidadeDesconto).length} de {matriz.itens.length} nesta página
-                </span>
+                <span className="text-xs text-black">{formatarQtd(matriz.totalProdutos)} referência(s) no filtro</span>
               )}
             </div>
             <div className="p-4 pb-2 flex items-center justify-between flex-wrap gap-3">
@@ -1565,12 +1560,10 @@ export default function GiroPage() {
             )}
 
             {!matrizCarregando && matriz && matriz.itens.length === 0 && (
-              <p className="text-sm text-black py-8 text-center">Nenhum produto encontrado.</p>
-            )}
-
-            {!matrizCarregando && matriz && matriz.itens.length > 0 && itensMatrizExibidos.length === 0 && (
               <p className="text-sm text-black py-8 text-center">
-                Nenhuma referência nesta página bate com &ldquo;pode ganhar ou aumentar desconto&rdquo;.
+                {mostrarApenasOportunidadeDesconto
+                  ? 'Nenhuma referência no filtro bate com "pode ganhar ou aumentar desconto".'
+                  : 'Nenhum produto encontrado.'}
               </p>
             )}
 

@@ -909,7 +909,8 @@ def matriz_produtos_giro(
     giroMinimo: Optional[float] = Query(None, description="So retorna referencias com giro TOTAL maior que esse valor (referencias sem giro - SV-3M/sem estoque - ficam de fora)"),
     status: Optional[str] = Query(None, description="Lista de status de produto separados por virgula (default: todos) - mesmo filtro usado no resto do Giro"),
     dimensaoFiltro: Optional[str] = Query(None, description="grupo, linha, familia, colecao ou status - filtra so as referencias dessa categoria (ex: clicou numa barra do grafico por dimensao)"),
-    categoriaFiltro: Optional[str] = Query(None, description="Valor da categoria (ex: 'BODY', 'SEM CLASSIFICACAO') - exige dimensaoFiltro junto.")
+    categoriaFiltro: Optional[str] = Query(None, description="Valor da categoria (ex: 'BODY', 'SEM CLASSIFICACAO') - exige dimensaoFiltro junto."),
+    oportunidadeDesconto: bool = Query(False, description="Quando true, so retorna referencias que batem na regra 'pode ganhar ou aumentar desconto' (mesma logica do card de totais) - filtra a base INTEIRA antes de paginar, nao so a pagina atual")
 ):
     """
     Giro por REFERENCIA (nao por SKU/cor/tamanho individual) e empresa, numa
@@ -959,6 +960,29 @@ def matriz_produtos_giro(
             # filtro "giro maior que X" - nao da pra comparar "sem giro" com
             # um numero.
             dados_completos = [i for i in dados_completos if i["giroTotal"] is not None and i["giroTotal"] > giroMinimo]
+
+        if oportunidadeDesconto:
+            # Precisa de preco/promo/Meses FL de TODA a base filtrada (nao so
+            # da pagina) pra filtrar direito antes de paginar - senao "so
+            # quem pode ganhar desconto" so enxergaria a pagina atual e o
+            # resto das referencias que bateriam na regra ficaria escondido
+            # nas outras paginas (pedido explicito do usuario).
+            precos_oportunidade = _obter_precos_produtos([i["cdProdutoPreco"] for i in dados_completos])
+            promocoes_oportunidade = _obter_promocoes_produtos([i["cdProdutoPreco"] for i in dados_completos], cd_empresas)
+            primeiras_oportunidade = _obter_primeira_oportunidade([i["referencia"] for i in dados_completos], status_filtro)
+            hoje_oportunidade = date.today()
+
+            def _bate_oportunidade(i):
+                preco = precos_oportunidade.get(i["cdProdutoPreco"]) or {"precoAtacado": None, "precoVarejo": None}
+                promo = promocoes_oportunidade.get(i["cdProdutoPreco"]) or {"fabrica": None, "atacado": None, "varejo": None}
+                dt_primeira = primeiras_oportunidade.get(i["referencia"])
+                meses_oportunidade = None
+                if dt_primeira:
+                    meses_oportunidade = (hoje_oportunidade.year - dt_primeira.year) * 12 + (hoje_oportunidade.month - dt_primeira.month)
+                return _tem_oportunidade_desconto(i["giroTotal"], meses_oportunidade, promo, preco.get("precoAtacado"), preco.get("precoVarejo"))
+
+            dados_completos = [i for i in dados_completos if _bate_oportunidade(i)]
+
         total_referencias = len(dados_completos)
         total_paginas = max(1, -(-total_referencias // porPagina))
 
