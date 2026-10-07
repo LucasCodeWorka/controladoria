@@ -28,6 +28,7 @@ Suporta filtrar por mes de referencia e por empresa antes de calcular:
 from fastapi import APIRouter, HTTPException, Query
 from typing import Optional
 from datetime import date, timedelta
+import math
 from database import execute_query, execute_insert
 from routers.cmv_detalhado import EMPRESAS_CMV_DETALHADO, _nome_empresa_cmv, _eh_fabrica
 
@@ -1287,3 +1288,157 @@ def venda_mensal_referencias(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Erro ao buscar venda mensal por referencia: {str(e)}")
+
+
+# ============================================================================
+# SUGESTAO CAMPANHA - mesma regra ja implementada no frontend (app/giro/
+# page.tsx: calcularPercentualCampanha/arredondarPrecoCampanha/
+# calcularPrecoCampanha/temOportunidadeDesconto), replicada aqui em Python
+# SO pro endpoint de totais (precisa rodar em cima do filtro INTEIRO, nao so
+# da pagina carregada na tela - a tabela continua calculando isso no
+# frontend, com os dados que ja tem da pagina).
+# ============================================================================
+
+def _calcular_percentual_campanha(giro_total: Optional[float], meses_oportunidade: Optional[int], tem_promo_ativa: bool) -> float:
+    if giro_total is None:
+        return 0
+    if meses_oportunidade is None or meses_oportunidade < 0:
+        return 0
+    if meses_oportunidade > 0 and not tem_promo_ativa:
+        return 30
+    if giro_total > 6 and meses_oportunidade >= 24:
+        return 70
+    if giro_total > 6 and meses_oportunidade >= 12:
+        return 60
+    if giro_total > 6:
+        return 50
+    if giro_total >= 4:
+        return 30
+    return 0
+
+
+def _arredondar_preco_campanha(preco: float) -> float:
+    if preco < 3.01:
+        return preco
+    faixa = math.floor((preco - 3.01) / 10)
+    return faixa * 10 + 9.9
+
+
+def _calcular_preco_campanha(preco_base: Optional[float], percentual: float) -> Optional[float]:
+    if preco_base is None or percentual <= 0:
+        return None
+    preco_com_desconto = preco_base * (1 - percentual / 100)
+    return _arredondar_preco_campanha(preco_com_desconto)
+
+
+def _variacao_percentual(preco_base: Optional[float], preco: Optional[float]) -> Optional[float]:
+    if preco_base is None or preco is None or preco_base == 0:
+        return None
+    return ((preco - preco_base) / preco_base) * 100
+
+
+def _pct_desconto_promo(preco_base: Optional[float], promo_tipo: Optional[dict]) -> float:
+    if not promo_tipo:
+        return 0.0
+    variacao = _variacao_percentual(preco_base, promo_tipo.get("precoPromo"))
+    return abs(variacao) if variacao is not None else 0.0
+
+
+def _tem_oportunidade_desconto(giro_total, meses_oportunidade, promo: dict, preco_atacado, preco_varejo) -> bool:
+    tem_promo = bool(promo.get("atacado") or promo.get("varejo"))
+    percentual = _calcular_percentual_campanha(giro_total, meses_oportunidade, tem_promo)
+    if percentual <= 0:
+        return False
+    desconto_atual = max(
+        _pct_desconto_promo(preco_atacado, promo.get("atacado")),
+        _pct_desconto_promo(preco_varejo, promo.get("varejo")),
+    )
+    return percentual > desconto_atual
+
+
+@router.get("/api/giro/totais-desconto")
+def totais_desconto_giro(
+    mesReferencia: Optional[str] = Query(None, description="Mes de referencia YYYY-MM (default: mes atual)"),
+    empresas: Optional[str] = Query(None, description="Lista de cd_empresa separados por virgula (default: todas)"),
+    giroMinimo: Optional[float] = Query(None, description="Mesmo filtro 'Giro maior que' da tabela"),
+    status: Optional[str] = Query(None, description="Mesmo filtro de status da tabela"),
+    dimensaoFiltro: Optional[str] = Query(None, description="grupo, linha, familia, colecao ou status"),
+    categoriaFiltro: Optional[str] = Query(None, description="Valor da categoria - exige dimensaoFiltro junto"),
+    oportunidadeDesconto: bool = Query(False, description="Quando true, so soma quem bate na regra 'pode ganhar ou aumentar desconto' (mesmo checkbox da tela)")
+):
+    """
+    Totais pros 2 cards acima da tabela "Giro por referencia e loja"
+    (Estoque total e Valor do desconto sugerido Atacado/Varejo) - em cima do
+    FILTRO INTEIRO (todas as paginas), nao so da pagina carregada. Busca
+    preco/promo de TODAS as referencias que batem no filtro (nao so as da
+    pagina atual) - mais pesado que o resto da tela por isso, entao e um
+    endpoint proprio, chamado so quando a tela realmente precisa atualizar
+    os cards (filtro mudou), nao em todo clique de pagina/ordenacao.
+    """
+    try:
+        mes_ref = mesReferencia or _mes_atual()
+        cd_empresas = _parse_empresas_giro(empresas)
+        status_filtro = [s.strip() for s in status.split(",") if s.strip()] if status else None
+        dados_completos = _obter_matriz_agregada(mes_ref, cd_empresas, status_filtro)
+
+        DIMENSOES_FILTRAVEIS = {"grupo", "linha", "familia", "colecao", "status"}
+        if dimensaoFiltro is not None:
+            if dimensaoFiltro not in DIMENSOES_FILTRAVEIS:
+                raise HTTPException(status_code=400, detail=f"dimensaoFiltro invalida: {dimensaoFiltro}. Use uma de: {sorted(DIMENSOES_FILTRAVEIS)}")
+            if categoriaFiltro is None:
+                raise HTTPException(status_code=400, detail="categoriaFiltro e obrigatorio junto com dimensaoFiltro")
+            dados_completos = [i for i in dados_completos if i["categorias"].get(dimensaoFiltro) == categoriaFiltro]
+
+        if giroMinimo is not None:
+            dados_completos = [i for i in dados_completos if i["giroTotal"] is not None and i["giroTotal"] > giroMinimo]
+
+        precos = _obter_precos_produtos([i["cdProdutoPreco"] for i in dados_completos])
+        promocoes = _obter_promocoes_produtos([i["cdProdutoPreco"] for i in dados_completos], cd_empresas)
+        primeiras_oportunidades = _obter_primeira_oportunidade([i["referencia"] for i in dados_completos], status_filtro)
+        hoje = date.today()
+
+        total_estoque = 0.0
+        total_desconto_atacado = 0.0
+        total_desconto_varejo = 0.0
+        total_referencias = 0
+
+        for item in dados_completos:
+            preco = precos.get(item["cdProdutoPreco"]) or {"precoAtacado": None, "precoVarejo": None}
+            promo = promocoes.get(item["cdProdutoPreco"]) or {"fabrica": None, "atacado": None, "varejo": None}
+            dt_primeira = primeiras_oportunidades.get(item["referencia"])
+            meses_oportunidade = None
+            if dt_primeira:
+                meses_oportunidade = (hoje.year - dt_primeira.year) * 12 + (hoje.month - dt_primeira.month)
+
+            if oportunidadeDesconto and not _tem_oportunidade_desconto(
+                item["giroTotal"], meses_oportunidade, promo, preco.get("precoAtacado"), preco.get("precoVarejo")
+            ):
+                continue
+
+            total_referencias += 1
+            total_estoque += item["estoqueTotal"]
+
+            tem_promo = bool(promo.get("atacado") or promo.get("varejo"))
+            percentual = _calcular_percentual_campanha(item["giroTotal"], meses_oportunidade, tem_promo)
+            preco_atacado_campanha = _calcular_preco_campanha(preco.get("precoAtacado"), percentual)
+            preco_varejo_campanha = _calcular_preco_campanha(preco.get("precoVarejo"), percentual)
+
+            if preco.get("precoAtacado") is not None and preco_atacado_campanha is not None:
+                total_desconto_atacado += item["estoqueTotal"] * (preco["precoAtacado"] - preco_atacado_campanha)
+            if preco.get("precoVarejo") is not None and preco_varejo_campanha is not None:
+                total_desconto_varejo += item["estoqueTotal"] * (preco["precoVarejo"] - preco_varejo_campanha)
+
+        return {
+            "totalEstoque": total_estoque,
+            "totalDescontoAtacado": total_desconto_atacado,
+            "totalDescontoVarejo": total_desconto_varejo,
+            "totalReferencias": total_referencias,
+            "mesReferencia": mes_ref,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[ERROR] Erro ao calcular totais de desconto do giro: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Erro ao calcular totais de desconto do giro: {str(e)}")
