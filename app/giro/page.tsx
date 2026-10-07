@@ -387,6 +387,40 @@ function temOportunidadeDesconto(item: ItemMatrizGiro): boolean {
   return percentualCampanha > descontoAtual;
 }
 
+interface TotaisCardsGiro {
+  totalEstoque: number;
+  totalDescontoAtacado: number;
+  totalDescontoVarejo: number;
+}
+
+// Totais pros cards acima da tabela - sempre em cima da LISTA JA FILTRADA
+// que esta na tela (itensMatrizExibidos: respeita giro minimo, filtro de
+// loja/dimensao e o flag "so quem pode ganhar ou aumentar desconto").
+// Valor do desconto usa o preco JA ARREDONDADO (,90) de Camp Atac/Camp Var
+// - e o preco que seria cobrado de verdade, nao o valor cru do percentual.
+function calcularTotaisCardsGiro(itens: ItemMatrizGiro[]): TotaisCardsGiro {
+  let totalEstoque = 0;
+  let totalDescontoAtacado = 0;
+  let totalDescontoVarejo = 0;
+
+  for (const item of itens) {
+    totalEstoque += item.estoqueTotal;
+
+    const percentualCampanha = calcularPercentualCampanha(item.giroTotal, item.mesesOportunidade, temPromoAtiva(item));
+    const precoAtacadoCampanha = calcularPrecoCampanha(item.precoAtacado, percentualCampanha);
+    const precoVarejoCampanha = calcularPrecoCampanha(item.precoVarejo, percentualCampanha);
+
+    if (item.precoAtacado !== null && precoAtacadoCampanha !== null) {
+      totalDescontoAtacado += item.estoqueTotal * (item.precoAtacado - precoAtacadoCampanha);
+    }
+    if (item.precoVarejo !== null && precoVarejoCampanha !== null) {
+      totalDescontoVarejo += item.estoqueTotal * (item.precoVarejo - precoVarejoCampanha);
+    }
+  }
+
+  return { totalEstoque, totalDescontoAtacado, totalDescontoVarejo };
+}
+
 // Arredondamento psicologico da sugestao de campanha (regra do usuario):
 // dentro de cada faixa de R$10 (3.01-13, 13.01-23, 23.01-33, ...), o preco
 // vira o teto da faixa terminado em ,90 (9.90, 19.90, 29.90, ...). Faixa n
@@ -1113,6 +1147,8 @@ export default function GiroPage() {
     ? (matriz?.itens ?? []).filter(temOportunidadeDesconto)
     : matriz?.itens ?? [];
 
+  const totaisCardsGiro = calcularTotaisCardsGiro(itensMatrizExibidos);
+
   return (
     <div className="max-w-[98%] mx-auto py-6 px-4 space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-4">
@@ -1335,6 +1371,34 @@ export default function GiroPage() {
               chaveAtiva={filtroDimensaoMatriz?.dimensao === dimensaoSelecionada ? filtroDimensaoMatriz.categoria : null}
             />
           </div>
+
+          {matriz && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="bg-white rounded-lg shadow-lg p-4">
+                <p className="text-xs font-medium text-black uppercase tracking-wide">Estoque total (tabela filtrada)</p>
+                <p className="text-2xl font-bold text-black mt-1">{formatarQtd(totaisCardsGiro.totalEstoque)} un.</p>
+                <p className="text-xs text-black mt-1">
+                  {itensMatrizExibidos.length} referência(s) nesta página
+                  {mostrarApenasOportunidadeDesconto ? ' — com o filtro "oportunidade de desconto" ligado' : ''}
+                </p>
+              </div>
+              <div className="bg-white rounded-lg shadow-lg p-4">
+                <p className="text-xs font-medium text-black uppercase tracking-wide">
+                  Valor do desconto sugerido (todo o estoque filtrado, preço já arredondado)
+                </p>
+                <div className="flex items-center gap-6 mt-1">
+                  <div>
+                    <p className="text-[10px] text-black uppercase tracking-wide">Atacado</p>
+                    <p className="text-xl font-bold text-rose-700">{formatarPreco(totaisCardsGiro.totalDescontoAtacado)}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-black uppercase tracking-wide">Varejo</p>
+                    <p className="text-xl font-bold text-rose-700">{formatarPreco(totaisCardsGiro.totalDescontoVarejo)}</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
 
           <div className="flex justify-end">
             <button
