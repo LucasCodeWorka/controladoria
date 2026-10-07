@@ -1465,10 +1465,21 @@ def totais_desconto_giro(
             preco_atacado_campanha = _calcular_preco_campanha(preco.get("precoAtacado"), percentual)
             preco_varejo_campanha = _calcular_preco_campanha(preco.get("precoVarejo"), percentual)
 
-            if preco.get("precoAtacado") is not None and preco_atacado_campanha is not None:
-                total_desconto_atacado += estoque_maraponga * (preco["precoAtacado"] - preco_atacado_campanha)
-            if preco.get("precoVarejo") is not None and preco_varejo_campanha is not None:
-                total_desconto_varejo += estoque_resto * (preco["precoVarejo"] - preco_varejo_campanha)
+            # Se o produto JA esta em promocao, o "custo" do desconto novo e
+            # so a diferenca entre o preco da promo atual e o preco
+            # sugerido (quanto o desconto vai AUMENTAR) - nao a diferenca
+            # com o preco cheio, que contaria de novo um desconto que ja
+            # esta sendo dado hoje. Sem promo ativa, a base continua sendo
+            # o preco cheio (pedido explicito do usuario).
+            promo_atacado_item = promo.get("atacado")
+            promo_varejo_item = promo.get("varejo")
+            base_atacado = promo_atacado_item["precoPromo"] if promo_atacado_item else preco.get("precoAtacado")
+            base_varejo = promo_varejo_item["precoPromo"] if promo_varejo_item else preco.get("precoVarejo")
+
+            if base_atacado is not None and preco_atacado_campanha is not None:
+                total_desconto_atacado += estoque_maraponga * max(0.0, base_atacado - preco_atacado_campanha)
+            if base_varejo is not None and preco_varejo_campanha is not None:
+                total_desconto_varejo += estoque_resto * max(0.0, base_varejo - preco_varejo_campanha)
 
         return {
             "totalEstoque": total_estoque,
