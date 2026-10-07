@@ -341,13 +341,15 @@ function formatarVariacao(pct: number | null): string {
 // "meses como FL" manda mais que a faixa de giro simples quando as duas
 // batem.
 //
-// Excecao que manda mais que tudo: Meses FL > 0 (ja passou pelo menos 1
-// mes como oportunidade) E nunca teve desconto (sem promo Atacado/Varejo
-// ATIVA agora - mesmo sinal ja usado em temOportunidadeDesconto) -> sempre
-// 30%, independente do giro, em vez da escada normal. "Nunca teve" aqui e
-// so sem promo ativa no momento, nao o historico completo de promocoes do
-// produto (pedido explicito do usuario, pra nao precisar de uma consulta
-// nova de historico).
+// Excecao que manda mais que a escada de Meses FL (mas exige giro >= 6):
+// Meses FL > 0 (ja passou pelo menos 1 mes como oportunidade) E giro >= 6 E
+// nunca teve desconto (sem promo Atacado/Varejo ATIVA agora - mesmo sinal
+// ja usado em temOportunidadeDesconto) -> sempre 30%, em vez da escada
+// normal (que daria 50/60/70% dependendo dos meses). Giro < 6 NAO entra
+// nessa excecao - cai na escada normal (giro >= 4 ja da 30% do mesmo jeito;
+// giro < 4 da 0%). "Nunca teve" aqui e so sem promo ativa no momento, nao o
+// historico completo de promocoes do produto (pedido explicito do usuario,
+// pra nao precisar de uma consulta nova de historico).
 function calcularPercentualCampanha(
   giroTotal: number | null,
   mesesOportunidade: number | null | undefined,
@@ -355,7 +357,7 @@ function calcularPercentualCampanha(
 ): number {
   if (giroTotal === null) return 0;
   if (mesesOportunidade === null || mesesOportunidade === undefined || mesesOportunidade < 0) return 0;
-  if (mesesOportunidade > 0 && !temPromoAtiva) return 30;
+  if (giroTotal >= 6 && mesesOportunidade > 0 && !temPromoAtiva) return 30;
   if (giroTotal > 6 && mesesOportunidade >= 24) return 70;
   if (giroTotal > 6 && mesesOportunidade >= 12) return 60;
   if (giroTotal > 6) return 50;
@@ -1940,9 +1942,9 @@ export default function GiroPage() {
                       virou oportunidade), não há sugestão de campanha.
                     </p>
                     <p className="text-xs text-black mt-2">
-                      <strong>Exceção que manda mais que tudo:</strong> Meses FL {'>'} 0 (já passou pelo menos 1 mês
-                      como oportunidade) e sem nenhuma promoção Atacado/Varejo ativa agora — sempre 30%, seja qual
-                      for o giro, em vez da escada acima.
+                      <strong>Exceção:</strong> Giro {'≥'} 6 e Meses FL {'>'} 0 (já passou pelo menos 1 mês como
+                      oportunidade) e sem nenhuma promoção Atacado/Varejo ativa agora — sempre 30%, em vez dos
+                      50/60/70% que a escada acima daria. Giro {'<'} 6 não entra nessa exceção, segue a escada normal.
                     </p>
                   </div>
 

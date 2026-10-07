@@ -1333,7 +1333,7 @@ def _calcular_percentual_campanha(giro_total: Optional[float], meses_oportunidad
         return 0
     if meses_oportunidade is None or meses_oportunidade < 0:
         return 0
-    if meses_oportunidade > 0 and not tem_promo_ativa:
+    if giro_total >= 6 and meses_oportunidade > 0 and not tem_promo_ativa:
         return 30
     if giro_total > 6 and meses_oportunidade >= 24:
         return 70
