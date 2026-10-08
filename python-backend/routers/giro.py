@@ -509,15 +509,31 @@ def _obter_matriz_agregada(mes_referencia: str, cd_empresas: list, status_filtro
         d["porLoja"][r["cd_empresa"]] = (estoque_prev + estoque, venda_prev + venda)
         d["estoqueTotal"] += estoque
         d["vendaTotal"] += venda
-        # Estoque/venda por cor (somando todas as empresas do filtro, igual
-        # o _obter_matriz_agregada_por_cor) - usado so pro filtro "Giro
-        # maior que X" olhar a cor mais rapida da referencia, nao a media
-        # geral dela (pedido explicito do usuario: referencia com 1 cor
-        # vendendo rapido e outras paradas nao pode ficar de fora so porque
-        # a MEDIA ficou baixa).
+        # Breakdown por cor (porLoja/estoque/venda/preco representativo,
+        # igual _obter_matriz_agregada_por_cor mas pra referencia inteira de
+        # uma vez) - usado pro filtro "Giro maior que X" olhar a cor mais
+        # rapida (giroMaximoCor) e pros cards de totais calcularem o
+        # desconto sugerido por cor, nao pela media da referencia (pedido
+        # explicito do usuario: referencia com 1 cor vendendo rapido e
+        # outras paradas nao pode ficar de fora/ter desconto subestimado so
+        # porque a MEDIA ficou baixa).
         cor_chave = (r["ds_cor"] or "").strip() or "SEM COR"
-        estoque_cor_prev, venda_cor_prev = d["porCor"].get(cor_chave, (0.0, 0.0))
-        d["porCor"][cor_chave] = (estoque_cor_prev + estoque, venda_cor_prev + venda)
+        if cor_chave not in d["porCor"]:
+            d["porCor"][cor_chave] = {
+                "porLoja": {}, "estoqueTotal": 0.0, "vendaTotal": 0.0,
+                "cdProdutoPreco": None, "cdProdutoFallback": None, "temLeveDefeito": False,
+            }
+        dc = d["porCor"][cor_chave]
+        if r["status"] == "LEVE DEFEITO":
+            dc["temLeveDefeito"] = True
+        if dc["cdProdutoPreco"] is None and not variante_desconsiderada:
+            dc["cdProdutoPreco"] = r["cd_produto"]
+        if dc["cdProdutoFallback"] is None:
+            dc["cdProdutoFallback"] = r["cd_produto"]
+        estoque_cor_prev, venda_cor_prev = dc["porLoja"].get(r["cd_empresa"], (0.0, 0.0))
+        dc["porLoja"][r["cd_empresa"]] = (estoque_cor_prev + estoque, venda_cor_prev + venda)
+        dc["estoqueTotal"] += estoque
+        dc["vendaTotal"] += venda
 
     # porLoja/total guardam estoque e venda media crus junto do giro (nao so
     # o resultado da divisao) pra montar o tooltip "estoque / venda = giro"
@@ -534,13 +550,28 @@ def _obter_matriz_agregada(mes_referencia: str, cd_empresas: list, status_filtro
             "vendaTotal": d["vendaTotal"],
             "giroTotal": _giro(d["estoqueTotal"], d["vendaTotal"]),
             "giroMaximoCor": max(
-                (g for g in (_giro(estoque, venda) for estoque, venda in d["porCor"].values()) if g is not None),
+                (g for g in (_giro(dc["estoqueTotal"], dc["vendaTotal"]) for dc in d["porCor"].values()) if g is not None),
                 default=None,
             ),
             "cdProdutoPreco": d["cdProdutoPreco"] or d["cdProdutoFallback"],
             "temLeveDefeito": d["temLeveDefeito"],
             "categorias": d["categorias"] or d["categoriasFallback"] or {},
             "cores": sorted(d["cores"]),
+            "porCor": [
+                {
+                    "cor": cor,
+                    "porLoja": {
+                        cd_empresa: {"estoque": estoque, "venda": venda, "giro": _giro(estoque, venda)}
+                        for cd_empresa, (estoque, venda) in dc["porLoja"].items()
+                    },
+                    "estoqueTotal": dc["estoqueTotal"],
+                    "vendaTotal": dc["vendaTotal"],
+                    "giroTotal": _giro(dc["estoqueTotal"], dc["vendaTotal"]),
+                    "cdProdutoPreco": dc["cdProdutoPreco"] or dc["cdProdutoFallback"],
+                    "temLeveDefeito": dc["temLeveDefeito"],
+                }
+                for cor, dc in d["porCor"].items()
+            ],
         }
         for ref, d in por_ref.items()
         # Fora as referencias totalmente mortas (zero estoque e zero venda
@@ -855,6 +886,67 @@ def _obter_primeira_oportunidade(
         GROUP BY referencia
     """, (*referencias, *params_status, *params_ativo)) or []
     return {r["referencia"]: r["dt_primeira"] for r in rows}
+
+
+def _obter_primeira_oportunidade_por_referencia_e_cor(
+    referencias: list, status_filtro: Optional[list] = None,
+    mes_referencia: Optional[str] = None, cd_empresas: Optional[list] = None,
+) -> dict:
+    """Mesma ideia de _obter_primeira_oportunidade, mas em lote pra VARIAS
+    referencias de uma vez e agrupado tambem por cor (chave (referencia,
+    cor) -> data) - usado pelos cards de totais do giro pra calcular o
+    desconto sugerido por cor (cada cor com seu proprio giro/Meses FL), nao
+    pela media da referencia inteira."""
+    referencias = list(set(referencias))
+    if not referencias:
+        return {}
+
+    if status_filtro:
+        status_oportunidade = [s for s in status_filtro if s.strip().upper().startswith("OPORTUNIDADE")]
+        if not status_oportunidade:
+            return {}
+        clausula_status = " AND status = ANY(%s)"
+        params_status: tuple = (status_oportunidade,)
+    else:
+        clausula_status = " AND status ILIKE 'OPORTUNIDADE%%'"
+        params_status = ()
+
+    clausula_ativo, params_ativo = "", ()
+    if mes_referencia and cd_empresas:
+        placeholders_emp = ",".join(["%s"] * len(cd_empresas))
+        clausula_ativo = f"""
+          AND EXISTS (
+              SELECT 1 FROM giro_produto_snapshot g
+              WHERE g.cd_produto = hist_dproduto.cd_produto
+                AND g.mes_referencia = %s AND g.cd_empresa IN ({placeholders_emp})
+                AND (g.estoque_atual > 0 OR g.venda_media_3m > 0)
+          )"""
+        params_ativo = (mes_referencia, *cd_empresas)
+
+    placeholders = ",".join(["%s"] * len(referencias))
+    rows = execute_query(f"""
+        SELECT referencia, COALESCE(ds_cor, 'SEM COR') AS cor, MIN(dt_inicio) AS dt_primeira
+        FROM hist_dproduto
+        WHERE referencia IN ({placeholders})
+          AND atual = true
+          {clausula_status}{clausula_ativo}
+        GROUP BY referencia, COALESCE(ds_cor, 'SEM COR')
+    """, (*referencias, *params_status, *params_ativo)) or []
+    return {(r["referencia"], r["cor"]): r["dt_primeira"] for r in rows}
+
+
+def _cd_produtos_cor_com_oportunidade(dados: list, primeiras_por_cor: dict) -> list:
+    """cd_produto representativo so das cores que TEM Meses FL. Cor sem data
+    de oportunidade nunca gera desconto sugerido (_calcular_percentual_
+    campanha devolve 0 quando meses e None), entao buscar preco/promo dela
+    seria so custo - e custo alto: com todas as lojas selecionadas sao
+    dezenas de milhares de SKUs, o que levava a primeira consulta (cache de
+    preco frio) de ~4s pra ~40s."""
+    return [
+        cor_item["cdProdutoPreco"]
+        for item in dados for cor_item in item["porCor"]
+        if cor_item["cdProdutoPreco"] and primeiras_por_cor.get((item["referencia"], cor_item["cor"]))
+    ]
 
 
 def _status_produto_disponiveis() -> list:
@@ -1209,33 +1301,30 @@ def matriz_produtos_giro(
             dados_completos = dados_filtrados_fl
 
         if oportunidadeDesconto:
-            # Precisa de preco/promo/Meses FL de TODA a base filtrada (nao so
-            # da pagina) pra filtrar direito antes de paginar - senao "so
-            # quem pode ganhar desconto" so enxergaria a pagina atual e o
-            # resto das referencias que bateriam na regra ficaria escondido
-            # nas outras paginas (pedido explicito do usuario).
-            precos_oportunidade = _obter_precos_produtos([i["cdProdutoPreco"] for i in dados_completos])
-            promocoes_oportunidade = _obter_promocoes_produtos([i["cdProdutoPreco"] for i in dados_completos], cd_empresas)
-            primeiras_oportunidade = _obter_primeira_oportunidade([i["referencia"] for i in dados_completos], status_filtro, mes_ref, cd_empresas)
+            # Precisa de preco/promo/Meses FL POR COR de TODA a base
+            # filtrada (nao so da pagina) pra filtrar direito antes de
+            # paginar - senao "so quem pode ganhar desconto" so enxergaria a
+            # pagina atual e o resto das referencias que bateriam na regra
+            # ficaria escondido nas outras paginas (pedido explicito do
+            # usuario). E por cor (nao giro da referencia inteira com Meses
+            # FL da referencia inteira) porque giro e Meses FL podem vir de
+            # cores DIFERENTES - uma cor rapida mas "EM LINHA" (sem Meses FL)
+            # misturada com o Meses FL de outra cor parada dava falso
+            # positivo. A sugestao de preco (Camp Atac/Camp Var mostrados na
+            # tabela) continua pela media da referencia, so o criterio de
+            # inclusao no filtro usa o detalhe por cor.
+            primeiras_por_cor = _obter_primeira_oportunidade_por_referencia_e_cor(
+                [i["referencia"] for i in dados_completos], status_filtro, mes_ref, cd_empresas
+            )
+            cd_produtos_cor = _cd_produtos_cor_com_oportunidade(dados_completos, primeiras_por_cor)
+            precos_cor = _obter_precos_produtos(cd_produtos_cor)
+            promocoes_cor = _obter_promocoes_produtos(cd_produtos_cor, cd_empresas)
             hoje_oportunidade = date.today()
 
-            def _bate_oportunidade(i):
-                preco = precos_oportunidade.get(i["cdProdutoPreco"]) or {"precoAtacado": None, "precoVarejo": None}
-                promo = promocoes_oportunidade.get(i["cdProdutoPreco"]) or {"fabrica": None, "atacado": None, "varejo": None}
-                dt_primeira = primeiras_oportunidade.get(i["referencia"])
-                meses_oportunidade = None
-                if dt_primeira:
-                    meses_oportunidade = (hoje_oportunidade.year - dt_primeira.year) * 12 + (hoje_oportunidade.month - dt_primeira.month)
-                # Usa o giro da cor mais rapida (nao a media da referencia)
-                # pro FILTRO - mesma logica do "Giro maior que X": uma
-                # referencia com 1 cor rapida pode ganhar desconto mesmo que
-                # a media geral esteja baixa. A sugestao de preco (Camp
-                # Atac/Camp Var mostrados na tabela) continua pela media da
-                # referencia, so o criterio de inclusao no filtro muda
-                # (pedido explicito do usuario).
-                return _tem_oportunidade_desconto(i["giroMaximoCor"], meses_oportunidade, promo, preco.get("precoAtacado"), preco.get("precoVarejo"))
-
-            dados_completos = [i for i in dados_completos if _bate_oportunidade(i)]
+            dados_completos = [
+                i for i in dados_completos
+                if _referencia_tem_cor_com_oportunidade(i, precos_cor, promocoes_cor, primeiras_por_cor, hoje_oportunidade)
+            ]
 
         total_referencias = len(dados_completos)
         total_paginas = max(1, -(-total_referencias // porPagina))
@@ -1700,6 +1789,27 @@ def _tem_oportunidade_desconto(giro_total, meses_oportunidade, promo: dict, prec
     return percentual > desconto_atual
 
 
+def _referencia_tem_cor_com_oportunidade(item: dict, precos_cor: dict, promocoes_cor: dict, primeiras_por_cor: dict, hoje) -> bool:
+    """Uma referencia "pode ganhar ou aumentar desconto" se PELO MENOS UMA
+    cor dela, sozinha, bate na regra - giro DA COR + Meses FL DA MESMA COR +
+    preco/promo DA MESMA COR. Nao mistura o giro de uma cor com o Meses FL
+    de outra: giroMaximoCor (a cor mais rapida) e o Meses FL da referencia
+    (a cor mais antiga em oportunidade) podem vir de cores DIFERENTES - uma
+    cor rapida mas "EM LINHA" (sem Meses FL nenhum) misturada com o Meses FL
+    de uma cor parada e lenta dava falso positivo (referencia entrava no
+    filtro sem nenhuma cor de verdade merecendo desconto)."""
+    for cor_item in item["porCor"]:
+        preco_cor = precos_cor.get(cor_item["cdProdutoPreco"]) or {"precoAtacado": None, "precoVarejo": None}
+        promo_cor = promocoes_cor.get(cor_item["cdProdutoPreco"]) or {"fabrica": None, "atacado": None, "varejo": None}
+        dt_primeira_cor = primeiras_por_cor.get((item["referencia"], cor_item["cor"]))
+        meses_cor = None
+        if dt_primeira_cor:
+            meses_cor = (hoje.year - dt_primeira_cor.year) * 12 + (hoje.month - dt_primeira_cor.month)
+        if _tem_oportunidade_desconto(cor_item["giroTotal"], meses_cor, promo_cor, preco_cor.get("precoAtacado"), preco_cor.get("precoVarejo")):
+            return True
+    return False
+
+
 @router.get("/api/giro/totais-desconto")
 def totais_desconto_giro(
     mesReferencia: Optional[str] = Query(None, description="Mes de referencia YYYY-MM (default: mes atual)"),
@@ -1754,8 +1864,6 @@ def totais_desconto_giro(
             # ficar de fora so porque a media ficou baixa.
             dados_completos = [i for i in dados_completos if i["giroMaximoCor"] is not None and i["giroMaximoCor"] > giroMinimo]
 
-        precos = _obter_precos_produtos([i["cdProdutoPreco"] for i in dados_completos])
-        promocoes = _obter_promocoes_produtos([i["cdProdutoPreco"] for i in dados_completos], cd_empresas)
         primeiras_oportunidades = _obter_primeira_oportunidade([i["referencia"] for i in dados_completos], status_filtro, mes_ref, cd_empresas)
         hoje = date.today()
 
@@ -1779,57 +1887,68 @@ def totais_desconto_giro(
         total_desconto_varejo = 0.0
         total_referencias = 0
 
-        for item in dados_completos:
-            preco = precos.get(item["cdProdutoPreco"]) or {"precoAtacado": None, "precoVarejo": None}
-            promo = promocoes.get(item["cdProdutoPreco"]) or {"fabrica": None, "atacado": None, "varejo": None}
-            dt_primeira = primeiras_oportunidades.get(item["referencia"])
-            meses_oportunidade = None
-            if dt_primeira:
-                meses_oportunidade = (hoje.year - dt_primeira.year) * 12 + (hoje.month - dt_primeira.month)
+        # Preco/promo/Meses FL POR COR de toda a base filtrada - usado tanto
+        # pra decidir quem ENTRA no filtro "oportunidade de desconto" quanto
+        # pra calcular o VALOR do desconto de quem entrar. Cada cor usa o
+        # proprio giro + o proprio Meses FL (nao mistura a cor mais rapida
+        # com o Meses FL de outra cor parada - giroMaximoCor e o Meses FL da
+        # referencia podiam vir de cores diferentes, dando falso positivo).
+        primeiras_por_cor = _obter_primeira_oportunidade_por_referencia_e_cor(
+            [item["referencia"] for item in dados_completos], status_filtro, mes_ref, cd_empresas
+        )
+        cd_produtos_cor = _cd_produtos_cor_com_oportunidade(dados_completos, primeiras_por_cor)
+        precos_cor = _obter_precos_produtos(cd_produtos_cor)
+        promocoes_cor = _obter_promocoes_produtos(cd_produtos_cor, cd_empresas)
 
-            # Giro da cor mais rapida pro FILTRO (criterio de inclusao),
-            # igual o outro endpoint - o calculo do VALOR do desconto logo
-            # abaixo continua usando o giro da referencia inteira (preco
-            # sugerido nao muda, so quem entra na soma dos cards).
-            if oportunidadeDesconto and not _tem_oportunidade_desconto(
-                item["giroMaximoCor"], meses_oportunidade, promo, preco.get("precoAtacado"), preco.get("precoVarejo")
-            ):
-                continue
+        dados_incluidos = [
+            item for item in dados_completos
+            if not oportunidadeDesconto or _referencia_tem_cor_com_oportunidade(item, precos_cor, promocoes_cor, primeiras_por_cor, hoje)
+        ]
 
-            total_referencias += 1
-            total_estoque += item["estoqueTotal"]
+        total_referencias = len(dados_incluidos)
+        total_estoque = sum(item["estoqueTotal"] for item in dados_incluidos)
 
-            # Maraponga so vende no atacado (nao tem venda de varejo la) - o
-            # estoque dela so pode entrar na conta do Atacado (estoque e
-            # desconto). O resto das lojas (e fabrica) so vende no varejo
-            # pro consumidor final - o estoque delas so pode entrar na conta
-            # do Varejo. Sem essa separacao, a mesma peca contava nos dois
-            # totais ao mesmo tempo (pedido explicito do usuario).
-            estoque_maraponga = (item["porLoja"].get(CD_EMPRESA_MARAPONGA) or {}).get("estoque", 0.0)
-            estoque_resto = item["estoqueTotal"] - estoque_maraponga
-            total_estoque_atacado += estoque_maraponga
-            total_estoque_varejo += estoque_resto
+        for item in dados_incluidos:
+            for cor_item in item["porCor"]:
+                preco_cor = precos_cor.get(cor_item["cdProdutoPreco"]) or {"precoAtacado": None, "precoVarejo": None}
+                promo_cor = promocoes_cor.get(cor_item["cdProdutoPreco"]) or {"fabrica": None, "atacado": None, "varejo": None}
+                dt_primeira_cor = primeiras_por_cor.get((item["referencia"], cor_item["cor"]))
+                meses_cor = None
+                if dt_primeira_cor:
+                    meses_cor = (hoje.year - dt_primeira_cor.year) * 12 + (hoje.month - dt_primeira_cor.month)
 
-            tem_promo = bool(promo.get("atacado") or promo.get("varejo"))
-            percentual = _calcular_percentual_campanha(item["giroTotal"], meses_oportunidade, tem_promo)
-            preco_atacado_campanha = _calcular_preco_campanha(preco.get("precoAtacado"), percentual)
-            preco_varejo_campanha = _calcular_preco_campanha(preco.get("precoVarejo"), percentual)
+                # Maraponga so vende no atacado (nao tem venda de varejo la) -
+                # o estoque dela so pode entrar na conta do Atacado (estoque
+                # e desconto). O resto das lojas (e fabrica) so vende no
+                # varejo pro consumidor final - o estoque delas so pode
+                # entrar na conta do Varejo. Sem essa separacao, a mesma
+                # peca contava nos dois totais ao mesmo tempo (pedido
+                # explicito do usuario).
+                estoque_maraponga_cor = (cor_item["porLoja"].get(CD_EMPRESA_MARAPONGA) or {}).get("estoque", 0.0)
+                estoque_resto_cor = cor_item["estoqueTotal"] - estoque_maraponga_cor
+                total_estoque_atacado += estoque_maraponga_cor
+                total_estoque_varejo += estoque_resto_cor
 
-            # Se o produto JA esta em promocao, o "custo" do desconto novo e
-            # so a diferenca entre o preco da promo atual e o preco
-            # sugerido (quanto o desconto vai AUMENTAR) - nao a diferenca
-            # com o preco cheio, que contaria de novo um desconto que ja
-            # esta sendo dado hoje. Sem promo ativa, a base continua sendo
-            # o preco cheio (pedido explicito do usuario).
-            promo_atacado_item = promo.get("atacado")
-            promo_varejo_item = promo.get("varejo")
-            base_atacado = promo_atacado_item["precoPromo"] if promo_atacado_item else preco.get("precoAtacado")
-            base_varejo = promo_varejo_item["precoPromo"] if promo_varejo_item else preco.get("precoVarejo")
+                tem_promo_cor = bool(promo_cor.get("atacado") or promo_cor.get("varejo"))
+                percentual_cor = _calcular_percentual_campanha(cor_item["giroTotal"], meses_cor, tem_promo_cor)
+                preco_atacado_campanha_cor = _calcular_preco_campanha(preco_cor.get("precoAtacado"), percentual_cor)
+                preco_varejo_campanha_cor = _calcular_preco_campanha(preco_cor.get("precoVarejo"), percentual_cor)
 
-            if base_atacado is not None and preco_atacado_campanha is not None:
-                total_desconto_atacado += estoque_maraponga * max(0.0, base_atacado - preco_atacado_campanha)
-            if base_varejo is not None and preco_varejo_campanha is not None:
-                total_desconto_varejo += estoque_resto * max(0.0, base_varejo - preco_varejo_campanha)
+                # Se a cor JA esta em promocao, o "custo" do desconto novo e
+                # so a diferenca entre o preco da promo atual e o preco
+                # sugerido (quanto o desconto vai AUMENTAR) - nao a diferenca
+                # com o preco cheio, que contaria de novo um desconto que ja
+                # esta sendo dado hoje. Sem promo ativa, a base continua
+                # sendo o preco cheio (pedido explicito do usuario).
+                promo_atacado_cor = promo_cor.get("atacado")
+                promo_varejo_cor = promo_cor.get("varejo")
+                base_atacado_cor = promo_atacado_cor["precoPromo"] if promo_atacado_cor else preco_cor.get("precoAtacado")
+                base_varejo_cor = promo_varejo_cor["precoPromo"] if promo_varejo_cor else preco_cor.get("precoVarejo")
+
+                if base_atacado_cor is not None and preco_atacado_campanha_cor is not None:
+                    total_desconto_atacado += estoque_maraponga_cor * max(0.0, base_atacado_cor - preco_atacado_campanha_cor)
+                if base_varejo_cor is not None and preco_varejo_campanha_cor is not None:
+                    total_desconto_varejo += estoque_resto_cor * max(0.0, base_varejo_cor - preco_varejo_campanha_cor)
 
         return {
             "totalEstoque": total_estoque,
