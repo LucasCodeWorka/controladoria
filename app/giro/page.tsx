@@ -444,6 +444,22 @@ const DESCRICAO_REGRA_CAMPANHA: Record<number, string> = {
   [REGRA_SEM_GIRO]: 'Regra 10: sem giro (SV-3M ou sem estoque/venda) → sem sugestão',
 };
 
+// Cor do badge de cada regra - bem distintas entre si de proposito, pra
+// bater o olho na tabela qual regra decidiu a sugestao daquela ref+cor
+// (pedido explicito do usuario).
+const COR_BADGE_REGRA: Record<number, string> = {
+  [REGRA_GIRO_MENOR_4]: 'bg-slate-200 text-slate-700',
+  [REGRA_GIRO_4_A_6]: 'bg-blue-200 text-blue-800',
+  [REGRA_GIRO_MAIOR_6]: 'bg-green-200 text-green-800',
+  [REGRA_APOS_12_MESES]: 'bg-yellow-200 text-yellow-800',
+  [REGRA_APOS_24_MESES]: 'bg-orange-200 text-orange-800',
+  [REGRA_EXCECAO_30_FIXO]: 'bg-purple-200 text-purple-800',
+  [REGRA_KISS_ME_30]: 'bg-pink-200 text-pink-800',
+  [REGRA_KISS_ME_0]: 'bg-red-200 text-red-800',
+  [REGRA_SEM_MESES_FL]: 'bg-cyan-200 text-cyan-800',
+  [REGRA_SEM_GIRO]: 'bg-indigo-200 text-indigo-800',
+};
+
 // Se a referencia tem alguma promocao Atacado/Varejo ativa agora - usado na
 // excecao de 30% fixo (Meses FL > 0 sem desconto ainda, ver
 // calcularPercentualCampanha). O filtro "oportunidade de desconto" (mesma
@@ -1426,6 +1442,7 @@ export default function GiroPage() {
   // detalhe daquela cor). O resto das colunas (Meses FL, precos, promo,
   // campanha, lojas, totais) e igual nos dois niveis.
   function linhaMatriz(item: ItemMatrizGiro, key: string, idx: number, nivel: number): React.ReactNode {
+    const regraCampanha = identificarRegraCampanha(item.giroTotal, item.mesesOportunidade, temPromoAtiva(item), item.familia, item.temCorSemMesesFL);
     return (
       <tr key={key} className={`${nivel === 1 ? 'bg-gray-50/70' : idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'} hover:bg-rose-50 transition-colors`}>
         <td
@@ -1456,6 +1473,14 @@ export default function GiroPage() {
         <td className={`px-4 py-2 text-black sticky left-[100px] z-10 ${nivel === 0 ? 'bg-inherit' : 'bg-gray-50/70'}`}>
           <div className={nivel === 1 ? 'pl-4 text-xs font-medium text-black/70' : ''}>
             {item.nome}
+            <span
+              className={`ml-1.5 inline-flex items-center justify-center w-4 h-4 rounded-full text-[9px] font-bold cursor-help ${COR_BADGE_REGRA[regraCampanha]}`}
+              onMouseEnter={(ev) => setTooltipCelula({ texto: DESCRICAO_REGRA_CAMPANHA[regraCampanha], x: ev.clientX, y: ev.clientY })}
+              onMouseMove={(ev) => setTooltipCelula({ texto: DESCRICAO_REGRA_CAMPANHA[regraCampanha], x: ev.clientX, y: ev.clientY })}
+              onMouseLeave={() => setTooltipCelula(null)}
+            >
+              {regraCampanha}
+            </span>
             {nivel === 1 && item.temLeveDefeito && (
               <span className="ml-1.5 px-1 py-0.5 text-[9px] font-medium bg-orange-100 text-orange-700 rounded" title="Classificado como Leve Defeito">
                 LD
@@ -1508,7 +1533,6 @@ export default function GiroPage() {
           const promoVarejo = item.promocoes?.find((p) => p.tipo === 'Varejo');
           const pctPromoAtacado = promoAtacado ? variacaoPercentual(item.precoAtacado, promoAtacado.precoPromo) : null;
           const pctPromoVarejo = promoVarejo ? variacaoPercentual(item.precoVarejo, promoVarejo.precoPromo) : null;
-          const regraCampanha = identificarRegraCampanha(item.giroTotal, item.mesesOportunidade, temPromoAtiva(item), item.familia, item.temCorSemMesesFL);
           const percentualCampanha = PERCENTUAL_POR_REGRA[regraCampanha];
           const descricaoRegra = DESCRICAO_REGRA_CAMPANHA[regraCampanha];
           const precoAtacadoCampanha = calcularPrecoCampanha(item.precoAtacado, percentualCampanha);
@@ -1551,15 +1575,11 @@ export default function GiroPage() {
               >
                 {precoAtacadoCampanha !== null ? (
                   <>
-                    <div className="text-[10px] text-rose-500 leading-tight">
-                      -{percentualCampanha}% <sup className="text-black/50">({regraCampanha})</sup>
-                    </div>
+                    <div className="text-[10px] text-rose-500 leading-tight">-{percentualCampanha}%</div>
                     {formatarPreco(precoAtacadoCampanha)}
                   </>
                 ) : (
-                  <span className="text-black">
-                    - <sup className="text-black/40">({regraCampanha})</sup>
-                  </span>
+                  <span className="text-black">-</span>
                 )}
               </td>
               <td
@@ -1570,15 +1590,11 @@ export default function GiroPage() {
               >
                 {precoVarejoCampanha !== null ? (
                   <>
-                    <div className="text-[10px] text-rose-500 leading-tight">
-                      -{percentualCampanha}% <sup className="text-black/50">({regraCampanha})</sup>
-                    </div>
+                    <div className="text-[10px] text-rose-500 leading-tight">-{percentualCampanha}%</div>
                     {formatarPreco(precoVarejoCampanha)}
                   </>
                 ) : (
-                  <span className="text-black">
-                    - <sup className="text-black/40">({regraCampanha})</sup>
-                  </span>
+                  <span className="text-black">-</span>
                 )}
               </td>
             </>
