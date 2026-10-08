@@ -358,7 +358,37 @@ function formatarVariacao(pct: number | null): string {
 // conjunto usado no backend (_calcular_percentual_campanha em giro.py).
 const FAMILIAS_REGRA_PROPRIA_CAMPANHA = new Set(['KISS ME', 'KISS ME PLUS']);
 
-function calcularPercentualCampanha(
+// Numeracao das regras (mesma ordem mostrada no modal "Regras", secao
+// "Percentual de desconto") - cada ref+cor cai em exatamente uma, usada
+// tanto pro percentual quanto pra mostrar na tabela qual regra decidiu
+// aquela sugestao (pedido explicito do usuario). identificarRegraCampanha
+// e a fonte da verdade - calcularPercentualCampanha so traduz o numero da
+// regra pro percentual correspondente, pra nunca divergir uma da outra.
+const REGRA_GIRO_MENOR_4 = 1;
+const REGRA_GIRO_4_A_6 = 2;
+const REGRA_GIRO_MAIOR_6 = 3;
+const REGRA_APOS_12_MESES = 4;
+const REGRA_APOS_24_MESES = 5;
+const REGRA_EXCECAO_30_FIXO = 6;
+const REGRA_KISS_ME_30 = 7;
+const REGRA_KISS_ME_0 = 8;
+const REGRA_SEM_MESES_FL = 9;
+const REGRA_SEM_GIRO = 10;
+
+const PERCENTUAL_POR_REGRA: Record<number, number> = {
+  [REGRA_GIRO_MENOR_4]: 0,
+  [REGRA_GIRO_4_A_6]: 30,
+  [REGRA_GIRO_MAIOR_6]: 50,
+  [REGRA_APOS_12_MESES]: 60,
+  [REGRA_APOS_24_MESES]: 70,
+  [REGRA_EXCECAO_30_FIXO]: 30,
+  [REGRA_KISS_ME_30]: 30,
+  [REGRA_KISS_ME_0]: 0,
+  [REGRA_SEM_MESES_FL]: 0,
+  [REGRA_SEM_GIRO]: 0,
+};
+
+function identificarRegraCampanha(
   giroTotal: number | null,
   mesesOportunidade: number | null | undefined,
   temPromoAtiva: boolean,
@@ -374,20 +404,45 @@ function calcularPercentualCampanha(
   // normal mesmo sendo KISS ME.
   if (familia && FAMILIAS_REGRA_PROPRIA_CAMPANHA.has(familia.trim().toUpperCase()) && temCorSemMesesFL) {
     if (giroTotal !== null && giroTotal > 6 && mesesOportunidade !== null && mesesOportunidade !== undefined && mesesOportunidade > 24) {
-      return 30;
+      return REGRA_KISS_ME_30;
     }
-    return 0;
+    return REGRA_KISS_ME_0;
   }
 
-  if (giroTotal === null) return 0;
-  if (mesesOportunidade === null || mesesOportunidade === undefined || mesesOportunidade < 0) return 0;
-  if (giroTotal >= 6 && mesesOportunidade > 0 && !temPromoAtiva) return 30;
-  if (giroTotal > 6 && mesesOportunidade >= 24) return 70;
-  if (giroTotal > 6 && mesesOportunidade >= 12) return 60;
-  if (giroTotal > 6) return 50;
-  if (giroTotal >= 4) return 30;
-  return 0;
+  if (giroTotal === null) return REGRA_SEM_GIRO;
+  if (mesesOportunidade === null || mesesOportunidade === undefined || mesesOportunidade < 0) return REGRA_SEM_MESES_FL;
+  if (giroTotal >= 6 && mesesOportunidade > 0 && !temPromoAtiva) return REGRA_EXCECAO_30_FIXO;
+  if (giroTotal > 6 && mesesOportunidade >= 24) return REGRA_APOS_24_MESES;
+  if (giroTotal > 6 && mesesOportunidade >= 12) return REGRA_APOS_12_MESES;
+  if (giroTotal > 6) return REGRA_GIRO_MAIOR_6;
+  if (giroTotal >= 4) return REGRA_GIRO_4_A_6;
+  return REGRA_GIRO_MENOR_4;
 }
+
+function calcularPercentualCampanha(
+  giroTotal: number | null,
+  mesesOportunidade: number | null | undefined,
+  temPromoAtiva: boolean,
+  familia?: string | null,
+  temCorSemMesesFL?: boolean
+): number {
+  return PERCENTUAL_POR_REGRA[identificarRegraCampanha(giroTotal, mesesOportunidade, temPromoAtiva, familia, temCorSemMesesFL)];
+}
+
+// Texto curto de cada regra, pro tooltip da celula Camp Atac/Camp Var -
+// mesma numeracao/descricao mostrada no modal "Regras".
+const DESCRICAO_REGRA_CAMPANHA: Record<number, string> = {
+  [REGRA_GIRO_MENOR_4]: 'Regra 1: Giro < 4 → 0%',
+  [REGRA_GIRO_4_A_6]: 'Regra 2: Giro ≥ 4 e ≤ 6 → 30%',
+  [REGRA_GIRO_MAIOR_6]: 'Regra 3: Giro > 6 → 50%',
+  [REGRA_APOS_12_MESES]: 'Regra 4: Após 12 meses como FL e giro > 6 → 60%',
+  [REGRA_APOS_24_MESES]: 'Regra 5: Após 24 meses como FL e giro > 6 → 70%',
+  [REGRA_EXCECAO_30_FIXO]: 'Regra 6 (exceção): Giro ≥ 6, Meses FL > 0, sem promoção ativa → 30% fixo',
+  [REGRA_KISS_ME_30]: 'Regra 7 (exceção KISS ME/KISS ME PLUS, mista): Giro > 6 e Meses FL > 24 → 30%',
+  [REGRA_KISS_ME_0]: 'Regra 8 (exceção KISS ME/KISS ME PLUS, mista): fora da condição da regra 7 → 0%',
+  [REGRA_SEM_MESES_FL]: 'Regra 9: sem Meses FL (nunca virou oportunidade) → sem sugestão',
+  [REGRA_SEM_GIRO]: 'Regra 10: sem giro (SV-3M ou sem estoque/venda) → sem sugestão',
+};
 
 // Se a referencia tem alguma promocao Atacado/Varejo ativa agora - usado na
 // excecao de 30% fixo (Meses FL > 0 sem desconto ainda, ver
@@ -430,12 +485,12 @@ function arredondarPrecoCampanha(preco: number): number {
 // usada em calcularPercentualCampanha, e as primeiras faixas de
 // arredondamento (a regra repete a cada R$10 pra sempre, ver
 // arredondarPrecoCampanha).
-const REGRAS_PERCENTUAL_CAMPANHA: { giro: string; percentual: string }[] = [
-  { giro: 'Giro < 4', percentual: '0%' },
-  { giro: 'Giro ≥ 4 e ≤ 6', percentual: '30%' },
-  { giro: 'Giro > 6', percentual: '50%' },
-  { giro: 'Após 12 meses como FL e giro > 6', percentual: '60%' },
-  { giro: 'Após 24 meses como FL e giro > 6', percentual: '70%' },
+const REGRAS_PERCENTUAL_CAMPANHA: { numero: number; giro: string; percentual: string }[] = [
+  { numero: REGRA_GIRO_MENOR_4, giro: 'Giro < 4', percentual: '0%' },
+  { numero: REGRA_GIRO_4_A_6, giro: 'Giro ≥ 4 e ≤ 6', percentual: '30%' },
+  { numero: REGRA_GIRO_MAIOR_6, giro: 'Giro > 6', percentual: '50%' },
+  { numero: REGRA_APOS_12_MESES, giro: 'Após 12 meses como FL e giro > 6', percentual: '60%' },
+  { numero: REGRA_APOS_24_MESES, giro: 'Após 24 meses como FL e giro > 6', percentual: '70%' },
 ];
 
 const REGRAS_ARREDONDAMENTO: { de: string; ate: string; venda: string }[] = Array.from({ length: 29 }, (_, i) => {
@@ -1453,11 +1508,19 @@ export default function GiroPage() {
           const promoVarejo = item.promocoes?.find((p) => p.tipo === 'Varejo');
           const pctPromoAtacado = promoAtacado ? variacaoPercentual(item.precoAtacado, promoAtacado.precoPromo) : null;
           const pctPromoVarejo = promoVarejo ? variacaoPercentual(item.precoVarejo, promoVarejo.precoPromo) : null;
-          const percentualCampanha = calcularPercentualCampanha(item.giroTotal, item.mesesOportunidade, temPromoAtiva(item), item.familia, item.temCorSemMesesFL);
+          const regraCampanha = identificarRegraCampanha(item.giroTotal, item.mesesOportunidade, temPromoAtiva(item), item.familia, item.temCorSemMesesFL);
+          const percentualCampanha = PERCENTUAL_POR_REGRA[regraCampanha];
+          const descricaoRegra = DESCRICAO_REGRA_CAMPANHA[regraCampanha];
           const precoAtacadoCampanha = calcularPrecoCampanha(item.precoAtacado, percentualCampanha);
           const precoVarejoCampanha = calcularPrecoCampanha(item.precoVarejo, percentualCampanha);
           const precoAtacadoCampanhaReal = calcularPrecoCampanhaReal(item.precoAtacado, percentualCampanha);
           const precoVarejoCampanhaReal = calcularPrecoCampanhaReal(item.precoVarejo, percentualCampanha);
+          const tooltipAtacado = precoAtacadoCampanhaReal !== null
+            ? `${descricaoRegra}\nPreço real (sem arredondamento): ${formatarPreco(precoAtacadoCampanhaReal)}`
+            : descricaoRegra;
+          const tooltipVarejo = precoVarejoCampanhaReal !== null
+            ? `${descricaoRegra}\nPreço real (sem arredondamento): ${formatarPreco(precoVarejoCampanhaReal)}`
+            : descricaoRegra;
           return (
             <>
               <td className="px-3 py-2 text-right text-amber-900 bg-amber-50/30 whitespace-nowrap">
@@ -1482,32 +1545,40 @@ export default function GiroPage() {
               </td>
               <td
                 className="px-3 py-2 text-right text-rose-900 bg-rose-50/30 whitespace-nowrap cursor-help"
-                onMouseEnter={(ev) => precoAtacadoCampanhaReal !== null && setTooltipCelula({ texto: `Preço real (sem arredondamento): ${formatarPreco(precoAtacadoCampanhaReal)}`, x: ev.clientX, y: ev.clientY })}
-                onMouseMove={(ev) => precoAtacadoCampanhaReal !== null && setTooltipCelula({ texto: `Preço real (sem arredondamento): ${formatarPreco(precoAtacadoCampanhaReal)}`, x: ev.clientX, y: ev.clientY })}
+                onMouseEnter={(ev) => setTooltipCelula({ texto: tooltipAtacado, x: ev.clientX, y: ev.clientY })}
+                onMouseMove={(ev) => setTooltipCelula({ texto: tooltipAtacado, x: ev.clientX, y: ev.clientY })}
                 onMouseLeave={() => setTooltipCelula(null)}
               >
                 {precoAtacadoCampanha !== null ? (
                   <>
-                    <div className="text-[10px] text-rose-500 leading-tight">-{percentualCampanha}%</div>
+                    <div className="text-[10px] text-rose-500 leading-tight">
+                      -{percentualCampanha}% <sup className="text-black/50">({regraCampanha})</sup>
+                    </div>
                     {formatarPreco(precoAtacadoCampanha)}
                   </>
                 ) : (
-                  <span className="text-black">-</span>
+                  <span className="text-black">
+                    - <sup className="text-black/40">({regraCampanha})</sup>
+                  </span>
                 )}
               </td>
               <td
                 className="px-3 py-2 text-right text-rose-900 bg-rose-50/30 whitespace-nowrap cursor-help"
-                onMouseEnter={(ev) => precoVarejoCampanhaReal !== null && setTooltipCelula({ texto: `Preço real (sem arredondamento): ${formatarPreco(precoVarejoCampanhaReal)}`, x: ev.clientX, y: ev.clientY })}
-                onMouseMove={(ev) => precoVarejoCampanhaReal !== null && setTooltipCelula({ texto: `Preço real (sem arredondamento): ${formatarPreco(precoVarejoCampanhaReal)}`, x: ev.clientX, y: ev.clientY })}
+                onMouseEnter={(ev) => setTooltipCelula({ texto: tooltipVarejo, x: ev.clientX, y: ev.clientY })}
+                onMouseMove={(ev) => setTooltipCelula({ texto: tooltipVarejo, x: ev.clientX, y: ev.clientY })}
                 onMouseLeave={() => setTooltipCelula(null)}
               >
                 {precoVarejoCampanha !== null ? (
                   <>
-                    <div className="text-[10px] text-rose-500 leading-tight">-{percentualCampanha}%</div>
+                    <div className="text-[10px] text-rose-500 leading-tight">
+                      -{percentualCampanha}% <sup className="text-black/50">({regraCampanha})</sup>
+                    </div>
                     {formatarPreco(precoVarejoCampanha)}
                   </>
                 ) : (
-                  <span className="text-black">-</span>
+                  <span className="text-black">
+                    - <sup className="text-black/40">({regraCampanha})</sup>
+                  </span>
                 )}
               </td>
             </>
@@ -2391,9 +2462,15 @@ export default function GiroPage() {
 
                   <div>
                     <h3 className="text-sm font-semibold text-black mb-2">Percentual de desconto (por Giro e Meses FL)</h3>
+                    <p className="text-xs text-black mb-2">
+                      Cada regra tem um número — esse mesmo número aparece entre parênteses ao lado do percentual nas
+                      colunas Camp Atac/Camp Var da tabela, indicando qual regra decidiu a sugestão daquela ref+cor
+                      (passe o mouse na célula pra ver a descrição completa).
+                    </p>
                     <table className="w-full text-sm border border-gray-200 rounded-md overflow-hidden">
                       <thead className="bg-gray-50 border-b border-gray-200">
                         <tr>
+                          <th className="text-left px-3 py-2 font-medium text-black w-10">Nº</th>
                           <th className="text-left px-3 py-2 font-medium text-black">Giro</th>
                           <th className="text-right px-3 py-2 font-medium text-black">Percentual</th>
                         </tr>
@@ -2401,6 +2478,7 @@ export default function GiroPage() {
                       <tbody className="divide-y divide-gray-100">
                         {REGRAS_PERCENTUAL_CAMPANHA.map((r) => (
                           <tr key={r.giro}>
+                            <td className="px-3 py-1.5 text-black font-mono">{r.numero}</td>
                             <td className="px-3 py-1.5 text-black">{r.giro}</td>
                             <td className="px-3 py-1.5 text-right text-black">{r.percentual}</td>
                           </tr>
@@ -2409,21 +2487,28 @@ export default function GiroPage() {
                     </table>
                     <p className="text-xs text-black mt-2">
                       Quando o giro bate em mais de uma faixa junto com Meses FL, a faixa de Meses FL manda mais (ex:
-                      giro {'>'} 6 com 12+ meses FL usa 60%, não 50%). Sem Meses FL preenchido (referência nunca
-                      virou oportunidade), não há sugestão de campanha.
+                      giro {'>'} 6 com 12+ meses FL usa a regra 4, não a 3).
                     </p>
                     <p className="text-xs text-black mt-2">
-                      <strong>Exceção:</strong> Giro {'≥'} 6 e Meses FL {'>'} 0 (já passou pelo menos 1 mês como
-                      oportunidade) e sem nenhuma promoção Atacado/Varejo ativa agora — sempre 30%, em vez dos
-                      50/60/70% que a escada acima daria. Giro {'<'} 6 não entra nessa exceção, segue a escada normal.
+                      <strong>Regra {REGRA_EXCECAO_30_FIXO} (exceção):</strong> Giro {'≥'} 6 e Meses FL {'>'} 0 (já
+                      passou pelo menos 1 mês como oportunidade) e sem nenhuma promoção Atacado/Varejo ativa agora —
+                      sempre 30%, em vez dos 50/60/70% que a escada acima daria. Giro {'<'} 6 não entra nessa
+                      exceção, segue a escada normal.
                     </p>
                     <p className="text-xs text-black mt-2">
-                      <strong>Exceção — famílias KISS ME e KISS ME PLUS:</strong> só vale quando a referência é
-                      <strong> mista</strong> (tem pelo menos uma cor ainda em linha, sem Meses FL, convivendo com
-                      cor(es) já em oportunidade). Nesse caso, substitui a escada acima inteira (não se combina com
-                      ela nem com a exceção de 30% fixo): Giro {'>'} 6 e Meses FL {' > '}24 — 30%; fora isso — 0%
-                      (sem sugestão de desconto). Se a referência inteira já virou oportunidade (toda cor com Meses
-                      FL), não é mais mista — segue a escada normal mesmo sendo KISS ME.
+                      <strong>Regras {REGRA_KISS_ME_30} e {REGRA_KISS_ME_0} (exceção — famílias KISS ME e KISS ME
+                      PLUS):</strong> só valem quando a referência é <strong>mista</strong> (tem pelo menos uma cor
+                      ainda em linha, sem Meses FL, convivendo com cor(es) já em oportunidade). Nesse caso,
+                      substituem a escada acima inteira (não se combinam com ela nem com a regra {REGRA_EXCECAO_30_FIXO}):
+                      regra {REGRA_KISS_ME_30} — Giro {'>'} 6 e Meses FL {' > '}24 → 30%; regra {REGRA_KISS_ME_0} —
+                      fora dessa condição → 0% (sem sugestão de desconto). Se a referência inteira já virou
+                      oportunidade (toda cor com Meses FL), não é mais mista — segue a escada normal mesmo sendo
+                      KISS ME.
+                    </p>
+                    <p className="text-xs text-black mt-2">
+                      <strong>Regra {REGRA_SEM_MESES_FL}:</strong> sem Meses FL preenchido (referência nunca virou
+                      oportunidade) — sem sugestão de campanha. <strong>Regra {REGRA_SEM_GIRO}:</strong> sem giro
+                      (SV-3M ou sem estoque/venda nenhum) — sem sugestão de campanha.
                     </p>
                   </div>
 
