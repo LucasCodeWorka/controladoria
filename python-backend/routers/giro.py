@@ -1275,55 +1275,28 @@ def matriz_produtos_giro(
             dados_completos, linha_filtro, familia_filtro, grupo_filtro, colecao_filtro, referenciaBusca
         )
 
-        if giroMinimo is not None:
-            # "Giro maior que X" olha a cor MAIS RAPIDA da referencia (nao a
-            # media geral dela) - pedido explicito do usuario: uma
-            # referencia com 1 cor vendendo rapido e outras paradas nao pode
-            # ficar de fora so porque a media ficou baixa. Cor sem venda
-            # nenhuma (giro null) nunca passa - nao da pra comparar "sem
-            # giro" com um numero.
-            dados_completos = [i for i in dados_completos if i["giroMaximoCor"] is not None and i["giroMaximoCor"] > giroMinimo]
-
-        if mesesFLMinimo is not None:
-            # Precisa do Meses FL de TODA a base filtrada (nao so da pagina),
-            # mesmo motivo do giroMinimo acima - senao o filtro so
-            # enxergaria a pagina atual.
-            primeiras_fl = _obter_primeira_oportunidade([i["referencia"] for i in dados_completos], status_filtro, mes_ref, cd_empresas)
-            hoje_fl = date.today()
-            dados_filtrados_fl = []
-            for i in dados_completos:
-                dt_primeira = primeiras_fl.get(i["referencia"])
-                if not dt_primeira:
-                    continue
-                meses = (hoje_fl.year - dt_primeira.year) * 12 + (hoje_fl.month - dt_primeira.month)
-                if meses > mesesFLMinimo:
-                    dados_filtrados_fl.append(i)
-            dados_completos = dados_filtrados_fl
-
-        if oportunidadeDesconto:
-            # Precisa de preco/promo/Meses FL POR COR de TODA a base
-            # filtrada (nao so da pagina) pra filtrar direito antes de
-            # paginar - senao "so quem pode ganhar desconto" so enxergaria a
-            # pagina atual e o resto das referencias que bateriam na regra
-            # ficaria escondido nas outras paginas (pedido explicito do
-            # usuario). E por cor (nao giro da referencia inteira com Meses
-            # FL da referencia inteira) porque giro e Meses FL podem vir de
-            # cores DIFERENTES - uma cor rapida mas "EM LINHA" (sem Meses FL)
-            # misturada com o Meses FL de outra cor parada dava falso
-            # positivo. A sugestao de preco (Camp Atac/Camp Var mostrados na
-            # tabela) continua pela media da referencia, so o criterio de
-            # inclusao no filtro usa o detalhe por cor.
+        # Giro / Meses FL / "pode ganhar ou aumentar desconto" sao avaliados
+        # JUNTOS e POR COR: a referencia so entra se tiver pelo menos UMA cor
+        # que bate em todos eles ao mesmo tempo. Avaliar um por um (maior
+        # giro entre as cores x maior Meses FL entre as cores) deixava passar
+        # referencia onde cada criterio vinha de uma cor diferente. Roda em
+        # cima de TODA a base filtrada (nao so da pagina) pra paginar certo -
+        # senao o filtro so enxergaria a pagina atual.
+        if giroMinimo is not None or mesesFLMinimo is not None or oportunidadeDesconto:
             primeiras_por_cor = _obter_primeira_oportunidade_por_referencia_e_cor(
                 [i["referencia"] for i in dados_completos], status_filtro, mes_ref, cd_empresas
             )
             cd_produtos_cor = _cd_produtos_cor_com_oportunidade(dados_completos, primeiras_por_cor)
             precos_cor = _obter_precos_produtos(cd_produtos_cor)
             promocoes_cor = _obter_promocoes_produtos(cd_produtos_cor, cd_empresas)
-            hoje_oportunidade = date.today()
+            hoje_filtro_cor = date.today()
 
             dados_completos = [
                 i for i in dados_completos
-                if _referencia_tem_cor_com_oportunidade(i, precos_cor, promocoes_cor, primeiras_por_cor, hoje_oportunidade)
+                if _cores_no_filtro(
+                    i, precos_cor, promocoes_cor, primeiras_por_cor, hoje_filtro_cor,
+                    giroMinimo, mesesFLMinimo, oportunidadeDesconto,
+                )
             ]
 
         total_referencias = len(dados_completos)
@@ -1460,7 +1433,10 @@ def matriz_produtos_giro_por_cor(
     referencia: str = Query(..., description="Referencia a abrir o detalhe por cor"),
     mesReferencia: Optional[str] = Query(None, description="Mes de referencia YYYY-MM (default: mes atual)"),
     empresas: Optional[str] = Query(None, description="Lista de cd_empresa separados por virgula (default: todas)"),
-    status: Optional[str] = Query(None, description="Lista de status de produto separados por virgula (default: todos)")
+    status: Optional[str] = Query(None, description="Lista de status de produto separados por virgula (default: todos)"),
+    giroMinimo: Optional[float] = Query(None, description="Mesmo filtro 'Giro maior que' da tabela - aplicado ao giro DA COR"),
+    mesesFLMinimo: Optional[int] = Query(None, description="Mesmo filtro 'Meses FL maior que' da tabela - aplicado ao Meses FL DA COR"),
+    oportunidadeDesconto: bool = Query(False, description="Mesmo checkbox da tabela - so as cores que, sozinhas, podem ganhar ou aumentar desconto")
 ):
     """
     Abre UMA referencia por cor - mesma estrutura da matriz principal
@@ -1468,6 +1444,12 @@ def matriz_produtos_giro_por_cor(
     vez de somar tudo na referencia. Chamado sob demanda quando o usuario
     expande a linha na tela (nao faz parte da consulta principal, que
     continua agregada por referencia).
+
+    Os filtros da tela (giro, Meses FL, oportunidade de desconto) valem
+    aqui tambem, aplicados a CADA COR - a linha-pai entra no filtro quando
+    pelo menos uma cor dela bate na regra, entao o detalhe tem que mostrar
+    justamente quais cores sao essas, nao a referencia inteira (pedido
+    explicito do usuario).
     """
     try:
         mes_ref = mesReferencia or _mes_atual()
@@ -1488,6 +1470,13 @@ def matriz_produtos_giro_por_cor(
             meses_oportunidade = None
             if dt_primeira_oportunidade:
                 meses_oportunidade = (hoje.year - dt_primeira_oportunidade.year) * 12 + (hoje.month - dt_primeira_oportunidade.month)
+
+            if not _cor_bate_filtros(
+                item["giroTotal"], meses_oportunidade, preco, promo,
+                giroMinimo, mesesFLMinimo, oportunidadeDesconto,
+            ):
+                continue
+
             itens_resposta.append({
                 "referencia": referencia,
                 "cor": item["cor"],
@@ -1789,15 +1778,39 @@ def _tem_oportunidade_desconto(giro_total, meses_oportunidade, promo: dict, prec
     return percentual > desconto_atual
 
 
-def _referencia_tem_cor_com_oportunidade(item: dict, precos_cor: dict, promocoes_cor: dict, primeiras_por_cor: dict, hoje) -> bool:
-    """Uma referencia "pode ganhar ou aumentar desconto" se PELO MENOS UMA
-    cor dela, sozinha, bate na regra - giro DA COR + Meses FL DA MESMA COR +
-    preco/promo DA MESMA COR. Nao mistura o giro de uma cor com o Meses FL
-    de outra: giroMaximoCor (a cor mais rapida) e o Meses FL da referencia
-    (a cor mais antiga em oportunidade) podem vir de cores DIFERENTES - uma
-    cor rapida mas "EM LINHA" (sem Meses FL nenhum) misturada com o Meses FL
-    de uma cor parada e lenta dava falso positivo (referencia entrava no
-    filtro sem nenhuma cor de verdade merecendo desconto)."""
+def _cor_bate_filtros(
+    giro_cor: Optional[float], meses_cor: Optional[int], preco_cor: dict, promo_cor: dict,
+    giro_minimo: Optional[float] = None, meses_fl_minimo: Optional[int] = None,
+    oportunidade_desconto: bool = False,
+) -> bool:
+    """Se UMA cor, sozinha, bate em TODOS os filtros ativos da tela ao mesmo
+    tempo. O "ao mesmo tempo" e o ponto: avaliar cada filtro de forma
+    independente (maior giro entre as cores x maior Meses FL entre as cores)
+    deixava passar referencia onde o giro vem de uma cor e o Meses FL de
+    outra - ex: ACQUA com 19 meses FL mas sem venda nenhuma, e DUSK com giro
+    17 mas so 7 meses FL: nenhuma das duas atende "giro > 2 E Meses FL > 18",
+    mas a referencia passava (pedido explicito do usuario: filtro por ref
+    COR, nao por referencia)."""
+    if giro_minimo is not None and not (giro_cor is not None and giro_cor > giro_minimo):
+        return False
+    if meses_fl_minimo is not None and not (meses_cor is not None and meses_cor > meses_fl_minimo):
+        return False
+    if oportunidade_desconto and not _tem_oportunidade_desconto(
+        giro_cor, meses_cor, promo_cor, preco_cor.get("precoAtacado"), preco_cor.get("precoVarejo")
+    ):
+        return False
+    return True
+
+
+def _cores_no_filtro(
+    item: dict, precos_cor: dict, promocoes_cor: dict, primeiras_por_cor: dict, hoje,
+    giro_minimo: Optional[float] = None, meses_fl_minimo: Optional[int] = None,
+    oportunidade_desconto: bool = False,
+) -> list:
+    """Cores da referencia que batem em todos os filtros ativos. Lista vazia
+    = a referencia inteira fica de fora. Sem nenhum filtro ativo, devolve
+    todas as cores (comportamento normal da tela sem filtro)."""
+    cores_ok = []
     for cor_item in item["porCor"]:
         preco_cor = precos_cor.get(cor_item["cdProdutoPreco"]) or {"precoAtacado": None, "precoVarejo": None}
         promo_cor = promocoes_cor.get(cor_item["cdProdutoPreco"]) or {"fabrica": None, "atacado": None, "varejo": None}
@@ -1805,9 +1818,12 @@ def _referencia_tem_cor_com_oportunidade(item: dict, precos_cor: dict, promocoes
         meses_cor = None
         if dt_primeira_cor:
             meses_cor = (hoje.year - dt_primeira_cor.year) * 12 + (hoje.month - dt_primeira_cor.month)
-        if _tem_oportunidade_desconto(cor_item["giroTotal"], meses_cor, promo_cor, preco_cor.get("precoAtacado"), preco_cor.get("precoVarejo")):
-            return True
-    return False
+        if _cor_bate_filtros(
+            cor_item["giroTotal"], meses_cor, preco_cor, promo_cor,
+            giro_minimo, meses_fl_minimo, oportunidade_desconto,
+        ):
+            cores_ok.append(cor_item)
+    return cores_ok
 
 
 @router.get("/api/giro/totais-desconto")
@@ -1857,42 +1873,18 @@ def totais_desconto_giro(
             dados_completos, linha_filtro, familia_filtro, grupo_filtro, colecao_filtro, referenciaBusca
         )
 
-        if giroMinimo is not None:
-            # "Giro maior que X" olha a cor MAIS RAPIDA da referencia (nao a
-            # media geral dela) - pedido explicito do usuario: uma
-            # referencia com 1 cor vendendo rapido e outras paradas nao pode
-            # ficar de fora so porque a media ficou baixa.
-            dados_completos = [i for i in dados_completos if i["giroMaximoCor"] is not None and i["giroMaximoCor"] > giroMinimo]
-
-        primeiras_oportunidades = _obter_primeira_oportunidade([i["referencia"] for i in dados_completos], status_filtro, mes_ref, cd_empresas)
-        hoje = date.today()
-
-        if mesesFLMinimo is not None:
-            # Mesmo filtro "Meses FL maior que X" da tabela - reusa
-            # primeiras_oportunidades (ja buscado pra TODA a base acima).
-            dados_filtrados_fl = []
-            for i in dados_completos:
-                dt_primeira = primeiras_oportunidades.get(i["referencia"])
-                if not dt_primeira:
-                    continue
-                meses = (hoje.year - dt_primeira.year) * 12 + (hoje.month - dt_primeira.month)
-                if meses > mesesFLMinimo:
-                    dados_filtrados_fl.append(i)
-            dados_completos = dados_filtrados_fl
-
         total_estoque = 0.0
         total_estoque_atacado = 0.0
         total_estoque_varejo = 0.0
         total_desconto_atacado = 0.0
         total_desconto_varejo = 0.0
-        total_referencias = 0
+        hoje = date.today()
 
-        # Preco/promo/Meses FL POR COR de toda a base filtrada - usado tanto
-        # pra decidir quem ENTRA no filtro "oportunidade de desconto" quanto
-        # pra calcular o VALOR do desconto de quem entrar. Cada cor usa o
-        # proprio giro + o proprio Meses FL (nao mistura a cor mais rapida
-        # com o Meses FL de outra cor parada - giroMaximoCor e o Meses FL da
-        # referencia podiam vir de cores diferentes, dando falso positivo).
+        # Mesmos filtros da tabela, avaliados JUNTOS e POR COR (ver
+        # _cor_bate_filtros): a referencia entra se tiver pelo menos uma cor
+        # que atende todos, e os totais somam SO essas cores - e exatamente
+        # o que a tabela mostra ao expandir a linha, entao card e tabela
+        # falam do mesmo conjunto de ref+cor (pedido explicito do usuario).
         primeiras_por_cor = _obter_primeira_oportunidade_por_referencia_e_cor(
             [item["referencia"] for item in dados_completos], status_filtro, mes_ref, cd_empresas
         )
@@ -1900,16 +1892,24 @@ def totais_desconto_giro(
         precos_cor = _obter_precos_produtos(cd_produtos_cor)
         promocoes_cor = _obter_promocoes_produtos(cd_produtos_cor, cd_empresas)
 
-        dados_incluidos = [
-            item for item in dados_completos
-            if not oportunidadeDesconto or _referencia_tem_cor_com_oportunidade(item, precos_cor, promocoes_cor, primeiras_por_cor, hoje)
-        ]
+        cores_por_referencia = {}
+        for item in dados_completos:
+            cores_ok = _cores_no_filtro(
+                item, precos_cor, promocoes_cor, primeiras_por_cor, hoje,
+                giroMinimo, mesesFLMinimo, oportunidadeDesconto,
+            )
+            if cores_ok:
+                cores_por_referencia[item["referencia"]] = cores_ok
 
+        dados_incluidos = [item for item in dados_completos if item["referencia"] in cores_por_referencia]
         total_referencias = len(dados_incluidos)
-        total_estoque = sum(item["estoqueTotal"] for item in dados_incluidos)
+        total_estoque = sum(
+            cor_item["estoqueTotal"]
+            for item in dados_incluidos for cor_item in cores_por_referencia[item["referencia"]]
+        )
 
         for item in dados_incluidos:
-            for cor_item in item["porCor"]:
+            for cor_item in cores_por_referencia[item["referencia"]]:
                 preco_cor = precos_cor.get(cor_item["cdProdutoPreco"]) or {"precoAtacado": None, "precoVarejo": None}
                 promo_cor = promocoes_cor.get(cor_item["cdProdutoPreco"]) or {"fabrica": None, "atacado": None, "varejo": None}
                 dt_primeira_cor = primeiras_por_cor.get((item["referencia"], cor_item["cor"]))

@@ -1074,6 +1074,21 @@ export default function GiroPage() {
       if (statusParam) {
         params.set('status', statusParam);
       }
+      // Os mesmos filtros da tabela valem no detalhe por cor - a linha-pai
+      // entra no filtro quando ALGUMA cor dela bate na regra, entao
+      // expandir tem que mostrar justamente quais cores sao essas, nao a
+      // referencia inteira (pedido explicito do usuario).
+      const giroMinimoNum = Number(matrizGiroMinimo.trim().replace(',', '.'));
+      if (matrizGiroMinimo.trim() !== '' && !Number.isNaN(giroMinimoNum)) {
+        params.set('giroMinimo', String(giroMinimoNum));
+      }
+      const mesesFLMinimoNum = Number(matrizMesesFLMinimo.trim());
+      if (matrizMesesFLMinimo.trim() !== '' && !Number.isNaN(mesesFLMinimoNum)) {
+        params.set('mesesFLMinimo', String(mesesFLMinimoNum));
+      }
+      if (mostrarApenasOportunidadeDesconto) {
+        params.set('oportunidadeDesconto', 'true');
+      }
       const response = await fetch(`/api/giro/matriz-produtos/cores?${params.toString()}`, { cache: 'no-store' });
       const data = await response.json();
       if (response.ok && !data.error) {

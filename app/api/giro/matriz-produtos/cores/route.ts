@@ -11,11 +11,17 @@ export async function GET(request: NextRequest) {
     const mesReferencia = searchParams.get('mesReferencia');
     const empresas = searchParams.get('empresas');
     const status = searchParams.get('status');
+    const giroMinimo = searchParams.get('giroMinimo');
+    const mesesFLMinimo = searchParams.get('mesesFLMinimo');
+    const oportunidadeDesconto = searchParams.get('oportunidadeDesconto');
     const params = new URLSearchParams();
     if (referencia) params.set('referencia', referencia);
     if (mesReferencia) params.set('mesReferencia', mesReferencia);
     if (empresas) params.set('empresas', empresas);
     if (status) params.set('status', status);
+    if (giroMinimo) params.set('giroMinimo', giroMinimo);
+    if (mesesFLMinimo) params.set('mesesFLMinimo', mesesFLMinimo);
+    if (oportunidadeDesconto) params.set('oportunidadeDesconto', oportunidadeDesconto);
 
     const response = await fetch(`${PYTHON_API_URL}/api/giro/matriz-produtos/cores?${params.toString()}`, {
       method: 'GET',
