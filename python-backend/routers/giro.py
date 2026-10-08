@@ -1226,7 +1226,14 @@ def matriz_produtos_giro(
                 meses_oportunidade = None
                 if dt_primeira:
                     meses_oportunidade = (hoje_oportunidade.year - dt_primeira.year) * 12 + (hoje_oportunidade.month - dt_primeira.month)
-                return _tem_oportunidade_desconto(i["giroTotal"], meses_oportunidade, promo, preco.get("precoAtacado"), preco.get("precoVarejo"))
+                # Usa o giro da cor mais rapida (nao a media da referencia)
+                # pro FILTRO - mesma logica do "Giro maior que X": uma
+                # referencia com 1 cor rapida pode ganhar desconto mesmo que
+                # a media geral esteja baixa. A sugestao de preco (Camp
+                # Atac/Camp Var mostrados na tabela) continua pela media da
+                # referencia, so o criterio de inclusao no filtro muda
+                # (pedido explicito do usuario).
+                return _tem_oportunidade_desconto(i["giroMaximoCor"], meses_oportunidade, promo, preco.get("precoAtacado"), preco.get("precoVarejo"))
 
             dados_completos = [i for i in dados_completos if _bate_oportunidade(i)]
 
@@ -1780,8 +1787,12 @@ def totais_desconto_giro(
             if dt_primeira:
                 meses_oportunidade = (hoje.year - dt_primeira.year) * 12 + (hoje.month - dt_primeira.month)
 
+            # Giro da cor mais rapida pro FILTRO (criterio de inclusao),
+            # igual o outro endpoint - o calculo do VALOR do desconto logo
+            # abaixo continua usando o giro da referencia inteira (preco
+            # sugerido nao muda, so quem entra na soma dos cards).
             if oportunidadeDesconto and not _tem_oportunidade_desconto(
-                item["giroTotal"], meses_oportunidade, promo, preco.get("precoAtacado"), preco.get("precoVarejo")
+                item["giroMaximoCor"], meses_oportunidade, promo, preco.get("precoAtacado"), preco.get("precoVarejo")
             ):
                 continue
 
