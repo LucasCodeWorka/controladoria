@@ -1289,10 +1289,12 @@ def matriz_produtos_giro(
         # cima de TODA a base filtrada (nao so da pagina) pra paginar certo -
         # senao o filtro so enxergaria a pagina atual.
         primeiras_por_cor = None
+        mista_dict = None
         if giroMinimo is not None or mesesFLMinimo is not None or oportunidadeDesconto:
             primeiras_por_cor = _obter_primeira_oportunidade_por_referencia_e_cor(
                 [i["referencia"] for i in dados_completos], status_filtro, mes_ref, cd_empresas
             )
+            mista_dict = _mista_por_referencia(dados_completos, primeiras_por_cor, mes_ref, cd_empresas, status_filtro)
             cd_produtos_cor = _cd_produtos_cor_com_oportunidade(dados_completos, primeiras_por_cor)
             precos_cor = _obter_precos_produtos(cd_produtos_cor)
             promocoes_cor = _obter_promocoes_produtos(cd_produtos_cor, cd_empresas)
@@ -1302,7 +1304,7 @@ def matriz_produtos_giro(
                 i for i in dados_completos
                 if _cores_no_filtro(
                     i, precos_cor, promocoes_cor, primeiras_por_cor, hoje_filtro_cor,
-                    giroMinimo, mesesFLMinimo, oportunidadeDesconto,
+                    giroMinimo, mesesFLMinimo, oportunidadeDesconto, mista_dict.get(i["referencia"]),
                 )
             ]
 
@@ -1399,6 +1401,8 @@ def matriz_produtos_giro(
             primeiras_por_cor = _obter_primeira_oportunidade_por_referencia_e_cor(
                 [i["referencia"] for i in itens_pagina], status_filtro, mes_ref, cd_empresas
             )
+        if mista_dict is None:
+            mista_dict = _mista_por_referencia(itens_pagina, primeiras_por_cor, mes_ref, cd_empresas, status_filtro)
         hoje = date.today()
         itens_resposta = []
         for item in itens_pagina:
@@ -1424,7 +1428,7 @@ def matriz_produtos_giro(
                 "dtPrimeiraOportunidade": dt_primeira_oportunidade.isoformat() if dt_primeira_oportunidade else None,
                 "mesesOportunidade": meses_oportunidade,
                 "familia": (item.get("categorias") or {}).get("familia"),
-                "temCorSemMesesFL": _referencia_tem_cor_sem_meses_fl(item, primeiras_por_cor),
+                "temCorSemMesesFL": mista_dict.get(item["referencia"], False),
             })
 
         return {
@@ -1483,8 +1487,16 @@ def matriz_produtos_giro_por_cor(
         # MISTA (pelo menos 1 cor sem Meses FL, ainda em linha) - ver
         # _referencia_tem_cor_sem_meses_fl. Aqui ja esta tudo escopado a 1
         # referencia so, entao e so checar se alguma cor ficou de fora do
-        # dict de datas.
-        tem_cor_sem_meses_fl = any(primeiras_oportunidades.get(c["cor"]) is None for c in dados_cor)
+        # dict de datas - MAS so da certo se dados_cor/primeiras_oportunidades
+        # nao vieram com filtro de status (senao a query de origem ja
+        # exclui as cores em linha antes de chegar aqui, e nunca
+        # encontraria nenhuma - ver _referencias_mistas pro caso com
+        # filtro de status ativo).
+        familia_referencia = dados_cor[0].get("familia") if dados_cor else None
+        if status_filtro and familia_referencia and familia_referencia.strip().upper() in FAMILIAS_REGRA_PROPRIA_CAMPANHA:
+            tem_cor_sem_meses_fl = bool(_referencias_mistas([referencia], mes_ref, cd_empresas))
+        else:
+            tem_cor_sem_meses_fl = any(primeiras_oportunidades.get(c["cor"]) is None for c in dados_cor)
 
         itens_resposta = []
         for item in sorted(dados_cor, key=lambda i: i["cor"]):
@@ -1903,23 +1915,86 @@ def _referencia_tem_cor_sem_meses_fl(item: dict, primeiras_por_cor: dict) -> boo
     se aplica quando a referencia e MISTA (tem cor parada convivendo com
     cor ainda em linha). Se a referencia INTEIRA ja virou oportunidade
     (toda cor tem Meses FL), devolve False - nesse caso usa a escada normal
-    mesmo sendo KISS ME (pedido explicito do usuario)."""
+    mesmo sendo KISS ME (pedido explicito do usuario).
+
+    CUIDADO: so da o resultado certo quando item["porCor"]/primeiras_por_
+    cor vieram de uma consulta SEM filtro de status - se a tela tiver um
+    filtro de status ativo (ex: so "OPORTUNIDADE..."), a query de origem
+    ja exclui as cores em linha ANTES de chegar aqui, entao essa funcao
+    nunca as veria e sempre devolveria False (referencia "nao mista") por
+    engano. Ver _mista_por_referencia, que corrige isso reconsultando sem
+    o filtro de status quando necessario - usar essa em vez de chamar esta
+    funcao direto sempre que houver filtro de status na tela."""
     return any(
         primeiras_por_cor.get((item["referencia"], cor_item["cor"])) is None
         for cor_item in item["porCor"]
     )
 
 
+def _referencias_mistas(referencias: list, mes_referencia: str, cd_empresas: list) -> set:
+    """De uma lista de referencias, quais tem pelo menos uma cor "em linha"
+    (status atual NAO oportunidade) com estoque ou venda nas lojas/mes
+    filtrados - SEMPRE ignora qualquer filtro de status da tela (a cor em
+    linha so entra aqui se a query IGNORAR o status filtrado, senao nunca
+    apareceria). Usado so pra corrigir a mista-ness das familias KISS ME/
+    KISS ME PLUS quando ha filtro de status ativo - escopado as poucas
+    referencias que realmente precisam (pedido explicito do usuario: o
+    contexto pra essa decisao e a referencia INTEIRA, nao o que o filtro
+    de status da tela esta escondendo agora), bem mais barato que
+    reconsultar a base inteira sem filtro de status."""
+    if not referencias:
+        return set()
+    placeholders = ",".join(["%s"] * len(referencias))
+    placeholders_emp = ",".join(["%s"] * len(cd_empresas))
+    rows = execute_query(f"""
+        SELECT DISTINCT p.referencia
+        FROM mv_prd_referencia_produto p
+        JOIN giro_produto_snapshot g ON g.cd_produto = p.cd_produto
+        WHERE p.referencia IN ({placeholders})
+          AND g.mes_referencia = %s AND g.cd_empresa IN ({placeholders_emp})
+          AND (g.estoque_atual > 0 OR g.venda_media_3m > 0)
+          AND p.status NOT ILIKE 'OPORTUNIDADE%%'
+    """, (*referencias, mes_referencia, *cd_empresas)) or []
+    return {r["referencia"] for r in rows}
+
+
+def _mista_por_referencia(
+    dados: list, primeiras_por_cor: dict, mes_referencia: str, cd_empresas: list, status_filtro: Optional[list],
+) -> dict:
+    """{referencia: bool} se e mista (_referencia_tem_cor_sem_meses_fl) -
+    corrigido pras familias KISS ME/KISS ME PLUS quando ha filtro de
+    status ativo (ver _referencias_mistas). So reconsulta quando realmente
+    precisa: sem filtro de status, os dados ja vieram certos; com filtro
+    de status, so as referencias KISS ME/KISS ME PLUS (unica regra que usa
+    esse flag) entram na reconsulta, em lote."""
+    resultado = {item["referencia"]: _referencia_tem_cor_sem_meses_fl(item, primeiras_por_cor) for item in dados}
+    if status_filtro:
+        referencias_kiss = [
+            item["referencia"] for item in dados
+            if ((item.get("categorias") or {}).get("familia") or "").strip().upper() in FAMILIAS_REGRA_PROPRIA_CAMPANHA
+        ]
+        if referencias_kiss:
+            mistas_reais = _referencias_mistas(referencias_kiss, mes_referencia, cd_empresas)
+            for ref in referencias_kiss:
+                resultado[ref] = ref in mistas_reais
+    return resultado
+
+
 def _cores_no_filtro(
     item: dict, precos_cor: dict, promocoes_cor: dict, primeiras_por_cor: dict, hoje,
     giro_minimo: Optional[float] = None, meses_fl_minimo: Optional[int] = None,
-    oportunidade_desconto: bool = False,
+    oportunidade_desconto: bool = False, tem_cor_sem_meses_fl: Optional[bool] = None,
 ) -> list:
     """Cores da referencia que batem em todos os filtros ativos. Lista vazia
     = a referencia inteira fica de fora. Sem nenhum filtro ativo, devolve
-    todas as cores (comportamento normal da tela sem filtro)."""
+    todas as cores (comportamento normal da tela sem filtro).
+
+    tem_cor_sem_meses_fl: se nao informado, calcula na hora (so correto
+    quando NAO ha filtro de status ativo - ver _mista_por_referencia pro
+    caso com filtro de status, que precisa reconsultar sem ele)."""
     familia = (item.get("categorias") or {}).get("familia")
-    tem_cor_sem_meses_fl = _referencia_tem_cor_sem_meses_fl(item, primeiras_por_cor)
+    if tem_cor_sem_meses_fl is None:
+        tem_cor_sem_meses_fl = _referencia_tem_cor_sem_meses_fl(item, primeiras_por_cor)
     cores_ok = []
     for cor_item in item["porCor"]:
         preco_cor = precos_cor.get(cor_item["cdProdutoPreco"]) or {"precoAtacado": None, "precoVarejo": None}
@@ -2000,6 +2075,7 @@ def totais_desconto_giro(
         primeiras_por_cor = _obter_primeira_oportunidade_por_referencia_e_cor(
             [item["referencia"] for item in dados_completos], status_filtro, mes_ref, cd_empresas
         )
+        mista_dict = _mista_por_referencia(dados_completos, primeiras_por_cor, mes_ref, cd_empresas, status_filtro)
         cd_produtos_cor = _cd_produtos_cor_com_oportunidade(dados_completos, primeiras_por_cor)
         precos_cor = _obter_precos_produtos(cd_produtos_cor)
         promocoes_cor = _obter_promocoes_produtos(cd_produtos_cor, cd_empresas)
@@ -2008,7 +2084,7 @@ def totais_desconto_giro(
         for item in dados_completos:
             cores_ok = _cores_no_filtro(
                 item, precos_cor, promocoes_cor, primeiras_por_cor, hoje,
-                giroMinimo, mesesFLMinimo, oportunidadeDesconto,
+                giroMinimo, mesesFLMinimo, oportunidadeDesconto, mista_dict.get(item["referencia"]),
             )
             if cores_ok:
                 cores_por_referencia[item["referencia"]] = cores_ok
@@ -2022,7 +2098,7 @@ def totais_desconto_giro(
 
         for item in dados_incluidos:
             familia_item = (item.get("categorias") or {}).get("familia")
-            tem_cor_sem_meses_fl_item = _referencia_tem_cor_sem_meses_fl(item, primeiras_por_cor)
+            tem_cor_sem_meses_fl_item = mista_dict.get(item["referencia"], False)
             for cor_item in cores_por_referencia[item["referencia"]]:
                 preco_cor = precos_cor.get(cor_item["cdProdutoPreco"]) or {"precoAtacado": None, "precoVarejo": None}
                 promo_cor = promocoes_cor.get(cor_item["cdProdutoPreco"]) or {"fabrica": None, "atacado": None, "varejo": None}
