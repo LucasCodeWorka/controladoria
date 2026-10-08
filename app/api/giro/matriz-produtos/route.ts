@@ -23,6 +23,7 @@ export async function GET(request: NextRequest) {
     const grupo = searchParams.get('grupo');
     const colecao = searchParams.get('colecao');
     const referenciaBusca = searchParams.get('referenciaBusca');
+    const mesesFLMinimo = searchParams.get('mesesFLMinimo');
     const params = new URLSearchParams();
     if (mesReferencia) params.set('mesReferencia', mesReferencia);
     if (empresas) params.set('empresas', empresas);
@@ -40,6 +41,7 @@ export async function GET(request: NextRequest) {
     if (grupo) params.set('grupo', grupo);
     if (colecao) params.set('colecao', colecao);
     if (referenciaBusca) params.set('referenciaBusca', referenciaBusca);
+    if (mesesFLMinimo) params.set('mesesFLMinimo', mesesFLMinimo);
 
     const response = await fetch(`${PYTHON_API_URL}/api/giro/matriz-produtos?${params.toString()}`, {
       method: 'GET',

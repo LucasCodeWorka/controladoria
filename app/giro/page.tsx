@@ -767,6 +767,10 @@ export default function GiroPage() {
   // filtro) ate clicar em Aplicar/Enter, pra nao refazer a busca a cada
   // digito.
   const [matrizGiroMinimo, setMatrizGiroMinimo] = useState('');
+  // Mesmo padrao do giro minimo, mas pro "Meses FL" (ha quanto tempo a
+  // referencia esta em oportunidade) - filtra a base INTEIRA antes de
+  // paginar, igual giroMinimo.
+  const [matrizMesesFLMinimo, setMatrizMesesFLMinimo] = useState('');
 
   // Filtro "oportunidade de desconto" - so dentro da pagina atual (o promo
   // de cada referencia so e buscado pra pagina carregada, mesmo padrao ja
@@ -916,7 +920,8 @@ export default function GiroPage() {
     giroMinimo: string,
     statusParam: string,
     filtroDimensao: { dimensao: DimensaoGiro; categoria: string } | null = null,
-    oportunidadeDesconto: boolean = mostrarApenasOportunidadeDesconto
+    oportunidadeDesconto: boolean = mostrarApenasOportunidadeDesconto,
+    mesesFLMinimo: string = matrizMesesFLMinimo
   ) {
     setMatrizCarregando(true);
     try {
@@ -942,6 +947,10 @@ export default function GiroPage() {
       if (oportunidadeDesconto) {
         params.set('oportunidadeDesconto', 'true');
       }
+      const mesesFLMinimoNum = Number(mesesFLMinimo.trim());
+      if (mesesFLMinimo.trim() !== '' && !Number.isNaN(mesesFLMinimoNum)) {
+        params.set('mesesFLMinimo', String(mesesFLMinimoNum));
+      }
       aplicarFiltrosCategoriaParams(params);
       const response = await fetch(`/api/giro/matriz-produtos?${params.toString()}`, { cache: 'no-store' });
       const data = await response.json();
@@ -952,7 +961,7 @@ export default function GiroPage() {
       setMatriz(data);
       setMatrizPagina(pagina);
       buscarVendaMensalReferencias(mesRef, empresasParam, (data.itens || []).map((i: ItemMatrizGiro) => i.referencia), statusParam);
-      buscarTotaisDescontoGiro(mesRef, empresasParam, giroMinimo, statusParam, filtroDimensao, oportunidadeDesconto);
+      buscarTotaisDescontoGiro(mesRef, empresasParam, giroMinimo, statusParam, filtroDimensao, oportunidadeDesconto, mesesFLMinimo);
       // Filtro mudou - o detalhe por cor que ja estava em cache nao vale
       // mais (empresa/mes/status podem ter mudado o giro/preco de cada cor).
       setCoresExpandidas(new Set());
@@ -976,7 +985,8 @@ export default function GiroPage() {
     giroMinimo: string,
     statusParam: string,
     filtroDimensao: { dimensao: DimensaoGiro; categoria: string } | null,
-    oportunidadeDesconto: boolean
+    oportunidadeDesconto: boolean,
+    mesesFLMinimo: string = matrizMesesFLMinimo
   ) {
     setTotaisDescontoCarregando(true);
     try {
@@ -994,6 +1004,10 @@ export default function GiroPage() {
       }
       if (oportunidadeDesconto) {
         params.set('oportunidadeDesconto', 'true');
+      }
+      const mesesFLMinimoNum = Number(mesesFLMinimo.trim());
+      if (mesesFLMinimo.trim() !== '' && !Number.isNaN(mesesFLMinimoNum)) {
+        params.set('mesesFLMinimo', String(mesesFLMinimoNum));
       }
       aplicarFiltrosCategoriaParams(params);
       const response = await fetch(`/api/giro/totais-desconto?${params.toString()}`, { cache: 'no-store' });
@@ -1188,6 +1202,15 @@ export default function GiroPage() {
   function limparFiltroGiroMinimo() {
     setMatrizGiroMinimo('');
     buscarMatriz(mesReferencia, empresasParaMatriz(), 1, matrizOrdenarPor, matrizOrdem, '', Array.from(statusSelecionados).join(','), filtroDimensaoMatriz);
+  }
+
+  function aplicarFiltroMesesFLMinimo() {
+    buscarMatriz(mesReferencia, empresasParaMatriz(), 1, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','), filtroDimensaoMatriz, mostrarApenasOportunidadeDesconto, matrizMesesFLMinimo);
+  }
+
+  function limparFiltroMesesFLMinimo() {
+    setMatrizMesesFLMinimo('');
+    buscarMatriz(mesReferencia, empresasParaMatriz(), 1, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','), filtroDimensaoMatriz, mostrarApenasOportunidadeDesconto, '');
   }
 
   // Clique numa barra do grafico "Giro por dimensao" - filtra a tabela de
@@ -1946,6 +1969,35 @@ export default function GiroPage() {
               {matrizGiroMinimo.trim() !== '' && (
                 <button
                   onClick={limparFiltroGiroMinimo}
+                  disabled={matrizCarregando}
+                  className="text-xs text-black hover:text-black underline disabled:opacity-40"
+                >
+                  Limpar
+                </button>
+              )}
+
+              <label htmlFor="meses-fl-minimo" className="text-black ml-2">Meses FL maior que:</label>
+              <input
+                id="meses-fl-minimo"
+                type="number"
+                step="1"
+                min="0"
+                placeholder="ex: 12"
+                value={matrizMesesFLMinimo}
+                onChange={(e) => setMatrizMesesFLMinimo(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') aplicarFiltroMesesFLMinimo(); }}
+                className="w-24 border border-gray-300 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-rose-500"
+              />
+              <button
+                onClick={aplicarFiltroMesesFLMinimo}
+                disabled={matrizCarregando}
+                className="px-3 py-1 bg-gray-100 hover:bg-gray-200 text-black rounded-md text-xs disabled:opacity-40 transition-colors"
+              >
+                Aplicar
+              </button>
+              {matrizMesesFLMinimo.trim() !== '' && (
+                <button
+                  onClick={limparFiltroMesesFLMinimo}
                   disabled={matrizCarregando}
                   className="text-xs text-black hover:text-black underline disabled:opacity-40"
                 >

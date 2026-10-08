@@ -1116,7 +1116,8 @@ def matriz_produtos_giro(
     familia: Optional[str] = Query(None, description="Lista de familia separadas por virgula (default: todas)"),
     grupo: Optional[str] = Query(None, description="Lista de grupo separados por virgula (default: todos)"),
     colecao: Optional[str] = Query(None, description="Lista de colecao separadas por virgula (default: todas)"),
-    referenciaBusca: Optional[str] = Query(None, description="Busca por referencia (contains, case-insensitive)")
+    referenciaBusca: Optional[str] = Query(None, description="Busca por referencia (contains, case-insensitive)"),
+    mesesFLMinimo: Optional[int] = Query(None, description="So retorna referencias com Meses FL maior que esse valor (referencias sem Meses FL ficam de fora) - filtra a base INTEIRA antes de paginar")
 ):
     """
     Giro por REFERENCIA (nao por SKU/cor/tamanho individual) e empresa, numa
@@ -1174,6 +1175,22 @@ def matriz_produtos_giro(
             # filtro "giro maior que X" - nao da pra comparar "sem giro" com
             # um numero.
             dados_completos = [i for i in dados_completos if i["giroTotal"] is not None and i["giroTotal"] > giroMinimo]
+
+        if mesesFLMinimo is not None:
+            # Precisa do Meses FL de TODA a base filtrada (nao so da pagina),
+            # mesmo motivo do giroMinimo acima - senao o filtro so
+            # enxergaria a pagina atual.
+            primeiras_fl = _obter_primeira_oportunidade([i["referencia"] for i in dados_completos], status_filtro, mes_ref, cd_empresas)
+            hoje_fl = date.today()
+            dados_filtrados_fl = []
+            for i in dados_completos:
+                dt_primeira = primeiras_fl.get(i["referencia"])
+                if not dt_primeira:
+                    continue
+                meses = (hoje_fl.year - dt_primeira.year) * 12 + (hoje_fl.month - dt_primeira.month)
+                if meses > mesesFLMinimo:
+                    dados_filtrados_fl.append(i)
+            dados_completos = dados_filtrados_fl
 
         if oportunidadeDesconto:
             # Precisa de preco/promo/Meses FL de TODA a base filtrada (nao so
@@ -1673,7 +1690,8 @@ def totais_desconto_giro(
     familia: Optional[str] = Query(None, description="Mesmo filtro de familia da tabela"),
     grupo: Optional[str] = Query(None, description="Mesmo filtro de grupo da tabela"),
     colecao: Optional[str] = Query(None, description="Mesmo filtro de colecao da tabela"),
-    referenciaBusca: Optional[str] = Query(None, description="Mesma busca por referencia da tabela")
+    referenciaBusca: Optional[str] = Query(None, description="Mesma busca por referencia da tabela"),
+    mesesFLMinimo: Optional[int] = Query(None, description="Mesmo filtro 'Meses FL maior que' da tabela")
 ):
     """
     Totais pros 2 cards acima da tabela "Giro por referencia e loja"
@@ -1713,6 +1731,19 @@ def totais_desconto_giro(
         promocoes = _obter_promocoes_produtos([i["cdProdutoPreco"] for i in dados_completos], cd_empresas)
         primeiras_oportunidades = _obter_primeira_oportunidade([i["referencia"] for i in dados_completos], status_filtro, mes_ref, cd_empresas)
         hoje = date.today()
+
+        if mesesFLMinimo is not None:
+            # Mesmo filtro "Meses FL maior que X" da tabela - reusa
+            # primeiras_oportunidades (ja buscado pra TODA a base acima).
+            dados_filtrados_fl = []
+            for i in dados_completos:
+                dt_primeira = primeiras_oportunidades.get(i["referencia"])
+                if not dt_primeira:
+                    continue
+                meses = (hoje.year - dt_primeira.year) * 12 + (hoje.month - dt_primeira.month)
+                if meses > mesesFLMinimo:
+                    dados_filtrados_fl.append(i)
+            dados_completos = dados_filtrados_fl
 
         total_estoque = 0.0
         total_estoque_atacado = 0.0
