@@ -461,6 +461,13 @@ def _obter_matriz_agregada(mes_referencia: str, cd_empresas: list, status_filtro
         variante_desconsiderada = _eh_variante_preco_desconsiderada(r["status"], r["familia"])
         if r["status"] == "LEVE DEFEITO":
             d["temLeveDefeito"] = True
+        # Cor "de verdade" pra mostrar como tag - fora variante leve
+        # defeito/doacao, ja que o cadastro as vezes usa o proprio campo de
+        # cor pra registrar isso (confirmado: ds_cor = "LEVE DEFEITO" em
+        # produtos reais), o que poluiria a lista de cores com algo que nao
+        # e cor nenhuma.
+        if r["ds_cor"] and r["ds_cor"].strip() and not variante_desconsiderada:
+            d["cores"].add(r["ds_cor"].strip())
         # Categoria (grupo/linha/familia/colecao/status) pro filtro por
         # clique no grafico "Giro por dimensao" - pega da mesma variante
         # "normal" usada pro preco (nao leve defeito/doacao), com fallback
@@ -503,28 +510,6 @@ def _obter_matriz_agregada(mes_referencia: str, cd_empresas: list, status_filtro
         d["estoqueTotal"] += estoque
         d["vendaTotal"] += venda
 
-    # Lista de cores da referencia (tag mostrada na linha-pai) - consulta A
-    # PARTE, sem filtro de empresa, igual o "Meses FL" (_obter_primeira_
-    # oportunidade): cor e atributo do produto, nao da loja. Se construisse
-    # junto do loop acima (escopado pelas empresas filtradas), uma cor sem
-    # nenhum estoque/venda nas empresas escolhidas sumiria da tag mesmo
-    # tendo, por exemplo, anos em oportunidade (o motivo do "Meses FL" da
-    # linha-pai nao bater com o detalhe por cor antes desse ajuste).
-    referencias_com_dados = list(por_ref.keys())
-    if referencias_com_dados:
-        placeholders_ref = ",".join(["%s"] * len(referencias_com_dados))
-        linhas_cores = execute_query(f"""
-            SELECT COALESCE(p.referencia, p.cd_produto::text) AS referencia, p.ds_cor, p.status, p.familia
-            FROM mv_prd_referencia_produto p
-            WHERE COALESCE(p.referencia, p.cd_produto::text) IN ({placeholders_ref}){clausula_status}
-        """, (*referencias_com_dados, *params_status)) or []
-        for r in linhas_cores:
-            d = por_ref.get(r["referencia"])
-            if d is None:
-                continue
-            if r["ds_cor"] and r["ds_cor"].strip() and not _eh_variante_preco_desconsiderada(r["status"], r["familia"]):
-                d["cores"].add(r["ds_cor"].strip())
-
     # porLoja/total guardam estoque e venda media crus junto do giro (nao so
     # o resultado da divisao) pra montar o tooltip "estoque / venda = giro"
     # no frontend, sem precisar de outra consulta.
@@ -562,24 +547,14 @@ def _obter_matriz_agregada_por_cor(mes_referencia: str, cd_empresas: list, refer
     referencia) - escopado a 1 referencia so, entao e barato."""
     placeholders = ",".join(["%s"] * len(cd_empresas))
     clausula_status, params_status = _clausula_status(status_filtro)
-    # Parte de mv_prd_referencia_produto (toda cor cadastrada pra essa
-    # referencia) com LEFT JOIN pro snapshot - ao contrario de
-    # _obter_matriz_agregada (que soma TODAS as empresas de uma vez, entao
-    # pode comecar do snapshot sem perder nada), aqui o snapshot ja vem
-    # filtrado pelas empresas escolhidas no filtro. Comecar do snapshot
-    # faria uma cor sumir inteira quando ela so tem estoque/venda em outra
-    # empresa (fora do filtro) - mesmo ela estando em oportunidade ha anos,
-    # o que explicaria mal o "Meses FL" da linha-pai (que nao filtra por
-    # empresa). Comecando de p, a cor aparece do mesmo jeito, so que com
-    # porLoja vazio/estoque zerado (pedido explicito do usuario).
     linhas = execute_query(f"""
-        SELECT p.cd_produto, p.ds_cor, p.ds_tamanho, p.status, p.familia, p.produto AS nome,
-            g.cd_empresa, g.estoque_atual, g.venda_media_3m
-        FROM mv_prd_referencia_produto p
-        LEFT JOIN giro_produto_snapshot g
-            ON g.cd_produto = p.cd_produto AND g.mes_referencia = %s AND g.cd_empresa IN ({placeholders})
-        WHERE (p.referencia = %s OR (p.referencia IS NULL AND p.cd_produto::text = %s)){clausula_status}
-    """, (mes_referencia, *cd_empresas, referencia, referencia, *params_status)) or []
+        SELECT g.cd_empresa, g.cd_produto, g.estoque_atual, g.venda_media_3m,
+            p.ds_cor, p.ds_tamanho, p.status, p.familia, p.produto AS nome
+        FROM giro_produto_snapshot g
+        LEFT JOIN mv_prd_referencia_produto p ON p.cd_produto = g.cd_produto
+        WHERE g.mes_referencia = %s AND g.cd_empresa IN ({placeholders})
+          AND COALESCE(p.referencia, g.cd_produto::text) = %s{clausula_status}
+    """, (mes_referencia, *cd_empresas, referencia, *params_status)) or []
 
     def _giro(estoque: float, venda: float):
         return (estoque / venda) if venda > 0 else None
@@ -614,22 +589,13 @@ def _obter_matriz_agregada_por_cor(mes_referencia: str, cd_empresas: list, refer
             d["cdProdutoPreco"] = r["cd_produto"]
         if d["cdProdutoFallback"] is None:
             d["cdProdutoFallback"] = r["cd_produto"]
-        # cd_empresa nulo = esse SKU nao tem nenhum registro no snapshot
-        # pras empresas filtradas (LEFT JOIN sem match) - a cor ainda entra
-        # na lista, so que sem contribuir estoque/venda pra nenhuma loja.
-        if r["cd_empresa"] is not None:
-            estoque = float(r["estoque_atual"] or 0)
-            venda = float(r["venda_media_3m"] or 0)
-            estoque_prev, venda_prev = d["porLoja"].get(r["cd_empresa"], (0.0, 0.0))
-            d["porLoja"][r["cd_empresa"]] = (estoque_prev + estoque, venda_prev + venda)
-            d["estoqueTotal"] += estoque
-            d["vendaTotal"] += venda
+        estoque = float(r["estoque_atual"] or 0)
+        venda = float(r["venda_media_3m"] or 0)
+        estoque_prev, venda_prev = d["porLoja"].get(r["cd_empresa"], (0.0, 0.0))
+        d["porLoja"][r["cd_empresa"]] = (estoque_prev + estoque, venda_prev + venda)
+        d["estoqueTotal"] += estoque
+        d["vendaTotal"] += venda
 
-    # Ao contrario de _obter_matriz_agregada, NAO filtra cor com estoque e
-    # venda zerados aqui - a lista de tags "cores" da linha-pai conta toda
-    # cor que existe pra essa referencia (sem olhar estoque), entao o
-    # detalhe expandido precisa trazer a mesma quantidade de cores, senao a
-    # contagem do badge ("+29" etc) nao bate com o que aparece ao expandir.
     return [
         {
             "cor": cor,
@@ -644,10 +610,20 @@ def _obter_matriz_agregada_por_cor(mes_referencia: str, cd_empresas: list, refer
             "temLeveDefeito": d["temLeveDefeito"],
         }
         for cor, d in por_cor.items()
+        # Cor sem estoque e sem venda nas lojas filtradas nao precisa
+        # aparecer - o "Meses FL" da linha-pai (e da propria cor, se tiver)
+        # ja ignora essas cores mortas no calculo (ver
+        # _obter_primeira_oportunidade/_obter_primeira_oportunidade_por_cor),
+        # entao nao sobra nenhum numero que dependa de uma cor que nem
+        # aparece aqui (pedido explicito do usuario).
+        if d["estoqueTotal"] > 0 or d["vendaTotal"] > 0
     ]
 
 
-def _obter_primeira_oportunidade_por_cor(referencia: str, status_filtro: Optional[list] = None) -> dict:
+def _obter_primeira_oportunidade_por_cor(
+    referencia: str, status_filtro: Optional[list] = None,
+    mes_referencia: Optional[str] = None, cd_empresas: Optional[list] = None,
+) -> dict:
     """Mesma logica de _obter_primeira_oportunidade, mas agrupado por cor
     dentro de UMA referencia so (pro detalhe expandido por cor) - cada cor
     pode ter uma data diferente, ou nenhuma (se essa cor especifica nunca
@@ -662,14 +638,30 @@ def _obter_primeira_oportunidade_por_cor(referencia: str, status_filtro: Optiona
         clausula_status = " AND status ILIKE 'OPORTUNIDADE%%'"
         params_status = ()
 
+    # So conta a cor se ela tiver estoque ou venda nas lojas filtradas
+    # (pedido explicito do usuario) - senao uma cor sem presenca nenhuma
+    # ali (mesmo que em oportunidade ha anos no cadastro) nao deveria
+    # "contar" o Meses FL, ja que nem aparece no detalhe por cor abaixo.
+    clausula_ativo, params_ativo = "", ()
+    if mes_referencia and cd_empresas:
+        placeholders_emp = ",".join(["%s"] * len(cd_empresas))
+        clausula_ativo = f"""
+          AND EXISTS (
+              SELECT 1 FROM giro_produto_snapshot g
+              WHERE g.cd_produto = hist_dproduto.cd_produto
+                AND g.mes_referencia = %s AND g.cd_empresa IN ({placeholders_emp})
+                AND (g.estoque_atual > 0 OR g.venda_media_3m > 0)
+          )"""
+        params_ativo = (mes_referencia, *cd_empresas)
+
     rows = execute_query(f"""
         SELECT COALESCE(ds_cor, 'SEM COR') AS cor, MIN(dt_inicio) AS dt_primeira
         FROM hist_dproduto
         WHERE referencia = %s
           AND atual = true
-          {clausula_status}
+          {clausula_status}{clausula_ativo}
         GROUP BY COALESCE(ds_cor, 'SEM COR')
-    """, (referencia, *params_status)) or []
+    """, (referencia, *params_status, *params_ativo)) or []
     return {r["cor"]: r["dt_primeira"] for r in rows}
 
 
@@ -789,7 +781,10 @@ def _promos_ativas_lista(promo: dict) -> list:
     ]
 
 
-def _obter_primeira_oportunidade(referencias: list, status_filtro: Optional[list] = None) -> dict:
+def _obter_primeira_oportunidade(
+    referencias: list, status_filtro: Optional[list] = None,
+    mes_referencia: Optional[str] = None, cd_empresas: Optional[list] = None,
+) -> dict:
     """Data mais antiga (dt_inicio) entre os SKUs de cada referencia que
     estao HOJE (atual=true) em algum status "OPORTUNIDADE..." - via
     hist_dproduto, historico tipo SCD (uma linha por trecho de tempo que o
@@ -801,7 +796,16 @@ def _obter_primeira_oportunidade(referencias: list, status_filtro: Optional[list
     TAMBEM passam nesse filtro - como status e um valor so por SKU (nao da
     pra ser "EM LINHA" e "OPORTUNIDADE" ao mesmo tempo), filtrar so por
     "EM LINHA" por exemplo faz essa funcao nao achar nada pra ninguem, o
-    que e o correto (pedido do usuario: analisar so os SKUs do filtro)."""
+    que e o correto (pedido do usuario: analisar so os SKUs do filtro).
+
+    mes_referencia + cd_empresas (opcionais): quando informados, so conta
+    um SKU se ele tiver estoque ou venda nas lojas filtradas (giro_produto_
+    snapshot) - pedido explicito do usuario, pra "Meses FL" nao vir de uma
+    cor/tamanho que nem aparece em lugar nenhum da tela com esse filtro de
+    loja (cor morta ali, mesmo que em oportunidade ha anos no cadastro).
+    Fica opcional pra nao mudar o calculo de quem ainda chama sem esses
+    dois parametros (ex: durante o recalculo do giro, antes do snapshot
+    desse mes/empresa existir)."""
     referencias = list(set(referencias))
     if not referencias:
         return {}
@@ -816,15 +820,27 @@ def _obter_primeira_oportunidade(referencias: list, status_filtro: Optional[list
         clausula_status = " AND status ILIKE 'OPORTUNIDADE%%'"
         params_status = ()
 
+    clausula_ativo, params_ativo = "", ()
+    if mes_referencia and cd_empresas:
+        placeholders_emp = ",".join(["%s"] * len(cd_empresas))
+        clausula_ativo = f"""
+          AND EXISTS (
+              SELECT 1 FROM giro_produto_snapshot g
+              WHERE g.cd_produto = hist_dproduto.cd_produto
+                AND g.mes_referencia = %s AND g.cd_empresa IN ({placeholders_emp})
+                AND (g.estoque_atual > 0 OR g.venda_media_3m > 0)
+          )"""
+        params_ativo = (mes_referencia, *cd_empresas)
+
     placeholders = ",".join(["%s"] * len(referencias))
     rows = execute_query(f"""
         SELECT referencia, MIN(dt_inicio) AS dt_primeira
         FROM hist_dproduto
         WHERE referencia IN ({placeholders})
           AND atual = true
-          {clausula_status}
+          {clausula_status}{clausula_ativo}
         GROUP BY referencia
-    """, (*referencias, *params_status)) or []
+    """, (*referencias, *params_status, *params_ativo)) or []
     return {r["referencia"]: r["dt_primeira"] for r in rows}
 
 
@@ -1167,7 +1183,7 @@ def matriz_produtos_giro(
             # nas outras paginas (pedido explicito do usuario).
             precos_oportunidade = _obter_precos_produtos([i["cdProdutoPreco"] for i in dados_completos])
             promocoes_oportunidade = _obter_promocoes_produtos([i["cdProdutoPreco"] for i in dados_completos], cd_empresas)
-            primeiras_oportunidade = _obter_primeira_oportunidade([i["referencia"] for i in dados_completos], status_filtro)
+            primeiras_oportunidade = _obter_primeira_oportunidade([i["referencia"] for i in dados_completos], status_filtro, mes_ref, cd_empresas)
             hoje_oportunidade = date.today()
 
             def _bate_oportunidade(i):
@@ -1221,7 +1237,7 @@ def matriz_produtos_giro(
         elif ordenarPor == "mesesOportunidade":
             # Mesmo motivo dos blocos acima: pra ordenar direito precisa da
             # data de TODAS as referencias, nao so da pagina.
-            primeiras_completas = _obter_primeira_oportunidade([i["referencia"] for i in dados_completos], status_filtro)
+            primeiras_completas = _obter_primeira_oportunidade([i["referencia"] for i in dados_completos], status_filtro, mes_ref, cd_empresas)
 
             def _extrair_meses(i):
                 dt_primeira = primeiras_completas.get(i["referencia"])
@@ -1264,7 +1280,7 @@ def matriz_produtos_giro(
         # cada linha da resposta em vez de mutar o item cacheado.
         precos = _obter_precos_produtos([i["cdProdutoPreco"] for i in itens_pagina])
         promocoes = _obter_promocoes_produtos([i["cdProdutoPreco"] for i in itens_pagina], cd_empresas)
-        primeiras_oportunidades = _obter_primeira_oportunidade([i["referencia"] for i in itens_pagina], status_filtro)
+        primeiras_oportunidades = _obter_primeira_oportunidade([i["referencia"] for i in itens_pagina], status_filtro, mes_ref, cd_empresas)
         hoje = date.today()
         itens_resposta = []
         for item in itens_pagina:
@@ -1330,7 +1346,7 @@ def matriz_produtos_giro_por_cor(
         status_filtro = [s.strip() for s in status.split(",") if s.strip()] if status else None
 
         dados_cor = _obter_matriz_agregada_por_cor(mes_ref, cd_empresas, referencia, status_filtro)
-        primeiras_oportunidades = _obter_primeira_oportunidade_por_cor(referencia, status_filtro)
+        primeiras_oportunidades = _obter_primeira_oportunidade_por_cor(referencia, status_filtro, mes_ref, cd_empresas)
         precos = _obter_precos_produtos([i["cdProdutoPreco"] for i in dados_cor])
         promocoes = _obter_promocoes_produtos([i["cdProdutoPreco"] for i in dados_cor], cd_empresas)
         hoje = date.today()
@@ -1695,7 +1711,7 @@ def totais_desconto_giro(
 
         precos = _obter_precos_produtos([i["cdProdutoPreco"] for i in dados_completos])
         promocoes = _obter_promocoes_produtos([i["cdProdutoPreco"] for i in dados_completos], cd_empresas)
-        primeiras_oportunidades = _obter_primeira_oportunidade([i["referencia"] for i in dados_completos], status_filtro)
+        primeiras_oportunidades = _obter_primeira_oportunidade([i["referencia"] for i in dados_completos], status_filtro, mes_ref, cd_empresas)
         hoje = date.today()
 
         total_estoque = 0.0
