@@ -1759,11 +1759,27 @@ def _variacao_percentual(preco_base: Optional[float], preco: Optional[float]) ->
     return ((preco - preco_base) / preco_base) * 100
 
 
-def _pct_desconto_promo(preco_base: Optional[float], promo_tipo: Optional[dict]) -> float:
-    if not promo_tipo:
+def _ganho_desconto_canal(preco_cheio: Optional[float], promo_canal: Optional[dict], percentual: float) -> float:
+    """Quanto, em R$ por peca, o preco sugerido melhora o que o canal
+    (atacado OU varejo) pratica hoje. Zero = nao ha ganho nenhum.
+
+    Compara PRECO JA ARREDONDADO, nao percentual: a regra de
+    arredondamento (faixas de R$ 10 terminando em 9,90) pode empurrar o
+    preco sugerido PRA CIMA e deixa-lo igual ou pior que a promocao atual.
+    Ex: R$ 30,90 com 50% = R$ 15,45, que arredonda pra R$ 19,90 - se a
+    promo de hoje ja esta em R$ 15,90, nao ha ganho, mesmo o percentual
+    sugerido (50%) sendo maior que o praticado (48,5%). Essa e exatamente
+    a conta que os cards usam pro valor do desconto, entao filtro e valor
+    nunca discordam (pedido explicito do usuario)."""
+    if preco_cheio is None:
         return 0.0
-    variacao = _variacao_percentual(preco_base, promo_tipo.get("precoPromo"))
-    return abs(variacao) if variacao is not None else 0.0
+    preco_campanha = _calcular_preco_campanha(preco_cheio, percentual)
+    if preco_campanha is None:
+        return 0.0
+    base = promo_canal["precoPromo"] if promo_canal else preco_cheio
+    if base is None:
+        return 0.0
+    return max(0.0, base - preco_campanha)
 
 
 def _tem_oportunidade_desconto(giro_total, meses_oportunidade, promo: dict, preco_atacado, preco_varejo) -> bool:
@@ -1771,11 +1787,15 @@ def _tem_oportunidade_desconto(giro_total, meses_oportunidade, promo: dict, prec
     percentual = _calcular_percentual_campanha(giro_total, meses_oportunidade, tem_promo)
     if percentual <= 0:
         return False
-    desconto_atual = max(
-        _pct_desconto_promo(preco_atacado, promo.get("atacado")),
-        _pct_desconto_promo(preco_varejo, promo.get("varejo")),
+    # Atacado e Varejo avaliados SEPARADAMENTE: basta um dos dois ter ganho
+    # real. Antes usava o MAIOR desconto entre os dois canais como
+    # referencia unica, o que barrava o canal sem promocao quando o outro
+    # ja estava com desconto alto (ex: varejo ja com 50%, atacado sem promo
+    # nenhuma, e a referencia inteira ficava de fora).
+    return (
+        _ganho_desconto_canal(preco_atacado, promo.get("atacado"), percentual) > 0
+        or _ganho_desconto_canal(preco_varejo, promo.get("varejo"), percentual) > 0
     )
-    return percentual > desconto_atual
 
 
 def _cor_bate_filtros(
@@ -1929,26 +1949,20 @@ def totais_desconto_giro(
                 total_estoque_atacado += estoque_maraponga_cor
                 total_estoque_varejo += estoque_resto_cor
 
+                # Mesma conta que o filtro usa (_ganho_desconto_canal): se a
+                # cor JA esta em promocao, o "custo" do desconto novo e so a
+                # diferenca entre o preco da promo atual e o preco sugerido
+                # (quanto o desconto vai AUMENTAR) - nao a diferenca com o
+                # preco cheio, que contaria de novo um desconto ja praticado
+                # hoje. Sem promo ativa, a base e o preco cheio.
                 tem_promo_cor = bool(promo_cor.get("atacado") or promo_cor.get("varejo"))
                 percentual_cor = _calcular_percentual_campanha(cor_item["giroTotal"], meses_cor, tem_promo_cor)
-                preco_atacado_campanha_cor = _calcular_preco_campanha(preco_cor.get("precoAtacado"), percentual_cor)
-                preco_varejo_campanha_cor = _calcular_preco_campanha(preco_cor.get("precoVarejo"), percentual_cor)
-
-                # Se a cor JA esta em promocao, o "custo" do desconto novo e
-                # so a diferenca entre o preco da promo atual e o preco
-                # sugerido (quanto o desconto vai AUMENTAR) - nao a diferenca
-                # com o preco cheio, que contaria de novo um desconto que ja
-                # esta sendo dado hoje. Sem promo ativa, a base continua
-                # sendo o preco cheio (pedido explicito do usuario).
-                promo_atacado_cor = promo_cor.get("atacado")
-                promo_varejo_cor = promo_cor.get("varejo")
-                base_atacado_cor = promo_atacado_cor["precoPromo"] if promo_atacado_cor else preco_cor.get("precoAtacado")
-                base_varejo_cor = promo_varejo_cor["precoPromo"] if promo_varejo_cor else preco_cor.get("precoVarejo")
-
-                if base_atacado_cor is not None and preco_atacado_campanha_cor is not None:
-                    total_desconto_atacado += estoque_maraponga_cor * max(0.0, base_atacado_cor - preco_atacado_campanha_cor)
-                if base_varejo_cor is not None and preco_varejo_campanha_cor is not None:
-                    total_desconto_varejo += estoque_resto_cor * max(0.0, base_varejo_cor - preco_varejo_campanha_cor)
+                total_desconto_atacado += estoque_maraponga_cor * _ganho_desconto_canal(
+                    preco_cor.get("precoAtacado"), promo_cor.get("atacado"), percentual_cor
+                )
+                total_desconto_varejo += estoque_resto_cor * _ganho_desconto_canal(
+                    preco_cor.get("precoVarejo"), promo_cor.get("varejo"), percentual_cor
+                )
 
         return {
             "totalEstoque": total_estoque,

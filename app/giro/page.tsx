@@ -345,7 +345,7 @@ function formatarVariacao(pct: number | null): string {
 // Excecao que manda mais que a escada de Meses FL (mas exige giro >= 6):
 // Meses FL > 0 (ja passou pelo menos 1 mes como oportunidade) E giro >= 6 E
 // nunca teve desconto (sem promo Atacado/Varejo ATIVA agora - mesmo sinal
-// ja usado em temOportunidadeDesconto) -> sempre 30%, em vez da escada
+// ja usado em temPromoAtiva) -> sempre 30%, em vez da escada
 // normal (que daria 50/60/70% dependendo dos meses). Giro < 6 NAO entra
 // nessa excecao - cai na escada normal (giro >= 4 ja da 30% do mesmo jeito;
 // giro < 4 da 0%). "Nunca teve" aqui e so sem promo ativa no momento, nao o
