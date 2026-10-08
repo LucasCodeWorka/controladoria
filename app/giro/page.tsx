@@ -114,6 +114,7 @@ interface ItemMatrizGiro {
   dtPrimeiraOportunidade?: string | null;
   mesesOportunidade?: number | null;
   cor?: string | null;
+  familia?: string | null;
 }
 
 interface MatrizGiro {
@@ -351,11 +352,27 @@ function formatarVariacao(pct: number | null): string {
 // giro < 4 da 0%). "Nunca teve" aqui e so sem promo ativa no momento, nao o
 // historico completo de promocoes do produto (pedido explicito do usuario,
 // pra nao precisar de uma consulta nova de historico).
+// Familia com regra PROPRIA de campanha (pedido explicito do usuario) -
+// substitui inteira a escada normal, nao se combina com ela. Mesmo
+// conjunto usado no backend (_calcular_percentual_campanha em giro.py).
+const FAMILIAS_REGRA_PROPRIA_CAMPANHA = new Set(['KISS ME', 'KISS ME PLUS']);
+
 function calcularPercentualCampanha(
   giroTotal: number | null,
   mesesOportunidade: number | null | undefined,
-  temPromoAtiva: boolean
+  temPromoAtiva: boolean,
+  familia?: string | null
 ): number {
+  // Regra exclusiva das familias KISS ME / KISS ME PLUS: 30% so quando
+  // Meses FL > 24 E giro > 6 - fora isso, 0% (nao cai na escada normal
+  // abaixo, nem na excecao do giro>=6 com Meses FL>0).
+  if (familia && FAMILIAS_REGRA_PROPRIA_CAMPANHA.has(familia.trim().toUpperCase())) {
+    if (giroTotal !== null && giroTotal > 6 && mesesOportunidade !== null && mesesOportunidade !== undefined && mesesOportunidade > 24) {
+      return 30;
+    }
+    return 0;
+  }
+
   if (giroTotal === null) return 0;
   if (mesesOportunidade === null || mesesOportunidade === undefined || mesesOportunidade < 0) return 0;
   if (giroTotal >= 6 && mesesOportunidade > 0 && !temPromoAtiva) return 30;
@@ -1428,7 +1445,7 @@ export default function GiroPage() {
           const promoVarejo = item.promocoes?.find((p) => p.tipo === 'Varejo');
           const pctPromoAtacado = promoAtacado ? variacaoPercentual(item.precoAtacado, promoAtacado.precoPromo) : null;
           const pctPromoVarejo = promoVarejo ? variacaoPercentual(item.precoVarejo, promoVarejo.precoPromo) : null;
-          const percentualCampanha = calcularPercentualCampanha(item.giroTotal, item.mesesOportunidade, temPromoAtiva(item));
+          const percentualCampanha = calcularPercentualCampanha(item.giroTotal, item.mesesOportunidade, temPromoAtiva(item), item.familia);
           const precoAtacadoCampanha = calcularPrecoCampanha(item.precoAtacado, percentualCampanha);
           const precoVarejoCampanha = calcularPrecoCampanha(item.precoVarejo, percentualCampanha);
           const precoAtacadoCampanhaReal = calcularPrecoCampanhaReal(item.precoAtacado, percentualCampanha);
@@ -2341,6 +2358,11 @@ export default function GiroPage() {
                       <strong>Exceção:</strong> Giro {'≥'} 6 e Meses FL {'>'} 0 (já passou pelo menos 1 mês como
                       oportunidade) e sem nenhuma promoção Atacado/Varejo ativa agora — sempre 30%, em vez dos
                       50/60/70% que a escada acima daria. Giro {'<'} 6 não entra nessa exceção, segue a escada normal.
+                    </p>
+                    <p className="text-xs text-black mt-2">
+                      <strong>Exceção — famílias KISS ME e KISS ME PLUS:</strong> regra própria, substitui a escada
+                      acima inteira (não se combina com ela nem com a exceção de 30% fixo). Giro {'>'} 6 e Meses FL
+                      {' > '}24 — 30%. Fora isso — 0% (sem sugestão de desconto).
                     </p>
                   </div>
 
