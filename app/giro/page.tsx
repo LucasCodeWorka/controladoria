@@ -155,22 +155,16 @@ function classeGiro(giro: number): string {
   return 'text-rose-700';
 }
 
-// Celula de giro: numero colorido quando da pra calcular (teve venda no
-// periodo); badge ambar "SV-3M" (sem venda nos ultimos 3 meses) quando tem
-// estoque mas nao vendeu nada - o pior caso (estoque parado); badge cinza
-// "SE-SV" (sem estoque e sem venda) so quando nao tem NADA - referencias
-// assim nem aparecem mais na tabela, mas uma loja isolada dentro de uma
-// referencia com movimento em outras lojas pode cair aqui.
+// Celula de giro: numero colorido sempre que ha estoque (produto parado
+// sem venda nenhuma usa o proprio estoque como giro - pedido explicito do
+// usuario, pra nao ficar de fora de sugestao de desconto/filtro/ordenacao;
+// ver _giro no backend). So sobra o badge cinza "SE-SV" (sem estoque e sem
+// venda) quando nao ha NADA - referencias assim nem aparecem mais na
+// tabela, mas uma loja isolada dentro de uma referencia com movimento em
+// outras lojas pode cair aqui.
 function CelulaGiro({ estoque, giro }: { estoque: number; giro: number | null }) {
   if (giro !== null) {
     return <span className={`font-medium ${classeGiro(giro)}`}>{formatarGiro(giro)}</span>;
-  }
-  if (estoque > 0) {
-    return (
-      <span className="inline-block px-1.5 py-0.5 text-[10px] font-semibold rounded bg-amber-50 text-amber-700 border border-amber-200">
-        SV-3M
-      </span>
-    );
   }
   return (
     <span className="inline-block px-1.5 py-0.5 text-[10px] font-semibold rounded bg-gray-100 text-black border border-gray-200">
@@ -281,8 +275,8 @@ function tooltipGiro(
   const detalheMensal = detalheVendaMensalGiro(meses, vendaPorMes);
   const linhas = [
     giro === null
-      ? `Estoque: ${formatarQtd(estoque)} ÷ Venda média: ${vendaFmt} = ${estoque > 0 ? 'sem venda no período (SV-3M)' : 'sem estoque e sem venda no período'}`
-      : `Estoque: ${formatarQtd(estoque)} ÷ Venda média: ${vendaFmt} = ${formatarGiro(giro)}`,
+      ? `Estoque: ${formatarQtd(estoque)} ÷ Venda média: ${vendaFmt} = sem estoque e sem venda no período`
+      : `Estoque: ${formatarQtd(estoque)} ÷ Venda média: ${vendaFmt} = ${formatarGiro(giro)}${venda === 0 ? ' (sem venda no período — giro = estoque)' : ''}`,
     janela,
   ];
   if (detalheMensal) linhas.push(detalheMensal);
@@ -441,7 +435,7 @@ const DESCRICAO_REGRA_CAMPANHA: Record<number, string> = {
   [REGRA_KISS_ME_30]: 'Regra 7 (exceção KISS ME/KISS ME PLUS, mista): Giro > 6 e Meses FL > 24 → 30%',
   [REGRA_KISS_ME_0]: 'Regra 8 (exceção KISS ME/KISS ME PLUS, mista): fora da condição da regra 7 → 0%',
   [REGRA_SEM_MESES_FL]: 'Regra 9: sem Meses FL (nunca virou oportunidade) → sem sugestão',
-  [REGRA_SEM_GIRO]: 'Regra 10: sem giro (SV-3M ou sem estoque/venda) → sem sugestão',
+  [REGRA_SEM_GIRO]: 'Regra 10: sem giro (sem estoque e sem venda) → sem sugestão',
 };
 
 // Cor do badge de cada regra - bem distintas entre si de proposito, pra
@@ -2209,11 +2203,7 @@ export default function GiroPage() {
                 <div className="flex items-center gap-3 mt-1 text-[11px] text-black">
                   <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500" /> Giro rápido</span>
                   <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500" /> Atenção</span>
-                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-rose-500" /> Estoque parado</span>
-                  <span className="flex items-center gap-1">
-                    <span className="px-1 py-0.5 text-[10px] font-semibold rounded bg-amber-50 text-amber-700 border border-amber-200">SV-3M</span>
-                    Tem estoque mas sem venda nos últimos 3 meses
-                  </span>
+                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-rose-500" /> Estoque parado (inclui sem venda nos últimos 3 meses — giro = estoque)</span>
                   <span className="flex items-center gap-1">
                     <span className="px-1 py-0.5 text-[10px] font-semibold rounded bg-gray-100 text-black border border-gray-200">SE-SV</span>
                     Sem estoque e sem venda nessa loja
@@ -2474,6 +2464,14 @@ export default function GiroPage() {
                         cai na mesma regra do Meses FL = 0 (só o último mês fechado).
                       </li>
                     </ul>
+                    <p className="text-xs text-black mt-2">
+                      <strong>Giro = estoque ÷ venda média.</strong> Quando não há venda nenhuma no período mas há
+                      estoque, o giro usa o <strong>próprio estoque</strong> como valor (em vez de ficar sem giro) —
+                      produto parado há meses com peça sobrando é o pior caso de giro na prática, não um caso sem
+                      informação. Vale em tudo que usa giro: coluna Total, ordenação, filtro &quot;Giro maior que
+                      X&quot;, gráficos e sugestão de desconto. Só fica sem giro (badge SE-SV) quando não há estoque
+                      nem venda nenhuma.
+                    </p>
                   </div>
 
                   <div>
@@ -2524,7 +2522,7 @@ export default function GiroPage() {
                     <p className="text-xs text-black mt-2">
                       <strong>Regra {REGRA_SEM_MESES_FL}:</strong> sem Meses FL preenchido (referência nunca virou
                       oportunidade) — sem sugestão de campanha. <strong>Regra {REGRA_SEM_GIRO}:</strong> sem giro
-                      (SV-3M ou sem estoque/venda nenhum) — sem sugestão de campanha.
+                      (sem estoque e sem venda nenhuma) — sem sugestão de campanha.
                     </p>
                   </div>
 

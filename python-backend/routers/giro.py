@@ -40,6 +40,26 @@ router = APIRouter()
 CD_EMPRESA_MARAPONGA = 2
 
 
+def _giro(estoque: float, venda: float) -> Optional[float]:
+    """Giro = estoque / venda media. Quando NAO ha venda (venda=0) mas tem
+    estoque, usa o PROPRIO ESTOQUE como giro, em vez de None - pedido
+    explicito do usuario: produto parado ha 3 meses com peca sobrando e o
+    PIOR caso de giro na pratica (cobertura "infinita" no ritmo atual de
+    venda, que e zero), nao um caso "sem dado" a excluir. Antes disso,
+    giro=None fazia esses produtos ficarem de fora de QUALQUER sugestao de
+    desconto (_calcular_percentual_campanha retorna 0 quando giro e None),
+    do filtro "Giro maior que X", da ordenacao e dos graficos - exatamente
+    os produtos que mais precisam de markdown, ignorados pelo sistema. So
+    continua None quando nem estoque nem venda existem (0/0 - nao ha nada
+    a medir). Fonte unica: toda consulta de giro do modulo usa esta
+    funcao, nunca uma copia local."""
+    if venda > 0:
+        return estoque / venda
+    if estoque > 0:
+        return estoque
+    return None
+
+
 def _criar_tabela_giro():
     # Migracao unica: a tabela antiga (so um snapshot global, sem mes de
     # referencia) nao tem como virar a nova (chave cd_empresa+mes_referencia)
@@ -444,9 +464,6 @@ def _obter_matriz_agregada(mes_referencia: str, cd_empresas: list, status_filtro
         WHERE g.mes_referencia = %s AND g.cd_empresa IN ({placeholders}){clausula_status}
     """, (mes_referencia, *cd_empresas, *params_status)) or []
 
-    def _giro(estoque: float, venda: float):
-        return (estoque / venda) if venda > 0 else None
-
     por_ref: dict = {}
     for r in linhas:
         ref = r["referencia"]
@@ -599,9 +616,6 @@ def _obter_matriz_agregada_por_cor(mes_referencia: str, cd_empresas: list, refer
         WHERE g.mes_referencia = %s AND g.cd_empresa IN ({placeholders})
           AND COALESCE(p.referencia, g.cd_produto::text) = %s{clausula_status}
     """, (mes_referencia, *cd_empresas, referencia, *params_status)) or []
-
-    def _giro(estoque: float, venda: float):
-        return (estoque / venda) if venda > 0 else None
 
     # Mesmo cadastro-quirk do _obter_matriz_agregada: leve defeito/doacao as
     # vezes usa o proprio campo de cor pra registrar isso (ds_cor =
@@ -1004,8 +1018,10 @@ def _top_produtos_giro(mes_referencia: str, cd_empresas: list, status_filtro: Op
     """Top 10 melhor e pior giro por produto, somando estoque/venda das
     empresas selecionadas que ja tem giro_produto_snapshot pro mes pedido.
     Produtos com venda media = 0 (sem nenhuma venda no periodo, so estoque
-    parado) entram no 'pior giro' com giro null - sao o pior caso na pratica
-    (estoque parado, giro indefinido), nao um caso a esconder."""
+    parado) usam o proprio estoque como giro (ver _giro) - sao o pior caso
+    na pratica, e o numero alto (geralmente bem maior que qualquer giro
+    numerico real) ja garante que aparecem no topo do "pior giro" sem
+    precisar de uma lista separada."""
     placeholders = ",".join(["%s"] * len(cd_empresas))
     clausula_status, params_status = _clausula_status(status_filtro)
     rows = execute_query(f"""
@@ -1023,24 +1039,17 @@ def _top_produtos_giro(mes_referencia: str, cd_empresas: list, status_filtro: Op
         venda_media = float(r["venda_media_3m"] or 0)
         if estoque <= 0:
             continue
-        giro = (estoque / venda_media) if venda_media > 0 else None
         itens.append({
             "cdProduto": r["cd_produto"],
             "referencia": r["referencia"] or str(r["cd_produto"]),
             "nome": r["nome"] or "(sem cadastro)",
             "estoqueAtual": estoque,
             "vendaMedia3m": venda_media,
-            "giro": giro,
+            "giro": _giro(estoque, venda_media),
         })
 
-    com_venda = [i for i in itens if i["giro"] is not None]
-    parados = [i for i in itens if i["giro"] is None]
-
-    melhor_giro = sorted(com_venda, key=lambda i: i["giro"])[:TOP_N_PRODUTOS_GIRO]
-    # Pior giro: primeiro os parados (estoque sem nenhuma venda - pior caso
-    # possivel), depois os de maior giro numerico, ate completar o top 10.
-    pior_giro = (sorted(parados, key=lambda i: i["estoqueAtual"], reverse=True) +
-                 sorted(com_venda, key=lambda i: i["giro"], reverse=True))[:TOP_N_PRODUTOS_GIRO]
+    melhor_giro = sorted(itens, key=lambda i: i["giro"])[:TOP_N_PRODUTOS_GIRO]
+    pior_giro = sorted(itens, key=lambda i: i["giro"], reverse=True)[:TOP_N_PRODUTOS_GIRO]
 
     return {"melhorGiro": melhor_giro, "piorGiro": pior_giro}
 
@@ -1066,11 +1075,6 @@ def _montar_resposta(mes_referencia: str, cd_empresas: list, status_filtro: Opti
             "mesReferencia": mes_referencia, "empresasFaltantes": empresas_faltantes,
             "topProdutos": {"melhorGiro": [], "piorGiro": []},
         }
-
-    def _giro(estoque: float, venda_media: float):
-        if venda_media <= 0:
-            return None
-        return estoque / venda_media
 
     # Sem filtro de status: le direto do snapshot por empresa (agregado,
     # instantaneo). Com filtro de status: agrega na hora a partir do
@@ -1596,7 +1600,7 @@ def giro_por_dimensao(
         )
 
         for item in itens:
-            item["giro"] = (item["estoqueTotal"] / item["vendaTotal"]) if item["vendaTotal"] > 0 else None
+            item["giro"] = _giro(item["estoqueTotal"], item["vendaTotal"])
 
         return {"dimensao": dimensao, "itens": itens, "mesReferencia": mes_ref}
     except HTTPException:
@@ -1647,9 +1651,6 @@ def giro_por_loja(
             WHERE g.mes_referencia = %s AND g.cd_empresa IN ({placeholders}){clausula_dimensao}
             GROUP BY 1
         """, (mes_ref, *cd_empresas, *params_dimensao)) or []
-
-        def _giro(estoque: float, venda: float):
-            return (estoque / venda) if venda > 0 else None
 
         valores = {r["cd_empresa"]: (float(r["estoque"] or 0), float(r["venda"] or 0)) for r in rows}
         itens = []
