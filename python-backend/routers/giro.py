@@ -559,9 +559,23 @@ def _obter_matriz_agregada_por_cor(mes_referencia: str, cd_empresas: list, refer
     def _giro(estoque: float, venda: float):
         return (estoque / venda) if venda > 0 else None
 
+    # Mesmo cadastro-quirk do _obter_matriz_agregada: leve defeito/doacao as
+    # vezes usa o proprio campo de cor pra registrar isso (ds_cor =
+    # "LEVE DEFEITO"), o que nao e uma cor de verdade. Um ds_cor so conta
+    # como cor "de verdade" se aparecer em pelo menos uma variante normal -
+    # senao o SKU entra na cor "SEM COR" junto com o resto sem cor
+    # cadastrada, pra nao criar uma linha de cor falsa que nao bate com a
+    # contagem do badge "cores" da linha-pai (que usa a mesma regra).
+    cores_reais = {
+        r["ds_cor"].strip()
+        for r in linhas
+        if r["ds_cor"] and r["ds_cor"].strip() and not _eh_variante_preco_desconsiderada(r["status"], r["familia"])
+    }
+
     por_cor: dict = {}
     for r in linhas:
-        cor = (r["ds_cor"] or "").strip() or "SEM COR"
+        cor_bruta = (r["ds_cor"] or "").strip()
+        cor = cor_bruta if cor_bruta in cores_reais else "SEM COR"
         if cor not in por_cor:
             por_cor[cor] = {
                 "porLoja": {}, "estoqueTotal": 0.0, "vendaTotal": 0.0,
@@ -582,6 +596,11 @@ def _obter_matriz_agregada_por_cor(mes_referencia: str, cd_empresas: list, refer
         d["estoqueTotal"] += estoque
         d["vendaTotal"] += venda
 
+    # Ao contrario de _obter_matriz_agregada, NAO filtra cor com estoque e
+    # venda zerados aqui - a lista de tags "cores" da linha-pai conta toda
+    # cor que existe pra essa referencia (sem olhar estoque), entao o
+    # detalhe expandido precisa trazer a mesma quantidade de cores, senao a
+    # contagem do badge ("+29" etc) nao bate com o que aparece ao expandir.
     return [
         {
             "cor": cor,
@@ -596,7 +615,6 @@ def _obter_matriz_agregada_por_cor(mes_referencia: str, cd_empresas: list, refer
             "temLeveDefeito": d["temLeveDefeito"],
         }
         for cor, d in por_cor.items()
-        if d["estoqueTotal"] > 0 or d["vendaTotal"] > 0
     ]
 
 
