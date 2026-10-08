@@ -1803,6 +1803,24 @@ def _ganho_desconto_canal(preco_cheio: Optional[float], promo_canal: Optional[di
     return max(0.0, base - preco_campanha)
 
 
+def _acrescimo_canal(preco_cheio: Optional[float], promo_canal: Optional[dict], percentual: float) -> float:
+    """O oposto de _ganho_desconto_canal: quanto, em R$ por peca, o preco
+    sugerido PIORA (aumenta) o que o canal pratica hoje. So acontece quando
+    ja existe promocao ativa MAIS AGRESSIVA que a sugestao da campanha (sem
+    promo ativa, a base e o preco cheio, que a campanha so pode reduzir -
+    nunca aumentar). Zero = nao ha acrescimo nenhum (campanha mantem ou
+    melhora o preco atual)."""
+    if preco_cheio is None or not promo_canal:
+        return 0.0
+    preco_campanha = _calcular_preco_campanha(preco_cheio, percentual)
+    if preco_campanha is None:
+        return 0.0
+    base = promo_canal["precoPromo"]
+    if base is None:
+        return 0.0
+    return max(0.0, preco_campanha - base)
+
+
 def _tem_oportunidade_desconto(giro_total, meses_oportunidade, promo: dict, preco_atacado, preco_varejo, familia: Optional[str] = None) -> bool:
     tem_promo = bool(promo.get("atacado") or promo.get("varejo"))
     percentual = _calcular_percentual_campanha(giro_total, meses_oportunidade, tem_promo, familia)
@@ -1920,6 +1938,8 @@ def totais_desconto_giro(
         total_estoque_varejo = 0.0
         total_desconto_atacado = 0.0
         total_desconto_varejo = 0.0
+        total_acrescimo_atacado = 0.0
+        total_acrescimo_varejo = 0.0
         hoje = date.today()
 
         # Mesmos filtros da tabela, avaliados JUNTOS e POR COR (ver
@@ -1986,6 +2006,17 @@ def totais_desconto_giro(
                 total_desconto_varejo += estoque_resto_cor * _ganho_desconto_canal(
                     preco_cor.get("precoVarejo"), promo_cor.get("varejo"), percentual_cor
                 )
+                # Caso oposto: cor ja esta em promocao MAIS AGRESSIVA que a
+                # sugestao da campanha - aplicar a campanha ali subiria o
+                # preco (diminuiria o desconto). Mostrado em cards separados
+                # pra nao esconder esse "custo" dentro do card de ganho
+                # (pedido explicito do usuario).
+                total_acrescimo_atacado += estoque_maraponga_cor * _acrescimo_canal(
+                    preco_cor.get("precoAtacado"), promo_cor.get("atacado"), percentual_cor
+                )
+                total_acrescimo_varejo += estoque_resto_cor * _acrescimo_canal(
+                    preco_cor.get("precoVarejo"), promo_cor.get("varejo"), percentual_cor
+                )
 
         return {
             "totalEstoque": total_estoque,
@@ -1993,6 +2024,8 @@ def totais_desconto_giro(
             "totalEstoqueVarejo": total_estoque_varejo,
             "totalDescontoAtacado": total_desconto_atacado,
             "totalDescontoVarejo": total_desconto_varejo,
+            "totalAcrescimoAtacado": total_acrescimo_atacado,
+            "totalAcrescimoVarejo": total_acrescimo_varejo,
             "totalReferencias": total_referencias,
             "mesReferencia": mes_ref,
         }

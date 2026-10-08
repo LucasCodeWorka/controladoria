@@ -402,6 +402,8 @@ interface TotaisDescontoGiro {
   totalEstoqueVarejo: number;
   totalDescontoAtacado: number;
   totalDescontoVarejo: number;
+  totalAcrescimoAtacado: number;
+  totalAcrescimoVarejo: number;
   totalReferencias: number;
   mesReferencia: string;
 }
@@ -1951,6 +1953,56 @@ export default function GiroPage() {
                         : formatarPreco(
                             totaisDescontoGiro && totaisDescontoGiro.totalEstoqueVarejo > 0
                               ? totaisDescontoGiro.totalDescontoVarejo / totaisDescontoGiro.totalEstoqueVarejo
+                              : 0
+                          )}
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <div className="bg-white rounded-lg shadow-lg p-4">
+                <p className="text-xs font-medium text-black uppercase tracking-wide" title="Cor já está em promoção mais agressiva que a sugestão da campanha — aplicar a campanha ali SUBIRIA o preço (diminuiria o desconto)">
+                  Valor de acréscimo (cor já com desconto maior que a sugestão)
+                </p>
+                <div className="flex items-center gap-6 mt-1">
+                  <div>
+                    <p className="text-[10px] text-black uppercase tracking-wide">Atacado</p>
+                    <p className="text-xl font-bold text-amber-700">
+                      {totaisDescontoCarregando ? '...' : formatarPreco(totaisDescontoGiro?.totalAcrescimoAtacado ?? 0)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-black uppercase tracking-wide">Varejo</p>
+                    <p className="text-xl font-bold text-amber-700">
+                      {totaisDescontoCarregando ? '...' : formatarPreco(totaisDescontoGiro?.totalAcrescimoVarejo ?? 0)}
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <div className="bg-white rounded-lg shadow-lg p-4">
+                <p className="text-xs font-medium text-black uppercase tracking-wide">
+                  Acréscimo médio por peça (valor de acréscimo ÷ estoque)
+                </p>
+                <div className="flex items-center gap-6 mt-1">
+                  <div>
+                    <p className="text-[10px] text-black uppercase tracking-wide">Atacado</p>
+                    <p className="text-xl font-bold text-amber-700">
+                      {totaisDescontoCarregando
+                        ? '...'
+                        : formatarPreco(
+                            totaisDescontoGiro && totaisDescontoGiro.totalEstoqueAtacado > 0
+                              ? totaisDescontoGiro.totalAcrescimoAtacado / totaisDescontoGiro.totalEstoqueAtacado
+                              : 0
+                          )}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-black uppercase tracking-wide">Varejo</p>
+                    <p className="text-xl font-bold text-amber-700">
+                      {totaisDescontoCarregando
+                        ? '...'
+                        : formatarPreco(
+                            totaisDescontoGiro && totaisDescontoGiro.totalEstoqueVarejo > 0
+                              ? totaisDescontoGiro.totalAcrescimoVarejo / totaisDescontoGiro.totalEstoqueVarejo
                               : 0
                           )}
                     </p>
