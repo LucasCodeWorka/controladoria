@@ -1288,6 +1288,7 @@ def matriz_produtos_giro(
         # referencia onde cada criterio vinha de uma cor diferente. Roda em
         # cima de TODA a base filtrada (nao so da pagina) pra paginar certo -
         # senao o filtro so enxergaria a pagina atual.
+        primeiras_por_cor = None
         if giroMinimo is not None or mesesFLMinimo is not None or oportunidadeDesconto:
             primeiras_por_cor = _obter_primeira_oportunidade_por_referencia_e_cor(
                 [i["referencia"] for i in dados_completos], status_filtro, mes_ref, cd_empresas
@@ -1389,6 +1390,15 @@ def matriz_produtos_giro(
         precos = _obter_precos_produtos([i["cdProdutoPreco"] for i in itens_pagina])
         promocoes = _obter_promocoes_produtos([i["cdProdutoPreco"] for i in itens_pagina], cd_empresas)
         primeiras_oportunidades = _obter_primeira_oportunidade([i["referencia"] for i in itens_pagina], status_filtro, mes_ref, cd_empresas)
+        # Pro "temCorSemMesesFL" (regra especial KISS ME/KISS ME PLUS so se
+        # aplica em referencia mista) - se algum filtro de giro/Meses FL/
+        # oportunidade ja buscou isso pra base INTEIRA la em cima, reusa;
+        # senao busca so pras referencias da pagina atual (mesmo padrao de
+        # preco/promo acima - nao vale a pena pra base inteira sem filtro).
+        if primeiras_por_cor is None:
+            primeiras_por_cor = _obter_primeira_oportunidade_por_referencia_e_cor(
+                [i["referencia"] for i in itens_pagina], status_filtro, mes_ref, cd_empresas
+            )
         hoje = date.today()
         itens_resposta = []
         for item in itens_pagina:
@@ -1414,6 +1424,7 @@ def matriz_produtos_giro(
                 "dtPrimeiraOportunidade": dt_primeira_oportunidade.isoformat() if dt_primeira_oportunidade else None,
                 "mesesOportunidade": meses_oportunidade,
                 "familia": (item.get("categorias") or {}).get("familia"),
+                "temCorSemMesesFL": _referencia_tem_cor_sem_meses_fl(item, primeiras_por_cor),
             })
 
         return {
@@ -1468,6 +1479,12 @@ def matriz_produtos_giro_por_cor(
         precos = _obter_precos_produtos([i["cdProdutoPreco"] for i in dados_cor])
         promocoes = _obter_promocoes_produtos([i["cdProdutoPreco"] for i in dados_cor], cd_empresas)
         hoje = date.today()
+        # Regra especial KISS ME/KISS ME PLUS so vale se a referencia e
+        # MISTA (pelo menos 1 cor sem Meses FL, ainda em linha) - ver
+        # _referencia_tem_cor_sem_meses_fl. Aqui ja esta tudo escopado a 1
+        # referencia so, entao e so checar se alguma cor ficou de fora do
+        # dict de datas.
+        tem_cor_sem_meses_fl = any(primeiras_oportunidades.get(c["cor"]) is None for c in dados_cor)
 
         itens_resposta = []
         for item in sorted(dados_cor, key=lambda i: i["cor"]):
@@ -1480,7 +1497,7 @@ def matriz_produtos_giro_por_cor(
 
             if not _cor_bate_filtros(
                 item["giroTotal"], meses_oportunidade, preco, promo,
-                giroMinimo, mesesFLMinimo, oportunidadeDesconto, item.get("familia"),
+                giroMinimo, mesesFLMinimo, oportunidadeDesconto, item.get("familia"), tem_cor_sem_meses_fl,
             ):
                 continue
 
@@ -1501,6 +1518,7 @@ def matriz_produtos_giro_por_cor(
                 "dtPrimeiraOportunidade": dt_primeira_oportunidade.isoformat() if dt_primeira_oportunidade else None,
                 "mesesOportunidade": meses_oportunidade,
                 "familia": item.get("familia"),
+                "temCorSemMesesFL": tem_cor_sem_meses_fl,
             })
 
         return {"itens": itens_resposta, "referencia": referencia, "mesReferencia": mes_ref}
@@ -1734,11 +1752,19 @@ def venda_mensal_referencias(
 FAMILIAS_REGRA_PROPRIA_CAMPANHA = {"KISS ME", "KISS ME PLUS"}
 
 
-def _calcular_percentual_campanha(giro_total: Optional[float], meses_oportunidade: Optional[int], tem_promo_ativa: bool, familia: Optional[str] = None) -> float:
-    # Regra exclusiva das familias KISS ME / KISS ME PLUS: 30% so quando
-    # Meses FL > 24 E giro > 6 - fora isso, 0% (nao cai na escada normal
-    # abaixo, nem na excecao do giro>=6 com Meses FL>0).
-    if familia and familia.strip().upper() in FAMILIAS_REGRA_PROPRIA_CAMPANHA:
+def _calcular_percentual_campanha(
+    giro_total: Optional[float], meses_oportunidade: Optional[int], tem_promo_ativa: bool,
+    familia: Optional[str] = None, tem_cor_sem_meses_fl: bool = False,
+) -> float:
+    # Regra exclusiva das familias KISS ME / KISS ME PLUS, e so quando a
+    # referencia e MISTA (tem_cor_sem_meses_fl=True, ou seja, tem pelo menos
+    # uma cor ainda em linha / sem Meses FL convivendo com cores que ja
+    # viraram oportunidade): 30% so quando Meses FL > 24 E giro > 6 - fora
+    # isso, 0% (nao cai na escada normal abaixo, nem na excecao do giro>=6
+    # com Meses FL>0). Se a referencia INTEIRA ja virou oportunidade (toda
+    # cor com Meses FL), nao e mais "mista" - usa a escada normal, mesmo
+    # sendo KISS ME (pedido explicito do usuario).
+    if familia and familia.strip().upper() in FAMILIAS_REGRA_PROPRIA_CAMPANHA and tem_cor_sem_meses_fl:
         if giro_total is not None and giro_total > 6 and meses_oportunidade is not None and meses_oportunidade > 24:
             return 30
         return 0
@@ -1821,9 +1847,12 @@ def _acrescimo_canal(preco_cheio: Optional[float], promo_canal: Optional[dict], 
     return max(0.0, preco_campanha - base)
 
 
-def _tem_oportunidade_desconto(giro_total, meses_oportunidade, promo: dict, preco_atacado, preco_varejo, familia: Optional[str] = None) -> bool:
+def _tem_oportunidade_desconto(
+    giro_total, meses_oportunidade, promo: dict, preco_atacado, preco_varejo,
+    familia: Optional[str] = None, tem_cor_sem_meses_fl: bool = False,
+) -> bool:
     tem_promo = bool(promo.get("atacado") or promo.get("varejo"))
-    percentual = _calcular_percentual_campanha(giro_total, meses_oportunidade, tem_promo, familia)
+    percentual = _calcular_percentual_campanha(giro_total, meses_oportunidade, tem_promo, familia, tem_cor_sem_meses_fl)
     if percentual <= 0:
         return False
     # Atacado e Varejo avaliados SEPARADAMENTE: basta um dos dois ter ganho
@@ -1840,7 +1869,7 @@ def _tem_oportunidade_desconto(giro_total, meses_oportunidade, promo: dict, prec
 def _cor_bate_filtros(
     giro_cor: Optional[float], meses_cor: Optional[int], preco_cor: dict, promo_cor: dict,
     giro_minimo: Optional[float] = None, meses_fl_minimo: Optional[int] = None,
-    oportunidade_desconto: bool = False, familia: Optional[str] = None,
+    oportunidade_desconto: bool = False, familia: Optional[str] = None, tem_cor_sem_meses_fl: bool = False,
 ) -> bool:
     """Se UMA cor, sozinha, bate em TODOS os filtros ativos da tela ao mesmo
     tempo. O "ao mesmo tempo" e o ponto: avaliar cada filtro de forma
@@ -1855,10 +1884,23 @@ def _cor_bate_filtros(
     if meses_fl_minimo is not None and not (meses_cor is not None and meses_cor > meses_fl_minimo):
         return False
     if oportunidade_desconto and not _tem_oportunidade_desconto(
-        giro_cor, meses_cor, promo_cor, preco_cor.get("precoAtacado"), preco_cor.get("precoVarejo"), familia
+        giro_cor, meses_cor, promo_cor, preco_cor.get("precoAtacado"), preco_cor.get("precoVarejo"), familia, tem_cor_sem_meses_fl
     ):
         return False
     return True
+
+
+def _referencia_tem_cor_sem_meses_fl(item: dict, primeiras_por_cor: dict) -> bool:
+    """Pelo menos uma cor da referencia SEM Meses FL (ainda em linha, nunca
+    virou oportunidade) - usado na regra especial KISS ME/KISS ME PLUS: so
+    se aplica quando a referencia e MISTA (tem cor parada convivendo com
+    cor ainda em linha). Se a referencia INTEIRA ja virou oportunidade
+    (toda cor tem Meses FL), devolve False - nesse caso usa a escada normal
+    mesmo sendo KISS ME (pedido explicito do usuario)."""
+    return any(
+        primeiras_por_cor.get((item["referencia"], cor_item["cor"])) is None
+        for cor_item in item["porCor"]
+    )
 
 
 def _cores_no_filtro(
@@ -1870,6 +1912,7 @@ def _cores_no_filtro(
     = a referencia inteira fica de fora. Sem nenhum filtro ativo, devolve
     todas as cores (comportamento normal da tela sem filtro)."""
     familia = (item.get("categorias") or {}).get("familia")
+    tem_cor_sem_meses_fl = _referencia_tem_cor_sem_meses_fl(item, primeiras_por_cor)
     cores_ok = []
     for cor_item in item["porCor"]:
         preco_cor = precos_cor.get(cor_item["cdProdutoPreco"]) or {"precoAtacado": None, "precoVarejo": None}
@@ -1880,7 +1923,7 @@ def _cores_no_filtro(
             meses_cor = (hoje.year - dt_primeira_cor.year) * 12 + (hoje.month - dt_primeira_cor.month)
         if _cor_bate_filtros(
             cor_item["giroTotal"], meses_cor, preco_cor, promo_cor,
-            giro_minimo, meses_fl_minimo, oportunidade_desconto, familia,
+            giro_minimo, meses_fl_minimo, oportunidade_desconto, familia, tem_cor_sem_meses_fl,
         ):
             cores_ok.append(cor_item)
     return cores_ok
@@ -1972,6 +2015,7 @@ def totais_desconto_giro(
 
         for item in dados_incluidos:
             familia_item = (item.get("categorias") or {}).get("familia")
+            tem_cor_sem_meses_fl_item = _referencia_tem_cor_sem_meses_fl(item, primeiras_por_cor)
             for cor_item in cores_por_referencia[item["referencia"]]:
                 preco_cor = precos_cor.get(cor_item["cdProdutoPreco"]) or {"precoAtacado": None, "precoVarejo": None}
                 promo_cor = promocoes_cor.get(cor_item["cdProdutoPreco"]) or {"fabrica": None, "atacado": None, "varejo": None}
@@ -1999,7 +2043,7 @@ def totais_desconto_giro(
                 # preco cheio, que contaria de novo um desconto ja praticado
                 # hoje. Sem promo ativa, a base e o preco cheio.
                 tem_promo_cor = bool(promo_cor.get("atacado") or promo_cor.get("varejo"))
-                percentual_cor = _calcular_percentual_campanha(cor_item["giroTotal"], meses_cor, tem_promo_cor, familia_item)
+                percentual_cor = _calcular_percentual_campanha(cor_item["giroTotal"], meses_cor, tem_promo_cor, familia_item, tem_cor_sem_meses_fl_item)
                 total_desconto_atacado += estoque_maraponga_cor * _ganho_desconto_canal(
                     preco_cor.get("precoAtacado"), promo_cor.get("atacado"), percentual_cor
                 )

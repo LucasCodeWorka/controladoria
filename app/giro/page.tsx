@@ -115,6 +115,7 @@ interface ItemMatrizGiro {
   mesesOportunidade?: number | null;
   cor?: string | null;
   familia?: string | null;
+  temCorSemMesesFL?: boolean;
 }
 
 interface MatrizGiro {
@@ -361,12 +362,17 @@ function calcularPercentualCampanha(
   giroTotal: number | null,
   mesesOportunidade: number | null | undefined,
   temPromoAtiva: boolean,
-  familia?: string | null
+  familia?: string | null,
+  temCorSemMesesFL?: boolean
 ): number {
-  // Regra exclusiva das familias KISS ME / KISS ME PLUS: 30% so quando
+  // Regra exclusiva das familias KISS ME / KISS ME PLUS, e so quando a
+  // referencia e MISTA (temCorSemMesesFL=true, tem pelo menos uma cor
+  // ainda em linha convivendo com cor em oportunidade): 30% so quando
   // Meses FL > 24 E giro > 6 - fora isso, 0% (nao cai na escada normal
-  // abaixo, nem na excecao do giro>=6 com Meses FL>0).
-  if (familia && FAMILIAS_REGRA_PROPRIA_CAMPANHA.has(familia.trim().toUpperCase())) {
+  // abaixo, nem na excecao do giro>=6 com Meses FL>0). Se a referencia
+  // INTEIRA ja virou oportunidade (toda cor com Meses FL), usa a escada
+  // normal mesmo sendo KISS ME.
+  if (familia && FAMILIAS_REGRA_PROPRIA_CAMPANHA.has(familia.trim().toUpperCase()) && temCorSemMesesFL) {
     if (giroTotal !== null && giroTotal > 6 && mesesOportunidade !== null && mesesOportunidade !== undefined && mesesOportunidade > 24) {
       return 30;
     }
@@ -1447,7 +1453,7 @@ export default function GiroPage() {
           const promoVarejo = item.promocoes?.find((p) => p.tipo === 'Varejo');
           const pctPromoAtacado = promoAtacado ? variacaoPercentual(item.precoAtacado, promoAtacado.precoPromo) : null;
           const pctPromoVarejo = promoVarejo ? variacaoPercentual(item.precoVarejo, promoVarejo.precoPromo) : null;
-          const percentualCampanha = calcularPercentualCampanha(item.giroTotal, item.mesesOportunidade, temPromoAtiva(item), item.familia);
+          const percentualCampanha = calcularPercentualCampanha(item.giroTotal, item.mesesOportunidade, temPromoAtiva(item), item.familia, item.temCorSemMesesFL);
           const precoAtacadoCampanha = calcularPrecoCampanha(item.precoAtacado, percentualCampanha);
           const precoVarejoCampanha = calcularPrecoCampanha(item.precoVarejo, percentualCampanha);
           const precoAtacadoCampanhaReal = calcularPrecoCampanhaReal(item.precoAtacado, percentualCampanha);
@@ -2412,9 +2418,12 @@ export default function GiroPage() {
                       50/60/70% que a escada acima daria. Giro {'<'} 6 não entra nessa exceção, segue a escada normal.
                     </p>
                     <p className="text-xs text-black mt-2">
-                      <strong>Exceção — famílias KISS ME e KISS ME PLUS:</strong> regra própria, substitui a escada
-                      acima inteira (não se combina com ela nem com a exceção de 30% fixo). Giro {'>'} 6 e Meses FL
-                      {' > '}24 — 30%. Fora isso — 0% (sem sugestão de desconto).
+                      <strong>Exceção — famílias KISS ME e KISS ME PLUS:</strong> só vale quando a referência é
+                      <strong> mista</strong> (tem pelo menos uma cor ainda em linha, sem Meses FL, convivendo com
+                      cor(es) já em oportunidade). Nesse caso, substitui a escada acima inteira (não se combina com
+                      ela nem com a exceção de 30% fixo): Giro {'>'} 6 e Meses FL {' > '}24 — 30%; fora isso — 0%
+                      (sem sugestão de desconto). Se a referência inteira já virou oportunidade (toda cor com Meses
+                      FL), não é mais mista — segue a escada normal mesmo sendo KISS ME.
                     </p>
                   </div>
 
