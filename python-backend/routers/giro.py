@@ -514,9 +514,9 @@ def _obter_matriz_agregada(mes_referencia: str, cd_empresas: list, status_filtro
     if referencias_com_dados:
         placeholders_ref = ",".join(["%s"] * len(referencias_com_dados))
         linhas_cores = execute_query(f"""
-            SELECT COALESCE(referencia, cd_produto::text) AS referencia, ds_cor, status, familia
-            FROM mv_prd_referencia_produto
-            WHERE COALESCE(referencia, cd_produto::text) IN ({placeholders_ref}){clausula_status}
+            SELECT COALESCE(p.referencia, p.cd_produto::text) AS referencia, p.ds_cor, p.status, p.familia
+            FROM mv_prd_referencia_produto p
+            WHERE COALESCE(p.referencia, p.cd_produto::text) IN ({placeholders_ref}){clausula_status}
         """, (*referencias_com_dados, *params_status)) or []
         for r in linhas_cores:
             d = por_ref.get(r["referencia"])
