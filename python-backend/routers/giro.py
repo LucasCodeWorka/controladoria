@@ -454,7 +454,7 @@ def _obter_matriz_agregada(mes_referencia: str, cd_empresas: list, status_filtro
             por_ref[ref] = {
                 "nomeBase": None, "nomeBaseFallback": None, "porLoja": {}, "estoqueTotal": 0.0, "vendaTotal": 0.0,
                 "cdProdutoPreco": None, "cdProdutoFallback": None, "temLeveDefeito": False,
-                "categorias": None, "categoriasFallback": None, "cores": set(),
+                "categorias": None, "categoriasFallback": None, "cores": set(), "porCor": {},
             }
         d = por_ref[ref]
         nome_sem_variante = _nome_base_referencia(r["nome"], r["ds_cor"], r["ds_tamanho"])
@@ -509,6 +509,15 @@ def _obter_matriz_agregada(mes_referencia: str, cd_empresas: list, status_filtro
         d["porLoja"][r["cd_empresa"]] = (estoque_prev + estoque, venda_prev + venda)
         d["estoqueTotal"] += estoque
         d["vendaTotal"] += venda
+        # Estoque/venda por cor (somando todas as empresas do filtro, igual
+        # o _obter_matriz_agregada_por_cor) - usado so pro filtro "Giro
+        # maior que X" olhar a cor mais rapida da referencia, nao a media
+        # geral dela (pedido explicito do usuario: referencia com 1 cor
+        # vendendo rapido e outras paradas nao pode ficar de fora so porque
+        # a MEDIA ficou baixa).
+        cor_chave = (r["ds_cor"] or "").strip() or "SEM COR"
+        estoque_cor_prev, venda_cor_prev = d["porCor"].get(cor_chave, (0.0, 0.0))
+        d["porCor"][cor_chave] = (estoque_cor_prev + estoque, venda_cor_prev + venda)
 
     # porLoja/total guardam estoque e venda media crus junto do giro (nao so
     # o resultado da divisao) pra montar o tooltip "estoque / venda = giro"
@@ -524,6 +533,10 @@ def _obter_matriz_agregada(mes_referencia: str, cd_empresas: list, status_filtro
             "estoqueTotal": d["estoqueTotal"],
             "vendaTotal": d["vendaTotal"],
             "giroTotal": _giro(d["estoqueTotal"], d["vendaTotal"]),
+            "giroMaximoCor": max(
+                (g for g in (_giro(estoque, venda) for estoque, venda in d["porCor"].values()) if g is not None),
+                default=None,
+            ),
             "cdProdutoPreco": d["cdProdutoPreco"] or d["cdProdutoFallback"],
             "temLeveDefeito": d["temLeveDefeito"],
             "categorias": d["categorias"] or d["categoriasFallback"] or {},
@@ -1171,10 +1184,13 @@ def matriz_produtos_giro(
         )
 
         if giroMinimo is not None:
-            # Giro null (SV-3M ou sem estoque/venda nenhum) nunca passa no
-            # filtro "giro maior que X" - nao da pra comparar "sem giro" com
-            # um numero.
-            dados_completos = [i for i in dados_completos if i["giroTotal"] is not None and i["giroTotal"] > giroMinimo]
+            # "Giro maior que X" olha a cor MAIS RAPIDA da referencia (nao a
+            # media geral dela) - pedido explicito do usuario: uma
+            # referencia com 1 cor vendendo rapido e outras paradas nao pode
+            # ficar de fora so porque a media ficou baixa. Cor sem venda
+            # nenhuma (giro null) nunca passa - nao da pra comparar "sem
+            # giro" com um numero.
+            dados_completos = [i for i in dados_completos if i["giroMaximoCor"] is not None and i["giroMaximoCor"] > giroMinimo]
 
         if mesesFLMinimo is not None:
             # Precisa do Meses FL de TODA a base filtrada (nao so da pagina),
@@ -1725,7 +1741,11 @@ def totais_desconto_giro(
         )
 
         if giroMinimo is not None:
-            dados_completos = [i for i in dados_completos if i["giroTotal"] is not None and i["giroTotal"] > giroMinimo]
+            # "Giro maior que X" olha a cor MAIS RAPIDA da referencia (nao a
+            # media geral dela) - pedido explicito do usuario: uma
+            # referencia com 1 cor vendendo rapido e outras paradas nao pode
+            # ficar de fora so porque a media ficou baixa.
+            dados_completos = [i for i in dados_completos if i["giroMaximoCor"] is not None and i["giroMaximoCor"] > giroMinimo]
 
         precos = _obter_precos_produtos([i["cdProdutoPreco"] for i in dados_completos])
         promocoes = _obter_promocoes_produtos([i["cdProdutoPreco"] for i in dados_completos], cd_empresas)
