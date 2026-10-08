@@ -1835,16 +1835,23 @@ def _acrescimo_canal(preco_cheio: Optional[float], promo_canal: Optional[dict], 
     ja existe promocao ativa MAIS AGRESSIVA que a sugestao da campanha (sem
     promo ativa, a base e o preco cheio, que a campanha so pode reduzir -
     nunca aumentar). Zero = nao ha acrescimo nenhum (campanha mantem ou
-    melhora o preco atual)."""
+    melhora o preco atual).
+
+    Quando a campanha nao sugere NENHUM desconto (percentual <= 0 - ex: a
+    cor nao bate mais na regra, ou caiu na regra das familias KISS ME/KISS
+    ME PLUS que da 0%), a promocao atual seria removida por completo - o
+    preco volta pro CHEIO, nao pra um "preco de campanha" (que nem existe
+    nesse caso). Usar preco_cheio como referencia aqui, em vez de sair
+    cedo com 0, e o que faz esse card capturar o caso real: cor que esta
+    com desconto hoje mas deixaria de ter desconto nenhum (pedido
+    explicito do usuario - esse caso estava saindo do card antes)."""
     if preco_cheio is None or not promo_canal:
-        return 0.0
-    preco_campanha = _calcular_preco_campanha(preco_cheio, percentual)
-    if preco_campanha is None:
         return 0.0
     base = promo_canal["precoPromo"]
     if base is None:
         return 0.0
-    return max(0.0, preco_campanha - base)
+    preco_resultante = _calcular_preco_campanha(preco_cheio, percentual) if percentual > 0 else preco_cheio
+    return max(0.0, preco_resultante - base)
 
 
 def _tem_oportunidade_desconto(
