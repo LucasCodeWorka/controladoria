@@ -816,6 +816,34 @@ def _clausula_status(status_filtro: Optional[list]) -> tuple:
     return " AND p.status = ANY(%s)", (status_filtro,)
 
 
+def _aplicar_filtros_categoria(
+    dados_completos: list,
+    linha_filtro: Optional[list] = None,
+    familia_filtro: Optional[list] = None,
+    grupo_filtro: Optional[list] = None,
+    colecao_filtro: Optional[list] = None,
+    referencia_busca: Optional[str] = None,
+) -> list:
+    """Filtros adicionais da tela de Giro (dropdowns de Linha/Familia/Grupo/
+    Colecao - multi-select, cada um independente - e busca por Referencia -
+    texto livre, contains) - complementam o dimensaoFiltro/categoriaFiltro
+    (que so filtra UMA categoria de cada vez, vindo do clique numa barra do
+    grafico). Usa o item['categorias'] que _obter_matriz_agregada ja
+    calculou, sem precisar de outra consulta nem tocar no cache."""
+    if linha_filtro:
+        dados_completos = [i for i in dados_completos if i["categorias"].get("linha") in linha_filtro]
+    if familia_filtro:
+        dados_completos = [i for i in dados_completos if i["categorias"].get("familia") in familia_filtro]
+    if grupo_filtro:
+        dados_completos = [i for i in dados_completos if i["categorias"].get("grupo") in grupo_filtro]
+    if colecao_filtro:
+        dados_completos = [i for i in dados_completos if i["categorias"].get("colecao") in colecao_filtro]
+    if referencia_busca and referencia_busca.strip():
+        termo = referencia_busca.strip().upper()
+        dados_completos = [i for i in dados_completos if termo in str(i["referencia"]).upper()]
+    return dados_completos
+
+
 def _top_produtos_giro(mes_referencia: str, cd_empresas: list, status_filtro: Optional[list] = None) -> dict:
     """Top 10 melhor e pior giro por produto, somando estoque/venda das
     empresas selecionadas que ja tem giro_produto_snapshot pro mes pedido.
@@ -953,6 +981,29 @@ def listar_status_produtos():
         raise HTTPException(status_code=500, detail=f"Erro ao listar status de produto: {str(e)}")
 
 
+@router.get("/api/giro/opcoes-filtro")
+def listar_opcoes_filtro_giro():
+    """Valores distintos de linha/familia/grupo/colecao (mv_prd_referencia_produto)
+    pros dropdowns de filtro adicionais da tela de Giro, junto do filtro de
+    status ja existente."""
+    try:
+        def _distintos(coluna: str) -> list:
+            rows = execute_query(
+                f"SELECT DISTINCT {coluna} FROM mv_prd_referencia_produto WHERE {coluna} IS NOT NULL ORDER BY 1", ()
+            ) or []
+            return [r[coluna] for r in rows]
+
+        return {
+            "linhas": _distintos("linha"),
+            "familias": _distintos("familia"),
+            "grupos": _distintos("grupo"),
+            "colecoes": _distintos("colecao"),
+        }
+    except Exception as e:
+        print(f"[ERROR] Erro ao listar opcoes de filtro do giro: {e}")
+        raise HTTPException(status_code=500, detail=f"Erro ao listar opcoes de filtro do giro: {str(e)}")
+
+
 @router.get("/api/giro/dados")
 def obter_giro(
     mesReferencia: Optional[str] = Query(None, description="Mes de referencia YYYY-MM (default: mes atual)"),
@@ -1015,7 +1066,12 @@ def matriz_produtos_giro(
     status: Optional[str] = Query(None, description="Lista de status de produto separados por virgula (default: todos) - mesmo filtro usado no resto do Giro"),
     dimensaoFiltro: Optional[str] = Query(None, description="grupo, linha, familia, colecao ou status - filtra so as referencias dessa categoria (ex: clicou numa barra do grafico por dimensao)"),
     categoriaFiltro: Optional[str] = Query(None, description="Valor da categoria (ex: 'BODY', 'SEM CLASSIFICACAO') - exige dimensaoFiltro junto."),
-    oportunidadeDesconto: bool = Query(False, description="Quando true, so retorna referencias que batem na regra 'pode ganhar ou aumentar desconto' (mesma logica do card de totais) - filtra a base INTEIRA antes de paginar, nao so a pagina atual")
+    oportunidadeDesconto: bool = Query(False, description="Quando true, so retorna referencias que batem na regra 'pode ganhar ou aumentar desconto' (mesma logica do card de totais) - filtra a base INTEIRA antes de paginar, nao so a pagina atual"),
+    linha: Optional[str] = Query(None, description="Lista de linha separadas por virgula (default: todas) - filtro independente do dimensaoFiltro"),
+    familia: Optional[str] = Query(None, description="Lista de familia separadas por virgula (default: todas)"),
+    grupo: Optional[str] = Query(None, description="Lista de grupo separados por virgula (default: todos)"),
+    colecao: Optional[str] = Query(None, description="Lista de colecao separadas por virgula (default: todas)"),
+    referenciaBusca: Optional[str] = Query(None, description="Busca por referencia (contains, case-insensitive)")
 ):
     """
     Giro por REFERENCIA (nao por SKU/cor/tamanho individual) e empresa, numa
@@ -1059,6 +1115,14 @@ def matriz_produtos_giro(
             if categoriaFiltro is None:
                 raise HTTPException(status_code=400, detail="categoriaFiltro e obrigatorio junto com dimensaoFiltro")
             dados_completos = [i for i in dados_completos if i["categorias"].get(dimensaoFiltro) == categoriaFiltro]
+
+        linha_filtro = [v.strip() for v in linha.split(",") if v.strip()] if linha else None
+        familia_filtro = [v.strip() for v in familia.split(",") if v.strip()] if familia else None
+        grupo_filtro = [v.strip() for v in grupo.split(",") if v.strip()] if grupo else None
+        colecao_filtro = [v.strip() for v in colecao.split(",") if v.strip()] if colecao else None
+        dados_completos = _aplicar_filtros_categoria(
+            dados_completos, linha_filtro, familia_filtro, grupo_filtro, colecao_filtro, referenciaBusca
+        )
 
         if giroMinimo is not None:
             # Giro null (SV-3M ou sem estoque/venda nenhum) nunca passa no
@@ -1559,7 +1623,12 @@ def totais_desconto_giro(
     status: Optional[str] = Query(None, description="Mesmo filtro de status da tabela"),
     dimensaoFiltro: Optional[str] = Query(None, description="grupo, linha, familia, colecao ou status"),
     categoriaFiltro: Optional[str] = Query(None, description="Valor da categoria - exige dimensaoFiltro junto"),
-    oportunidadeDesconto: bool = Query(False, description="Quando true, so soma quem bate na regra 'pode ganhar ou aumentar desconto' (mesmo checkbox da tela)")
+    oportunidadeDesconto: bool = Query(False, description="Quando true, so soma quem bate na regra 'pode ganhar ou aumentar desconto' (mesmo checkbox da tela)"),
+    linha: Optional[str] = Query(None, description="Mesmo filtro de linha da tabela"),
+    familia: Optional[str] = Query(None, description="Mesmo filtro de familia da tabela"),
+    grupo: Optional[str] = Query(None, description="Mesmo filtro de grupo da tabela"),
+    colecao: Optional[str] = Query(None, description="Mesmo filtro de colecao da tabela"),
+    referenciaBusca: Optional[str] = Query(None, description="Mesma busca por referencia da tabela")
 ):
     """
     Totais pros 2 cards acima da tabela "Giro por referencia e loja"
@@ -1583,6 +1652,14 @@ def totais_desconto_giro(
             if categoriaFiltro is None:
                 raise HTTPException(status_code=400, detail="categoriaFiltro e obrigatorio junto com dimensaoFiltro")
             dados_completos = [i for i in dados_completos if i["categorias"].get(dimensaoFiltro) == categoriaFiltro]
+
+        linha_filtro = [v.strip() for v in linha.split(",") if v.strip()] if linha else None
+        familia_filtro = [v.strip() for v in familia.split(",") if v.strip()] if familia else None
+        grupo_filtro = [v.strip() for v in grupo.split(",") if v.strip()] if grupo else None
+        colecao_filtro = [v.strip() for v in colecao.split(",") if v.strip()] if colecao else None
+        dados_completos = _aplicar_filtros_categoria(
+            dados_completos, linha_filtro, familia_filtro, grupo_filtro, colecao_filtro, referenciaBusca
+        )
 
         if giroMinimo is not None:
             dados_completos = [i for i in dados_completos if i["giroTotal"] is not None and i["giroTotal"] > giroMinimo]

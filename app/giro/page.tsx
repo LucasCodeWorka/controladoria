@@ -654,6 +654,24 @@ export default function GiroPage() {
   const [statusSelecionados, setStatusSelecionados] = useState<Set<string>>(new Set());
   const [filtroStatusAberto, setFiltroStatusAberto] = useState(false);
 
+  // Filtros adicionais por classificacao do produto (Linha/Familia/Grupo/
+  // Colecao - multi-select, cada um independente e combinavel com os
+  // outros) + busca livre por referencia - complementam o filtro de clique
+  // no grafico "Giro por dimensao" (que so filtra UMA categoria por vez).
+  const [linhasDisponiveis, setLinhasDisponiveis] = useState<string[]>([]);
+  const [linhasSelecionadas, setLinhasSelecionadas] = useState<Set<string>>(new Set());
+  const [filtroLinhaAberto, setFiltroLinhaAberto] = useState(false);
+  const [familiasDisponiveis, setFamiliasDisponiveis] = useState<string[]>([]);
+  const [familiasSelecionadas, setFamiliasSelecionadas] = useState<Set<string>>(new Set());
+  const [filtroFamiliaAberto, setFiltroFamiliaAberto] = useState(false);
+  const [gruposDisponiveis, setGruposDisponiveis] = useState<string[]>([]);
+  const [gruposSelecionados, setGruposSelecionados] = useState<Set<string>>(new Set());
+  const [filtroGrupoAberto, setFiltroGrupoAberto] = useState(false);
+  const [colecoesDisponiveis, setColecoesDisponiveis] = useState<string[]>([]);
+  const [colecoesSelecionadas, setColecoesSelecionadas] = useState<Set<string>>(new Set());
+  const [filtroColecaoAberto, setFiltroColecaoAberto] = useState(false);
+  const [referenciaBuscaFiltro, setReferenciaBuscaFiltro] = useState('');
+
   const [dados, setDados] = useState<DadosGiro | null>(null);
   const [carregandoInicial, setCarregandoInicial] = useState(false);
   const [consultaExecutada, setConsultaExecutada] = useState(false);
@@ -793,7 +811,10 @@ export default function GiroPage() {
         setEmpresasDisponiveis(lista);
         // Restaura o filtro salvo da ultima visita, se houver - senao,
         // seleciona todas por padrao (mesmo padrao do DRE/DFC).
-        const salvo = carregarFiltro<{ mesReferencia: string; empresas: number[]; status: string[] }>('giro_filtros');
+        const salvo = carregarFiltro<{
+          mesReferencia: string; empresas: number[]; status: string[];
+          linhas?: string[]; familias?: string[]; grupos?: string[]; colecoes?: string[]; referenciaBusca?: string;
+        }>('giro_filtros');
         const validas = new Set(lista.map((e) => e.cdEmpresa));
         if (salvo) {
           if (salvo.mesReferencia) setMesReferencia(salvo.mesReferencia);
@@ -803,6 +824,11 @@ export default function GiroPage() {
           const empresasValidas = (salvo.empresas || []).filter((cd) => validas.has(cd));
           setEmpresasSelecionadas(new Set(empresasValidas.length > 0 ? empresasValidas : lista.map((e) => e.cdEmpresa)));
           if (salvo.status) setStatusSelecionados(new Set(salvo.status));
+          if (salvo.linhas) setLinhasSelecionadas(new Set(salvo.linhas));
+          if (salvo.familias) setFamiliasSelecionadas(new Set(salvo.familias));
+          if (salvo.grupos) setGruposSelecionados(new Set(salvo.grupos));
+          if (salvo.colecoes) setColecoesSelecionadas(new Set(salvo.colecoes));
+          if (salvo.referenciaBusca) setReferenciaBuscaFiltro(salvo.referenciaBusca);
         } else {
           setEmpresasSelecionadas(new Set(lista.map((e) => e.cdEmpresa)));
         }
@@ -813,11 +839,21 @@ export default function GiroPage() {
       .then((r) => r.json())
       .then((data) => setStatusDisponiveis(data.status || []))
       .catch((e) => console.error('Erro ao buscar status de produto:', e));
+
+    fetch('/api/giro/opcoes-filtro', { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((data) => {
+        setLinhasDisponiveis(data.linhas || []);
+        setFamiliasDisponiveis(data.familias || []);
+        setGruposDisponiveis(data.grupos || []);
+        setColecoesDisponiveis(data.colecoes || []);
+      })
+      .catch((e) => console.error('Erro ao buscar opcoes de filtro do giro:', e));
   }, []);
 
-  // Salva o filtro atual sempre que o usuario alterar mes, lojas ou status,
-  // pulando a primeira renderizacao pra nao sobrescrever o que acabou de
-  // ser restaurado acima com os valores padrao.
+  // Salva o filtro atual sempre que o usuario alterar mes, lojas, status ou
+  // os filtros adicionais, pulando a primeira renderizacao pra nao
+  // sobrescrever o que acabou de ser restaurado acima com os valores padrao.
   const primeiraRenderizacaoFiltroRef = useRef(true);
   useEffect(() => {
     if (primeiraRenderizacaoFiltroRef.current) {
@@ -828,8 +864,13 @@ export default function GiroPage() {
       mesReferencia,
       empresas: Array.from(empresasSelecionadas),
       status: Array.from(statusSelecionados),
+      linhas: Array.from(linhasSelecionadas),
+      familias: Array.from(familiasSelecionadas),
+      grupos: Array.from(gruposSelecionados),
+      colecoes: Array.from(colecoesSelecionadas),
+      referenciaBusca: referenciaBuscaFiltro,
     });
-  }, [mesReferencia, empresasSelecionadas, statusSelecionados]);
+  }, [mesReferencia, empresasSelecionadas, statusSelecionados, linhasSelecionadas, familiasSelecionadas, gruposSelecionados, colecoesSelecionadas, referenciaBuscaFiltro]);
 
   async function buscarSnapshot(mesRef: string, empresasParam: string, statusParam: string) {
     try {
@@ -853,6 +894,19 @@ export default function GiroPage() {
   }
 
   // Nao consulta sozinho ao abrir a tela - so no clique em "Consultar".
+  // Filtros adicionais por classificacao (Linha/Familia/Grupo/Colecao +
+  // busca por referencia) - sempre os mesmos pra matriz e totais-desconto,
+  // lidos direto do estado (nao precisam ser passados pelos ~9 pontos que
+  // chamam buscarMatriz, so entram quando o usuario clica "Consultar" de
+  // novo com os dropdowns mudados).
+  function aplicarFiltrosCategoriaParams(params: URLSearchParams) {
+    if (linhasSelecionadas.size > 0) params.set('linha', Array.from(linhasSelecionadas).join(','));
+    if (familiasSelecionadas.size > 0) params.set('familia', Array.from(familiasSelecionadas).join(','));
+    if (gruposSelecionados.size > 0) params.set('grupo', Array.from(gruposSelecionados).join(','));
+    if (colecoesSelecionadas.size > 0) params.set('colecao', Array.from(colecoesSelecionadas).join(','));
+    if (referenciaBuscaFiltro.trim()) params.set('referenciaBusca', referenciaBuscaFiltro.trim());
+  }
+
   async function buscarMatriz(
     mesRef: string,
     empresasParam: string,
@@ -888,6 +942,7 @@ export default function GiroPage() {
       if (oportunidadeDesconto) {
         params.set('oportunidadeDesconto', 'true');
       }
+      aplicarFiltrosCategoriaParams(params);
       const response = await fetch(`/api/giro/matriz-produtos?${params.toString()}`, { cache: 'no-store' });
       const data = await response.json();
       if (!response.ok || data.error) {
@@ -940,6 +995,7 @@ export default function GiroPage() {
       if (oportunidadeDesconto) {
         params.set('oportunidadeDesconto', 'true');
       }
+      aplicarFiltrosCategoriaParams(params);
       const response = await fetch(`/api/giro/totais-desconto?${params.toString()}`, { cache: 'no-store' });
       const data = await response.json();
       if (response.ok && !data.error) {
@@ -1215,6 +1271,15 @@ export default function GiroPage() {
       const novo = new Set(atual);
       if (novo.has(status)) novo.delete(status);
       else novo.add(status);
+      return novo;
+    });
+  }
+
+  function toggleValorEmSet(valor: string, setter: React.Dispatch<React.SetStateAction<Set<string>>>) {
+    setter((atual) => {
+      const novo = new Set(atual);
+      if (novo.has(valor)) novo.delete(valor);
+      else novo.add(valor);
       return novo;
     });
   }
@@ -1522,6 +1587,127 @@ export default function GiroPage() {
               </div>
             )}
           </div>
+
+          <div className="relative">
+            <button
+              onClick={() => setFiltroGrupoAberto((v) => !v)}
+              className="min-w-[140px] flex items-center justify-between gap-2 px-3 py-2 border border-gray-300 rounded-md text-sm bg-white hover:bg-gray-50"
+            >
+              Grupo ({gruposSelecionados.size === 0 ? 'todos' : gruposSelecionados.size})
+              <ChevronDown className="w-4 h-4 text-black" />
+            </button>
+            {filtroGrupoAberto && (
+              <div className="absolute z-30 mt-1 w-72 max-h-80 overflow-auto bg-white border border-gray-200 rounded-lg shadow-xl p-2">
+                <div className="flex justify-between px-1 pb-1 mb-1 border-b border-gray-100">
+                  <button className="text-xs font-medium text-purple-700 hover:text-purple-900" onClick={() => setGruposSelecionados(new Set(gruposDisponiveis))}>
+                    Todos
+                  </button>
+                  <button className="text-xs font-medium text-black hover:text-black" onClick={() => setGruposSelecionados(new Set())}>
+                    Limpar
+                  </button>
+                </div>
+                {gruposDisponiveis.map((g) => (
+                  <label key={g} className="flex items-center gap-2 px-1 py-1 text-sm hover:bg-gray-50 rounded cursor-pointer">
+                    <input type="checkbox" checked={gruposSelecionados.has(g)} onChange={() => toggleValorEmSet(g, setGruposSelecionados)} />
+                    {g}
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="relative">
+            <button
+              onClick={() => setFiltroLinhaAberto((v) => !v)}
+              className="min-w-[140px] flex items-center justify-between gap-2 px-3 py-2 border border-gray-300 rounded-md text-sm bg-white hover:bg-gray-50"
+            >
+              Linha ({linhasSelecionadas.size === 0 ? 'todas' : linhasSelecionadas.size})
+              <ChevronDown className="w-4 h-4 text-black" />
+            </button>
+            {filtroLinhaAberto && (
+              <div className="absolute z-30 mt-1 w-72 max-h-80 overflow-auto bg-white border border-gray-200 rounded-lg shadow-xl p-2">
+                <div className="flex justify-between px-1 pb-1 mb-1 border-b border-gray-100">
+                  <button className="text-xs font-medium text-purple-700 hover:text-purple-900" onClick={() => setLinhasSelecionadas(new Set(linhasDisponiveis))}>
+                    Todas
+                  </button>
+                  <button className="text-xs font-medium text-black hover:text-black" onClick={() => setLinhasSelecionadas(new Set())}>
+                    Limpar
+                  </button>
+                </div>
+                {linhasDisponiveis.map((l) => (
+                  <label key={l} className="flex items-center gap-2 px-1 py-1 text-sm hover:bg-gray-50 rounded cursor-pointer">
+                    <input type="checkbox" checked={linhasSelecionadas.has(l)} onChange={() => toggleValorEmSet(l, setLinhasSelecionadas)} />
+                    {l}
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="relative">
+            <button
+              onClick={() => setFiltroFamiliaAberto((v) => !v)}
+              className="min-w-[150px] flex items-center justify-between gap-2 px-3 py-2 border border-gray-300 rounded-md text-sm bg-white hover:bg-gray-50"
+            >
+              Família ({familiasSelecionadas.size === 0 ? 'todas' : familiasSelecionadas.size})
+              <ChevronDown className="w-4 h-4 text-black" />
+            </button>
+            {filtroFamiliaAberto && (
+              <div className="absolute z-30 mt-1 w-72 max-h-80 overflow-auto bg-white border border-gray-200 rounded-lg shadow-xl p-2">
+                <div className="flex justify-between px-1 pb-1 mb-1 border-b border-gray-100">
+                  <button className="text-xs font-medium text-purple-700 hover:text-purple-900" onClick={() => setFamiliasSelecionadas(new Set(familiasDisponiveis))}>
+                    Todas
+                  </button>
+                  <button className="text-xs font-medium text-black hover:text-black" onClick={() => setFamiliasSelecionadas(new Set())}>
+                    Limpar
+                  </button>
+                </div>
+                {familiasDisponiveis.map((f) => (
+                  <label key={f} className="flex items-center gap-2 px-1 py-1 text-sm hover:bg-gray-50 rounded cursor-pointer">
+                    <input type="checkbox" checked={familiasSelecionadas.has(f)} onChange={() => toggleValorEmSet(f, setFamiliasSelecionadas)} />
+                    {f}
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="relative">
+            <button
+              onClick={() => setFiltroColecaoAberto((v) => !v)}
+              className="min-w-[150px] flex items-center justify-between gap-2 px-3 py-2 border border-gray-300 rounded-md text-sm bg-white hover:bg-gray-50"
+            >
+              Coleção ({colecoesSelecionadas.size === 0 ? 'todas' : colecoesSelecionadas.size})
+              <ChevronDown className="w-4 h-4 text-black" />
+            </button>
+            {filtroColecaoAberto && (
+              <div className="absolute z-30 mt-1 w-72 max-h-80 overflow-auto bg-white border border-gray-200 rounded-lg shadow-xl p-2">
+                <div className="flex justify-between px-1 pb-1 mb-1 border-b border-gray-100">
+                  <button className="text-xs font-medium text-purple-700 hover:text-purple-900" onClick={() => setColecoesSelecionadas(new Set(colecoesDisponiveis))}>
+                    Todas
+                  </button>
+                  <button className="text-xs font-medium text-black hover:text-black" onClick={() => setColecoesSelecionadas(new Set())}>
+                    Limpar
+                  </button>
+                </div>
+                {colecoesDisponiveis.map((c) => (
+                  <label key={c} className="flex items-center gap-2 px-1 py-1 text-sm hover:bg-gray-50 rounded cursor-pointer">
+                    <input type="checkbox" checked={colecoesSelecionadas.has(c)} onChange={() => toggleValorEmSet(c, setColecoesSelecionadas)} />
+                    {c}
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <input
+            type="text"
+            value={referenciaBuscaFiltro}
+            onChange={(e) => setReferenciaBuscaFiltro(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && consultar()}
+            placeholder="Referência..."
+            className="w-36 px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-primary bg-white"
+          />
 
           <button
             onClick={consultar}
