@@ -539,6 +539,93 @@ def _obter_matriz_agregada(mes_referencia: str, cd_empresas: list, status_filtro
     return resultado
 
 
+def _obter_matriz_agregada_por_cor(mes_referencia: str, cd_empresas: list, referencia: str, status_filtro: Optional[list] = None) -> list:
+    """Mesma ideia de _obter_matriz_agregada, mas abrindo UMA referencia por
+    cor (em vez de somar tudo numa linha so) - usado quando o usuario
+    expande uma linha da matriz pra ver o detalhe por cor. Sempre busca na
+    hora (sem cache, igual o resto da tela que so cacheia o nivel de
+    referencia) - escopado a 1 referencia so, entao e barato."""
+    placeholders = ",".join(["%s"] * len(cd_empresas))
+    clausula_status, params_status = _clausula_status(status_filtro)
+    linhas = execute_query(f"""
+        SELECT g.cd_empresa, g.cd_produto, g.estoque_atual, g.venda_media_3m,
+            p.ds_cor, p.ds_tamanho, p.status, p.familia, p.produto AS nome
+        FROM giro_produto_snapshot g
+        LEFT JOIN mv_prd_referencia_produto p ON p.cd_produto = g.cd_produto
+        WHERE g.mes_referencia = %s AND g.cd_empresa IN ({placeholders})
+          AND COALESCE(p.referencia, g.cd_produto::text) = %s{clausula_status}
+    """, (mes_referencia, *cd_empresas, referencia, *params_status)) or []
+
+    def _giro(estoque: float, venda: float):
+        return (estoque / venda) if venda > 0 else None
+
+    por_cor: dict = {}
+    for r in linhas:
+        cor = (r["ds_cor"] or "").strip() or "SEM COR"
+        if cor not in por_cor:
+            por_cor[cor] = {
+                "porLoja": {}, "estoqueTotal": 0.0, "vendaTotal": 0.0,
+                "cdProdutoPreco": None, "cdProdutoFallback": None, "temLeveDefeito": False,
+            }
+        d = por_cor[cor]
+        variante_desconsiderada = _eh_variante_preco_desconsiderada(r["status"], r["familia"])
+        if r["status"] == "LEVE DEFEITO":
+            d["temLeveDefeito"] = True
+        if d["cdProdutoPreco"] is None and not variante_desconsiderada:
+            d["cdProdutoPreco"] = r["cd_produto"]
+        if d["cdProdutoFallback"] is None:
+            d["cdProdutoFallback"] = r["cd_produto"]
+        estoque = float(r["estoque_atual"] or 0)
+        venda = float(r["venda_media_3m"] or 0)
+        estoque_prev, venda_prev = d["porLoja"].get(r["cd_empresa"], (0.0, 0.0))
+        d["porLoja"][r["cd_empresa"]] = (estoque_prev + estoque, venda_prev + venda)
+        d["estoqueTotal"] += estoque
+        d["vendaTotal"] += venda
+
+    return [
+        {
+            "cor": cor,
+            "porLoja": {
+                cd_empresa: {"estoque": estoque, "venda": venda, "giro": _giro(estoque, venda)}
+                for cd_empresa, (estoque, venda) in d["porLoja"].items()
+            },
+            "estoqueTotal": d["estoqueTotal"],
+            "vendaTotal": d["vendaTotal"],
+            "giroTotal": _giro(d["estoqueTotal"], d["vendaTotal"]),
+            "cdProdutoPreco": d["cdProdutoPreco"] or d["cdProdutoFallback"],
+            "temLeveDefeito": d["temLeveDefeito"],
+        }
+        for cor, d in por_cor.items()
+        if d["estoqueTotal"] > 0 or d["vendaTotal"] > 0
+    ]
+
+
+def _obter_primeira_oportunidade_por_cor(referencia: str, status_filtro: Optional[list] = None) -> dict:
+    """Mesma logica de _obter_primeira_oportunidade, mas agrupado por cor
+    dentro de UMA referencia so (pro detalhe expandido por cor) - cada cor
+    pode ter uma data diferente, ou nenhuma (se essa cor especifica nunca
+    foi/nao esta mais em oportunidade)."""
+    if status_filtro:
+        status_oportunidade = [s for s in status_filtro if s.strip().upper().startswith("OPORTUNIDADE")]
+        if not status_oportunidade:
+            return {}
+        clausula_status = " AND status = ANY(%s)"
+        params_status: tuple = (status_oportunidade,)
+    else:
+        clausula_status = " AND status ILIKE 'OPORTUNIDADE%%'"
+        params_status = ()
+
+    rows = execute_query(f"""
+        SELECT COALESCE(ds_cor, 'SEM COR') AS cor, MIN(dt_inicio) AS dt_primeira
+        FROM hist_dproduto
+        WHERE referencia = %s
+          AND atual = true
+          {clausula_status}
+        GROUP BY COALESCE(ds_cor, 'SEM COR')
+    """, (referencia, *params_status)) or []
+    return {r["cor"]: r["dt_primeira"] for r in rows}
+
+
 # Cache em memoria de preco por cd_produto - {cd_produto: {"fabrica":...,
 # "atacado":..., "varejo":...}}. Preco nao e ligado ao giro (fonte diferente,
 # PRD_VALOR via f_dic_prd_valorprod), entao nao e limpo junto com o cache da
@@ -1110,6 +1197,67 @@ def matriz_produtos_giro(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Erro ao buscar matriz de produtos do giro: {str(e)}")
+
+
+@router.get("/api/giro/matriz-produtos/cores")
+def matriz_produtos_giro_por_cor(
+    referencia: str = Query(..., description="Referencia a abrir o detalhe por cor"),
+    mesReferencia: Optional[str] = Query(None, description="Mes de referencia YYYY-MM (default: mes atual)"),
+    empresas: Optional[str] = Query(None, description="Lista de cd_empresa separados por virgula (default: todas)"),
+    status: Optional[str] = Query(None, description="Lista de status de produto separados por virgula (default: todos)")
+):
+    """
+    Abre UMA referencia por cor - mesma estrutura da matriz principal
+    (giro por loja, precos, promocao, Meses FL), so que uma linha por cor em
+    vez de somar tudo na referencia. Chamado sob demanda quando o usuario
+    expande a linha na tela (nao faz parte da consulta principal, que
+    continua agregada por referencia).
+    """
+    try:
+        mes_ref = mesReferencia or _mes_atual()
+        cd_empresas = _parse_empresas_giro(empresas)
+        status_filtro = [s.strip() for s in status.split(",") if s.strip()] if status else None
+
+        dados_cor = _obter_matriz_agregada_por_cor(mes_ref, cd_empresas, referencia, status_filtro)
+        primeiras_oportunidades = _obter_primeira_oportunidade_por_cor(referencia, status_filtro)
+        precos = _obter_precos_produtos([i["cdProdutoPreco"] for i in dados_cor])
+        promocoes = _obter_promocoes_produtos([i["cdProdutoPreco"] for i in dados_cor], cd_empresas)
+        hoje = date.today()
+
+        itens_resposta = []
+        for item in sorted(dados_cor, key=lambda i: i["cor"]):
+            preco = precos.get(item["cdProdutoPreco"]) or {"precoFabrica": None, "precoAtacado": None, "precoVarejo": None}
+            promo = promocoes.get(item["cdProdutoPreco"]) or {"fabrica": None, "atacado": None, "varejo": None}
+            dt_primeira_oportunidade = primeiras_oportunidades.get(item["cor"])
+            meses_oportunidade = None
+            if dt_primeira_oportunidade:
+                meses_oportunidade = (hoje.year - dt_primeira_oportunidade.year) * 12 + (hoje.month - dt_primeira_oportunidade.month)
+            itens_resposta.append({
+                "referencia": referencia,
+                "cor": item["cor"],
+                "nome": item["cor"],
+                "porLoja": item["porLoja"],
+                "estoqueTotal": item["estoqueTotal"],
+                "vendaTotal": item["vendaTotal"],
+                "giroTotal": item["giroTotal"],
+                "precoFabrica": preco["precoFabrica"],
+                "precoAtacado": preco["precoAtacado"],
+                "precoVarejo": preco["precoVarejo"],
+                "promocoes": _promos_ativas_lista(promo),
+                "temLeveDefeito": item["temLeveDefeito"],
+                "cores": None,
+                "dtPrimeiraOportunidade": dt_primeira_oportunidade.isoformat() if dt_primeira_oportunidade else None,
+                "mesesOportunidade": meses_oportunidade,
+            })
+
+        return {"itens": itens_resposta, "referencia": referencia, "mesReferencia": mes_ref}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[ERROR] Erro ao buscar matriz de giro por cor: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Erro ao buscar matriz de giro por cor: {str(e)}")
 
 
 DIMENSOES_GIRO = {

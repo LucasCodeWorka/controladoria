@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
-import { RotateCw, Loader2, ChevronDown, Calendar, Info, X, Eye, EyeOff } from 'lucide-react';
+import { RotateCw, Loader2, ChevronDown, ChevronRight, Calendar, Info, X, Eye, EyeOff } from 'lucide-react';
 import {
   Bar,
   BarChart,
@@ -113,6 +113,7 @@ interface ItemMatrizGiro {
   cores?: string[];
   dtPrimeiraOportunidade?: string | null;
   mesesOportunidade?: number | null;
+  cor?: string | null;
 }
 
 interface MatrizGiro {
@@ -769,6 +770,14 @@ export default function GiroPage() {
   // ja sabe os valores e quer ver so Promo/Camp.
   const [mostrarPrecosCheios, setMostrarPrecosCheios] = useState(true);
 
+  // Detalhe por cor (expandir uma referencia pra ver o giro/preco/promo/
+  // Meses FL de cada cor dela em vez de so a soma). Busca sob demanda, uma
+  // referencia de cada vez, e fica em cache (nao busca de novo so por
+  // recolher/expandir de novo).
+  const [coresExpandidas, setCoresExpandidas] = useState<Set<string>>(new Set());
+  const [coresPorReferencia, setCoresPorReferencia] = useState<Record<string, ItemMatrizGiro[]>>({});
+  const [coresCarregando, setCoresCarregando] = useState<Set<string>>(new Set());
+
   // Tooltip da matriz com o calculo do giro (estoque / venda = giro) - o
   // atributo title nativo do navegador demora pra aparecer e alguns
   // usuarios nem percebem que existe, entao usa um balao proprio que segue
@@ -889,6 +898,10 @@ export default function GiroPage() {
       setMatrizPagina(pagina);
       buscarVendaMensalReferencias(mesRef, empresasParam, (data.itens || []).map((i: ItemMatrizGiro) => i.referencia), statusParam);
       buscarTotaisDescontoGiro(mesRef, empresasParam, giroMinimo, statusParam, filtroDimensao, oportunidadeDesconto);
+      // Filtro mudou - o detalhe por cor que ja estava em cache nao vale
+      // mais (empresa/mes/status podem ter mudado o giro/preco de cada cor).
+      setCoresExpandidas(new Set());
+      setCoresPorReferencia({});
     } catch (error) {
       console.error('Erro ao buscar matriz de giro:', error);
       setErro('Erro ao buscar a matriz por loja.');
@@ -964,6 +977,46 @@ export default function GiroPage() {
       }
     } catch (error) {
       console.error('Erro ao buscar venda mensal por referência:', error);
+    }
+  }
+
+  // Expande/recolhe o detalhe por cor de uma referencia. So busca na API na
+  // primeira vez que abre (fica em cache em coresPorReferencia) - abrir e
+  // fechar de novo so usa o que ja foi buscado.
+  async function toggleExpandirCores(referencia: string) {
+    setCoresExpandidas((prev) => {
+      const novo = new Set(prev);
+      if (novo.has(referencia)) novo.delete(referencia);
+      else novo.add(referencia);
+      return novo;
+    });
+
+    if (coresPorReferencia[referencia]) return;
+
+    setCoresCarregando((prev) => new Set(prev).add(referencia));
+    try {
+      const params = new URLSearchParams({
+        referencia,
+        mesReferencia,
+        empresas: empresasParaMatriz(),
+      });
+      const statusParam = Array.from(statusSelecionados).join(',');
+      if (statusParam) {
+        params.set('status', statusParam);
+      }
+      const response = await fetch(`/api/giro/matriz-produtos/cores?${params.toString()}`, { cache: 'no-store' });
+      const data = await response.json();
+      if (response.ok && !data.error) {
+        setCoresPorReferencia((prev) => ({ ...prev, [referencia]: data.itens || [] }));
+      }
+    } catch (error) {
+      console.error('Erro ao buscar detalhe por cor:', error);
+    } finally {
+      setCoresCarregando((prev) => {
+        const novo = new Set(prev);
+        novo.delete(referencia);
+        return novo;
+      });
     }
   }
 
@@ -1180,6 +1233,192 @@ export default function GiroPage() {
   // a base inteira, todas as paginas, antes de paginar) - matriz.itens ja
   // e so quem bate na regra, nao precisa filtrar de novo aqui.
   const itensMatrizExibidos = matriz?.itens ?? [];
+
+  // Total de colunas da tabela (pra colSpan da linha "Carregando cores...").
+  const totalColunasMatriz = 11 + (mostrarPrecosCheios ? 3 : 0) + (matriz?.empresas.length ?? 0);
+
+  // Renderiza uma linha da matriz - tanto a linha "pai" de uma referencia
+  // (nivel 0) quanto, quando expandida, uma linha por cor dela (nivel 1,
+  // onde item.referencia vem igual ao pai mas item.cor/item.nome trazem o
+  // detalhe daquela cor). O resto das colunas (Meses FL, precos, promo,
+  // campanha, lojas, totais) e igual nos dois niveis.
+  function linhaMatriz(item: ItemMatrizGiro, key: string, idx: number, nivel: number): React.ReactNode {
+    return (
+      <tr key={key} className={`${nivel === 1 ? 'bg-gray-50/70' : idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'} hover:bg-rose-50 transition-colors`}>
+        <td
+          className={`px-4 py-2 text-black sticky left-0 z-10 ${nivel === 0 ? 'bg-inherit cursor-help' : 'bg-gray-50/70'}`}
+          onMouseEnter={nivel === 0 ? (ev) => mostrarFotoRef(item.referencia, ev.clientX, ev.clientY) : undefined}
+          onMouseMove={nivel === 0 ? (ev) => moverFotoRef(item.referencia, ev.clientX, ev.clientY) : undefined}
+          onMouseLeave={nivel === 0 ? esconderFotoRef : undefined}
+        >
+          {nivel === 0 ? (
+            <div className="flex items-center gap-1.5">
+              <button onClick={() => toggleExpandirCores(item.referencia)} className="text-black/50 hover:text-rose-700" title="Ver detalhe por cor">
+                {coresExpandidas.has(item.referencia) ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+              </button>
+              {item.referencia}
+              {item.temLeveDefeito && (
+                <span
+                  className="px-1 py-0.5 text-[9px] font-medium bg-orange-100 text-orange-700 rounded"
+                  title="Alguma cor/tamanho dessa referência está classificado como Leve Defeito"
+                >
+                  LD
+                </span>
+              )}
+            </div>
+          ) : (
+            <span className="text-black/40 pl-4">↳</span>
+          )}
+        </td>
+        <td className={`px-4 py-2 text-black sticky left-[100px] z-10 ${nivel === 0 ? 'bg-inherit' : 'bg-gray-50/70'}`}>
+          <div className={nivel === 1 ? 'pl-4 text-xs font-medium text-black/70' : ''}>
+            {item.nome}
+            {nivel === 1 && item.temLeveDefeito && (
+              <span className="ml-1.5 px-1 py-0.5 text-[9px] font-medium bg-orange-100 text-orange-700 rounded" title="Classificado como Leve Defeito">
+                LD
+              </span>
+            )}
+          </div>
+          {item.cores && item.cores.length > 0 && (
+            <div className="flex flex-wrap gap-1 max-w-[220px] mt-1">
+              {item.cores.slice(0, 3).map((cor) => (
+                <span key={cor} className="px-1.5 py-0.5 text-[10px] font-medium bg-gray-100 text-black border border-gray-200 rounded" title={cor}>
+                  {cor}
+                </span>
+              ))}
+              {item.cores.length > 3 && (
+                <span
+                  className="px-1.5 py-0.5 text-[10px] font-medium bg-gray-200 text-black border border-gray-300 rounded cursor-help"
+                  onMouseEnter={(ev) => setTooltipCelula({ texto: item.cores!.slice(3).join(', '), x: ev.clientX, y: ev.clientY })}
+                  onMouseMove={(ev) => setTooltipCelula({ texto: item.cores!.slice(3).join(', '), x: ev.clientX, y: ev.clientY })}
+                  onMouseLeave={() => setTooltipCelula(null)}
+                >
+                  +{item.cores.length - 3}
+                </span>
+              )}
+            </div>
+          )}
+        </td>
+        <td
+          className="px-3 py-2 text-right text-orange-900 bg-orange-50/30 whitespace-nowrap cursor-help"
+          onMouseEnter={(ev) => item.dtPrimeiraOportunidade && setTooltipCelula({ texto: `Virou oportunidade em ${formatarDataBR(item.dtPrimeiraOportunidade)} (SKU mais antigo ainda em oportunidade hoje)`, x: ev.clientX, y: ev.clientY })}
+          onMouseMove={(ev) => item.dtPrimeiraOportunidade && setTooltipCelula({ texto: `Virou oportunidade em ${formatarDataBR(item.dtPrimeiraOportunidade)} (SKU mais antigo ainda em oportunidade hoje)`, x: ev.clientX, y: ev.clientY })}
+          onMouseLeave={() => setTooltipCelula(null)}
+        >
+          {item.mesesOportunidade !== null && item.mesesOportunidade !== undefined ? item.mesesOportunidade : <span className="text-black">-</span>}
+        </td>
+        {mostrarPrecosCheios && (
+          <>
+            <td className="px-3 py-2 text-right text-blue-900 bg-blue-50/30 whitespace-nowrap">{formatarPreco(item.precoFabrica)}</td>
+            <td className="px-3 py-2 text-right text-blue-900 bg-blue-50/30 whitespace-nowrap">
+              <div className="text-[10px] text-blue-400 leading-tight">{formatarVariacao(variacaoPercentual(item.precoFabrica, item.precoAtacado))}</div>
+              {formatarPreco(item.precoAtacado)}
+            </td>
+            <td className="px-3 py-2 text-right text-blue-900 bg-blue-50/30 whitespace-nowrap">
+              <div className="text-[10px] text-blue-400 leading-tight">{formatarVariacao(variacaoPercentual(item.precoFabrica, item.precoVarejo))}</div>
+              {formatarPreco(item.precoVarejo)}
+            </td>
+          </>
+        )}
+        {(() => {
+          const promoAtacado = item.promocoes?.find((p) => p.tipo === 'Atacado');
+          const promoVarejo = item.promocoes?.find((p) => p.tipo === 'Varejo');
+          const pctPromoAtacado = promoAtacado ? variacaoPercentual(item.precoAtacado, promoAtacado.precoPromo) : null;
+          const pctPromoVarejo = promoVarejo ? variacaoPercentual(item.precoVarejo, promoVarejo.precoPromo) : null;
+          const percentualCampanha = calcularPercentualCampanha(item.giroTotal, item.mesesOportunidade, temPromoAtiva(item));
+          const precoAtacadoCampanha = calcularPrecoCampanha(item.precoAtacado, percentualCampanha);
+          const precoVarejoCampanha = calcularPrecoCampanha(item.precoVarejo, percentualCampanha);
+          const precoAtacadoCampanhaReal = calcularPrecoCampanhaReal(item.precoAtacado, percentualCampanha);
+          const precoVarejoCampanhaReal = calcularPrecoCampanhaReal(item.precoVarejo, percentualCampanha);
+          return (
+            <>
+              <td className="px-3 py-2 text-right text-amber-900 bg-amber-50/30 whitespace-nowrap">
+                {promoAtacado ? (
+                  <>
+                    <div className="text-[10px] text-amber-500 leading-tight">{formatarVariacao(pctPromoAtacado)}</div>
+                    {formatarPreco(promoAtacado.precoPromo)}
+                  </>
+                ) : (
+                  <span className="text-black">-</span>
+                )}
+              </td>
+              <td className="px-3 py-2 text-right text-amber-900 bg-amber-50/30 whitespace-nowrap">
+                {promoVarejo ? (
+                  <>
+                    <div className="text-[10px] text-amber-500 leading-tight">{formatarVariacao(pctPromoVarejo)}</div>
+                    {formatarPreco(promoVarejo.precoPromo)}
+                  </>
+                ) : (
+                  <span className="text-black">-</span>
+                )}
+              </td>
+              <td
+                className="px-3 py-2 text-right text-rose-900 bg-rose-50/30 whitespace-nowrap cursor-help"
+                onMouseEnter={(ev) => precoAtacadoCampanhaReal !== null && setTooltipCelula({ texto: `Preço real (sem arredondamento): ${formatarPreco(precoAtacadoCampanhaReal)}`, x: ev.clientX, y: ev.clientY })}
+                onMouseMove={(ev) => precoAtacadoCampanhaReal !== null && setTooltipCelula({ texto: `Preço real (sem arredondamento): ${formatarPreco(precoAtacadoCampanhaReal)}`, x: ev.clientX, y: ev.clientY })}
+                onMouseLeave={() => setTooltipCelula(null)}
+              >
+                {precoAtacadoCampanha !== null ? (
+                  <>
+                    <div className="text-[10px] text-rose-500 leading-tight">-{percentualCampanha}%</div>
+                    {formatarPreco(precoAtacadoCampanha)}
+                  </>
+                ) : (
+                  <span className="text-black">-</span>
+                )}
+              </td>
+              <td
+                className="px-3 py-2 text-right text-rose-900 bg-rose-50/30 whitespace-nowrap cursor-help"
+                onMouseEnter={(ev) => precoVarejoCampanhaReal !== null && setTooltipCelula({ texto: `Preço real (sem arredondamento): ${formatarPreco(precoVarejoCampanhaReal)}`, x: ev.clientX, y: ev.clientY })}
+                onMouseMove={(ev) => precoVarejoCampanhaReal !== null && setTooltipCelula({ texto: `Preço real (sem arredondamento): ${formatarPreco(precoVarejoCampanhaReal)}`, x: ev.clientX, y: ev.clientY })}
+                onMouseLeave={() => setTooltipCelula(null)}
+              >
+                {precoVarejoCampanha !== null ? (
+                  <>
+                    <div className="text-[10px] text-rose-500 leading-tight">-{percentualCampanha}%</div>
+                    {formatarPreco(precoVarejoCampanha)}
+                  </>
+                ) : (
+                  <span className="text-black">-</span>
+                )}
+              </td>
+            </>
+          );
+        })()}
+        {matriz!.empresas.map((e) => {
+          const dados = item.porLoja[String(e.cdEmpresa)];
+          return (
+            <td
+              key={e.cdEmpresa}
+              className="px-3 py-2 text-right cursor-default"
+              onMouseEnter={(ev) => dados && setTooltipCelula({ texto: tooltipGiro(dados.estoque, dados.venda, dados.giro, mesReferencia, item.mesesOportunidade, vendaMensalPorReferencia[item.referencia]?.[String(e.cdEmpresa)]), x: ev.clientX, y: ev.clientY })}
+              onMouseMove={(ev) => dados && setTooltipCelula({ texto: tooltipGiro(dados.estoque, dados.venda, dados.giro, mesReferencia, item.mesesOportunidade, vendaMensalPorReferencia[item.referencia]?.[String(e.cdEmpresa)]), x: ev.clientX, y: ev.clientY })}
+              onMouseLeave={() => setTooltipCelula(null)}
+            >
+              <CelulaGiro estoque={dados?.estoque ?? 0} giro={dados?.giro ?? null} />
+            </td>
+          );
+        })}
+        <td
+          className="px-3 py-2 text-right text-slate-700 bg-slate-50/50 whitespace-nowrap cursor-default"
+          onMouseEnter={(ev) => setTooltipCelula({ texto: tooltipEstoquePorLoja(item, matriz!.empresas), x: ev.clientX, y: ev.clientY })}
+          onMouseMove={(ev) => setTooltipCelula({ texto: tooltipEstoquePorLoja(item, matriz!.empresas), x: ev.clientX, y: ev.clientY })}
+          onMouseLeave={() => setTooltipCelula(null)}
+        >
+          {formatarQtd(item.estoqueTotal)}
+        </td>
+        <td className="px-3 py-2 text-right text-slate-700 bg-slate-50/50 whitespace-nowrap">{formatarGiro(item.vendaTotal)}</td>
+        <td
+          className="px-4 py-2 text-right font-semibold bg-gray-100/70 border-l-2 border-gray-200 cursor-default"
+          onMouseEnter={(ev) => setTooltipCelula({ texto: tooltipGiro(item.estoqueTotal, item.vendaTotal, item.giroTotal, mesReferencia, item.mesesOportunidade, vendaMensalTotalReferencia(item.referencia, matriz!.empresas, vendaMensalPorReferencia)), x: ev.clientX, y: ev.clientY })}
+          onMouseMove={(ev) => setTooltipCelula({ texto: tooltipGiro(item.estoqueTotal, item.vendaTotal, item.giroTotal, mesReferencia, item.mesesOportunidade, vendaMensalTotalReferencia(item.referencia, matriz!.empresas, vendaMensalPorReferencia)), x: ev.clientX, y: ev.clientY })}
+          onMouseLeave={() => setTooltipCelula(null)}
+        >
+          <CelulaGiro estoque={item.estoqueTotal} giro={item.giroTotal} />
+        </td>
+      </tr>
+    );
+  }
 
   return (
     <div className="max-w-[98%] mx-auto py-6 px-4 space-y-6">
@@ -1715,167 +1954,25 @@ export default function GiroPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {itensMatrizExibidos.map((item, idx) => (
-                      <tr key={item.referencia} className={`${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'} hover:bg-rose-50 transition-colors`}>
-                        <td
-                          className="px-4 py-2 text-black sticky left-0 bg-inherit z-10 cursor-help"
-                          onMouseEnter={(ev) => mostrarFotoRef(item.referencia, ev.clientX, ev.clientY)}
-                          onMouseMove={(ev) => moverFotoRef(item.referencia, ev.clientX, ev.clientY)}
-                          onMouseLeave={esconderFotoRef}
-                        >
-                          <div className="flex items-center gap-1.5">
-                            {item.referencia}
-                            {item.temLeveDefeito && (
-                              <span
-                                className="px-1 py-0.5 text-[9px] font-medium bg-orange-100 text-orange-700 rounded"
-                                title="Alguma cor/tamanho dessa referência está classificado como Leve Defeito"
-                              >
-                                LD
-                              </span>
-                            )}
-                          </div>
-                        </td>
-                        <td className="px-4 py-2 text-black sticky left-[100px] bg-inherit z-10">
-                          <div>{item.nome}</div>
-                          {item.cores && item.cores.length > 0 && (
-                            <div className="flex flex-wrap gap-1 max-w-[220px] mt-1">
-                              {item.cores.slice(0, 3).map((cor) => (
-                                <span key={cor} className="px-1.5 py-0.5 text-[10px] font-medium bg-gray-100 text-black border border-gray-200 rounded" title={cor}>
-                                  {cor}
-                                </span>
-                              ))}
-                              {item.cores.length > 3 && (
-                                <span
-                                  className="px-1.5 py-0.5 text-[10px] font-medium bg-gray-200 text-black border border-gray-300 rounded cursor-help"
-                                  onMouseEnter={(ev) => setTooltipCelula({ texto: item.cores!.slice(3).join(', '), x: ev.clientX, y: ev.clientY })}
-                                  onMouseMove={(ev) => setTooltipCelula({ texto: item.cores!.slice(3).join(', '), x: ev.clientX, y: ev.clientY })}
-                                  onMouseLeave={() => setTooltipCelula(null)}
-                                >
-                                  +{item.cores.length - 3}
-                                </span>
-                              )}
-                            </div>
-                          )}
-                        </td>
-                        <td
-                          className="px-3 py-2 text-right text-orange-900 bg-orange-50/30 whitespace-nowrap cursor-help"
-                          onMouseEnter={(ev) => item.dtPrimeiraOportunidade && setTooltipCelula({ texto: `Virou oportunidade em ${formatarDataBR(item.dtPrimeiraOportunidade)} (SKU mais antigo ainda em oportunidade hoje)`, x: ev.clientX, y: ev.clientY })}
-                          onMouseMove={(ev) => item.dtPrimeiraOportunidade && setTooltipCelula({ texto: `Virou oportunidade em ${formatarDataBR(item.dtPrimeiraOportunidade)} (SKU mais antigo ainda em oportunidade hoje)`, x: ev.clientX, y: ev.clientY })}
-                          onMouseLeave={() => setTooltipCelula(null)}
-                        >
-                          {item.mesesOportunidade !== null && item.mesesOportunidade !== undefined ? item.mesesOportunidade : <span className="text-black">-</span>}
-                        </td>
-                        {mostrarPrecosCheios && (
-                          <>
-                            <td className="px-3 py-2 text-right text-blue-900 bg-blue-50/30 whitespace-nowrap">{formatarPreco(item.precoFabrica)}</td>
-                            <td className="px-3 py-2 text-right text-blue-900 bg-blue-50/30 whitespace-nowrap">
-                              <div className="text-[10px] text-blue-400 leading-tight">{formatarVariacao(variacaoPercentual(item.precoFabrica, item.precoAtacado))}</div>
-                              {formatarPreco(item.precoAtacado)}
-                            </td>
-                            <td className="px-3 py-2 text-right text-blue-900 bg-blue-50/30 whitespace-nowrap">
-                              <div className="text-[10px] text-blue-400 leading-tight">{formatarVariacao(variacaoPercentual(item.precoFabrica, item.precoVarejo))}</div>
-                              {formatarPreco(item.precoVarejo)}
-                            </td>
-                          </>
-                        )}
-                        {(() => {
-                          const promoAtacado = item.promocoes?.find((p) => p.tipo === 'Atacado');
-                          const promoVarejo = item.promocoes?.find((p) => p.tipo === 'Varejo');
-                          const pctPromoAtacado = promoAtacado ? variacaoPercentual(item.precoAtacado, promoAtacado.precoPromo) : null;
-                          const pctPromoVarejo = promoVarejo ? variacaoPercentual(item.precoVarejo, promoVarejo.precoPromo) : null;
-                          const percentualCampanha = calcularPercentualCampanha(item.giroTotal, item.mesesOportunidade, temPromoAtiva(item));
-                          const precoAtacadoCampanha = calcularPrecoCampanha(item.precoAtacado, percentualCampanha);
-                          const precoVarejoCampanha = calcularPrecoCampanha(item.precoVarejo, percentualCampanha);
-                          const precoAtacadoCampanhaReal = calcularPrecoCampanhaReal(item.precoAtacado, percentualCampanha);
-                          const precoVarejoCampanhaReal = calcularPrecoCampanhaReal(item.precoVarejo, percentualCampanha);
-                          return (
-                            <>
-                              <td className="px-3 py-2 text-right text-amber-900 bg-amber-50/30 whitespace-nowrap">
-                                {promoAtacado ? (
-                                  <>
-                                    <div className="text-[10px] text-amber-500 leading-tight">{formatarVariacao(pctPromoAtacado)}</div>
-                                    {formatarPreco(promoAtacado.precoPromo)}
-                                  </>
-                                ) : (
-                                  <span className="text-black">-</span>
-                                )}
+                    {itensMatrizExibidos.flatMap((item, idx) => {
+                      const linhas: React.ReactNode[] = [linhaMatriz(item, item.referencia, idx, 0)];
+                      if (coresExpandidas.has(item.referencia)) {
+                        if (coresCarregando.has(item.referencia)) {
+                          linhas.push(
+                            <tr key={`${item.referencia}-carregando-cores`}>
+                              <td colSpan={totalColunasMatriz} className="px-4 py-3 text-center text-sm text-black bg-gray-50">
+                                Carregando cores...
                               </td>
-                              <td className="px-3 py-2 text-right text-amber-900 bg-amber-50/30 whitespace-nowrap">
-                                {promoVarejo ? (
-                                  <>
-                                    <div className="text-[10px] text-amber-500 leading-tight">{formatarVariacao(pctPromoVarejo)}</div>
-                                    {formatarPreco(promoVarejo.precoPromo)}
-                                  </>
-                                ) : (
-                                  <span className="text-black">-</span>
-                                )}
-                              </td>
-                              <td
-                                className="px-3 py-2 text-right text-rose-900 bg-rose-50/30 whitespace-nowrap cursor-help"
-                                onMouseEnter={(ev) => precoAtacadoCampanhaReal !== null && setTooltipCelula({ texto: `Preço real (sem arredondamento): ${formatarPreco(precoAtacadoCampanhaReal)}`, x: ev.clientX, y: ev.clientY })}
-                                onMouseMove={(ev) => precoAtacadoCampanhaReal !== null && setTooltipCelula({ texto: `Preço real (sem arredondamento): ${formatarPreco(precoAtacadoCampanhaReal)}`, x: ev.clientX, y: ev.clientY })}
-                                onMouseLeave={() => setTooltipCelula(null)}
-                              >
-                                {precoAtacadoCampanha !== null ? (
-                                  <>
-                                    <div className="text-[10px] text-rose-500 leading-tight">-{percentualCampanha}%</div>
-                                    {formatarPreco(precoAtacadoCampanha)}
-                                  </>
-                                ) : (
-                                  <span className="text-black">-</span>
-                                )}
-                              </td>
-                              <td
-                                className="px-3 py-2 text-right text-rose-900 bg-rose-50/30 whitespace-nowrap cursor-help"
-                                onMouseEnter={(ev) => precoVarejoCampanhaReal !== null && setTooltipCelula({ texto: `Preço real (sem arredondamento): ${formatarPreco(precoVarejoCampanhaReal)}`, x: ev.clientX, y: ev.clientY })}
-                                onMouseMove={(ev) => precoVarejoCampanhaReal !== null && setTooltipCelula({ texto: `Preço real (sem arredondamento): ${formatarPreco(precoVarejoCampanhaReal)}`, x: ev.clientX, y: ev.clientY })}
-                                onMouseLeave={() => setTooltipCelula(null)}
-                              >
-                                {precoVarejoCampanha !== null ? (
-                                  <>
-                                    <div className="text-[10px] text-rose-500 leading-tight">-{percentualCampanha}%</div>
-                                    {formatarPreco(precoVarejoCampanha)}
-                                  </>
-                                ) : (
-                                  <span className="text-black">-</span>
-                                )}
-                              </td>
-                            </>
+                            </tr>
                           );
-                        })()}
-                        {matriz.empresas.map((e) => {
-                          const dados = item.porLoja[String(e.cdEmpresa)];
-                          return (
-                            <td
-                              key={e.cdEmpresa}
-                              className="px-3 py-2 text-right cursor-default"
-                              onMouseEnter={(ev) => dados && setTooltipCelula({ texto: tooltipGiro(dados.estoque, dados.venda, dados.giro, mesReferencia, item.mesesOportunidade, vendaMensalPorReferencia[item.referencia]?.[String(e.cdEmpresa)]), x: ev.clientX, y: ev.clientY })}
-                              onMouseMove={(ev) => dados && setTooltipCelula({ texto: tooltipGiro(dados.estoque, dados.venda, dados.giro, mesReferencia, item.mesesOportunidade, vendaMensalPorReferencia[item.referencia]?.[String(e.cdEmpresa)]), x: ev.clientX, y: ev.clientY })}
-                              onMouseLeave={() => setTooltipCelula(null)}
-                            >
-                              <CelulaGiro estoque={dados?.estoque ?? 0} giro={dados?.giro ?? null} />
-                            </td>
-                          );
-                        })}
-                        <td
-                          className="px-3 py-2 text-right text-slate-700 bg-slate-50/50 whitespace-nowrap cursor-default"
-                          onMouseEnter={(ev) => setTooltipCelula({ texto: tooltipEstoquePorLoja(item, matriz.empresas), x: ev.clientX, y: ev.clientY })}
-                          onMouseMove={(ev) => setTooltipCelula({ texto: tooltipEstoquePorLoja(item, matriz.empresas), x: ev.clientX, y: ev.clientY })}
-                          onMouseLeave={() => setTooltipCelula(null)}
-                        >
-                          {formatarQtd(item.estoqueTotal)}
-                        </td>
-                        <td className="px-3 py-2 text-right text-slate-700 bg-slate-50/50 whitespace-nowrap">{formatarGiro(item.vendaTotal)}</td>
-                        <td
-                          className="px-4 py-2 text-right font-semibold bg-gray-100/70 border-l-2 border-gray-200 cursor-default"
-                          onMouseEnter={(ev) => setTooltipCelula({ texto: tooltipGiro(item.estoqueTotal, item.vendaTotal, item.giroTotal, mesReferencia, item.mesesOportunidade, vendaMensalTotalReferencia(item.referencia, matriz.empresas, vendaMensalPorReferencia)), x: ev.clientX, y: ev.clientY })}
-                          onMouseMove={(ev) => setTooltipCelula({ texto: tooltipGiro(item.estoqueTotal, item.vendaTotal, item.giroTotal, mesReferencia, item.mesesOportunidade, vendaMensalTotalReferencia(item.referencia, matriz.empresas, vendaMensalPorReferencia)), x: ev.clientX, y: ev.clientY })}
-                          onMouseLeave={() => setTooltipCelula(null)}
-                        >
-                          <CelulaGiro estoque={item.estoqueTotal} giro={item.giroTotal} />
-                        </td>
-                      </tr>
-                    ))}
+                        } else {
+                          (coresPorReferencia[item.referencia] || []).forEach((corItem, corIdx) => {
+                            linhas.push(linhaMatriz(corItem, `${item.referencia}-cor-${corItem.cor}`, corIdx, 1));
+                          });
+                        }
+                      }
+                      return linhas;
+                    })}
                   </tbody>
                 </table>
               </div>
