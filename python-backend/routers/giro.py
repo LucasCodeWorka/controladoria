@@ -27,8 +27,9 @@ Suporta filtrar por mes de referencia e por empresa antes de calcular:
 """
 from fastapi import APIRouter, HTTPException, Query
 from typing import Optional
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 import math
+import asyncio
 from database import execute_query, execute_insert
 from routers.cmv_detalhado import EMPRESAS_CMV_DETALHADO, _nome_empresa_cmv, _eh_fabrica
 
@@ -1212,6 +1213,67 @@ def recalcular_giro(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Erro ao recalcular giro: {str(e)}")
+
+
+# ============================================================================
+# RECALCULO AUTOMATICO (agendador em background) - pedido do usuario depois
+# de achar uma loja (Tabosa) com o giro desatualizado ha 8 dias: o estoque
+# so e mesmo "tempo real" se alguem clicar em Recalcular. Em vez de
+# recalcular em TODA consulta (deixaria a tela de 0 pra ~7-80s a cada clique
+# - ver timings na docstring do modulo), roda em background, so pro MES
+# ATUAL (mes passado nunca fica desatualizado - o corte de estoque dele e
+# uma data fixa no passado, sempre o mesmo resultado), recalculando so as
+# empresas com o ultimo calculo velho (ou nunca calculado).
+#
+# LIMITACAO IMPORTANTE: isso so roda enquanto o PROCESSO do backend estiver
+# de pe. Num plano Render que hiberna por inatividade, o loop para junto
+# com o processo - o recalculo so volta a acontecer quando alguem acessa o
+# site de novo (o que acorda o servico e reinicia esse loop do zero). Nao e
+# um cron de verdade (garantido rodar numa hora fixa mesmo sem ninguem
+# acessando) - pra isso, precisaria de um Render Cron Job separado (outro
+# servico no render.yaml) ou um pinger externo.
+# ============================================================================
+
+INTERVALO_VERIFICACAO_AGENDADOR_SEGUNDOS = 60 * 60  # confere a cada 1h
+IDADE_MAXIMA_SNAPSHOT_HORAS = 24  # recalcula se o ultimo calculo (ou nunca calculado) tiver mais que isso
+
+
+def _snapshot_giro_desatualizado(cd_empresa: int, mes_referencia: str) -> bool:
+    """Se o giro dessa empresa, pro mes de referencia, nunca foi calculado
+    OU o ultimo calculo tem mais de IDADE_MAXIMA_SNAPSHOT_HORAS horas."""
+    rows = execute_query(
+        "SELECT dt_calculado FROM giro_snapshot WHERE cd_empresa = %s AND mes_referencia = %s",
+        (cd_empresa, mes_referencia)
+    ) or []
+    if not rows:
+        return True
+    idade = datetime.now() - rows[0]["dt_calculado"]
+    return idade.total_seconds() > IDADE_MAXIMA_SNAPSHOT_HORAS * 3600
+
+
+async def loop_recalculo_automatico_giro():
+    """Roda pra sempre em background (ver _app.on_event("startup") em
+    main.py): a cada INTERVALO_VERIFICACAO_AGENDADOR_SEGUNDOS, verifica
+    quais empresas estao com o giro do MES ATUAL desatualizado e recalcula
+    todas elas numa chamada so (mais rapido que uma por vez - ver
+    _calcular_giro). O calculo em si (sincrono, pesado) roda numa thread
+    separada (asyncio.to_thread) pra nao travar o resto da API enquanto
+    isso acontece."""
+    _criar_tabela_giro()
+    while True:
+        try:
+            mes_ref = _mes_atual()
+            cd_empresas = _parse_empresas_giro(None)
+            desatualizadas = [e for e in cd_empresas if _snapshot_giro_desatualizado(e, mes_ref)]
+            if desatualizadas:
+                print(f"[AGENDADOR GIRO] {len(desatualizadas)} empresa(s) desatualizada(s) no mes {mes_ref}: {desatualizadas} - recalculando...")
+                await asyncio.to_thread(_calcular_giro, mes_ref, desatualizadas)
+                print(f"[AGENDADOR GIRO] Recalculo automatico concluido - mes {mes_ref}")
+        except Exception as e:
+            print(f"[AGENDADOR GIRO] Erro no recalculo automatico: {e}")
+            import traceback
+            traceback.print_exc()
+        await asyncio.sleep(INTERVALO_VERIFICACAO_AGENDADOR_SEGUNDOS)
 
 
 @router.get("/api/giro/matriz-produtos")

@@ -1,8 +1,11 @@
+import asyncio
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database import close_all_connections
 
 from routers import health, indicadores, dre, classificacao, analise_executiva, cmv_detalhado, giro, estoque_tempo, foto, analisador_dre, balanco_patrimonial
+from routers.giro import loop_recalculo_automatico_giro
 
 app = FastAPI(
     title="Liebe DRE API",
@@ -48,6 +51,14 @@ app.include_router(estoque_tempo.router)
 app.include_router(foto.router)
 app.include_router(analisador_dre.router)
 app.include_router(balanco_patrimonial.router)
+
+
+@app.on_event("startup")
+async def startup_event():
+    # Recalculo automatico do giro em background (so pro mes atual, so
+    # empresas desatualizadas - ver loop_recalculo_automatico_giro) - fica
+    # rodando pra sempre em paralelo, sem bloquear a API.
+    asyncio.create_task(loop_recalculo_automatico_giro())
 
 
 @app.on_event("shutdown")
