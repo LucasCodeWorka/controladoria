@@ -21,6 +21,7 @@ import {
   Clock,
   Sparkles,
   Scale,
+  Banknote,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -52,6 +53,11 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
       name: 'DRE x DFC',
       href: '/dre-dfc',
       icon: GitCompare,
+    },
+    {
+      name: 'Fluxo de Caixa',
+      href: '/fluxo-caixa',
+      icon: Banknote,
     },
     {
       name: 'CMV Detalhado',
