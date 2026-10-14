@@ -605,12 +605,11 @@ export default function FluxoCaixaPage() {
   const DIAS_SEMANA = ['DOM', 'SEG', 'TER', 'QUA', 'QUI', 'SEX', 'SÁB'];
   const hoje = isoHoje();
 
-  function celula(key: ColKey, rawVal: number, cor: string, grupo: 'saida' | 'entrada', extraClasse = '') {
+  function celula(key: ColKey, rawVal: number, cor: string, extraClasse = '') {
     const ativa = colsAtivas[key];
     const v = rawVal || 0;
-    const bgGrupo = grupo === 'saida' ? 'bg-red-50' : 'bg-green-50';
     return (
-      <td className={`text-right px-3 py-2 ${bgGrupo} ${extraClasse}`} style={{ color: ativa ? cor : '#94a3b8', fontWeight: ativa && v > 0 ? 600 : 400 }}>
+      <td className={`text-right px-3 py-2 border-r border-gray-300 ${extraClasse}`} style={{ color: ativa ? cor : '#94a3b8', fontWeight: ativa && v > 0 ? 600 : 400 }}>
         {v > 0 ? <span style={!ativa ? { textDecoration: 'line-through' } : undefined}>{fmtBRL(v)}</span> : <span className="text-gray-300">—</span>}
       </td>
     );
@@ -822,26 +821,26 @@ export default function FluxoCaixaPage() {
               ))}
             </div>
 
-            <div className="overflow-x-auto max-h-[560px] overflow-y-auto">
-              <table className="w-full text-sm min-w-[1100px]">
+            <div className="overflow-x-auto max-h-[78vh] overflow-y-auto">
+              <table className="w-full text-sm min-w-[1100px] border-separate [border-spacing:0]">
                 <thead className="sticky top-0 z-10">
                   <tr className="text-left">
-                    <th rowSpan={2} className="px-3 py-2 min-w-[90px] align-middle font-medium text-black bg-gray-50 border-b border-gray-200">Data</th>
-                    <th colSpan={4} className="px-3 py-1.5 text-center text-xs font-semibold uppercase tracking-wide text-red-700 bg-red-50 border-b border-gray-200">Saídas</th>
-                    <th colSpan={4} className="px-3 py-1.5 text-center text-xs font-semibold uppercase tracking-wide text-green-700 bg-green-50 border-b border-gray-200 border-l-2 border-l-gray-300">Entradas</th>
-                    <th rowSpan={2} className="px-3 py-2 text-right whitespace-nowrap align-middle font-medium text-black bg-blue-50 border-b border-gray-200 border-l-2 border-l-gray-300">Saldo Dia</th>
-                    <th rowSpan={2} className="px-3 py-2 text-right whitespace-nowrap align-middle font-medium text-black bg-blue-50 border-b border-gray-200">Saldo Acum.</th>
-                    <th rowSpan={2} className="px-3 py-2 text-right align-middle font-medium text-black bg-gray-50 border-b border-gray-200">Qtd</th>
+                    <th rowSpan={2} className="px-3 py-2 min-w-[90px] align-middle font-medium text-black bg-gray-100 border-b-2 border-r-2 border-gray-300">Data</th>
+                    <th colSpan={4} className="px-3 py-1.5 text-center text-xs font-semibold uppercase tracking-wide text-white bg-red-600 border-b border-red-700">Saídas</th>
+                    <th colSpan={4} className="px-3 py-1.5 text-center text-xs font-semibold uppercase tracking-wide text-white bg-green-600 border-b border-green-700 border-l-2 border-l-gray-300">Entradas</th>
+                    <th rowSpan={2} className="px-3 py-2 text-right whitespace-nowrap align-middle font-medium text-black bg-gray-100 border-b-2 border-r border-gray-300 border-l-2 border-l-gray-300">Saldo Dia</th>
+                    <th rowSpan={2} className="px-3 py-2 text-right whitespace-nowrap align-middle font-medium text-black bg-gray-100 border-b-2 border-r-2 border-gray-300">Saldo Acum.</th>
+                    <th rowSpan={2} className="px-3 py-2 text-right align-middle font-medium text-black bg-gray-100 border-b-2 border-gray-300">Qtd</th>
                   </tr>
                   <tr className="text-left">
-                    <th className="px-3 py-1.5 text-right font-medium text-red-500 bg-red-50 border-b border-gray-200">Prev.</th>
-                    <th className="px-3 py-1.5 text-right font-medium text-red-800 bg-red-50 border-b border-gray-200">Real</th>
-                    <th className="px-3 py-1.5 text-right font-medium text-red-600 bg-red-50 border-b border-gray-200">Pedidos</th>
-                    <th className="px-3 py-1.5 text-right font-semibold text-red-800 bg-red-100 border-b border-gray-200">Total</th>
-                    <th className="px-3 py-1.5 text-right font-medium text-sky-700 bg-green-50 border-b border-gray-200 border-l-2 border-l-gray-300">Boleto</th>
-                    <th className="px-3 py-1.5 text-right font-medium text-green-700 bg-green-50 border-b border-gray-200">Cheque</th>
-                    <th className="px-3 py-1.5 text-right font-medium text-cyan-700 bg-green-50 border-b border-gray-200">Lojas</th>
-                    <th className="px-3 py-1.5 text-right font-semibold text-green-800 bg-green-100 border-b border-gray-200">Total</th>
+                    <th className="px-3 py-1.5 text-right font-medium text-white/90 bg-red-500 border-b-2 border-red-300 border-r border-red-400">Prev.</th>
+                    <th className="px-3 py-1.5 text-right font-medium text-white/90 bg-red-500 border-b-2 border-red-300 border-r border-red-400">Real</th>
+                    <th className="px-3 py-1.5 text-right font-medium text-white/90 bg-red-500 border-b-2 border-red-300 border-r border-red-400">Pedidos</th>
+                    <th className="px-3 py-1.5 text-right font-semibold text-white bg-red-700 border-b-2 border-red-300 border-r-2 border-gray-300">Total</th>
+                    <th className="px-3 py-1.5 text-right font-medium text-white/90 bg-green-500 border-b-2 border-green-300 border-r border-green-400">Boleto</th>
+                    <th className="px-3 py-1.5 text-right font-medium text-white/90 bg-green-500 border-b-2 border-green-300 border-r border-green-400">Cheque</th>
+                    <th className="px-3 py-1.5 text-right font-medium text-white/90 bg-green-500 border-b-2 border-green-300 border-r border-green-400">Lojas</th>
+                    <th className="px-3 py-1.5 text-right font-semibold text-white bg-green-700 border-b-2 border-green-300 border-r-2 border-gray-300">Total</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200">
@@ -857,25 +856,25 @@ export default function FluxoCaixaPage() {
                     const bg = isHoje ? 'bg-sky-50' : isFds ? 'bg-gray-100' : i % 2 === 0 ? 'bg-white' : 'bg-gray-50';
                     return (
                       <tr key={l.dia.dia} className={`${bg} ${isHoje ? 'font-bold' : ''} hover:bg-rose-50 transition-colors`}>
-                        <td className="px-3 py-2 whitespace-nowrap text-black">
+                        <td className="px-3 py-2 whitespace-nowrap text-black border-r-2 border-gray-300">
                           <span className="tabular-nums">{dd}/{mm}</span>
                           <span className="text-xs text-gray-500 ml-1.5">{dow}</span>
                           {isHoje && <span className="text-xs font-medium bg-sky-600 text-white rounded px-1.5 py-0.5 ml-1.5 align-middle">hoje</span>}
                         </td>
-                        {celula('previsao', l.dia.previsao, '#ef4444', 'saida')}
-                        {celula('real', l.dia.real, '#991b1b', 'saida')}
-                        {celula('pedidos', l.dia.pedidos, '#dc2626', 'saida')}
-                        <td className="text-right px-3 py-2 font-bold text-red-800 bg-red-100">
+                        {celula('previsao', l.dia.previsao, '#ef4444')}
+                        {celula('real', l.dia.real, '#991b1b')}
+                        {celula('pedidos', l.dia.pedidos, '#dc2626')}
+                        <td className="text-right px-3 py-2 font-bold text-red-800 border-r-2 border-gray-300">
                           {l.effSaidas > 0 ? fmtBRL(l.effSaidas) : <span className="text-gray-400">—</span>}
                         </td>
-                        {celula('boleto', l.dia.boleto, '#0284c7', 'entrada', 'border-l-2 border-l-gray-300')}
-                        {celula('cheque', l.dia.cheque, '#059669', 'entrada')}
-                        {celula('lojas', l.adjLojas, '#0891b2', 'entrada')}
-                        <td className="text-right px-3 py-2 font-bold text-green-800 bg-green-100">
+                        {celula('boleto', l.dia.boleto, '#0284c7')}
+                        {celula('cheque', l.dia.cheque, '#059669')}
+                        {celula('lojas', l.adjLojas, '#0891b2')}
+                        <td className="text-right px-3 py-2 font-bold text-green-800 border-r-2 border-gray-300">
                           {l.effEntradas > 0 ? fmtBRL(l.effEntradas) : <span className="text-gray-400">—</span>}
                         </td>
-                        <td className={`text-right px-3 py-2 font-bold bg-blue-50 border-l-2 border-l-gray-300 ${l.effSaldoDia >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(l.effSaldoDia)}</td>
-                        <td className={`text-right px-3 py-2 font-bold bg-blue-50 ${l.saldoAcum >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(l.saldoAcum)}</td>
+                        <td className={`text-right px-3 py-2 font-bold border-r border-gray-300 ${l.effSaldoDia >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(l.effSaldoDia)}</td>
+                        <td className={`text-right px-3 py-2 font-bold border-r-2 border-gray-300 ${l.saldoAcum >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(l.saldoAcum)}</td>
                         <td className="text-right px-3 py-2 text-black">{fmtNum(l.dia.qtd)}</td>
                       </tr>
                     );
@@ -883,19 +882,19 @@ export default function FluxoCaixaPage() {
                 </tbody>
                 {linhasDiarias.length > 0 && (
                   <tfoot>
-                    <tr className="font-bold text-sm border-t-2 border-gray-300">
-                      <td className="px-3 py-2.5 uppercase text-xs tracking-wide text-black bg-gray-100">Total</td>
-                      <td className="text-right px-3 py-2.5 text-red-700 bg-red-50">{fmtBRL(totais.previsao)}</td>
-                      <td className="text-right px-3 py-2.5 text-red-800 bg-red-50">{fmtBRL(totais.real)}</td>
-                      <td className="text-right px-3 py-2.5 text-red-600 bg-red-50">{fmtBRL(totais.pedidos)}</td>
-                      <td className="text-right px-3 py-2.5 text-red-800 bg-red-100">{fmtBRL(totais.saidas)}</td>
-                      <td className="text-right px-3 py-2.5 text-sky-700 bg-green-50 border-l-2 border-l-gray-300">{fmtBRL(totais.boleto)}</td>
-                      <td className="text-right px-3 py-2.5 text-green-700 bg-green-50">{fmtBRL(totais.cheque)}</td>
-                      <td className="text-right px-3 py-2.5 text-cyan-700 bg-green-50">{fmtBRL(totais.lojas)}</td>
-                      <td className="text-right px-3 py-2.5 text-green-800 bg-green-100">{fmtBRL(totais.entradas)}</td>
-                      <td className={`text-right px-3 py-2.5 bg-blue-50 border-l-2 border-l-gray-300 ${saldoFinal >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(saldoFinal)}</td>
-                      <td className={`text-right px-3 py-2.5 bg-blue-50 ${saldoFinal >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(saldoFinal)}</td>
-                      <td className="text-right px-3 py-2.5 text-black bg-gray-100">{fmtNum(totais.qtd)}</td>
+                    <tr className="font-bold text-sm bg-gray-100">
+                      <td className="px-3 py-2.5 uppercase text-xs tracking-wide text-black border-t-2 border-r-2 border-gray-400">Total</td>
+                      <td className="text-right px-3 py-2.5 text-red-700 border-t-2 border-r border-gray-400">{fmtBRL(totais.previsao)}</td>
+                      <td className="text-right px-3 py-2.5 text-red-800 border-t-2 border-r border-gray-400">{fmtBRL(totais.real)}</td>
+                      <td className="text-right px-3 py-2.5 text-red-600 border-t-2 border-r border-gray-400">{fmtBRL(totais.pedidos)}</td>
+                      <td className="text-right px-3 py-2.5 text-red-800 border-t-2 border-r-2 border-gray-400">{fmtBRL(totais.saidas)}</td>
+                      <td className="text-right px-3 py-2.5 text-sky-700 border-t-2 border-r border-gray-400">{fmtBRL(totais.boleto)}</td>
+                      <td className="text-right px-3 py-2.5 text-green-700 border-t-2 border-r border-gray-400">{fmtBRL(totais.cheque)}</td>
+                      <td className="text-right px-3 py-2.5 text-cyan-700 border-t-2 border-r border-gray-400">{fmtBRL(totais.lojas)}</td>
+                      <td className="text-right px-3 py-2.5 text-green-800 border-t-2 border-r-2 border-gray-400">{fmtBRL(totais.entradas)}</td>
+                      <td className={`text-right px-3 py-2.5 border-t-2 border-r border-gray-400 ${saldoFinal >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(saldoFinal)}</td>
+                      <td className={`text-right px-3 py-2.5 border-t-2 border-r-2 border-gray-400 ${saldoFinal >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(saldoFinal)}</td>
+                      <td className="text-right px-3 py-2.5 text-black border-t-2 border-gray-400">{fmtNum(totais.qtd)}</td>
                     </tr>
                   </tfoot>
                 )}
