@@ -498,7 +498,7 @@ export default function FluxoCaixaPage() {
   function celula(key: ColKey, rawVal: number, cor: string, grupo: 'saida' | 'entrada') {
     const ativa = colsAtivas[key];
     const v = rawVal || 0;
-    const bgGrupo = grupo === 'saida' ? 'bg-slate-50' : 'bg-green-50/60';
+    const bgGrupo = grupo === 'saida' ? 'bg-slate-50' : 'bg-green-50';
     return (
       <td className={`text-right px-3 py-2 border-r border-gray-200 ${bgGrupo}`} style={{ color: ativa ? cor : '#64748b', opacity: ativa ? 1 : 0.45, fontWeight: ativa && v > 0 ? 600 : 400 }}>
         {v > 0 ? <span style={!ativa ? { textDecoration: 'line-through' } : undefined}>{fmtBRL(v)}</span> : <span className="text-gray-300">—</span>}
@@ -639,7 +639,7 @@ export default function FluxoCaixaPage() {
             </div>
 
             {/* Simulacao */}
-            <div className="flex items-center gap-4 flex-wrap px-4 py-2.5 border-b border-gray-200 bg-amber-50/50">
+            <div className="flex items-center gap-4 flex-wrap px-4 py-2.5 border-b border-gray-200 bg-amber-50">
               <span className="text-xs font-bold text-black uppercase tracking-wide">Simulação</span>
               <label className="flex items-center gap-1.5 text-sm">
                 <span className="font-semibold text-purple-700">Multimarcas</span>
@@ -703,13 +703,13 @@ export default function FluxoCaixaPage() {
                     <th className="px-3 py-1.5 text-right font-medium text-slate-700 bg-slate-50 border-b border-r border-gray-200">Prev.</th>
                     <th className="px-3 py-1.5 text-right font-medium text-slate-700 bg-slate-50 border-b border-r border-gray-200">Real</th>
                     <th className="px-3 py-1.5 text-right font-medium text-amber-700 bg-slate-50 border-b border-r border-gray-200">Pedidos</th>
-                    <th className="px-3 py-1.5 text-right font-semibold text-black bg-slate-200/70 border-b border-r-2 border-gray-300">Total</th>
+                    <th className="px-3 py-1.5 text-right font-semibold text-black bg-slate-200 border-b border-r-2 border-gray-300">Total</th>
                     <th className="px-3 py-1.5 text-right font-medium text-green-700 bg-green-50 border-b border-r border-gray-200">Cartão</th>
                     <th className="px-3 py-1.5 text-right font-medium text-sky-700 bg-green-50 border-b border-r border-gray-200">Boleto</th>
                     <th className="px-3 py-1.5 text-right font-medium text-green-700 bg-green-50 border-b border-r border-gray-200">Cheque</th>
                     <th className="px-3 py-1.5 text-right font-medium text-cyan-700 bg-green-50 border-b border-r border-gray-200">Lojas</th>
                     <th className="px-3 py-1.5 text-right font-medium text-purple-700 bg-green-50 border-b border-r border-gray-200">Multimarcas</th>
-                    <th className="px-3 py-1.5 text-right font-semibold text-black bg-green-200/70 border-b border-r-2 border-gray-300">Total</th>
+                    <th className="px-3 py-1.5 text-right font-semibold text-black bg-green-200 border-b border-r-2 border-gray-300">Total</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -733,7 +733,7 @@ export default function FluxoCaixaPage() {
                         {celula('previsao', l.dia.previsao, '#64748b', 'saida')}
                         {celula('real', l.dia.real, '#334155', 'saida')}
                         {celula('pedidos', l.dia.pedidos, '#b45309', 'saida')}
-                        <td className="text-right px-3 py-2 font-bold text-black bg-slate-200/50 border-r-2 border-gray-300">
+                        <td className="text-right px-3 py-2 font-bold text-black bg-slate-200 border-r-2 border-gray-300">
                           {l.effSaidas > 0 ? fmtBRL(l.effSaidas) : <span className="text-gray-300">—</span>}
                         </td>
                         {celula('cartao', l.dia.cartao, '#059669', 'entrada')}
@@ -741,7 +741,7 @@ export default function FluxoCaixaPage() {
                         {celula('cheque', l.dia.cheque, '#059669', 'entrada')}
                         {celula('lojas', l.adjLojas, '#0891b2', 'entrada')}
                         {celula('multimarcas', l.adjMulti, '#9333ea', 'entrada')}
-                        <td className="text-right px-3 py-2 font-bold text-green-700 bg-green-200/50 border-r-2 border-gray-300">
+                        <td className="text-right px-3 py-2 font-bold text-green-700 bg-green-200 border-r-2 border-gray-300">
                           {l.effEntradas > 0 ? fmtBRL(l.effEntradas) : <span className="text-gray-300">—</span>}
                         </td>
                         <td className={`text-right px-3 py-2 font-bold border-r border-gray-100 ${l.effSaldoDia >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(l.effSaldoDia)}</td>
@@ -754,20 +754,20 @@ export default function FluxoCaixaPage() {
                 {linhasDiarias.length > 0 && (
                   <tfoot>
                     <tr className="font-bold text-sm border-t-2 border-gray-300">
-                      <td className="px-3 py-2.5 uppercase text-xs tracking-wide text-black bg-gray-200/70 border-r border-gray-200">Total</td>
+                      <td className="px-3 py-2.5 uppercase text-xs tracking-wide text-black bg-gray-200 border-r border-gray-200">Total</td>
                       <td className="text-right px-3 py-2.5 text-slate-700 bg-slate-100 border-r border-gray-200">{fmtBRL(totais.previsao)}</td>
                       <td className="text-right px-3 py-2.5 text-slate-700 bg-slate-100 border-r border-gray-200">{fmtBRL(totais.real)}</td>
                       <td className="text-right px-3 py-2.5 text-amber-700 bg-slate-100 border-r border-gray-200">{fmtBRL(totais.pedidos)}</td>
-                      <td className="text-right px-3 py-2.5 text-black bg-slate-300/60 border-r-2 border-gray-300">{fmtBRL(totais.saidas)}</td>
+                      <td className="text-right px-3 py-2.5 text-black bg-slate-300 border-r-2 border-gray-300">{fmtBRL(totais.saidas)}</td>
                       <td className="text-right px-3 py-2.5 text-green-700 bg-green-100 border-r border-gray-200">{fmtBRL(totais.cartao)}</td>
                       <td className="text-right px-3 py-2.5 text-sky-700 bg-green-100 border-r border-gray-200">{fmtBRL(totais.boleto)}</td>
                       <td className="text-right px-3 py-2.5 text-green-700 bg-green-100 border-r border-gray-200">{fmtBRL(totais.cheque)}</td>
                       <td className="text-right px-3 py-2.5 text-cyan-700 bg-green-100 border-r border-gray-200">{fmtBRL(totais.lojas)}</td>
                       <td className="text-right px-3 py-2.5 text-purple-700 bg-green-100 border-r border-gray-200">{fmtBRL(totais.multimarcas)}</td>
-                      <td className="text-right px-3 py-2.5 text-green-700 bg-green-300/60 border-r-2 border-gray-300">{fmtBRL(totais.entradas)}</td>
-                      <td className={`text-right px-3 py-2.5 bg-gray-200/70 border-r border-gray-200 ${saldoFinal >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(saldoFinal)}</td>
-                      <td className={`text-right px-3 py-2.5 bg-gray-200/70 border-r border-gray-200 ${saldoFinal >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(saldoFinal)}</td>
-                      <td className="text-right px-3 py-2.5 text-black bg-gray-200/70">{fmtNum(totais.qtd)}</td>
+                      <td className="text-right px-3 py-2.5 text-green-700 bg-green-300 border-r-2 border-gray-300">{fmtBRL(totais.entradas)}</td>
+                      <td className={`text-right px-3 py-2.5 bg-gray-200 border-r border-gray-200 ${saldoFinal >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(saldoFinal)}</td>
+                      <td className={`text-right px-3 py-2.5 bg-gray-200 border-r border-gray-200 ${saldoFinal >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(saldoFinal)}</td>
+                      <td className="text-right px-3 py-2.5 text-black bg-gray-200">{fmtNum(totais.qtd)}</td>
                     </tr>
                   </tfoot>
                 )}
