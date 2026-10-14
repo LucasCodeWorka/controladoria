@@ -1,7 +1,10 @@
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Banknote, ChevronDown, Loader2, Settings, X, RotateCcw, AlertTriangle, ArrowUp, ArrowDown, ArrowUpDown } from 'lucide-react';
+import {
+  Banknote, ChevronDown, Loader2, Settings, X, RotateCcw, AlertTriangle,
+  ArrowUp, ArrowDown, ArrowUpDown, Clock, CalendarDays, TrendingUp,
+} from 'lucide-react';
 import {
   Bar,
   BarChart,
@@ -131,7 +134,7 @@ function TooltipMes({ active, payload }: { active?: boolean; payload?: TooltipMe
   const m = payload[0].payload;
   const totalEntradas = m.cartao + m.boleto + m.cheque + m.lojas + m.multimarcas;
   return (
-    <div className="bg-gray-900 text-white text-sm rounded px-3 py-2 shadow-lg space-y-1">
+    <div className="bg-gray-900 text-white text-xs rounded px-2.5 py-1.5 shadow-lg space-y-1 max-w-xs">
       <p className="font-semibold">{fmtMes(m.mes)}</p>
       <p>Saídas: {fmtBRL(m.totalSaidas)} (Real {fmtBRL(m.real)} · Prev {fmtBRL(m.previsao)} · Pedidos {fmtBRL(m.pedidos)})</p>
       <p>Entradas: {fmtBRL(totalEntradas)} (Cartão {fmtBRL(m.cartao)} · Boleto {fmtBRL(m.boleto)} · Cheque {fmtBRL(m.cheque)} · Lojas {fmtBRL(m.lojas)} · Multi {fmtBRL(m.multimarcas)})</p>
@@ -141,15 +144,15 @@ function TooltipMes({ active, payload }: { active?: boolean; payload?: TooltipMe
 
 function GraficoMensalFC({ meses }: { meses: MesFC[] }) {
   if (!meses.length) {
-    return <p className="text-base text-gray-400 py-8 text-center">Sem dados no período.</p>;
+    return <p className="text-sm text-gray-400 py-8 text-center">Sem dados no período.</p>;
   }
   const dados = meses.map((m) => ({ ...m, totalEntradas: m.cartao + m.boleto + m.cheque + m.lojas + m.multimarcas }));
   return (
     <div role="img" aria-label="Saídas e entradas projetadas por mês">
       <ResponsiveContainer width="100%" height={240}>
         <BarChart data={dados} margin={{ top: 8, right: 8, left: 0, bottom: 4 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
-          <XAxis dataKey="mes" tickFormatter={fmtMes} tick={{ fontSize: 12, fill: '#52514e' }} axisLine={{ stroke: '#c3c2b7' }} tickLine={false} />
+          <CartesianGrid strokeDasharray="3 3" stroke="#e1e0d9" vertical={false} />
+          <XAxis dataKey="mes" tickFormatter={fmtMes} tick={{ fontSize: 11, fill: '#52514e' }} axisLine={{ stroke: '#c3c2b7' }} tickLine={false} />
           <YAxis tickFormatter={(v: number) => fmtBRL(v)} tick={{ fontSize: 11, fill: '#898781' }} axisLine={false} tickLine={false} width={84} />
           <Tooltip content={<TooltipMes />} cursor={{ fill: 'rgba(11,11,11,0.04)' }} />
           <Bar dataKey="totalSaidas" name="Saídas" fill="#334155" radius={[4, 4, 0, 0]} maxBarSize={36} />
@@ -157,10 +160,10 @@ function GraficoMensalFC({ meses }: { meses: MesFC[] }) {
         </BarChart>
       </ResponsiveContainer>
       <div className="flex items-center justify-center gap-6 mt-2">
-        <span className="flex items-center gap-1.5 text-sm text-gray-600">
+        <span className="flex items-center gap-1.5 text-xs font-medium text-black">
           <span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ backgroundColor: '#334155' }} /> Saídas
         </span>
-        <span className="flex items-center gap-1.5 text-sm text-gray-600">
+        <span className="flex items-center gap-1.5 text-xs font-medium text-black">
           <span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ backgroundColor: '#059669' }} /> Entradas
         </span>
       </div>
@@ -173,17 +176,17 @@ function GraficoMensalFC({ meses }: { meses: MesFC[] }) {
 // layout do relatorio de referencia que o usuario pediu pra replicar aqui.
 function ListaBarrasRanking({ itens, cor }: { itens: { nome: string; valor: number }[]; cor: string }) {
   if (!itens.length) {
-    return <p className="text-base text-gray-400 py-8 text-center">Sem dados no período.</p>;
+    return <p className="text-sm text-gray-400 py-8 text-center">Sem dados no período.</p>;
   }
   const maxValor = Math.max(...itens.map((i) => i.valor), 1);
   return (
-    <div className="max-h-[520px] overflow-y-auto pr-1 space-y-1">
+    <div className="max-h-[520px] overflow-y-auto pr-1 space-y-1.5">
       {itens.map((item, i) => (
         <div key={`${item.nome}-${i}`} className="flex items-center gap-2 text-sm">
-          <span className="w-28 flex-shrink-0 text-right font-semibold text-gray-700 tabular-nums">{fmtBRL(-item.valor)}</span>
+          <span className="w-28 flex-shrink-0 text-right font-semibold text-black tabular-nums">{fmtBRL(-item.valor)}</span>
           <div className="flex-1 flex items-center min-w-0">
             <div className="h-5 rounded-sm" style={{ width: `${Math.max(2, (item.valor / maxValor) * 100)}%`, backgroundColor: cor }} />
-            <span className="ml-2 truncate text-gray-700" title={item.nome}>{item.nome}</span>
+            <span className="ml-2 truncate text-black" title={item.nome}>{item.nome}</span>
           </div>
         </div>
       ))}
@@ -496,25 +499,32 @@ export default function FluxoCaixaPage() {
     const ativa = colsAtivas[key];
     const v = rawVal || 0;
     return (
-      <td className="text-right px-3 py-2 border-r border-gray-200" style={{ color: ativa ? cor : '#94a3b8', opacity: ativa ? 1 : 0.4, fontWeight: ativa && v > 0 ? 600 : 400 }}>
-        {v > 0 ? <span style={!ativa ? { textDecoration: 'line-through' } : undefined}>{fmtBRL(v)}</span> : <span className="opacity-25">—</span>}
+      <td className="text-right px-3 py-2 border-r border-gray-100" style={{ color: ativa ? cor : '#64748b', opacity: ativa ? 1 : 0.45, fontWeight: ativa && v > 0 ? 600 : 400 }}>
+        {v > 0 ? <span style={!ativa ? { textDecoration: 'line-through' } : undefined}>{fmtBRL(v)}</span> : <span className="text-gray-300">—</span>}
       </td>
     );
   }
+
+  const kpiCards = [
+    { label: 'Títulos Vencidos', valor: dados?.totalVencido ?? 0, icone: AlertTriangle, borda: 'border-red-500', valorCor: 'text-red-600' },
+    { label: 'A Pagar — 30 dias', valor: dados?.kpi30 ?? 0, icone: Clock, borda: 'border-amber-500', valorCor: 'text-black' },
+    { label: 'A Pagar — 90 dias', valor: dados?.kpi90 ?? 0, icone: CalendarDays, borda: 'border-blue-500', valorCor: 'text-black' },
+    { label: 'Projeção 12 meses', valor: dados?.kpi180 ?? 0, icone: TrendingUp, borda: 'border-rose-500', valorCor: 'text-black' },
+  ];
 
   return (
     <div className="max-w-[98%] mx-auto py-6 px-4 space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div className="flex items-center gap-3">
-          <div className="p-3 bg-emerald-100 rounded-lg">
-            <Banknote className="w-6 h-6 text-emerald-600" />
+          <div className="p-3 bg-rose-100 rounded-lg">
+            <Banknote className="w-6 h-6 text-rose-600" />
           </div>
           <div>
             <h1 className="text-2xl font-bold text-brand-dark">Fluxo de Caixa</h1>
-            <p className="text-base text-gray-500">Saídas (duplicatas a pagar) e entradas projetadas/realizadas, com saldo diário acumulado.</p>
+            <p className="text-sm text-gray-500">Saídas (duplicatas a pagar) e entradas projetadas/realizadas, com saldo diário acumulado.</p>
           </div>
         </div>
-        {dados?.geradoEm && <span className="text-sm text-gray-400">Atualizado em {dados.geradoEm}</span>}
+        {dados?.geradoEm && <span className="text-sm text-gray-500">Atualizado em {dados.geradoEm}</span>}
       </div>
 
       {/* Filtros */}
@@ -522,18 +532,18 @@ export default function FluxoCaixaPage() {
         <div className="flex items-center gap-3 flex-wrap">
           <div className="flex flex-col gap-1">
             <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">De</label>
-            <input type="date" value={dtInicio} onChange={(e) => setDtInicio(e.target.value)} className="h-9 px-2 border border-gray-300 rounded-md text-base" />
+            <input type="date" value={dtInicio} onChange={(e) => setDtInicio(e.target.value)} className="h-9 px-2 border border-gray-300 rounded-md text-sm text-black" />
           </div>
           <div className="flex flex-col gap-1">
             <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Até</label>
-            <input type="date" value={dtFim} onChange={(e) => setDtFim(e.target.value)} className="h-9 px-2 border border-gray-300 rounded-md text-base" />
+            <input type="date" value={dtFim} onChange={(e) => setDtFim(e.target.value)} className="h-9 px-2 border border-gray-300 rounded-md text-sm text-black" />
           </div>
 
           <div className="relative">
             <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide block mb-1">Empresa</label>
             <button
               onClick={() => setFiltroEmpresasAberto((v) => !v)}
-              className="min-w-[160px] h-9 flex items-center justify-between gap-2 px-3 border border-gray-300 rounded-md text-base bg-white hover:bg-gray-50"
+              className="min-w-[160px] h-9 flex items-center justify-between gap-2 px-3 border border-gray-300 rounded-md text-sm text-black bg-white hover:bg-gray-50"
             >
               Empresas ({empresasSelecionadas.size}/{empresasDisponiveis.length})
               <ChevronDown className="w-4 h-4 text-gray-500" />
@@ -542,17 +552,17 @@ export default function FluxoCaixaPage() {
               <div className="absolute z-30 mt-1 w-64 max-h-80 overflow-auto bg-white border border-gray-200 rounded-lg shadow-xl p-2">
                 <div className="flex justify-between px-1 pb-1 mb-1 border-b border-gray-100">
                   <button
-                    className="text-sm font-medium text-emerald-700 hover:text-emerald-900"
+                    className="text-xs font-medium text-rose-700 hover:text-rose-900"
                     onClick={() => setEmpresasSelecionadas(new Set(empresasDisponiveis.map((e) => e.id)))}
                   >
                     Todas
                   </button>
-                  <button className="text-sm font-medium text-gray-600 hover:text-gray-900" onClick={() => setEmpresasSelecionadas(new Set())}>
+                  <button className="text-xs font-medium text-black hover:text-black" onClick={() => setEmpresasSelecionadas(new Set())}>
                     Nenhuma
                   </button>
                 </div>
                 {empresasDisponiveis.map((e) => (
-                  <label key={e.id} className="flex items-center gap-2 px-1 py-1 text-base hover:bg-gray-50 rounded cursor-pointer">
+                  <label key={e.id} className="flex items-center gap-2 px-1 py-1 text-sm text-black hover:bg-gray-50 rounded cursor-pointer">
                     <input type="checkbox" checked={empresasSelecionadas.has(e.id)} onChange={() => toggleEmpresaFiltro(e.id)} />
                     {e.nome}
                   </label>
@@ -564,18 +574,18 @@ export default function FluxoCaixaPage() {
           <button
             onClick={buscar}
             disabled={loading}
-            className="h-9 self-end flex items-center gap-2 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-md transition-colors disabled:opacity-50"
+            className="h-9 self-end flex items-center gap-2 px-4 bg-green-600 hover:bg-green-700 text-white rounded-md transition-colors disabled:opacity-50"
           >
             {loading && <Loader2 className="w-4 h-4 animate-spin" />}
             Aplicar
           </button>
         </div>
-        {erro && <p className="text-base text-red-600 mt-3">{erro}</p>}
+        {erro && <p className="text-sm text-red-600 mt-3">{erro}</p>}
       </div>
 
       {loading && !dados && (
         <div className="flex items-center justify-center py-16">
-          <Loader2 className="w-6 h-6 animate-spin text-emerald-600" />
+          <Loader2 className="w-6 h-6 animate-spin text-green-600" />
           <span className="ml-3 text-gray-600">Carregando...</span>
         </div>
       )}
@@ -583,22 +593,23 @@ export default function FluxoCaixaPage() {
       {dados && (
         <>
           {/* KPIs */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            {[
-              { label: 'Títulos Vencidos', valor: dados.totalVencido, cor: 'text-red-600' },
-              { label: 'A Pagar — 30 dias', valor: dados.kpi30, cor: 'text-amber-600' },
-              { label: 'A Pagar — 90 dias', valor: dados.kpi90, cor: 'text-blue-600' },
-              { label: 'Projeção 12 meses', valor: dados.kpi180, cor: 'text-gray-900' },
-            ].map((k) => (
-              <div key={k.label} className="bg-white rounded-lg shadow-md p-4">
-                <div className="text-sm text-gray-500 uppercase tracking-wide font-semibold">{k.label}</div>
-                <div className={`text-xl font-bold mt-1 ${k.cor}`}>{fmtBRL(k.valor)}</div>
-              </div>
-            ))}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            {kpiCards.map((k) => {
+              const Icone = k.icone;
+              return (
+                <div key={k.label} className={`bg-white rounded-lg shadow p-3 border-l-4 ${k.borda}`}>
+                  <div className="flex items-center gap-2 text-black text-xs font-medium">
+                    <Icone className="w-4 h-4" />
+                    {k.label}
+                  </div>
+                  <p className={`text-lg font-bold mt-1 ${k.valorCor}`}>{fmtBRL(k.valor)}</p>
+                </div>
+              );
+            })}
           </div>
 
           {dados.totalVencido > 0 && (
-            <div className="flex items-start gap-2 bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 text-base">
+            <div className="flex items-start gap-2 bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 text-sm">
               <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
               <span>
                 <strong>{fmtNum(dados.vencidos.reduce((s, r) => s + r.qtd, 0))} títulos vencidos</strong> totalizam {fmtBRL(dados.totalVencido)} e ainda não foram baixados.
@@ -608,55 +619,55 @@ export default function FluxoCaixaPage() {
 
           {/* Grafico mensal */}
           <div className="bg-white rounded-lg shadow-md p-4">
-            <h2 className="text-base font-semibold text-gray-700 mb-2">Projeção Mensal</h2>
+            <h2 className="text-sm font-semibold text-black uppercase tracking-wide mb-3">Projeção Mensal</h2>
             <GraficoMensalFC meses={dados.meses} />
           </div>
 
           {/* Visao diaria */}
           <div className="bg-white rounded-lg shadow-md overflow-hidden">
             <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-gray-50">
-              <h2 className="text-base font-semibold text-gray-700">Visão Diária</h2>
+              <h2 className="text-sm font-semibold text-black uppercase tracking-wide">Visão Diária</h2>
               <div className="flex gap-2">
-                <button onClick={faturasAbrir} className="flex items-center gap-1 text-sm bg-gray-200 hover:bg-gray-300 text-gray-700 rounded px-2 py-1">
-                  <Settings className="w-3 h-3" /> Faturas Descontadas
+                <button onClick={faturasAbrir} className="flex items-center gap-1 text-xs font-medium bg-gray-200 hover:bg-gray-300 text-black rounded px-2 py-1 transition-colors">
+                  <Settings className="w-3.5 h-3.5" /> Faturas Descontadas
                 </button>
-                <button onClick={() => setLojasModalAberto(true)} className="flex items-center gap-1 text-sm bg-gray-200 hover:bg-gray-300 text-gray-700 rounded px-2 py-1">
-                  <Settings className="w-3 h-3" /> Projeção Lojas
+                <button onClick={() => setLojasModalAberto(true)} className="flex items-center gap-1 text-xs font-medium bg-gray-200 hover:bg-gray-300 text-black rounded px-2 py-1 transition-colors">
+                  <Settings className="w-3.5 h-3.5" /> Projeção Lojas
                 </button>
               </div>
             </div>
 
             {/* Simulacao */}
-            <div className="flex items-center gap-4 flex-wrap px-4 py-2 border-b border-gray-200 bg-emerald-50/40">
-              <span className="text-xs font-bold text-gray-500 uppercase tracking-wide">Simulação</span>
+            <div className="flex items-center gap-4 flex-wrap px-4 py-2.5 border-b border-gray-200 bg-amber-50/50">
+              <span className="text-xs font-bold text-black uppercase tracking-wide">Simulação</span>
               <label className="flex items-center gap-1.5 text-sm">
                 <span className="font-semibold text-purple-700">Multimarcas</span>
-                <span className="text-gray-400">Crescimento</span>
-                <input type="number" step={0.5} value={crescMulti} onChange={(e) => setCrescMulti(parseFloat(e.target.value) || 0)} className="w-16 px-1.5 py-1 border border-gray-300 rounded text-right text-sm" />
-                <span className="text-gray-400">%</span>
+                <span className="text-gray-600">Crescimento</span>
+                <input type="number" step={0.5} value={crescMulti} onChange={(e) => setCrescMulti(parseFloat(e.target.value) || 0)} className="w-16 px-1.5 py-1 border border-gray-300 rounded text-right text-sm text-black" />
+                <span className="text-gray-600">%</span>
               </label>
               <label className="flex items-center gap-1.5 text-sm">
                 <span className="font-semibold text-purple-700">Multimarcas</span>
-                <span className="text-gray-400">Inflação</span>
-                <input type="number" step={0.5} value={inflacaoMulti} onChange={(e) => setInflacaoMulti(parseFloat(e.target.value) || 0)} className="w-16 px-1.5 py-1 border border-gray-300 rounded text-right text-sm" />
-                <span className="text-gray-400">%</span>
+                <span className="text-gray-600">Inflação</span>
+                <input type="number" step={0.5} value={inflacaoMulti} onChange={(e) => setInflacaoMulti(parseFloat(e.target.value) || 0)} className="w-16 px-1.5 py-1 border border-gray-300 rounded text-right text-sm text-black" />
+                <span className="text-gray-600">%</span>
               </label>
               <label className="flex items-center gap-1.5 text-sm">
                 <span className="font-semibold text-cyan-700">Lojas</span>
-                <span className="text-gray-400">Crescimento</span>
-                <input type="number" step={0.5} value={crescLojas} onChange={(e) => setCrescLojas(parseFloat(e.target.value) || 0)} className="w-16 px-1.5 py-1 border border-gray-300 rounded text-right text-sm" />
-                <span className="text-gray-400">%</span>
+                <span className="text-gray-600">Crescimento</span>
+                <input type="number" step={0.5} value={crescLojas} onChange={(e) => setCrescLojas(parseFloat(e.target.value) || 0)} className="w-16 px-1.5 py-1 border border-gray-300 rounded text-right text-sm text-black" />
+                <span className="text-gray-600">%</span>
               </label>
-              <button onClick={resetarAjustes} className="flex items-center gap-1 text-sm text-gray-500 border border-gray-300 rounded px-2 py-1 hover:bg-white">
-                <RotateCcw className="w-3 h-3" /> Resetar
+              <button onClick={resetarAjustes} className="flex items-center gap-1 text-xs font-medium text-black border border-gray-300 rounded px-2 py-1 hover:bg-white transition-colors">
+                <RotateCcw className="w-3.5 h-3.5" /> Resetar
               </button>
             </div>
 
             {/* Toggles de coluna */}
-            <div className="flex items-center gap-1.5 flex-wrap px-4 py-2 border-b border-gray-200">
+            <div className="flex items-center gap-1.5 flex-wrap px-4 py-2.5 border-b border-gray-200">
               {COL_DEFS.map((g) => (
                 <React.Fragment key={g.group}>
-                  <span className="text-xs font-bold text-gray-400 uppercase tracking-wide mr-1">{g.group}:</span>
+                  <span className="text-xs font-bold text-black uppercase tracking-wide mr-1">{g.group}:</span>
                   {g.cols.map((c) => {
                     const on = colsAtivas[c.key];
                     return (
@@ -664,8 +675,8 @@ export default function FluxoCaixaPage() {
                         key={c.key}
                         onClick={() => toggleCol(c.key)}
                         title={on ? 'Excluir do cálculo' : 'Incluir no cálculo'}
-                        className="text-sm font-semibold rounded-full px-2.5 py-1 mr-1 border"
-                        style={{ borderColor: on ? c.color : '#cbd5e1', backgroundColor: on ? `${c.color}18` : '#f1f5f9', color: on ? c.color : '#94a3b8' }}
+                        className="text-xs font-semibold rounded-full px-2.5 py-1 mr-1 border transition-colors"
+                        style={{ borderColor: on ? c.color : '#cbd5e1', backgroundColor: on ? `${c.color}18` : '#f1f5f9', color: on ? c.color : '#64748b' }}
                       >
                         {on ? '✓' : '○'} {c.label}
                       </button>
@@ -679,30 +690,30 @@ export default function FluxoCaixaPage() {
             <div className="overflow-x-auto max-h-[560px] overflow-y-auto">
               <table className="w-full text-sm border-collapse min-w-[1100px]">
                 <thead className="sticky top-0 z-10">
-                  <tr className="bg-[#1a2f55] text-white text-left">
-                    <th rowSpan={2} className="px-3 py-2 min-w-[90px] border-r border-white/10 align-middle">Data</th>
-                    <th colSpan={4} className="px-3 py-1.5 text-center text-[11px] uppercase tracking-wide border-b border-white/15 border-r border-white/10">Saídas</th>
-                    <th colSpan={6} className="px-3 py-1.5 text-center text-[11px] uppercase tracking-wide border-b border-white/15 border-r border-white/10 text-emerald-300">Entradas</th>
-                    <th rowSpan={2} className="px-3 py-2 text-right whitespace-nowrap border-r border-white/10 align-middle">Saldo Dia</th>
-                    <th rowSpan={2} className="px-3 py-2 text-right whitespace-nowrap border-r border-white/10 align-middle">Saldo Acum.</th>
-                    <th rowSpan={2} className="px-3 py-2 text-right align-middle">Qtd</th>
+                  <tr className="text-left">
+                    <th rowSpan={2} className="px-3 py-2 min-w-[90px] align-middle font-medium text-black bg-gray-50 border-b border-r border-gray-200">Data</th>
+                    <th colSpan={4} className="px-3 py-1.5 text-center text-xs font-semibold uppercase tracking-wide text-slate-700 bg-slate-100 border-b border-r border-gray-200">Saídas</th>
+                    <th colSpan={6} className="px-3 py-1.5 text-center text-xs font-semibold uppercase tracking-wide text-green-700 bg-green-100 border-b border-r border-gray-200">Entradas</th>
+                    <th rowSpan={2} className="px-3 py-2 text-right whitespace-nowrap align-middle font-medium text-black bg-gray-50 border-b border-r border-gray-200">Saldo Dia</th>
+                    <th rowSpan={2} className="px-3 py-2 text-right whitespace-nowrap align-middle font-medium text-black bg-gray-50 border-b border-r border-gray-200">Saldo Acum.</th>
+                    <th rowSpan={2} className="px-3 py-2 text-right align-middle font-medium text-black bg-gray-50 border-b border-gray-200">Qtd</th>
                   </tr>
-                  <tr className="bg-[#162540] text-white/65">
-                    <th className="px-3 py-1.5 text-right font-normal border-r border-white/5">Prev.</th>
-                    <th className="px-3 py-1.5 text-right font-normal border-r border-white/5">Real</th>
-                    <th className="px-3 py-1.5 text-right font-normal border-r border-white/5 text-amber-200">Pedidos</th>
-                    <th className="px-3 py-1.5 text-right font-semibold text-white border-r border-white/10">Total</th>
-                    <th className="px-3 py-1.5 text-right font-normal border-r border-white/5 text-emerald-300">Cartão</th>
-                    <th className="px-3 py-1.5 text-right font-normal border-r border-white/5 text-sky-300">Boleto</th>
-                    <th className="px-3 py-1.5 text-right font-normal border-r border-white/5 text-emerald-300">Cheque</th>
-                    <th className="px-3 py-1.5 text-right font-normal border-r border-white/5 text-cyan-200">Lojas</th>
-                    <th className="px-3 py-1.5 text-right font-normal border-r border-white/5 text-purple-200">Multimarcas</th>
-                    <th className="px-3 py-1.5 text-right font-semibold border-r border-white/10 text-emerald-300">Total</th>
+                  <tr className="text-left">
+                    <th className="px-3 py-1.5 text-right font-medium text-slate-700 bg-slate-50 border-b border-r border-gray-200">Prev.</th>
+                    <th className="px-3 py-1.5 text-right font-medium text-slate-700 bg-slate-50 border-b border-r border-gray-200">Real</th>
+                    <th className="px-3 py-1.5 text-right font-medium text-amber-700 bg-slate-50 border-b border-r border-gray-200">Pedidos</th>
+                    <th className="px-3 py-1.5 text-right font-semibold text-black bg-slate-200/70 border-b border-r border-gray-200">Total</th>
+                    <th className="px-3 py-1.5 text-right font-medium text-green-700 bg-green-50 border-b border-r border-gray-200">Cartão</th>
+                    <th className="px-3 py-1.5 text-right font-medium text-sky-700 bg-green-50 border-b border-r border-gray-200">Boleto</th>
+                    <th className="px-3 py-1.5 text-right font-medium text-green-700 bg-green-50 border-b border-r border-gray-200">Cheque</th>
+                    <th className="px-3 py-1.5 text-right font-medium text-cyan-700 bg-green-50 border-b border-r border-gray-200">Lojas</th>
+                    <th className="px-3 py-1.5 text-right font-medium text-purple-700 bg-green-50 border-b border-r border-gray-200">Multimarcas</th>
+                    <th className="px-3 py-1.5 text-right font-semibold text-black bg-green-200/70 border-b border-r border-gray-200">Total</th>
                   </tr>
                 </thead>
                 <tbody>
                   {linhasDiarias.length === 0 && (
-                    <tr><td colSpan={14} className="text-center text-gray-400 py-8">Sem dados no período selecionado</td></tr>
+                    <tr><td colSpan={14} className="text-center text-gray-500 py-8">Sem dados no período selecionado</td></tr>
                   )}
                   {linhasDiarias.map((l, i) => {
                     const dt = new Date(`${l.dia.dia}T12:00:00`);
@@ -710,52 +721,52 @@ export default function FluxoCaixaPage() {
                     const isHoje = l.dia.dia === hoje;
                     const isFds = dt.getDay() === 0 || dt.getDay() === 6;
                     const [, mm, dd] = l.dia.dia.split('-');
-                    const bg = isHoje ? 'rgba(14,165,233,.13)' : isFds ? 'rgba(100,116,139,.13)' : i % 2 ? '#eaf0fb' : '#ffffff';
+                    const bg = isHoje ? 'bg-sky-50' : isFds ? 'bg-gray-100' : i % 2 === 0 ? 'bg-white' : 'bg-gray-50';
                     return (
-                      <tr key={l.dia.dia} style={{ backgroundColor: bg, fontWeight: isHoje ? 700 : 400 }} className="border-b border-gray-200">
-                        <td className="px-3 py-2 whitespace-nowrap border-r border-gray-200">
+                      <tr key={l.dia.dia} className={`${bg} ${isHoje ? 'font-bold' : ''} border-b border-gray-100 hover:bg-rose-50 transition-colors`}>
+                        <td className="px-3 py-2 whitespace-nowrap border-r border-gray-100 text-black">
                           <span className="tabular-nums">{dd}/{mm}</span>
                           <span className="text-xs text-gray-500 ml-1.5">{dow}</span>
-                          {isHoje && <span className="text-[10px] bg-sky-700 text-white rounded px-1 ml-1.5 align-middle">hoje</span>}
+                          {isHoje && <span className="text-xs font-medium bg-sky-600 text-white rounded px-1.5 py-0.5 ml-1.5 align-middle">hoje</span>}
                         </td>
                         {celula('previsao', l.dia.previsao, '#64748b')}
                         {celula('real', l.dia.real, '#334155')}
                         {celula('pedidos', l.dia.pedidos, '#b45309')}
-                        <td className="text-right px-3 py-2 font-bold text-gray-800 border-r-2 border-gray-300">
-                          {l.effSaidas > 0 ? fmtBRL(l.effSaidas) : <span className="opacity-25">—</span>}
+                        <td className="text-right px-3 py-2 font-bold text-black border-r-2 border-gray-200">
+                          {l.effSaidas > 0 ? fmtBRL(l.effSaidas) : <span className="text-gray-300">—</span>}
                         </td>
                         {celula('cartao', l.dia.cartao, '#059669')}
                         {celula('boleto', l.dia.boleto, '#0284c7')}
                         {celula('cheque', l.dia.cheque, '#059669')}
                         {celula('lojas', l.adjLojas, '#0891b2')}
                         {celula('multimarcas', l.adjMulti, '#9333ea')}
-                        <td className="text-right px-3 py-2 font-bold text-emerald-600 border-r-2 border-gray-300">
-                          {l.effEntradas > 0 ? fmtBRL(l.effEntradas) : <span className="opacity-25">—</span>}
+                        <td className="text-right px-3 py-2 font-bold text-green-700 border-r-2 border-gray-200">
+                          {l.effEntradas > 0 ? fmtBRL(l.effEntradas) : <span className="text-gray-300">—</span>}
                         </td>
-                        <td className="text-right px-3 py-2 font-bold border-r border-gray-200" style={{ color: l.effSaldoDia >= 0 ? '#059669' : '#dc2626' }}>{fmtBRL(l.effSaldoDia)}</td>
-                        <td className="text-right px-3 py-2 font-bold border-r border-gray-200" style={{ color: l.saldoAcum >= 0 ? '#059669' : '#dc2626' }}>{fmtBRL(l.saldoAcum)}</td>
-                        <td className="text-right px-3 py-2 text-gray-500">{fmtNum(l.dia.qtd)}</td>
+                        <td className={`text-right px-3 py-2 font-bold border-r border-gray-100 ${l.effSaldoDia >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(l.effSaldoDia)}</td>
+                        <td className={`text-right px-3 py-2 font-bold border-r border-gray-100 ${l.saldoAcum >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(l.saldoAcum)}</td>
+                        <td className="text-right px-3 py-2 text-black">{fmtNum(l.dia.qtd)}</td>
                       </tr>
                     );
                   })}
                 </tbody>
                 {linhasDiarias.length > 0 && (
                   <tfoot>
-                    <tr className="bg-gray-100 font-bold text-sm border-t-2 border-gray-300">
-                      <td className="px-3 py-2.5 uppercase text-xs tracking-wide text-gray-700 border-r border-gray-200">Total</td>
-                      <td className="text-right px-3 py-2.5 text-gray-500 border-r border-gray-200">{fmtBRL(totais.previsao)}</td>
-                      <td className="text-right px-3 py-2.5 text-gray-700 border-r border-gray-200">{fmtBRL(totais.real)}</td>
+                    <tr className="bg-gray-200/70 font-bold text-sm border-t-2 border-gray-300">
+                      <td className="px-3 py-2.5 uppercase text-xs tracking-wide text-black border-r border-gray-200">Total</td>
+                      <td className="text-right px-3 py-2.5 text-slate-700 border-r border-gray-200">{fmtBRL(totais.previsao)}</td>
+                      <td className="text-right px-3 py-2.5 text-slate-700 border-r border-gray-200">{fmtBRL(totais.real)}</td>
                       <td className="text-right px-3 py-2.5 text-amber-700 border-r border-gray-200">{fmtBRL(totais.pedidos)}</td>
-                      <td className="text-right px-3 py-2.5 text-gray-800 border-r-2 border-gray-300">{fmtBRL(totais.saidas)}</td>
-                      <td className="text-right px-3 py-2.5 text-emerald-600 border-r border-gray-200">{fmtBRL(totais.cartao)}</td>
-                      <td className="text-right px-3 py-2.5 text-sky-600 border-r border-gray-200">{fmtBRL(totais.boleto)}</td>
-                      <td className="text-right px-3 py-2.5 text-emerald-600 border-r border-gray-200">{fmtBRL(totais.cheque)}</td>
-                      <td className="text-right px-3 py-2.5 text-cyan-600 border-r border-gray-200">{fmtBRL(totais.lojas)}</td>
-                      <td className="text-right px-3 py-2.5 text-purple-600 border-r border-gray-200">{fmtBRL(totais.multimarcas)}</td>
-                      <td className="text-right px-3 py-2.5 text-emerald-600 border-r-2 border-gray-300">{fmtBRL(totais.entradas)}</td>
-                      <td className="text-right px-3 py-2.5 border-r border-gray-200" style={{ color: saldoFinal >= 0 ? '#059669' : '#dc2626' }}>{fmtBRL(saldoFinal)}</td>
-                      <td className="text-right px-3 py-2.5 border-r border-gray-200" style={{ color: saldoFinal >= 0 ? '#059669' : '#dc2626' }}>{fmtBRL(saldoFinal)}</td>
-                      <td className="text-right px-3 py-2.5 text-gray-500">{fmtNum(totais.qtd)}</td>
+                      <td className="text-right px-3 py-2.5 text-black border-r-2 border-gray-300">{fmtBRL(totais.saidas)}</td>
+                      <td className="text-right px-3 py-2.5 text-green-700 border-r border-gray-200">{fmtBRL(totais.cartao)}</td>
+                      <td className="text-right px-3 py-2.5 text-sky-700 border-r border-gray-200">{fmtBRL(totais.boleto)}</td>
+                      <td className="text-right px-3 py-2.5 text-green-700 border-r border-gray-200">{fmtBRL(totais.cheque)}</td>
+                      <td className="text-right px-3 py-2.5 text-cyan-700 border-r border-gray-200">{fmtBRL(totais.lojas)}</td>
+                      <td className="text-right px-3 py-2.5 text-purple-700 border-r border-gray-200">{fmtBRL(totais.multimarcas)}</td>
+                      <td className="text-right px-3 py-2.5 text-green-700 border-r-2 border-gray-300">{fmtBRL(totais.entradas)}</td>
+                      <td className={`text-right px-3 py-2.5 border-r border-gray-200 ${saldoFinal >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(saldoFinal)}</td>
+                      <td className={`text-right px-3 py-2.5 border-r border-gray-200 ${saldoFinal >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(saldoFinal)}</td>
+                      <td className="text-right px-3 py-2.5 text-black">{fmtNum(totais.qtd)}</td>
                     </tr>
                   </tfoot>
                 )}
@@ -767,11 +778,11 @@ export default function FluxoCaixaPage() {
               filtrados acima) */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <div className="bg-white rounded-lg shadow-md p-4">
-              <h2 className="text-base font-semibold text-gray-700 mb-3">Fornecedores</h2>
+              <h2 className="text-sm font-semibold text-black uppercase tracking-wide mb-3">Fornecedores</h2>
               <ListaBarrasRanking itens={saidasFornecedor} cor="#dc2626" />
             </div>
             <div className="bg-white rounded-lg shadow-md p-4">
-              <h2 className="text-base font-semibold text-gray-700 mb-3">Despesas</h2>
+              <h2 className="text-sm font-semibold text-black uppercase tracking-wide mb-3">Despesas</h2>
               <ListaBarrasRanking itens={saidasDespesa} cor="#f59e0b" />
             </div>
           </div>
@@ -779,34 +790,34 @@ export default function FluxoCaixaPage() {
           {/* Tabela ordenavel de fornecedores */}
           <div className="bg-white rounded-lg shadow-md overflow-hidden">
             <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
-              <h2 className="text-base font-semibold text-gray-700">Fornecedores</h2>
+              <h2 className="text-sm font-semibold text-black uppercase tracking-wide">Fornecedores</h2>
             </div>
             <div className="overflow-x-auto max-h-[520px] overflow-y-auto">
-              <table className="w-full text-base border-collapse">
-                <thead className="sticky top-0 bg-gray-100">
+              <table className="w-full text-sm border-collapse">
+                <thead className="sticky top-0 bg-gray-50 border-b border-gray-200">
                   <tr>
-                    <th className="text-left px-4 py-2 font-semibold text-gray-600 cursor-pointer select-none" onClick={() => alternarOrdenacao('nome')}>
+                    <th className="text-left px-4 py-2 font-medium text-black cursor-pointer select-none" onClick={() => alternarOrdenacao('nome')}>
                       <span className="inline-flex items-center gap-1">
                         Nome
-                        {sortKey === 'nome' ? (sortDir === 'asc' ? <ArrowUp className="w-3.5 h-3.5" /> : <ArrowDown className="w-3.5 h-3.5" />) : <ArrowUpDown className="w-3.5 h-3.5 text-gray-300" />}
+                        {sortKey === 'nome' ? (sortDir === 'asc' ? <ArrowUp className="w-3.5 h-3.5" /> : <ArrowDown className="w-3.5 h-3.5" />) : <ArrowUpDown className="w-3.5 h-3.5 text-gray-400" />}
                       </span>
                     </th>
-                    <th className="text-right px-4 py-2 font-semibold text-gray-600 cursor-pointer select-none" onClick={() => alternarOrdenacao('valor')}>
+                    <th className="text-right px-4 py-2 font-medium text-black cursor-pointer select-none" onClick={() => alternarOrdenacao('valor')}>
                       <span className="inline-flex items-center gap-1">
                         Valor Atual
-                        {sortKey === 'valor' ? (sortDir === 'asc' ? <ArrowUp className="w-3.5 h-3.5" /> : <ArrowDown className="w-3.5 h-3.5" />) : <ArrowUpDown className="w-3.5 h-3.5 text-gray-300" />}
+                        {sortKey === 'valor' ? (sortDir === 'asc' ? <ArrowUp className="w-3.5 h-3.5" /> : <ArrowDown className="w-3.5 h-3.5" />) : <ArrowUpDown className="w-3.5 h-3.5 text-gray-400" />}
                       </span>
                     </th>
                   </tr>
                 </thead>
-                <tbody>
+                <tbody className="divide-y divide-gray-100">
                   {fornecedoresOrdenados.length === 0 && (
-                    <tr><td colSpan={2} className="text-center text-gray-400 py-8">Sem dados no período selecionado</td></tr>
+                    <tr><td colSpan={2} className="text-center text-gray-500 py-8">Sem dados no período selecionado</td></tr>
                   )}
                   {fornecedoresOrdenados.map((f, i) => (
-                    <tr key={`${f.cdFornecedor}-${i}`} className={`border-b border-gray-100 ${i % 2 ? 'bg-gray-50' : ''}`}>
-                      <td className="px-4 py-2 text-gray-700">{f.nome}</td>
-                      <td className="px-4 py-2 text-right font-medium text-red-600 tabular-nums">{fmtBRL(-f.valor)}</td>
+                    <tr key={`${f.cdFornecedor}-${i}`} className={`${i % 2 === 0 ? 'bg-white' : 'bg-gray-50'} hover:bg-rose-50 transition-colors`}>
+                      <td className="px-4 py-2 text-black">{f.nome}</td>
+                      <td className="px-4 py-2 text-right font-semibold text-red-600 tabular-nums">{fmtBRL(-f.valor)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -819,26 +830,28 @@ export default function FluxoCaixaPage() {
       {/* Modal: Projecao Lojas */}
       {lojasModalAberto && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setLojasModalAberto(false)}>
-          <div className="bg-white rounded-lg shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto p-6" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-4">
-              <strong className="text-base">Projeção de Lojas</strong>
-              <button onClick={() => setLojasModalAberto(false)} className="text-gray-400 hover:text-gray-700"><X className="w-5 h-5" /></button>
+          <div className="bg-white rounded-lg shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200 sticky top-0 bg-white">
+              <h2 className="text-base font-semibold text-black">Projeção de Lojas</h2>
+              <button onClick={() => setLojasModalAberto(false)} className="text-black/50 hover:text-black"><X className="w-5 h-5" /></button>
             </div>
-            <p className="text-sm text-gray-500 mb-3">
-              Cole os dados da planilha abaixo — uma linha por dia.<br />
-              Formatos aceitos: <code>DD/MM/AAAA;valor</code> ou <code>DD/MM/AAAA[tab]valor</code> (tab do Excel)
-            </p>
-            <textarea
-              value={lojasPaste}
-              onChange={(e) => setLojasPaste(e.target.value)}
-              rows={14}
-              placeholder={'01/07/2026;91188.26\n02/07/2026;91188.26\n...'}
-              className="w-full box-border font-mono text-sm p-2.5 border border-gray-300 rounded resize-vertical"
-            />
-            <div className="flex gap-2 mt-3 justify-end items-center">
-              <span className="flex-1 text-sm text-gray-500">{lojasStatus}</span>
-              <button onClick={() => setLojasModalAberto(false)} className="px-4 py-2 border border-gray-300 rounded text-base">Cancelar</button>
-              <button onClick={lojasGravar} disabled={lojasSalvando} className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-base font-semibold disabled:opacity-50">Salvar</button>
+            <div className="p-5">
+              <p className="text-sm text-gray-600 mb-3">
+                Cole os dados da planilha abaixo — uma linha por dia.<br />
+                Formatos aceitos: <code>DD/MM/AAAA;valor</code> ou <code>DD/MM/AAAA[tab]valor</code> (tab do Excel)
+              </p>
+              <textarea
+                value={lojasPaste}
+                onChange={(e) => setLojasPaste(e.target.value)}
+                rows={14}
+                placeholder={'01/07/2026;91188.26\n02/07/2026;91188.26\n...'}
+                className="w-full box-border font-mono text-sm text-black p-2.5 border border-gray-300 rounded resize-vertical"
+              />
+              <div className="flex gap-2 mt-3 justify-end items-center">
+                <span className="flex-1 text-sm text-gray-600">{lojasStatus}</span>
+                <button onClick={() => setLojasModalAberto(false)} className="px-4 py-2 border border-gray-300 rounded text-sm text-black hover:bg-gray-50">Cancelar</button>
+                <button onClick={lojasGravar} disabled={lojasSalvando} className="px-5 py-2 bg-green-600 hover:bg-green-700 text-white rounded text-sm font-semibold disabled:opacity-50 transition-colors">Salvar</button>
+              </div>
             </div>
           </div>
         </div>
@@ -847,40 +860,42 @@ export default function FluxoCaixaPage() {
       {/* Modal: Faturas Descontadas */}
       {faturasModalAberto && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setFaturasModalAberto(false)}>
-          <div className="bg-white rounded-lg shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto p-6" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-4">
-              <strong className="text-base">Faturas Descontadas (Empresa 001)</strong>
-              <button onClick={() => setFaturasModalAberto(false)} className="text-gray-400 hover:text-gray-700"><X className="w-5 h-5" /></button>
+          <div className="bg-white rounded-lg shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200 sticky top-0 bg-white">
+              <h2 className="text-base font-semibold text-black">Faturas Descontadas (Empresa 001)</h2>
+              <button onClick={() => setFaturasModalAberto(false)} className="text-black/50 hover:text-black"><X className="w-5 h-5" /></button>
             </div>
-            <p className="text-sm text-gray-500 mb-3">
-              Faturas já descontadas junto ao banco não entram mais no Boleto futuro. Cole abaixo — uma linha por fatura/parcela.<br />
-              Formato: <code>102045/002</code>
-            </p>
-            <textarea
-              value={faturasPaste}
-              onChange={(e) => setFaturasPaste(e.target.value)}
-              rows={8}
-              placeholder={'102045/002\n102045/003\n...'}
-              className="w-full box-border font-mono text-sm p-2.5 border border-gray-300 rounded resize-vertical"
-            />
-            <div className="flex gap-2 mt-3 justify-end items-center">
-              <span className="flex-1 text-sm text-gray-500">{faturasStatus}</span>
-              <button onClick={faturasGravar} disabled={faturasSalvando} className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-base font-semibold disabled:opacity-50">Salvar</button>
-            </div>
-            <div className="mt-4 border-t border-gray-200 pt-3">
-              <div className="flex justify-between items-center">
-                <strong className="text-sm">Já cadastradas</strong>
-                <button onClick={faturasRemoverTudo} className="text-xs border border-red-600 text-red-600 rounded px-2 py-0.5 hover:bg-red-50">Remover tudo</button>
+            <div className="p-5">
+              <p className="text-sm text-gray-600 mb-3">
+                Faturas já descontadas junto ao banco não entram mais no Boleto futuro. Cole abaixo — uma linha por fatura/parcela.<br />
+                Formato: <code>102045/002</code>
+              </p>
+              <textarea
+                value={faturasPaste}
+                onChange={(e) => setFaturasPaste(e.target.value)}
+                rows={8}
+                placeholder={'102045/002\n102045/003\n...'}
+                className="w-full box-border font-mono text-sm text-black p-2.5 border border-gray-300 rounded resize-vertical"
+              />
+              <div className="flex gap-2 mt-3 justify-end items-center">
+                <span className="flex-1 text-sm text-gray-600">{faturasStatus}</span>
+                <button onClick={faturasGravar} disabled={faturasSalvando} className="px-5 py-2 bg-green-600 hover:bg-green-700 text-white rounded text-sm font-semibold disabled:opacity-50 transition-colors">Salvar</button>
               </div>
-              <div className="mt-2 max-h-44 overflow-y-auto text-sm">
-                {faturasLista === null && <span className="text-gray-400">Carregando…</span>}
-                {faturasLista !== null && faturasLista.length === 0 && <span className="text-gray-400">Nenhuma fatura cadastrada.</span>}
-                {faturasLista?.map((f) => (
-                  <div key={`${f.nrFat}-${f.nrParcela}`} className="flex justify-between items-center py-1 border-b border-gray-100">
-                    <span>{String(f.nrFat).padStart(6, '0')}/{String(f.nrParcela).padStart(3, '0')}</span>
-                    <button onClick={() => faturasRemover(f.nrFat, f.nrParcela)} className="text-red-600 hover:text-red-800 text-sm">remover</button>
-                  </div>
-                ))}
+              <div className="mt-4 border-t border-gray-200 pt-3">
+                <div className="flex justify-between items-center">
+                  <strong className="text-sm text-black">Já cadastradas</strong>
+                  <button onClick={faturasRemoverTudo} className="text-xs font-medium border border-red-600 text-red-600 rounded px-2 py-0.5 hover:bg-red-50">Remover tudo</button>
+                </div>
+                <div className="mt-2 max-h-44 overflow-y-auto text-sm">
+                  {faturasLista === null && <span className="text-gray-500">Carregando…</span>}
+                  {faturasLista !== null && faturasLista.length === 0 && <span className="text-gray-500">Nenhuma fatura cadastrada.</span>}
+                  {faturasLista?.map((f) => (
+                    <div key={`${f.nrFat}-${f.nrParcela}`} className="flex justify-between items-center py-1 border-b border-gray-100 text-black">
+                      <span>{String(f.nrFat).padStart(6, '0')}/{String(f.nrParcela).padStart(3, '0')}</span>
+                      <button onClick={() => faturasRemover(f.nrFat, f.nrParcela)} className="text-red-600 hover:text-red-800 text-sm">remover</button>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
           </div>
