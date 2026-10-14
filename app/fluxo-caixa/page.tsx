@@ -410,12 +410,9 @@ export default function FluxoCaixaPage() {
     return (a.valor - b.valor) * mult;
   });
 
-  useEffect(() => {
-    if (empresasDisponiveis.length > 0) {
-      buscar();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [empresasDisponiveis.length]);
+  // Nao busca sozinho ao carregar a tela - so quando o usuario clicar em
+  // "Aplicar" (pedido explicito do usuario, pra nao disparar a consulta
+  // pesada toda vez que a tela abre).
 
   function toggleEmpresaFiltro(id: number) {
     setEmpresasSelecionadas((atual) => {
@@ -710,6 +707,12 @@ export default function FluxoCaixaPage() {
         <div className="flex items-center justify-center py-16">
           <Loader2 className="w-6 h-6 animate-spin text-green-600" />
           <span className="ml-3 text-gray-600">Carregando...</span>
+        </div>
+      )}
+
+      {!loading && !dados && (
+        <div className="bg-white rounded-lg shadow border border-gray-200 p-8 text-center text-gray-500">
+          Escolha o período e clique em Aplicar.
         </div>
       )}
 
