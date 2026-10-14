@@ -192,31 +192,31 @@ function GraficoMensalFC({ meses, saldoBancario }: { meses: MesFC[]; saldoBancar
   });
   return (
     <div role="img" aria-label="Saídas, entradas e saldo acumulado projetados por mês">
-      <ResponsiveContainer width="100%" height={260}>
-        <ComposedChart data={dados} margin={{ top: 24, right: 16, left: 0, bottom: 4 }}>
+      <ResponsiveContainer width="100%" height={300}>
+        <ComposedChart data={dados} margin={{ top: 32, right: 16, left: 0, bottom: 16 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#e1e0d9" vertical={false} />
-          <XAxis dataKey="mes" tickFormatter={fmtMes} tick={{ fontSize: 11, fill: '#52514e' }} axisLine={{ stroke: '#c3c2b7' }} tickLine={false} />
-          <YAxis tickFormatter={(v: number) => fmtBRLCompacto(v)} tick={{ fontSize: 11, fill: '#898781' }} axisLine={false} tickLine={false} width={64} />
+          <XAxis dataKey="mes" tickFormatter={fmtMes} tick={{ fontSize: 13, fill: '#52514e' }} axisLine={{ stroke: '#c3c2b7' }} tickLine={false} />
+          <YAxis tickFormatter={(v: number) => fmtBRLCompacto(v)} tick={{ fontSize: 13, fill: '#898781' }} axisLine={false} tickLine={false} width={80} />
           <Tooltip content={<TooltipMes />} cursor={{ fill: 'rgba(11,11,11,0.04)' }} />
-          <Bar dataKey="totalSaidas" name="Saídas" fill="#dc2626" radius={[4, 4, 0, 0]} maxBarSize={36}>
-            <LabelList dataKey="totalSaidas" position="top" formatter={(v: React.ReactNode) => fmtBRLCompacto(v as number)} style={{ fontSize: 11, fontWeight: 700, fill: '#991b1b' }} />
+          <Bar dataKey="totalSaidas" name="Saídas" fill="#dc2626" radius={[4, 4, 0, 0]} maxBarSize={40}>
+            <LabelList dataKey="totalSaidas" position="top" formatter={(v: React.ReactNode) => fmtBRLCompacto(v as number)} style={{ fontSize: 13, fontWeight: 700, fill: '#991b1b' }} />
           </Bar>
-          <Bar dataKey="totalEntradas" name="Entradas" fill="#059669" radius={[4, 4, 0, 0]} maxBarSize={36}>
-            <LabelList dataKey="totalEntradas" position="top" formatter={(v: React.ReactNode) => fmtBRLCompacto(v as number)} style={{ fontSize: 11, fontWeight: 700, fill: '#047857' }} />
+          <Bar dataKey="totalEntradas" name="Entradas" fill="#059669" radius={[4, 4, 0, 0]} maxBarSize={40}>
+            <LabelList dataKey="totalEntradas" position="top" formatter={(v: React.ReactNode) => fmtBRLCompacto(v as number)} style={{ fontSize: 13, fontWeight: 700, fill: '#047857' }} />
           </Bar>
-          <Line type="monotone" dataKey="saldoAcumulado" name="Saldo Acumulado" stroke="#2563eb" strokeWidth={2.5} dot={{ r: 4, fill: '#2563eb', strokeWidth: 0 }} activeDot={{ r: 6 }}>
-            <LabelList dataKey="saldoAcumulado" position="top" formatter={(v: React.ReactNode) => fmtBRLCompacto(v as number)} style={{ fontSize: 11, fontWeight: 700, fill: '#1d4ed8' }} />
+          <Line type="monotone" dataKey="saldoAcumulado" name="Saldo Acumulado" stroke="#2563eb" strokeWidth={3} dot={{ r: 5, fill: '#2563eb', strokeWidth: 0 }} activeDot={{ r: 7 }}>
+            <LabelList dataKey="saldoAcumulado" position="top" formatter={(v: React.ReactNode) => fmtBRLCompacto(v as number)} style={{ fontSize: 13, fontWeight: 700, fill: '#1d4ed8' }} />
           </Line>
         </ComposedChart>
       </ResponsiveContainer>
       <div className="flex items-center justify-center gap-6 mt-2">
-        <span className="flex items-center gap-1.5 text-xs font-medium text-black">
-          <span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ backgroundColor: '#dc2626' }} /> Saídas
+        <span className="flex items-center gap-1.5 text-sm font-medium text-black">
+          <span className="w-3 h-3 rounded-sm inline-block" style={{ backgroundColor: '#dc2626' }} /> Saídas
         </span>
-        <span className="flex items-center gap-1.5 text-xs font-medium text-black">
-          <span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ backgroundColor: '#059669' }} /> Entradas
+        <span className="flex items-center gap-1.5 text-sm font-medium text-black">
+          <span className="w-3 h-3 rounded-sm inline-block" style={{ backgroundColor: '#059669' }} /> Entradas
         </span>
-        <span className="flex items-center gap-1.5 text-xs font-medium text-black">
+        <span className="flex items-center gap-1.5 text-sm font-medium text-black">
           <span className="w-4 h-0.5 rounded-full inline-block" style={{ backgroundColor: '#2563eb' }} /> Saldo Acumulado
         </span>
       </div>
@@ -569,7 +569,7 @@ export default function FluxoCaixaPage() {
     const v = rawVal || 0;
     const bgGrupo = grupo === 'saida' ? 'bg-red-50' : 'bg-green-50';
     return (
-      <td className={`text-right px-3 py-2 border-r border-b border-gray-300 ${bgGrupo}`} style={{ color: ativa ? cor : '#94a3b8', fontWeight: ativa && v > 0 ? 600 : 400 }}>
+      <td className={`text-right px-3 py-2 border-r border-b border-gray-200 ${bgGrupo}`} style={{ color: ativa ? cor : '#94a3b8', fontWeight: ativa && v > 0 ? 600 : 400 }}>
         {v > 0 ? <span style={!ativa ? { textDecoration: 'line-through' } : undefined}>{fmtBRL(v)}</span> : <span className="text-gray-300">—</span>}
       </td>
     );
@@ -671,28 +671,21 @@ export default function FluxoCaixaPage() {
               </span>
             </div>
             {saldosBancarios && saldosBancarios.contas.length > 0 ? (
-              <table className="w-full text-sm border-collapse">
-                <thead className="bg-gray-50 border-b border-gray-200">
-                  <tr>
-                    <th className="text-left px-4 py-2 font-medium text-black">Banco</th>
-                    <th className="text-left px-4 py-2 font-medium text-black">Agência</th>
-                    <th className="text-left px-4 py-2 font-medium text-black">Conta</th>
-                    <th className="text-right px-4 py-2 font-medium text-black">Posição em</th>
-                    <th className="text-right px-4 py-2 font-medium text-black">Saldo</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {saldosBancarios.contas.map((c, i) => (
-                    <tr key={`${c.nmBanco}-${c.nrConta}-${i}`} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                      <td className="px-4 py-2 text-black">{c.nmBanco}</td>
-                      <td className="px-4 py-2 text-black">{c.nrAgencia}</td>
-                      <td className="px-4 py-2 text-black">{c.nrConta}</td>
-                      <td className="px-4 py-2 text-right text-gray-600">{c.dtPosicao.split('-').reverse().join('/')}</td>
-                      <td className={`px-4 py-2 text-right font-semibold tabular-nums ${c.vlSaldo >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(c.vlSaldo)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {saldosBancarios.contas.map((c, i) => (
+                  <div
+                    key={`${c.nmBanco}-${c.nrConta}-${i}`}
+                    className={`rounded-lg bg-gray-50 border-l-4 p-3 ${c.vlSaldo >= 0 ? 'border-green-500' : 'border-red-500'}`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-sm font-semibold text-black truncate">{c.nmBanco}</span>
+                      <span className="text-xs text-gray-500 whitespace-nowrap">{c.dtPosicao.split('-').reverse().join('/')}</span>
+                    </div>
+                    <p className="text-xs text-gray-600 mt-0.5">Ag {c.nrAgencia} · Conta {c.nrConta}</p>
+                    <p className={`text-xl font-bold mt-1.5 tabular-nums ${c.vlSaldo >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(c.vlSaldo)}</p>
+                  </div>
+                ))}
+              </div>
             ) : (
               <p className="text-sm text-gray-500 py-8 text-center">Nenhuma conta bancária cadastrada.</p>
             )}
@@ -772,22 +765,22 @@ export default function FluxoCaixaPage() {
               <table className="w-full text-sm border-collapse min-w-[1100px]">
                 <thead className="sticky top-0 z-10">
                   <tr className="text-left">
-                    <th rowSpan={2} className="px-3 py-2 min-w-[90px] align-middle font-medium text-black bg-gray-50 border-b border-r border-gray-300">Data</th>
-                    <th colSpan={4} className="px-3 py-1.5 text-center text-xs font-semibold uppercase tracking-wide text-red-700 bg-red-100 border-b border-r-2 border-gray-400">Saídas</th>
-                    <th colSpan={4} className="px-3 py-1.5 text-center text-xs font-semibold uppercase tracking-wide text-green-700 bg-green-100 border-b border-r-2 border-gray-400">Entradas</th>
-                    <th rowSpan={2} className="px-3 py-2 text-right whitespace-nowrap align-middle font-medium text-black bg-blue-50 border-b border-r border-gray-300">Saldo Dia</th>
-                    <th rowSpan={2} className="px-3 py-2 text-right whitespace-nowrap align-middle font-medium text-black bg-blue-50 border-b border-r border-gray-300">Saldo Acum.</th>
-                    <th rowSpan={2} className="px-3 py-2 text-right align-middle font-medium text-black bg-gray-50 border-b border-gray-300">Qtd</th>
+                    <th rowSpan={2} className="px-3 py-2 min-w-[90px] align-middle font-medium text-black bg-gray-50 border-b border-r border-gray-200">Data</th>
+                    <th colSpan={4} className="px-3 py-1.5 text-center text-xs font-semibold uppercase tracking-wide text-red-700 bg-red-100 border-b border-r-2 border-gray-300">Saídas</th>
+                    <th colSpan={4} className="px-3 py-1.5 text-center text-xs font-semibold uppercase tracking-wide text-green-700 bg-green-100 border-b border-r-2 border-gray-300">Entradas</th>
+                    <th rowSpan={2} className="px-3 py-2 text-right whitespace-nowrap align-middle font-medium text-black bg-blue-50 border-b border-r border-gray-200">Saldo Dia</th>
+                    <th rowSpan={2} className="px-3 py-2 text-right whitespace-nowrap align-middle font-medium text-black bg-blue-50 border-b border-r border-gray-200">Saldo Acum.</th>
+                    <th rowSpan={2} className="px-3 py-2 text-right align-middle font-medium text-black bg-gray-50 border-b border-gray-200">Qtd</th>
                   </tr>
                   <tr className="text-left">
-                    <th className="px-3 py-1.5 text-right font-medium text-red-500 bg-red-50 border-b border-r border-gray-300">Prev.</th>
-                    <th className="px-3 py-1.5 text-right font-medium text-red-800 bg-red-50 border-b border-r border-gray-300">Real</th>
-                    <th className="px-3 py-1.5 text-right font-medium text-red-600 bg-red-50 border-b border-r border-gray-300">Pedidos</th>
-                    <th className="px-3 py-1.5 text-right font-semibold text-red-900 bg-red-200 border-b border-r-2 border-gray-400">Total</th>
-                    <th className="px-3 py-1.5 text-right font-medium text-sky-700 bg-green-50 border-b border-r border-gray-300">Boleto</th>
-                    <th className="px-3 py-1.5 text-right font-medium text-green-700 bg-green-50 border-b border-r border-gray-300">Cheque</th>
-                    <th className="px-3 py-1.5 text-right font-medium text-cyan-700 bg-green-50 border-b border-r border-gray-300">Lojas</th>
-                    <th className="px-3 py-1.5 text-right font-semibold text-green-900 bg-green-200 border-b border-r-2 border-gray-400">Total</th>
+                    <th className="px-3 py-1.5 text-right font-medium text-red-500 bg-red-50 border-b border-r border-gray-200">Prev.</th>
+                    <th className="px-3 py-1.5 text-right font-medium text-red-800 bg-red-50 border-b border-r border-gray-200">Real</th>
+                    <th className="px-3 py-1.5 text-right font-medium text-red-600 bg-red-50 border-b border-r border-gray-200">Pedidos</th>
+                    <th className="px-3 py-1.5 text-right font-semibold text-red-800 bg-red-100 border-b border-r-2 border-gray-300">Total</th>
+                    <th className="px-3 py-1.5 text-right font-medium text-sky-700 bg-green-50 border-b border-r border-gray-200">Boleto</th>
+                    <th className="px-3 py-1.5 text-right font-medium text-green-700 bg-green-50 border-b border-r border-gray-200">Cheque</th>
+                    <th className="px-3 py-1.5 text-right font-medium text-cyan-700 bg-green-50 border-b border-r border-gray-200">Lojas</th>
+                    <th className="px-3 py-1.5 text-right font-semibold text-green-800 bg-green-100 border-b border-r-2 border-gray-300">Total</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -803,7 +796,7 @@ export default function FluxoCaixaPage() {
                     const bg = isHoje ? 'bg-sky-50' : isFds ? 'bg-gray-100' : i % 2 === 0 ? 'bg-white' : 'bg-gray-50';
                     return (
                       <tr key={l.dia.dia} className={`${bg} ${isHoje ? 'font-bold' : ''} hover:bg-rose-50 transition-colors`}>
-                        <td className="px-3 py-2 whitespace-nowrap border-r border-b border-gray-300 text-black">
+                        <td className="px-3 py-2 whitespace-nowrap border-r border-b border-gray-200 text-black">
                           <span className="tabular-nums">{dd}/{mm}</span>
                           <span className="text-xs text-gray-500 ml-1.5">{dow}</span>
                           {isHoje && <span className="text-xs font-medium bg-sky-600 text-white rounded px-1.5 py-0.5 ml-1.5 align-middle">hoje</span>}
@@ -811,37 +804,37 @@ export default function FluxoCaixaPage() {
                         {celula('previsao', l.dia.previsao, '#ef4444', 'saida')}
                         {celula('real', l.dia.real, '#991b1b', 'saida')}
                         {celula('pedidos', l.dia.pedidos, '#dc2626', 'saida')}
-                        <td className="text-right px-3 py-2 font-bold text-red-900 bg-red-200 border-r-2 border-b border-gray-400">
+                        <td className="text-right px-3 py-2 font-bold text-red-800 bg-red-100 border-r-2 border-b border-gray-300">
                           {l.effSaidas > 0 ? fmtBRL(l.effSaidas) : <span className="text-gray-400">—</span>}
                         </td>
                         {celula('boleto', l.dia.boleto, '#0284c7', 'entrada')}
                         {celula('cheque', l.dia.cheque, '#059669', 'entrada')}
                         {celula('lojas', l.adjLojas, '#0891b2', 'entrada')}
-                        <td className="text-right px-3 py-2 font-bold text-green-900 bg-green-200 border-r-2 border-b border-gray-400">
+                        <td className="text-right px-3 py-2 font-bold text-green-800 bg-green-100 border-r-2 border-b border-gray-300">
                           {l.effEntradas > 0 ? fmtBRL(l.effEntradas) : <span className="text-gray-400">—</span>}
                         </td>
-                        <td className={`text-right px-3 py-2 font-bold bg-blue-50 border-r border-b border-gray-300 ${l.effSaldoDia >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(l.effSaldoDia)}</td>
-                        <td className={`text-right px-3 py-2 font-bold bg-blue-50 border-r border-b border-gray-300 ${l.saldoAcum >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(l.saldoAcum)}</td>
-                        <td className="text-right px-3 py-2 text-black border-b border-gray-300">{fmtNum(l.dia.qtd)}</td>
+                        <td className={`text-right px-3 py-2 font-bold bg-blue-50 border-r border-b border-gray-200 ${l.effSaldoDia >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(l.effSaldoDia)}</td>
+                        <td className={`text-right px-3 py-2 font-bold bg-blue-50 border-r border-b border-gray-200 ${l.saldoAcum >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(l.saldoAcum)}</td>
+                        <td className="text-right px-3 py-2 text-black border-b border-gray-200">{fmtNum(l.dia.qtd)}</td>
                       </tr>
                     );
                   })}
                 </tbody>
                 {linhasDiarias.length > 0 && (
                   <tfoot>
-                    <tr className="font-bold text-sm border-t-2 border-gray-400">
-                      <td className="px-3 py-2.5 uppercase text-xs tracking-wide text-black bg-gray-200 border-r border-gray-300">Total</td>
-                      <td className="text-right px-3 py-2.5 text-red-700 bg-red-100 border-r border-gray-300">{fmtBRL(totais.previsao)}</td>
-                      <td className="text-right px-3 py-2.5 text-red-800 bg-red-100 border-r border-gray-300">{fmtBRL(totais.real)}</td>
-                      <td className="text-right px-3 py-2.5 text-red-600 bg-red-100 border-r border-gray-300">{fmtBRL(totais.pedidos)}</td>
-                      <td className="text-right px-3 py-2.5 text-red-900 bg-red-300 border-r-2 border-gray-400">{fmtBRL(totais.saidas)}</td>
-                      <td className="text-right px-3 py-2.5 text-sky-700 bg-green-100 border-r border-gray-300">{fmtBRL(totais.boleto)}</td>
-                      <td className="text-right px-3 py-2.5 text-green-700 bg-green-100 border-r border-gray-300">{fmtBRL(totais.cheque)}</td>
-                      <td className="text-right px-3 py-2.5 text-cyan-700 bg-green-100 border-r border-gray-300">{fmtBRL(totais.lojas)}</td>
-                      <td className="text-right px-3 py-2.5 text-green-900 bg-green-300 border-r-2 border-gray-400">{fmtBRL(totais.entradas)}</td>
-                      <td className={`text-right px-3 py-2.5 bg-blue-100 border-r border-gray-300 ${saldoFinal >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(saldoFinal)}</td>
-                      <td className={`text-right px-3 py-2.5 bg-blue-100 border-r border-gray-300 ${saldoFinal >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(saldoFinal)}</td>
-                      <td className="text-right px-3 py-2.5 text-black bg-gray-200">{fmtNum(totais.qtd)}</td>
+                    <tr className="font-bold text-sm border-t-2 border-gray-300">
+                      <td className="px-3 py-2.5 uppercase text-xs tracking-wide text-black bg-gray-100 border-r border-gray-200">Total</td>
+                      <td className="text-right px-3 py-2.5 text-red-700 bg-red-50 border-r border-gray-200">{fmtBRL(totais.previsao)}</td>
+                      <td className="text-right px-3 py-2.5 text-red-800 bg-red-50 border-r border-gray-200">{fmtBRL(totais.real)}</td>
+                      <td className="text-right px-3 py-2.5 text-red-600 bg-red-50 border-r border-gray-200">{fmtBRL(totais.pedidos)}</td>
+                      <td className="text-right px-3 py-2.5 text-red-800 bg-red-100 border-r-2 border-gray-300">{fmtBRL(totais.saidas)}</td>
+                      <td className="text-right px-3 py-2.5 text-sky-700 bg-green-50 border-r border-gray-200">{fmtBRL(totais.boleto)}</td>
+                      <td className="text-right px-3 py-2.5 text-green-700 bg-green-50 border-r border-gray-200">{fmtBRL(totais.cheque)}</td>
+                      <td className="text-right px-3 py-2.5 text-cyan-700 bg-green-50 border-r border-gray-200">{fmtBRL(totais.lojas)}</td>
+                      <td className="text-right px-3 py-2.5 text-green-800 bg-green-100 border-r-2 border-gray-300">{fmtBRL(totais.entradas)}</td>
+                      <td className={`text-right px-3 py-2.5 bg-blue-50 border-r border-gray-200 ${saldoFinal >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(saldoFinal)}</td>
+                      <td className={`text-right px-3 py-2.5 bg-blue-50 border-r border-gray-200 ${saldoFinal >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(saldoFinal)}</td>
+                      <td className="text-right px-3 py-2.5 text-black bg-gray-100">{fmtNum(totais.qtd)}</td>
                     </tr>
                   </tfoot>
                 )}
