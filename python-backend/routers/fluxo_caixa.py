@@ -53,6 +53,32 @@ def _dia_str(valor) -> str:
     return str(valor)[:10]
 
 
+def _expr_dt_efetiva(coluna: str, dias_sabado: int, dias_domingo: int) -> str:
+    """Expressao SQL que desloca uma data que cai em sabado/domingo pro dia
+    util seguinte (pedido explicito do usuario - 3 regras de projecao):
+    EXTRACT(DOW ...) = 6 e sabado, = 0 e domingo (convencao Postgres). Usada
+    tanto no filtro de periodo (BETWEEN) quanto no agrupamento por mes/dia -
+    a data ORIGINAL da duplicata/fatura nunca e alterada, so a data
+    CONSIDERADA no fluxo de caixa."""
+    return (
+        f"(CASE EXTRACT(DOW FROM {coluna}) "
+        f"WHEN 6 THEN {coluna} + interval '{dias_sabado} days' "
+        f"WHEN 0 THEN {coluna} + interval '{dias_domingo} days' "
+        f"ELSE {coluna} END)"
+    )
+
+
+# Duplicatas a pagar (saidas) com vencimento em fim de semana -> projetadas
+# pra segunda-feira seguinte (regra 2).
+_EXPR_DT_SAIDA_EFETIVA = _expr_dt_efetiva("dt_vencimento", 2, 1)
+
+# Boleto e Lojas (entradas) com data em fim de semana -> projetadas pra
+# terca-feira seguinte, nao segunda (regra 3 - diferente da regra das
+# duplicatas de proposito, pedido explicito do usuario).
+_EXPR_DT_BOLETO_EFETIVA = _expr_dt_efetiva("dt_vencimento", 3, 2)
+_EXPR_DT_LOJAS_EFETIVA = _expr_dt_efetiva("dt_dia", 3, 2)
+
+
 # ── Empresas presentes nas duplicatas ────────────────────────────────────
 SQL_EMPRESAS = """
     SELECT idempresa AS cd_empresa, REPLACE(empresa, 'LIEBE ', '') AS nome
@@ -117,8 +143,11 @@ def _obter_kpis() -> dict:
 
 
 # ── Saidas (duplicatas a pagar) ───────────────────────────────────────────
+# Vencimento em fim de semana conta pra segunda-feira seguinte no fluxo de
+# caixa (regra 2) - tanto no filtro de periodo quanto no agrupamento abaixo,
+# via _EXPR_DT_SAIDA_EFETIVA. A data original de vencimento nunca e tocada.
 def _filtros_saidas(dt_inicio: str, dt_fim: str, empresas: list) -> tuple:
-    where = "WHERE tp_situacao = 'N' AND (vl_duplicata - vl_pago) > 0 AND dt_vencimento BETWEEN %s AND %s"
+    where = f"WHERE tp_situacao = 'N' AND (vl_duplicata - vl_pago) > 0 AND {_EXPR_DT_SAIDA_EFETIVA} BETWEEN %s AND %s"
     params: list = [dt_inicio, dt_fim]
     if empresas:
         where += " AND cd_empresa = ANY(%s)"
@@ -128,7 +157,7 @@ def _filtros_saidas(dt_inicio: str, dt_fim: str, empresas: list) -> tuple:
 
 def _sql_saidas_mensal(where: str) -> str:
     return f"""
-        SELECT to_char(dt_vencimento, 'YYYY-MM') AS mes, tp_previsaoreal,
+        SELECT to_char({_EXPR_DT_SAIDA_EFETIVA}, 'YYYY-MM') AS mes, tp_previsaoreal,
             COUNT(*)::int AS qtd, ROUND(SUM(vl_duplicata - vl_pago)::numeric, 2) AS valor
         FROM vr_fcp_duplicatai
         {where}
@@ -139,7 +168,7 @@ def _sql_saidas_mensal(where: str) -> str:
 
 def _sql_saidas_diario(where: str) -> str:
     return f"""
-        SELECT dt_vencimento::date AS dia, tp_previsaoreal,
+        SELECT {_EXPR_DT_SAIDA_EFETIVA}::date AS dia, tp_previsaoreal,
             COUNT(*)::int AS qtd, ROUND(SUM(vl_duplicata - vl_pago)::numeric, 2) AS valor
         FROM vr_fcp_duplicatai
         {where}
@@ -234,9 +263,12 @@ def _sql_pedidos_diario(where: str) -> str:
 
 
 # ── Entradas - cartao (vr_fcr_faturai) ────────────────────────────────────
+# Entrada so conta se for data FUTURA (regra 1) - tudo ate hoje ja esta no
+# saldo bancario inicial, contar de novo aqui duplicaria o valor.
 def _filtros_cartao(dt_inicio: str, dt_fim: str, empresas: list) -> tuple:
     where = """WHERE tp_documento IN (4, 5) AND tp_cobranca = '14' AND tp_situacao = '1'
-        AND dt_vencimento BETWEEN %s AND %s"""
+        AND dt_vencimento BETWEEN %s AND %s
+        AND dt_vencimento > CURRENT_DATE"""
     params: list = [dt_inicio, dt_fim]
     if empresas:
         where += " AND cd_empresa = ANY(%s)"
@@ -267,9 +299,11 @@ def _sql_cartao_diario(where: str) -> str:
 
 
 # ── Entradas - cheque (vr_fcr_faturai) ────────────────────────────────────
+# Mesma regra 1 do cartao - so data futura.
 def _filtros_cheque(dt_inicio: str, dt_fim: str, empresas: list) -> tuple:
     where = """WHERE tp_documento IN (2) AND tp_situacao = '1' AND (vl_fatura - vl_pago) > 0
-        AND dt_vencimento BETWEEN %s AND %s"""
+        AND dt_vencimento BETWEEN %s AND %s
+        AND dt_vencimento > CURRENT_DATE"""
     params: list = [dt_inicio, dt_fim]
     if empresas:
         where += " AND cd_empresa = ANY(%s)"
@@ -301,10 +335,13 @@ def _sql_cheque_diario(where: str) -> str:
 
 # ── Entradas - boleto (vr_fcr_faturai), excluindo faturas ja descontadas
 # junto ao banco (empresa 001 - ver fcp_faturas_descontadas) ──────────────
+# Fim de semana -> terca-feira seguinte (regra 3) e so data futura (regra 1),
+# tanto no filtro de periodo quanto no agrupamento abaixo.
 def _filtros_boleto(dt_inicio: str, dt_fim: str, empresas: list) -> tuple:
-    where = """WHERE tp_documento IN (1) AND tp_situacao = '1' AND nr_portador < 999
+    where = f"""WHERE tp_documento IN (1) AND tp_situacao = '1' AND nr_portador < 999
         AND (vl_fatura - vl_pago) > 0
-        AND dt_vencimento BETWEEN %s AND %s
+        AND {_EXPR_DT_BOLETO_EFETIVA} BETWEEN %s AND %s
+        AND {_EXPR_DT_BOLETO_EFETIVA} > CURRENT_DATE
         AND NOT (
             cd_empresa = 1 AND EXISTS (
                 SELECT 1 FROM fcp_faturas_descontadas fd
@@ -320,7 +357,7 @@ def _filtros_boleto(dt_inicio: str, dt_fim: str, empresas: list) -> tuple:
 
 def _sql_boleto_mensal(where: str) -> str:
     return f"""
-        SELECT to_char(dt_vencimento, 'YYYY-MM') AS mes,
+        SELECT to_char({_EXPR_DT_BOLETO_EFETIVA}, 'YYYY-MM') AS mes,
             COUNT(*)::int AS qtd, ROUND(SUM(vl_fatura - vl_pago)::numeric, 2) AS valor
         FROM vr_fcr_faturai
         {where}
@@ -331,7 +368,7 @@ def _sql_boleto_mensal(where: str) -> str:
 
 def _sql_boleto_diario(where: str) -> str:
     return f"""
-        SELECT dt_vencimento::date AS dia,
+        SELECT {_EXPR_DT_BOLETO_EFETIVA}::date AS dia,
             COUNT(*)::int AS qtd, ROUND(SUM(vl_fatura - vl_pago)::numeric, 2) AS valor
         FROM vr_fcr_faturai
         {where}
@@ -341,18 +378,27 @@ def _sql_boleto_diario(where: str) -> str:
 
 
 # ── Entradas - projecao manual de lojas (fcp_lojas_projecao) ─────────────
+# Mesma regra 3 do boleto (fim de semana -> terca-feira) e regra 1 (so
+# futuro) - como mais de um dia original pode cair na mesma terca-feira
+# projetada (ex: sexta + sabado + domingo todos ficando pra terca nao, mas
+# sabado+domingo sim), precisa agregar (SUM) em vez do SELECT direto de
+# antes, que supunha 1 linha por dia (dt_dia e PK da tabela).
 def _sql_lojas_mensal(dt_inicio: str, dt_fim: str) -> tuple:
     return (
-        """SELECT to_char(dt_dia, 'YYYY-MM') AS mes, ROUND(SUM(vl_lojas)::numeric, 2) AS valor
-           FROM fcp_lojas_projecao WHERE dt_dia BETWEEN %s AND %s GROUP BY 1 ORDER BY 1""",
+        f"""SELECT to_char({_EXPR_DT_LOJAS_EFETIVA}, 'YYYY-MM') AS mes, ROUND(SUM(vl_lojas)::numeric, 2) AS valor
+           FROM fcp_lojas_projecao
+           WHERE {_EXPR_DT_LOJAS_EFETIVA} BETWEEN %s AND %s AND {_EXPR_DT_LOJAS_EFETIVA} > CURRENT_DATE
+           GROUP BY 1 ORDER BY 1""",
         (dt_inicio, dt_fim),
     )
 
 
 def _sql_lojas_diario(dt_inicio: str, dt_fim: str) -> tuple:
     return (
-        """SELECT dt_dia::date AS dia, vl_lojas AS valor
-           FROM fcp_lojas_projecao WHERE dt_dia BETWEEN %s AND %s ORDER BY 1""",
+        f"""SELECT {_EXPR_DT_LOJAS_EFETIVA}::date AS dia, ROUND(SUM(vl_lojas)::numeric, 2) AS valor
+           FROM fcp_lojas_projecao
+           WHERE {_EXPR_DT_LOJAS_EFETIVA} BETWEEN %s AND %s AND {_EXPR_DT_LOJAS_EFETIVA} > CURRENT_DATE
+           GROUP BY 1 ORDER BY 1""",
         (dt_inicio, dt_fim),
     )
 
@@ -367,6 +413,7 @@ def _sql_multimarcas_mensal(dt_inicio: str, dt_fim: str) -> tuple:
         WHERE cd_empresa = 1 AND tp_modalidade = '4' AND tp_operacao = 'S'
           AND cd_operacao IN (1, 52) AND tp_situacao = 4
           AND dt_transacao::date BETWEEN (%s::date - interval '1 year')::date AND (%s::date - interval '1 year')::date
+          AND (dt_transacao::date + interval '1 year')::date > CURRENT_DATE
         GROUP BY 1
         ORDER BY 1
         """,
@@ -383,6 +430,7 @@ def _sql_multimarcas_diario(dt_inicio: str, dt_fim: str) -> tuple:
         WHERE cd_empresa = 1 AND tp_modalidade = '4' AND tp_operacao = 'S'
           AND cd_operacao IN (1, 52) AND tp_situacao = 4
           AND dt_transacao::date BETWEEN (%s::date - interval '1 year')::date AND (%s::date - interval '1 year')::date
+          AND (dt_transacao::date + interval '1 year')::date > CURRENT_DATE
         GROUP BY 1
         ORDER BY 1
         """,
