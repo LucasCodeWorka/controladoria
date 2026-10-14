@@ -286,6 +286,16 @@ export default function FluxoCaixaPage() {
         if (salvo?.dtFim) setDtFim(salvo.dtFim);
       })
       .catch((e) => console.error('Erro ao buscar empresas do fluxo de caixa:', e));
+
+    // Toggles de coluna e simulacao de cenario tambem ficam salvos entre
+    // visitas - nao dependem da lista de empresas, carrega direto.
+    const salvo = carregarFiltro<{
+      colsAtivas?: Record<ColKey, boolean>; crescMulti?: number; inflacaoMulti?: number; crescLojas?: number;
+    }>(FILTRO_KEY);
+    if (salvo?.colsAtivas) setColsAtivas(salvo.colsAtivas);
+    if (salvo?.crescMulti !== undefined) setCrescMulti(salvo.crescMulti);
+    if (salvo?.inflacaoMulti !== undefined) setInflacaoMulti(salvo.inflacaoMulti);
+    if (salvo?.crescLojas !== undefined) setCrescLojas(salvo.crescLojas);
   }, []);
 
   const primeiraRenderizacaoFiltroRef = useRef(true);
@@ -294,8 +304,11 @@ export default function FluxoCaixaPage() {
       primeiraRenderizacaoFiltroRef.current = false;
       return;
     }
-    salvarFiltro(FILTRO_KEY, { empresas: Array.from(empresasSelecionadas), dtInicio, dtFim });
-  }, [empresasSelecionadas, dtInicio, dtFim]);
+    salvarFiltro(FILTRO_KEY, {
+      empresas: Array.from(empresasSelecionadas), dtInicio, dtFim,
+      colsAtivas, crescMulti, inflacaoMulti, crescLojas,
+    });
+  }, [empresasSelecionadas, dtInicio, dtFim, colsAtivas, crescMulti, inflacaoMulti, crescLojas]);
 
   async function buscar() {
     setLoading(true);
