@@ -746,7 +746,7 @@ export default function FluxoCaixaPage() {
                   </thead>
                   <tbody>
                     {saldosBancarios.contas.map((c, i) => (
-                      <tr key={`${c.nmBanco}-${c.nrConta}-${i}`} className={`${i % 2 === 0 ? 'bg-white' : 'bg-gray-50'} hover:bg-rose-50 transition-colors`}>
+                      <tr key={`${c.nmBanco}-${c.nrConta}-${i}`} className={`${i % 2 === 0 ? 'bg-white' : 'bg-gray-100'} hover:bg-rose-50 transition-colors`}>
                         <td className="px-4 py-2 text-black border-r border-b border-gray-300">{c.nmBanco}</td>
                         <td className="px-4 py-2 text-black border-r border-b border-gray-300">{c.nrAgencia}</td>
                         <td className="px-4 py-2 text-black border-r border-b border-gray-300">{c.nrConta}</td>
@@ -868,9 +868,13 @@ export default function FluxoCaixaPage() {
                     const dt = new Date(`${l.dia.dia}T12:00:00`);
                     const dow = DIAS_SEMANA[dt.getDay()];
                     const isHoje = l.dia.dia === hoje;
-                    const isFds = dt.getDay() === 0 || dt.getDay() === 6;
                     const [, mm, dd] = l.dia.dia.split('-');
-                    const bg = isHoje ? 'bg-sky-50' : isFds ? 'bg-gray-100' : i % 2 === 0 ? 'bg-white' : 'bg-gray-50';
+                    // Zebra bem visivel (branco/cinza-100, nao cinza-50 que
+                    // quase nao se distingue do branco) - pedido explicito
+                    // do usuario. O fim de semana ja fica marcado pelo
+                    // proprio rotulo SAB/DOM ao lado da data, sem precisar
+                    // de uma 3a cor de fundo que brigava com a zebra.
+                    const bg = isHoje ? 'bg-sky-50' : i % 2 === 0 ? 'bg-white' : 'bg-gray-100';
                     return (
                       <tr key={l.dia.dia} className={`${bg} ${isHoje ? 'font-bold' : ''} hover:bg-rose-50 transition-colors`}>
                         <td className="px-3 py-2 whitespace-nowrap text-black border-r-2 border-b border-gray-300">
@@ -960,7 +964,7 @@ export default function FluxoCaixaPage() {
                     <tr><td colSpan={2} className="text-center text-gray-500 py-8">Sem dados no período selecionado</td></tr>
                   )}
                   {fornecedoresOrdenados.map((f, i) => (
-                    <tr key={`${f.cdFornecedor}-${i}`} className={`${i % 2 === 0 ? 'bg-white' : 'bg-gray-50'} hover:bg-rose-50 transition-colors`}>
+                    <tr key={`${f.cdFornecedor}-${i}`} className={`${i % 2 === 0 ? 'bg-white' : 'bg-gray-100'} hover:bg-rose-50 transition-colors`}>
                       <td className="px-4 py-2 text-black border-b border-gray-200">{f.nome}</td>
                       <td className="px-4 py-2 text-right font-semibold text-red-600 tabular-nums border-b border-gray-200">{fmtBRL(-f.valor)}</td>
                     </tr>
