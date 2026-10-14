@@ -609,7 +609,7 @@ export default function FluxoCaixaPage() {
     const ativa = colsAtivas[key];
     const v = rawVal || 0;
     return (
-      <td className={`text-right px-3 py-2 border-r border-gray-300 ${extraClasse}`} style={{ color: ativa ? cor : '#94a3b8', fontWeight: ativa && v > 0 ? 600 : 400 }}>
+      <td className={`text-right px-3 py-2 border-r border-b border-gray-300 ${extraClasse}`} style={{ color: ativa ? cor : '#94a3b8', fontWeight: ativa && v > 0 ? 600 : 400 }}>
         {v > 0 ? <span style={!ativa ? { textDecoration: 'line-through' } : undefined}>{fmtBRL(v)}</span> : <span className="text-gray-300">—</span>}
       </td>
     );
@@ -720,31 +720,45 @@ export default function FluxoCaixaPage() {
               dados continuam vindo da API, so nao sao mostrados aqui. */}
 
           {/* Saldos bancarios - posicao de caixa atual, entra compondo o
-              Saldo Acum. da tabela diaria abaixo (ver acumLocal) */}
+              Saldo Acum. da tabela diaria abaixo (ver acumLocal). Mesmo
+              estilo visual da Visao Diaria (cabecalho solido, zebra,
+              linhas de grade) - pedido explicito do usuario. */}
           <div className="bg-white rounded-lg shadow-md overflow-hidden">
-            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-gray-50">
+            <div className="flex items-center px-4 py-3 border-b border-gray-200 bg-gray-50">
               <h2 className="text-sm font-semibold text-black uppercase tracking-wide flex items-center gap-2">
                 <Landmark className="w-4 h-4 text-rose-600" /> Saldos Bancários
               </h2>
-              <span className={`text-lg font-bold ${(saldosBancarios?.total ?? 0) >= 0 ? 'text-green-700' : 'text-red-600'}`}>
-                {fmtBRL(saldosBancarios?.total ?? 0)}
-              </span>
             </div>
             {saldosBancarios && saldosBancarios.contas.length > 0 ? (
-              <div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                {saldosBancarios.contas.map((c, i) => (
-                  <div
-                    key={`${c.nmBanco}-${c.nrConta}-${i}`}
-                    className={`rounded-lg bg-gray-50 border-l-4 p-3 ${c.vlSaldo >= 0 ? 'border-green-500' : 'border-red-500'}`}
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-sm font-semibold text-black truncate">{c.nmBanco}</span>
-                      <span className="text-xs text-gray-500 whitespace-nowrap">{c.dtPosicao.split('-').reverse().join('/')}</span>
-                    </div>
-                    <p className="text-xs text-gray-600 mt-0.5">Ag {c.nrAgencia} · Conta {c.nrConta}</p>
-                    <p className={`text-xl font-bold mt-1.5 tabular-nums ${c.vlSaldo >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(c.vlSaldo)}</p>
-                  </div>
-                ))}
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm border-separate [border-spacing:0]">
+                  <thead>
+                    <tr>
+                      <th className="text-left px-4 py-2 font-semibold text-white bg-rose-600 border-b border-r border-rose-700">Banco</th>
+                      <th className="text-left px-4 py-2 font-semibold text-white bg-rose-600 border-b border-r border-rose-700">Agência</th>
+                      <th className="text-left px-4 py-2 font-semibold text-white bg-rose-600 border-b border-r border-rose-700">Conta</th>
+                      <th className="text-right px-4 py-2 font-semibold text-white bg-rose-600 border-b border-r border-rose-700">Posição em</th>
+                      <th className="text-right px-4 py-2 font-semibold text-white bg-rose-600 border-b border-rose-700">Saldo</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {saldosBancarios.contas.map((c, i) => (
+                      <tr key={`${c.nmBanco}-${c.nrConta}-${i}`} className={`${i % 2 === 0 ? 'bg-white' : 'bg-gray-50'} hover:bg-rose-50 transition-colors`}>
+                        <td className="px-4 py-2 text-black border-r border-b border-gray-300">{c.nmBanco}</td>
+                        <td className="px-4 py-2 text-black border-r border-b border-gray-300">{c.nrAgencia}</td>
+                        <td className="px-4 py-2 text-black border-r border-b border-gray-300">{c.nrConta}</td>
+                        <td className="px-4 py-2 text-right text-gray-600 border-r border-b border-gray-300">{c.dtPosicao.split('-').reverse().join('/')}</td>
+                        <td className={`px-4 py-2 text-right font-semibold tabular-nums border-b border-gray-300 ${c.vlSaldo >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(c.vlSaldo)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr className="font-bold bg-gray-100">
+                      <td colSpan={4} className="px-4 py-2.5 text-right uppercase text-xs tracking-wide text-black border-t-2 border-r border-gray-400">Total</td>
+                      <td className={`px-4 py-2.5 text-right tabular-nums border-t-2 border-gray-400 ${(saldosBancarios?.total ?? 0) >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(saldosBancarios?.total ?? 0)}</td>
+                    </tr>
+                  </tfoot>
+                </table>
               </div>
             ) : (
               <p className="text-sm text-gray-500 py-8 text-center">Nenhuma conta bancária cadastrada.</p>
@@ -843,7 +857,7 @@ export default function FluxoCaixaPage() {
                     <th className="px-3 py-1.5 text-right font-semibold text-white bg-green-700 border-b-2 border-green-300 border-r-2 border-gray-300">Total</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-200">
+                <tbody>
                   {linhasDiarias.length === 0 && (
                     <tr><td colSpan={12} className="text-center text-gray-500 py-8">Sem dados no período selecionado</td></tr>
                   )}
@@ -856,7 +870,7 @@ export default function FluxoCaixaPage() {
                     const bg = isHoje ? 'bg-sky-50' : isFds ? 'bg-gray-100' : i % 2 === 0 ? 'bg-white' : 'bg-gray-50';
                     return (
                       <tr key={l.dia.dia} className={`${bg} ${isHoje ? 'font-bold' : ''} hover:bg-rose-50 transition-colors`}>
-                        <td className="px-3 py-2 whitespace-nowrap text-black border-r-2 border-gray-300">
+                        <td className="px-3 py-2 whitespace-nowrap text-black border-r-2 border-b border-gray-300">
                           <span className="tabular-nums">{dd}/{mm}</span>
                           <span className="text-xs text-gray-500 ml-1.5">{dow}</span>
                           {isHoje && <span className="text-xs font-medium bg-sky-600 text-white rounded px-1.5 py-0.5 ml-1.5 align-middle">hoje</span>}
@@ -864,18 +878,18 @@ export default function FluxoCaixaPage() {
                         {celula('previsao', l.dia.previsao, '#ef4444')}
                         {celula('real', l.dia.real, '#991b1b')}
                         {celula('pedidos', l.dia.pedidos, '#dc2626')}
-                        <td className="text-right px-3 py-2 font-bold text-red-800 border-r-2 border-gray-300">
+                        <td className="text-right px-3 py-2 font-bold text-red-800 border-r-2 border-b border-gray-300">
                           {l.effSaidas > 0 ? fmtBRL(l.effSaidas) : <span className="text-gray-400">—</span>}
                         </td>
                         {celula('boleto', l.dia.boleto, '#0284c7')}
                         {celula('cheque', l.dia.cheque, '#059669')}
                         {celula('lojas', l.adjLojas, '#0891b2')}
-                        <td className="text-right px-3 py-2 font-bold text-green-800 border-r-2 border-gray-300">
+                        <td className="text-right px-3 py-2 font-bold text-green-800 border-r-2 border-b border-gray-300">
                           {l.effEntradas > 0 ? fmtBRL(l.effEntradas) : <span className="text-gray-400">—</span>}
                         </td>
-                        <td className={`text-right px-3 py-2 font-bold border-r border-gray-300 ${l.effSaldoDia >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(l.effSaldoDia)}</td>
-                        <td className={`text-right px-3 py-2 font-bold border-r-2 border-gray-300 ${l.saldoAcum >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(l.saldoAcum)}</td>
-                        <td className="text-right px-3 py-2 text-black">{fmtNum(l.dia.qtd)}</td>
+                        <td className={`text-right px-3 py-2 font-bold border-r border-b border-gray-300 ${l.effSaldoDia >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(l.effSaldoDia)}</td>
+                        <td className={`text-right px-3 py-2 font-bold border-r-2 border-b border-gray-300 ${l.saldoAcum >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(l.saldoAcum)}</td>
+                        <td className="text-right px-3 py-2 text-black border-b border-gray-300">{fmtNum(l.dia.qtd)}</td>
                       </tr>
                     );
                   })}
@@ -938,14 +952,14 @@ export default function FluxoCaixaPage() {
                     </th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-100">
+                <tbody>
                   {fornecedoresOrdenados.length === 0 && (
                     <tr><td colSpan={2} className="text-center text-gray-500 py-8">Sem dados no período selecionado</td></tr>
                   )}
                   {fornecedoresOrdenados.map((f, i) => (
                     <tr key={`${f.cdFornecedor}-${i}`} className={`${i % 2 === 0 ? 'bg-white' : 'bg-gray-50'} hover:bg-rose-50 transition-colors`}>
-                      <td className="px-4 py-2 text-black">{f.nome}</td>
-                      <td className="px-4 py-2 text-right font-semibold text-red-600 tabular-nums">{fmtBRL(-f.valor)}</td>
+                      <td className="px-4 py-2 text-black border-b border-gray-200">{f.nome}</td>
+                      <td className="px-4 py-2 text-right font-semibold text-red-600 tabular-nums border-b border-gray-200">{fmtBRL(-f.valor)}</td>
                     </tr>
                   ))}
                 </tbody>
