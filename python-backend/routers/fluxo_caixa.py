@@ -148,6 +148,50 @@ def _sql_saidas_diario(where: str) -> str:
     """
 
 
+# Mesmo nome de fornecedor usado no resto do app (dre.py) - nm_fantasia
+# quando preenchido e nao for so asteriscos (cadastro mal feito), senao cai
+# pra nm_pessoa (PJ) ou nm_pessoa de pessoa fisica.
+def _sql_saidas_por_fornecedor(where: str) -> str:
+    return f"""
+        SELECT d.cd_fornecedor,
+            CASE WHEN p.nm_fantasia IS NULL OR TRIM(p.nm_fantasia) = '' OR p.nm_fantasia ~ '^\\*+$'
+                 THEN COALESCE(p.nm_pessoa, pf.nm_pessoa, 'Fornecedor ' || d.cd_fornecedor::text)
+                 ELSE p.nm_fantasia END AS nome,
+            ROUND(SUM(d.vl_duplicata - d.vl_pago)::numeric, 2) AS valor,
+            COUNT(*)::int AS qtd
+        FROM vr_fcp_duplicatai d
+        LEFT JOIN vr_pes_pessoa p ON p.cd_pessoa = d.cd_fornecedor
+        LEFT JOIN vr_pes_pesfisica pf ON pf.cd_pessoa = d.cd_fornecedor
+        {where}
+        GROUP BY 1, 2
+        ORDER BY 3 DESC
+    """
+
+
+# Saidas por despesa - precisa da tabela de rateio (vr_fcp_despduplicatai),
+# que e a unica que carrega cd_despesaitem (vr_fcp_duplicatai, usada no
+# resto da tela, so tem cd_componente, um codigo interno sem nome
+# legivel). Uma parcela pode ter o valor rateado entre varias despesas -
+# vl_rateio e a fatia de CADA despesa no valor TOTAL da parcela
+# (vl_duplicata), entao pra chegar no valor ainda EM ABERTO daquela fatia e
+# preciso aplicar a mesma proporcao aberta da parcela toda:
+# vl_rateio * (vl_duplicata - vl_pago) / vl_duplicata. Mesmo filtro (where)
+# de _filtros_saidas serve aqui tambem - as duas tabelas tem as mesmas
+# colunas de filtro (tp_situacao/vl_duplicata/vl_pago/dt_vencimento/
+# cd_empresa).
+def _sql_saidas_por_despesa(where: str) -> str:
+    return f"""
+        SELECT d.cd_despesaitem, i.ds_despesaitem AS nome,
+            ROUND(SUM(d.vl_rateio * (d.vl_duplicata - d.vl_pago) / NULLIF(d.vl_duplicata, 0))::numeric, 2) AS valor,
+            COUNT(*)::int AS qtd
+        FROM vr_fcp_despduplicatai d
+        JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
+        {where}
+        GROUP BY 1, 2
+        ORDER BY 3 DESC
+    """
+
+
 # ── Saidas - pedidos de compra (parcela simulada: dt_basepgto + qt_dia) ──
 def _filtros_pedidos(dt_inicio: str, dt_fim: str, empresas: list) -> tuple:
     params: list = [dt_inicio, dt_fim]
@@ -476,6 +520,50 @@ def dados_fluxo_caixa(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail="Erro ao carregar fluxo de caixa")
+
+
+@router.get("/api/fluxo-caixa/saidas-por-fornecedor")
+def saidas_por_fornecedor(
+    dt_inicio: Optional[str] = Query(None),
+    dt_fim: Optional[str] = Query(None),
+    empresas: Optional[str] = Query(None),
+):
+    try:
+        hoje = date.today()
+        dt_inicio = dt_inicio or hoje.isoformat()
+        dt_fim = dt_fim or (hoje + timedelta(days=30)).isoformat()
+        where, params = _filtros_saidas(dt_inicio, dt_fim, _parse_empresas(empresas))
+        rows = execute_query(_sql_saidas_por_fornecedor(where), tuple(params)) or []
+        return [
+            {"cdFornecedor": int(r["cd_fornecedor"]) if r["cd_fornecedor"] is not None else None,
+             "nome": r["nome"], "valor": float(r["valor"]), "qtd": r["qtd"]}
+            for r in rows
+        ]
+    except Exception as e:
+        print(f"[ERROR] Erro ao buscar saidas por fornecedor: {e}")
+        raise HTTPException(status_code=500, detail="Erro ao buscar saídas por fornecedor")
+
+
+@router.get("/api/fluxo-caixa/saidas-por-despesa")
+def saidas_por_despesa(
+    dt_inicio: Optional[str] = Query(None),
+    dt_fim: Optional[str] = Query(None),
+    empresas: Optional[str] = Query(None),
+):
+    try:
+        hoje = date.today()
+        dt_inicio = dt_inicio or hoje.isoformat()
+        dt_fim = dt_fim or (hoje + timedelta(days=30)).isoformat()
+        where, params = _filtros_saidas(dt_inicio, dt_fim, _parse_empresas(empresas))
+        rows = execute_query(_sql_saidas_por_despesa(where), tuple(params)) or []
+        return [
+            {"cdDespesaItem": int(r["cd_despesaitem"]) if r["cd_despesaitem"] is not None else None,
+             "nome": r["nome"], "valor": float(r["valor"]), "qtd": r["qtd"]}
+            for r in rows
+        ]
+    except Exception as e:
+        print(f"[ERROR] Erro ao buscar saidas por despesa: {e}")
+        raise HTTPException(status_code=500, detail="Erro ao buscar saídas por despesa")
 
 
 @router.get("/api/fluxo-caixa/lojas-projecao")

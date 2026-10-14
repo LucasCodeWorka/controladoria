@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Banknote, ChevronDown, Loader2, Settings, X, RotateCcw, AlertTriangle } from 'lucide-react';
+import { Banknote, ChevronDown, Loader2, Settings, X, RotateCcw, AlertTriangle, ArrowUp, ArrowDown, ArrowUpDown } from 'lucide-react';
 import {
   Bar,
   BarChart,
@@ -67,6 +67,20 @@ interface DadosFC {
 interface FaturaDescontada {
   nrFat: number;
   nrParcela: number;
+}
+
+interface SaidaFornecedor {
+  cdFornecedor: number | null;
+  nome: string;
+  valor: number;
+  qtd: number;
+}
+
+interface SaidaDespesa {
+  cdDespesaItem: number | null;
+  nome: string;
+  valor: number;
+  qtd: number;
 }
 
 type ColKey = 'previsao' | 'real' | 'pedidos' | 'cartao' | 'boleto' | 'cheque' | 'lojas' | 'multimarcas';
@@ -154,6 +168,29 @@ function GraficoMensalFC({ meses }: { meses: MesFC[] }) {
   );
 }
 
+// Lista ranqueada estilo "barra horizontal com rotulo" (valor a esquerda,
+// barra proporcional ao maior valor da lista, nome a direita) - mesmo
+// layout do relatorio de referencia que o usuario pediu pra replicar aqui.
+function ListaBarrasRanking({ itens, cor }: { itens: { nome: string; valor: number }[]; cor: string }) {
+  if (!itens.length) {
+    return <p className="text-sm text-gray-400 py-8 text-center">Sem dados no período.</p>;
+  }
+  const maxValor = Math.max(...itens.map((i) => i.valor), 1);
+  return (
+    <div className="max-h-[520px] overflow-y-auto pr-1 space-y-1">
+      {itens.map((item, i) => (
+        <div key={`${item.nome}-${i}`} className="flex items-center gap-2 text-xs">
+          <span className="w-24 flex-shrink-0 text-right font-semibold text-gray-700 tabular-nums">{fmtBRL(-item.valor)}</span>
+          <div className="flex-1 flex items-center min-w-0">
+            <div className="h-5 rounded-sm" style={{ width: `${Math.max(2, (item.valor / maxValor) * 100)}%`, backgroundColor: cor }} />
+            <span className="ml-2 truncate text-gray-700" title={item.nome}>{item.nome}</span>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function FluxoCaixaPage() {
   const [empresasDisponiveis, setEmpresasDisponiveis] = useState<EmpresaFC[]>([]);
   const [empresasSelecionadas, setEmpresasSelecionadas] = useState<Set<number>>(new Set());
@@ -165,6 +202,11 @@ export default function FluxoCaixaPage() {
   const [dados, setDados] = useState<DadosFC | null>(null);
   const [loading, setLoading] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
+
+  const [saidasFornecedor, setSaidasFornecedor] = useState<SaidaFornecedor[]>([]);
+  const [saidasDespesa, setSaidasDespesa] = useState<SaidaDespesa[]>([]);
+  const [sortKey, setSortKey] = useState<'nome' | 'valor'>('valor');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
 
   const [colsAtivas, setColsAtivas] = useState<Record<ColKey, boolean>>({
     previsao: true, real: true, pedidos: true,
@@ -218,13 +260,20 @@ export default function FluxoCaixaPage() {
       if (empresasSelecionadas.size > 0 && empresasSelecionadas.size < empresasDisponiveis.length) {
         params.set('empresas', Array.from(empresasSelecionadas).join(','));
       }
-      const response = await fetch(`/api/fluxo-caixa/dados?${params.toString()}`, { cache: 'no-store' });
-      const json = await response.json();
-      if (!response.ok || json.error) {
+      const qs = params.toString();
+      const [respDados, respFornecedor, respDespesa] = await Promise.all([
+        fetch(`/api/fluxo-caixa/dados?${qs}`, { cache: 'no-store' }),
+        fetch(`/api/fluxo-caixa/saidas-por-fornecedor?${qs}`, { cache: 'no-store' }),
+        fetch(`/api/fluxo-caixa/saidas-por-despesa?${qs}`, { cache: 'no-store' }),
+      ]);
+      const json = await respDados.json();
+      if (!respDados.ok || json.error) {
         setErro(json.error || 'Erro ao carregar fluxo de caixa');
         return;
       }
       setDados(json.data);
+      setSaidasFornecedor(respFornecedor.ok ? await respFornecedor.json() : []);
+      setSaidasDespesa(respDespesa.ok ? await respDespesa.json() : []);
     } catch (error) {
       console.error('Erro ao buscar fluxo de caixa:', error);
       setErro('Erro ao buscar os dados. Tente novamente.');
@@ -232,6 +281,21 @@ export default function FluxoCaixaPage() {
       setLoading(false);
     }
   }
+
+  function alternarOrdenacao(key: 'nome' | 'valor') {
+    if (sortKey === key) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortKey(key);
+      setSortDir(key === 'valor' ? 'desc' : 'asc');
+    }
+  }
+
+  const fornecedoresOrdenados = [...saidasFornecedor].sort((a, b) => {
+    const mult = sortDir === 'asc' ? 1 : -1;
+    if (sortKey === 'nome') return a.nome.localeCompare(b.nome) * mult;
+    return (a.valor - b.valor) * mult;
+  });
 
   useEffect(() => {
     if (empresasDisponiveis.length > 0) {
@@ -695,6 +759,57 @@ export default function FluxoCaixaPage() {
                     </tr>
                   </tfoot>
                 )}
+              </table>
+            </div>
+          </div>
+
+          {/* Saidas por fornecedor e por despesa (mesmo periodo/empresas
+              filtrados acima) */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div className="bg-white rounded-lg shadow-md p-4">
+              <h2 className="text-sm font-semibold text-gray-700 mb-3">Fornecedores</h2>
+              <ListaBarrasRanking itens={saidasFornecedor} cor="#dc2626" />
+            </div>
+            <div className="bg-white rounded-lg shadow-md p-4">
+              <h2 className="text-sm font-semibold text-gray-700 mb-3">Despesas</h2>
+              <ListaBarrasRanking itens={saidasDespesa} cor="#f59e0b" />
+            </div>
+          </div>
+
+          {/* Tabela ordenavel de fornecedores */}
+          <div className="bg-white rounded-lg shadow-md overflow-hidden">
+            <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
+              <h2 className="text-sm font-semibold text-gray-700">Fornecedores</h2>
+            </div>
+            <div className="overflow-x-auto max-h-[520px] overflow-y-auto">
+              <table className="w-full text-sm border-collapse">
+                <thead className="sticky top-0 bg-gray-100">
+                  <tr>
+                    <th className="text-left px-4 py-2 font-semibold text-gray-600 cursor-pointer select-none" onClick={() => alternarOrdenacao('nome')}>
+                      <span className="inline-flex items-center gap-1">
+                        Nome
+                        {sortKey === 'nome' ? (sortDir === 'asc' ? <ArrowUp className="w-3.5 h-3.5" /> : <ArrowDown className="w-3.5 h-3.5" />) : <ArrowUpDown className="w-3.5 h-3.5 text-gray-300" />}
+                      </span>
+                    </th>
+                    <th className="text-right px-4 py-2 font-semibold text-gray-600 cursor-pointer select-none" onClick={() => alternarOrdenacao('valor')}>
+                      <span className="inline-flex items-center gap-1">
+                        Valor Atual
+                        {sortKey === 'valor' ? (sortDir === 'asc' ? <ArrowUp className="w-3.5 h-3.5" /> : <ArrowDown className="w-3.5 h-3.5" />) : <ArrowUpDown className="w-3.5 h-3.5 text-gray-300" />}
+                      </span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {fornecedoresOrdenados.length === 0 && (
+                    <tr><td colSpan={2} className="text-center text-gray-400 py-8">Sem dados no período selecionado</td></tr>
+                  )}
+                  {fornecedoresOrdenados.map((f, i) => (
+                    <tr key={`${f.cdFornecedor}-${i}`} className={`border-b border-gray-100 ${i % 2 ? 'bg-gray-50' : ''}`}>
+                      <td className="px-4 py-2 text-gray-700">{f.nome}</td>
+                      <td className="px-4 py-2 text-right font-medium text-red-600 tabular-nums">{fmtBRL(-f.valor)}</td>
+                    </tr>
+                  ))}
+                </tbody>
               </table>
             </div>
           </div>
