@@ -126,6 +126,27 @@ function isoHoje(offsetDias = 0): string {
   return new Date(Date.now() + offsetDias * 86400000).toISOString().slice(0, 10);
 }
 
+// Atalhos de periodo - mesmo estilo/posicao dos atalhos ja usados em DRE/
+// DFC/CMV Detalhado (componente AtalhosPeriodo), mas voltados pra FRENTE
+// (fluxo de caixa e projecao, nao historico fechado) - por isso nao reusa
+// aqueles atalhos (Mes Anterior, Ultimos N Meses etc sao todos passados).
+// Cada atalho e recalculado em cima do "hoje" de verdade sempre que
+// aplicado - inclusive ao restaurar o ultimo filtro salvo (ver useEffect
+// de carregamento), pra nunca reabrir com uma janela defasada.
+const ATALHOS_PERIODO_FC: { id: string; label: string; calcular: () => { dtInicio: string; dtFim: string } }[] = [
+  { id: 'hoje', label: 'Hoje', calcular: () => ({ dtInicio: isoHoje(), dtFim: isoHoje() }) },
+  { id: '7d', label: 'Próximos 7 Dias', calcular: () => ({ dtInicio: isoHoje(), dtFim: isoHoje(7) }) },
+  { id: '15d', label: 'Próximos 15 Dias', calcular: () => ({ dtInicio: isoHoje(), dtFim: isoHoje(15) }) },
+  { id: '30d', label: 'Próximos 30 Dias', calcular: () => ({ dtInicio: isoHoje(), dtFim: isoHoje(30) }) },
+  { id: '60d', label: 'Próximos 60 Dias', calcular: () => ({ dtInicio: isoHoje(), dtFim: isoHoje(60) }) },
+  { id: '90d', label: 'Próximos 90 Dias', calcular: () => ({ dtInicio: isoHoje(), dtFim: isoHoje(90) }) },
+  { id: 'mes', label: 'Este Mês', calcular: () => {
+      const hoje = new Date();
+      const fimMes = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0);
+      return { dtInicio: isoHoje(), dtFim: fimMes.toISOString().slice(0, 10) };
+    } },
+];
+
 function fmtBRL(valor: number | null | undefined, decimais = 0): string {
   if (valor == null || isNaN(valor)) return '—';
   return `R$ ${valor.toLocaleString('pt-BR', { minimumFractionDigits: decimais, maximumFractionDigits: decimais })}`;
@@ -254,6 +275,7 @@ export default function FluxoCaixaPage() {
 
   const [dtInicio, setDtInicio] = useState(isoHoje());
   const [dtFim, setDtFim] = useState(isoHoje(30));
+  const [ultimoAtalho, setUltimoAtalho] = useState<string | null>(null);
 
   const [dados, setDados] = useState<DadosFC | null>(null);
   const [loading, setLoading] = useState(false);
@@ -290,12 +312,24 @@ export default function FluxoCaixaPage() {
       .then((r) => r.json())
       .then((lista: EmpresaFC[]) => {
         setEmpresasDisponiveis(lista || []);
-        const salvo = carregarFiltro<{ empresas: number[]; dtInicio: string; dtFim: string }>(FILTRO_KEY);
+        const salvo = carregarFiltro<{ empresas: number[]; dtInicio: string; dtFim: string; ultimoAtalho?: string | null }>(FILTRO_KEY);
         const validas = new Set((lista || []).map((e) => e.id));
         const empresasValidas = (salvo?.empresas || []).filter((id) => validas.has(id));
         setEmpresasSelecionadas(new Set(empresasValidas.length > 0 ? empresasValidas : (lista || []).map((e) => e.id)));
-        if (salvo?.dtInicio) setDtInicio(salvo.dtInicio);
-        if (salvo?.dtFim) setDtFim(salvo.dtFim);
+        // Se o ultimo filtro usado foi um atalho (ex: "Próximos 30 Dias"),
+        // recalcula em cima do "hoje" de agora, em vez de so repetir as
+        // mesmas datas congeladas de quando foi salvo (senao reabrir no dia
+        // seguinte mostraria uma janela ja defasada 1 dia pra tras).
+        const atalho = salvo?.ultimoAtalho ? ATALHOS_PERIODO_FC.find((a) => a.id === salvo.ultimoAtalho) : null;
+        if (atalho) {
+          const { dtInicio: di, dtFim: df } = atalho.calcular();
+          setDtInicio(di);
+          setDtFim(df);
+          setUltimoAtalho(atalho.id);
+        } else {
+          if (salvo?.dtInicio) setDtInicio(salvo.dtInicio);
+          if (salvo?.dtFim) setDtFim(salvo.dtFim);
+        }
       })
       .catch((e) => console.error('Erro ao buscar empresas do fluxo de caixa:', e));
 
@@ -310,6 +344,13 @@ export default function FluxoCaixaPage() {
     if (salvo?.crescLojas !== undefined) setCrescLojas(salvo.crescLojas);
   }, []);
 
+  function aplicarAtalhoPeriodo(atalho: typeof ATALHOS_PERIODO_FC[number]) {
+    const { dtInicio: di, dtFim: df } = atalho.calcular();
+    setDtInicio(di);
+    setDtFim(df);
+    setUltimoAtalho(atalho.id);
+  }
+
   const primeiraRenderizacaoFiltroRef = useRef(true);
   useEffect(() => {
     if (primeiraRenderizacaoFiltroRef.current) {
@@ -317,10 +358,10 @@ export default function FluxoCaixaPage() {
       return;
     }
     salvarFiltro(FILTRO_KEY, {
-      empresas: Array.from(empresasSelecionadas), dtInicio, dtFim,
+      empresas: Array.from(empresasSelecionadas), dtInicio, dtFim, ultimoAtalho,
       colsAtivas, crescMulti, inflacaoMulti, crescLojas,
     });
-  }, [empresasSelecionadas, dtInicio, dtFim, colsAtivas, crescMulti, inflacaoMulti, crescLojas]);
+  }, [empresasSelecionadas, dtInicio, dtFim, ultimoAtalho, colsAtivas, crescMulti, inflacaoMulti, crescLojas]);
 
   async function buscar() {
     setLoading(true);
@@ -595,11 +636,19 @@ export default function FluxoCaixaPage() {
         <div className="flex items-center gap-3 flex-wrap">
           <div className="flex flex-col gap-1">
             <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">De</label>
-            <input type="date" value={dtInicio} onChange={(e) => setDtInicio(e.target.value)} className="h-9 px-2 border border-gray-300 rounded-md text-sm text-black" />
+            <input
+              type="date" value={dtInicio}
+              onChange={(e) => { setDtInicio(e.target.value); setUltimoAtalho(null); }}
+              className="h-9 px-2 border border-gray-300 rounded-md text-sm text-black"
+            />
           </div>
           <div className="flex flex-col gap-1">
             <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Até</label>
-            <input type="date" value={dtFim} onChange={(e) => setDtFim(e.target.value)} className="h-9 px-2 border border-gray-300 rounded-md text-sm text-black" />
+            <input
+              type="date" value={dtFim}
+              onChange={(e) => { setDtFim(e.target.value); setUltimoAtalho(null); }}
+              className="h-9 px-2 border border-gray-300 rounded-md text-sm text-black"
+            />
           </div>
 
           <div className="relative">
@@ -642,6 +691,18 @@ export default function FluxoCaixaPage() {
             {loading && <Loader2 className="w-4 h-4 animate-spin" />}
             Aplicar
           </button>
+
+          {ATALHOS_PERIODO_FC.map((atalho) => (
+            <button
+              key={atalho.id}
+              onClick={() => aplicarAtalhoPeriodo(atalho)}
+              className={`px-3 py-2 text-sm rounded-md transition-colors ${
+                ultimoAtalho === atalho.id ? 'bg-rose-100 text-rose-700 font-medium' : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
+              }`}
+            >
+              {atalho.label}
+            </button>
+          ))}
         </div>
         {erro && <p className="text-sm text-red-600 mt-3">{erro}</p>}
       </div>
