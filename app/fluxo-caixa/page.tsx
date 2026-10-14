@@ -39,6 +39,7 @@ interface MesFC {
   boleto: number;
   cheque: number;
   lojas: number;
+  outrasEntradas: number;
   multimarcas: number;
   qtd: number;
 }
@@ -53,6 +54,7 @@ interface DiaFC {
   boleto: number;
   cheque: number;
   lojas: number;
+  outrasEntradas: number;
   multimarcas: number;
   qtd: number;
   saldoAcum: number;
@@ -102,7 +104,7 @@ interface SaidaDespesa {
   qtd: number;
 }
 
-type ColKey = 'previsao' | 'real' | 'pedidos' | 'cartao' | 'boleto' | 'cheque' | 'lojas' | 'multimarcas';
+type ColKey = 'previsao' | 'real' | 'pedidos' | 'cartao' | 'boleto' | 'cheque' | 'lojas' | 'outrasEntradas' | 'multimarcas';
 
 const FILTRO_KEY = 'fluxo_caixa_filtros_v1';
 
@@ -116,6 +118,7 @@ const COL_DEFS: { group: string; cols: { key: ColKey; label: string; color: stri
   // usuario) - nem aparecem na tabela nem compoem o saldo, so volta se
   // pedir de novo. Os dados continuam vindo da API, so nao sao usados aqui.
   { group: 'Entradas', cols: [
+    { key: 'outrasEntradas', label: 'Outras Entradas', color: '#7c3aed' },
     { key: 'boleto', label: 'Boleto', color: '#0284c7' },
     { key: 'cheque', label: 'Cheque', color: '#059669' },
     { key: 'lojas', label: 'Lojas', color: '#0891b2' },
@@ -189,7 +192,7 @@ function TooltipMes({ active, payload }: { active?: boolean; payload?: TooltipMe
     <div className="bg-gray-900 text-white text-xs rounded px-2.5 py-1.5 shadow-lg space-y-1 max-w-xs">
       <p className="font-semibold">{fmtMes(m.mes)}</p>
       <p>Saídas: {fmtBRL(m.totalSaidas)} (Real {fmtBRL(m.real)} · Prev {fmtBRL(m.previsao)} · Pedidos {fmtBRL(m.pedidos)})</p>
-      <p>Entradas: {fmtBRL(m.totalEntradas)} (Boleto {fmtBRL(m.boleto)} · Cheque {fmtBRL(m.cheque)} · Lojas {fmtBRL(m.lojas)})</p>
+      <p>Entradas: {fmtBRL(m.totalEntradas)} (Outras {fmtBRL(m.outrasEntradas)} · Boleto {fmtBRL(m.boleto)} · Cheque {fmtBRL(m.cheque)} · Lojas {fmtBRL(m.lojas)})</p>
       <p className={m.saldoAcumulado >= 0 ? 'text-emerald-400 font-semibold' : 'text-red-400 font-semibold'}>Saldo acumulado: {fmtBRL(m.saldoAcumulado)}</p>
     </div>
   );
@@ -207,7 +210,7 @@ function GraficoMensalFC({ meses, saldoBancario }: { meses: MesFC[]; saldoBancar
   // pedir de novo.
   let acumulado = saldoBancario;
   const dados: MesFCComSaldo[] = meses.map((m) => {
-    const totalEntradas = m.boleto + m.cheque + m.lojas;
+    const totalEntradas = m.outrasEntradas + m.boleto + m.cheque + m.lojas;
     acumulado += totalEntradas - m.totalSaidas;
     return { ...m, totalEntradas, saldoAcumulado: acumulado };
   });
@@ -289,7 +292,7 @@ export default function FluxoCaixaPage() {
 
   const [colsAtivas, setColsAtivas] = useState<Record<ColKey, boolean>>({
     previsao: true, real: true, pedidos: true,
-    cartao: true, boleto: true, cheque: true, lojas: true, multimarcas: true,
+    cartao: true, boleto: true, cheque: true, lojas: true, outrasEntradas: true, multimarcas: true,
   });
 
   const [crescMulti, setCrescMulti] = useState(0);
@@ -300,6 +303,11 @@ export default function FluxoCaixaPage() {
   const [lojasPaste, setLojasPaste] = useState('');
   const [lojasStatus, setLojasStatus] = useState('');
   const [lojasSalvando, setLojasSalvando] = useState(false);
+
+  const [outrasEntradasModalAberto, setOutrasEntradasModalAberto] = useState(false);
+  const [outrasEntradasPaste, setOutrasEntradasPaste] = useState('');
+  const [outrasEntradasStatus, setOutrasEntradasStatus] = useState('');
+  const [outrasEntradasSalvando, setOutrasEntradasSalvando] = useState(false);
 
   const [faturasModalAberto, setFaturasModalAberto] = useState(false);
   const [faturasLista, setFaturasLista] = useState<FaturaDescontada[] | null>(null);
@@ -479,6 +487,52 @@ export default function FluxoCaixaPage() {
     }
   }
 
+  async function outrasEntradasGravar() {
+    const raw = outrasEntradasPaste.trim();
+    if (!raw) { setOutrasEntradasStatus('Cole os dados primeiro.'); return; }
+
+    const linhas: { dia: string; valor: number }[] = [];
+    for (const linha of raw.split('\n')) {
+      const partes = linha.trim().split(/[\t;]/);
+      if (partes.length < 2) continue;
+      const [datePart, valPart] = partes;
+      let iso: string | null = null;
+      if (/^\d{2}\/\d{2}\/\d{4}$/.test(datePart.trim())) {
+        const [d, m, y] = datePart.trim().split('/');
+        iso = `${y}-${m}-${d}`;
+      } else if (/^\d{4}-\d{2}-\d{2}$/.test(datePart.trim())) {
+        iso = datePart.trim();
+      } else continue;
+      const valor = parseFloat(valPart.trim().replace(/\./g, '').replace(',', '.'));
+      if (isNaN(valor)) continue;
+      linhas.push({ dia: iso, valor });
+    }
+
+    if (!linhas.length) { setOutrasEntradasStatus('Nenhuma linha válida encontrada.'); return; }
+    setOutrasEntradasStatus(`Salvando ${linhas.length} linha(s)…`);
+    setOutrasEntradasSalvando(true);
+    try {
+      const res = await fetch('/api/fluxo-caixa/outras-entradas-projecao', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(linhas),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || json.detail || 'Erro ao salvar');
+      setOutrasEntradasStatus(`✓ ${json.count} dia(s) salvos.`);
+      setOutrasEntradasPaste('');
+      setTimeout(() => {
+        setOutrasEntradasModalAberto(false);
+        setOutrasEntradasStatus('');
+        buscar();
+      }, 900);
+    } catch (e) {
+      setOutrasEntradasStatus(`Erro: ${e instanceof Error ? e.message : 'desconhecido'}`);
+    } finally {
+      setOutrasEntradasSalvando(false);
+    }
+  }
+
   async function faturasCarregarLista() {
     setFaturasLista(null);
     try {
@@ -569,6 +623,7 @@ export default function FluxoCaixaPage() {
     const effPrev = ev('previsao', dia.previsao);
     const effReal = ev('real', dia.real);
     const effPed = ev('pedidos', dia.pedidos);
+    const effOutras = ev('outrasEntradas', dia.outrasEntradas);
     const effBol = ev('boleto', dia.boleto);
     const effCheq = ev('cheque', dia.cheque);
     const effLoj = ev('lojas', adjLojas);
@@ -576,12 +631,12 @@ export default function FluxoCaixaPage() {
     const effSaidas = effPrev + effReal + effPed;
     // Cartao e Multimarcas tirados temporariamente (pedido explicito do
     // usuario) - nao compoem mais o saldo, so volta se pedir de novo.
-    const effEntradas = effBol + effCheq + effLoj;
+    const effEntradas = effOutras + effBol + effCheq + effLoj;
     const effSaldoDia = effEntradas - effSaidas;
     acumLocal += effSaldoDia;
 
     return {
-      dia, adjLojas, adjMulti, effPrev, effReal, effPed, effBol, effCheq, effLoj,
+      dia, adjLojas, adjMulti, effPrev, effReal, effPed, effOutras, effBol, effCheq, effLoj,
       effSaidas, effEntradas, effSaldoDia, saldoAcum: acumLocal,
     };
   });
@@ -591,12 +646,13 @@ export default function FluxoCaixaPage() {
     real: acc.real + l.effReal,
     pedidos: acc.pedidos + l.effPed,
     saidas: acc.saidas + l.effSaidas,
+    outrasEntradas: acc.outrasEntradas + l.effOutras,
     boleto: acc.boleto + l.effBol,
     cheque: acc.cheque + l.effCheq,
     lojas: acc.lojas + l.effLoj,
     entradas: acc.entradas + l.effEntradas,
     qtd: acc.qtd + l.dia.qtd,
-  }), { previsao: 0, real: 0, pedidos: 0, saidas: 0, boleto: 0, cheque: 0, lojas: 0, entradas: 0, qtd: 0 });
+  }), { previsao: 0, real: 0, pedidos: 0, saidas: 0, outrasEntradas: 0, boleto: 0, cheque: 0, lojas: 0, entradas: 0, qtd: 0 });
 
   const saldoFinal = totais.entradas - totais.saidas;
   const DIAS_SEMANA = ['DOM', 'SEG', 'TER', 'QUA', 'QUI', 'SEX', 'SÁB'];
@@ -788,6 +844,9 @@ export default function FluxoCaixaPage() {
                 <button onClick={() => setLojasModalAberto(true)} className="flex items-center gap-1 text-xs font-medium bg-gray-200 hover:bg-gray-300 text-black rounded px-2 py-1 transition-colors">
                   <Settings className="w-3.5 h-3.5" /> Projeção Lojas
                 </button>
+                <button onClick={() => setOutrasEntradasModalAberto(true)} className="flex items-center gap-1 text-xs font-medium bg-gray-200 hover:bg-gray-300 text-black rounded px-2 py-1 transition-colors">
+                  <Settings className="w-3.5 h-3.5" /> Outras Entradas
+                </button>
               </div>
             </div>
 
@@ -847,7 +906,7 @@ export default function FluxoCaixaPage() {
                   <tr className="text-left">
                     <th rowSpan={2} className="px-3 py-2 min-w-[90px] align-middle font-medium text-black bg-gray-100 border-b-2 border-r-2 border-gray-300">Data</th>
                     <th colSpan={4} className="px-3 py-1.5 text-center text-xs font-semibold uppercase tracking-wide text-white bg-red-600 border-b border-red-700">Saídas</th>
-                    <th colSpan={4} className="px-3 py-1.5 text-center text-xs font-semibold uppercase tracking-wide text-white bg-green-600 border-b border-green-700 border-l-2 border-l-gray-300">Entradas</th>
+                    <th colSpan={5} className="px-3 py-1.5 text-center text-xs font-semibold uppercase tracking-wide text-white bg-green-600 border-b border-green-700 border-l-2 border-l-gray-300">Entradas</th>
                     <th rowSpan={2} className="px-3 py-2 text-right whitespace-nowrap align-middle font-medium text-black bg-gray-100 border-b-2 border-r border-gray-300 border-l-2 border-l-gray-300">Saldo Dia</th>
                     <th rowSpan={2} className="px-3 py-2 text-right whitespace-nowrap align-middle font-medium text-black bg-gray-100 border-b-2 border-r-2 border-gray-300">Saldo Acum.</th>
                     <th rowSpan={2} className="px-3 py-2 text-right align-middle font-medium text-black bg-gray-100 border-b-2 border-gray-300">Qtd</th>
@@ -857,6 +916,7 @@ export default function FluxoCaixaPage() {
                     <th className="px-3 py-1.5 text-right font-medium text-white/90 bg-red-500 border-b-2 border-red-300 border-r border-red-400">Real</th>
                     <th className="px-3 py-1.5 text-right font-medium text-white/90 bg-red-500 border-b-2 border-red-300 border-r border-red-400">Pedidos</th>
                     <th className="px-3 py-1.5 text-right font-semibold text-white bg-red-700 border-b-2 border-red-300 border-r-2 border-gray-300">Total</th>
+                    <th className="px-3 py-1.5 text-right font-medium text-white/90 bg-green-500 border-b-2 border-green-300 border-r border-green-400">Outras Entradas</th>
                     <th className="px-3 py-1.5 text-right font-medium text-white/90 bg-green-500 border-b-2 border-green-300 border-r border-green-400">Boleto</th>
                     <th className="px-3 py-1.5 text-right font-medium text-white/90 bg-green-500 border-b-2 border-green-300 border-r border-green-400">Cheque</th>
                     <th className="px-3 py-1.5 text-right font-medium text-white/90 bg-green-500 border-b-2 border-green-300 border-r border-green-400">Lojas</th>
@@ -865,19 +925,23 @@ export default function FluxoCaixaPage() {
                 </thead>
                 <tbody>
                   {linhasDiarias.length === 0 && (
-                    <tr><td colSpan={12} className="text-center text-gray-500 py-8">Sem dados no período selecionado</td></tr>
+                    <tr><td colSpan={13} className="text-center text-gray-500 py-8">Sem dados no período selecionado</td></tr>
                   )}
                   {linhasDiarias.map((l, i) => {
                     const dt = new Date(`${l.dia.dia}T12:00:00`);
                     const dow = DIAS_SEMANA[dt.getDay()];
                     const isHoje = l.dia.dia === hoje;
                     const [, mm, dd] = l.dia.dia.split('-');
+                    // Ultimo dia do mes - fechamento - fica com destaque
+                    // verde (pedido explicito do usuario), com prioridade
+                    // abaixo de "hoje" mas acima da zebra normal.
+                    const isUltimoDiaMes = dt.getDate() === new Date(dt.getFullYear(), dt.getMonth() + 1, 0).getDate();
                     // Zebra bem visivel (branco/cinza-100, nao cinza-50 que
                     // quase nao se distingue do branco) - pedido explicito
                     // do usuario. O fim de semana ja fica marcado pelo
                     // proprio rotulo SAB/DOM ao lado da data, sem precisar
                     // de uma 3a cor de fundo que brigava com a zebra.
-                    const bg = isHoje ? 'bg-sky-50' : i % 2 === 0 ? 'bg-white' : 'bg-gray-100';
+                    const bg = isHoje ? 'bg-sky-50' : isUltimoDiaMes ? 'bg-green-200' : i % 2 === 0 ? 'bg-white' : 'bg-gray-100';
                     const bgHover = `${bg} group-hover:bg-rose-50`;
                     return (
                       <tr key={l.dia.dia} className={`group ${isHoje ? 'font-bold' : ''} transition-colors`}>
@@ -892,6 +956,7 @@ export default function FluxoCaixaPage() {
                         <td className={`text-right px-3 py-2 font-bold text-red-800 border-r-2 border-b border-gray-300 ${bgHover}`}>
                           {l.effSaidas > 0 ? fmtBRL(l.effSaidas) : <span className="text-gray-400">—</span>}
                         </td>
+                        {celula('outrasEntradas', l.dia.outrasEntradas, '#7c3aed', bgHover)}
                         {celula('boleto', l.dia.boleto, '#0284c7', bgHover)}
                         {celula('cheque', l.dia.cheque, '#059669', bgHover)}
                         {celula('lojas', l.adjLojas, '#0891b2', bgHover)}
@@ -913,6 +978,7 @@ export default function FluxoCaixaPage() {
                       <td className="text-right px-3 py-2.5 text-red-800 border-t-2 border-r border-gray-400">{fmtBRL(totais.real)}</td>
                       <td className="text-right px-3 py-2.5 text-red-600 border-t-2 border-r border-gray-400">{fmtBRL(totais.pedidos)}</td>
                       <td className="text-right px-3 py-2.5 text-red-800 border-t-2 border-r-2 border-gray-400">{fmtBRL(totais.saidas)}</td>
+                      <td className="text-right px-3 py-2.5 text-violet-700 border-t-2 border-r border-gray-400">{fmtBRL(totais.outrasEntradas)}</td>
                       <td className="text-right px-3 py-2.5 text-sky-700 border-t-2 border-r border-gray-400">{fmtBRL(totais.boleto)}</td>
                       <td className="text-right px-3 py-2.5 text-green-700 border-t-2 border-r border-gray-400">{fmtBRL(totais.cheque)}</td>
                       <td className="text-right px-3 py-2.5 text-cyan-700 border-t-2 border-r border-gray-400">{fmtBRL(totais.lojas)}</td>
@@ -1007,6 +1073,36 @@ export default function FluxoCaixaPage() {
                 <span className="flex-1 text-sm text-gray-600">{lojasStatus}</span>
                 <button onClick={() => setLojasModalAberto(false)} className="px-4 py-2 border border-gray-300 rounded text-sm text-black hover:bg-gray-50">Cancelar</button>
                 <button onClick={lojasGravar} disabled={lojasSalvando} className="px-5 py-2 bg-green-600 hover:bg-green-700 text-white rounded text-sm font-semibold disabled:opacity-50 transition-colors">Salvar</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Projecao Outras Entradas */}
+      {outrasEntradasModalAberto && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setOutrasEntradasModalAberto(false)}>
+          <div className="bg-white rounded-lg shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200 sticky top-0 bg-white">
+              <h2 className="text-base font-semibold text-black">Outras Entradas</h2>
+              <button onClick={() => setOutrasEntradasModalAberto(false)} className="text-black/50 hover:text-black"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="p-5">
+              <p className="text-sm text-gray-600 mb-3">
+                Cole os dados da planilha abaixo — uma linha por dia.<br />
+                Formatos aceitos: <code>DD/MM/AAAA;valor</code> ou <code>DD/MM/AAAA[tab]valor</code> (tab do Excel)
+              </p>
+              <textarea
+                value={outrasEntradasPaste}
+                onChange={(e) => setOutrasEntradasPaste(e.target.value)}
+                rows={14}
+                placeholder={'20/10/2026;390000\n06/11/2026;3539445.01\n...'}
+                className="w-full box-border font-mono text-sm text-black p-2.5 border border-gray-300 rounded resize-vertical"
+              />
+              <div className="flex gap-2 mt-3 justify-end items-center">
+                <span className="flex-1 text-sm text-gray-600">{outrasEntradasStatus}</span>
+                <button onClick={() => setOutrasEntradasModalAberto(false)} className="px-4 py-2 border border-gray-300 rounded text-sm text-black hover:bg-gray-50">Cancelar</button>
+                <button onClick={outrasEntradasGravar} disabled={outrasEntradasSalvando} className="px-5 py-2 bg-green-600 hover:bg-green-700 text-white rounded text-sm font-semibold disabled:opacity-50 transition-colors">Salvar</button>
               </div>
             </div>
           </div>

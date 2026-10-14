@@ -44,6 +44,13 @@ def _criar_tabelas_fluxo_caixa():
             dt_atualizacao TIMESTAMP DEFAULT NOW()
         )
     """, ())
+    execute_insert("""
+        CREATE TABLE IF NOT EXISTS fcp_outras_entradas_projecao (
+            dt_dia DATE PRIMARY KEY,
+            vl_outras_entradas NUMERIC(14,2) NOT NULL DEFAULT 0,
+            dt_atualizacao TIMESTAMP DEFAULT NOW()
+        )
+    """, ())
 
 
 def _parse_empresas(empresas: Optional[str]) -> list:
@@ -256,6 +263,14 @@ def _sql_saidas_por_despesa(where: str) -> str:
 
 
 # ── Saidas - pedidos de compra (parcela simulada: dt_basepgto + qt_dia) ──
+# Mesma regra 2 das duplicatas (fim de semana -> segunda-feira) - pedido
+# explicito do usuario: pedidos tambem e saida, nao pode ter valor caindo
+# em sabado/domingo.
+_EXPR_DT_PEDIDOS_EFETIVA = _expr_dt_efetiva(
+    "(p.dt_basepgto::date + (c.qt_dia || ' days')::interval)::date", 2, 1
+)
+
+
 def _filtros_pedidos(dt_inicio: str, dt_fim: str, empresas: list) -> tuple:
     params: list = [dt_inicio, dt_fim]
     empresa_clause = ""
@@ -268,7 +283,7 @@ def _filtros_pedidos(dt_inicio: str, dt_fim: str, empresas: list) -> tuple:
         WHERE p.tp_situacao IN (1, 3, 5)
           AND p.vl_pendente > 0
           AND p.dt_basepgto IS NOT NULL
-          AND (p.dt_basepgto::date + (c.qt_dia || ' days')::interval)::date BETWEEN %s AND %s
+          AND {_EXPR_DT_PEDIDOS_EFETIVA} BETWEEN %s AND %s
           {empresa_clause}
     """
     return where, params
@@ -276,7 +291,7 @@ def _filtros_pedidos(dt_inicio: str, dt_fim: str, empresas: list) -> tuple:
 
 def _sql_pedidos_mensal(where: str) -> str:
     return f"""
-        SELECT to_char((p.dt_basepgto::date + (c.qt_dia || ' days')::interval)::date, 'YYYY-MM') AS mes,
+        SELECT to_char({_EXPR_DT_PEDIDOS_EFETIVA}, 'YYYY-MM') AS mes,
             COUNT(DISTINCT p.cd_pedido)::int AS qtd,
             ROUND(SUM(p.vl_pendente / NULLIF(c.qt_parcela, 0))::numeric, 2) AS valor
         {where}
@@ -287,7 +302,7 @@ def _sql_pedidos_mensal(where: str) -> str:
 
 def _sql_pedidos_diario(where: str) -> str:
     return f"""
-        SELECT (p.dt_basepgto::date + (c.qt_dia || ' days')::interval)::date AS dia,
+        SELECT {_EXPR_DT_PEDIDOS_EFETIVA} AS dia,
             COUNT(DISTINCT p.cd_pedido)::int AS qtd,
             ROUND(SUM(p.vl_pendente / NULLIF(c.qt_parcela, 0))::numeric, 2) AS valor
         {where}
@@ -437,6 +452,32 @@ def _sql_lojas_diario(dt_inicio: str, dt_fim: str) -> tuple:
     )
 
 
+# ── Entradas - outras entradas (fcp_outras_entradas_projecao, projecao
+# manual colada pelo usuario) - mesma regra 1/3 (so futuro, fim de semana
+# vai pra terca) e mesmo cuidado de agregar (SUM) do _sql_lojas_* acima.
+_EXPR_DT_OUTRAS_ENTRADAS_EFETIVA = _expr_dt_efetiva("dt_dia", 3, 2)
+
+
+def _sql_outras_entradas_mensal(dt_inicio: str, dt_fim: str) -> tuple:
+    return (
+        f"""SELECT to_char({_EXPR_DT_OUTRAS_ENTRADAS_EFETIVA}, 'YYYY-MM') AS mes, ROUND(SUM(vl_outras_entradas)::numeric, 2) AS valor
+           FROM fcp_outras_entradas_projecao
+           WHERE {_EXPR_DT_OUTRAS_ENTRADAS_EFETIVA} BETWEEN %s AND %s AND {_EXPR_DT_OUTRAS_ENTRADAS_EFETIVA} > CURRENT_DATE
+           GROUP BY 1 ORDER BY 1""",
+        (dt_inicio, dt_fim),
+    )
+
+
+def _sql_outras_entradas_diario(dt_inicio: str, dt_fim: str) -> tuple:
+    return (
+        f"""SELECT {_EXPR_DT_OUTRAS_ENTRADAS_EFETIVA}::date AS dia, ROUND(SUM(vl_outras_entradas)::numeric, 2) AS valor
+           FROM fcp_outras_entradas_projecao
+           WHERE {_EXPR_DT_OUTRAS_ENTRADAS_EFETIVA} BETWEEN %s AND %s AND {_EXPR_DT_OUTRAS_ENTRADAS_EFETIVA} > CURRENT_DATE
+           GROUP BY 1 ORDER BY 1""",
+        (dt_inicio, dt_fim),
+    )
+
+
 # ── Entradas - multimarcas (ano anterior deslocado +1 ano) ────────────────
 def _sql_multimarcas_mensal(dt_inicio: str, dt_fim: str) -> tuple:
     return (
@@ -508,6 +549,8 @@ def dados_fluxo_caixa(
         where_pedidos, p_pedidos = _filtros_pedidos(dt_inicio, dt_fim, cd_empresas)
         sql_lojas_m, p_lojas_m = _sql_lojas_mensal(dt_inicio, dt_fim)
         sql_lojas_d, p_lojas_d = _sql_lojas_diario(dt_inicio, dt_fim)
+        sql_outras_m, p_outras_m = _sql_outras_entradas_mensal(dt_inicio, dt_fim)
+        sql_outras_d, p_outras_d = _sql_outras_entradas_diario(dt_inicio, dt_fim)
         sql_multi_m, p_multi_m = _sql_multimarcas_mensal(dt_inicio, dt_fim)
         sql_multi_d, p_multi_d = _sql_multimarcas_diario(dt_inicio, dt_fim)
 
@@ -524,6 +567,8 @@ def dados_fluxo_caixa(
         r_pedidos_d = execute_query(_sql_pedidos_diario(where_pedidos), tuple(p_pedidos)) or []
         r_lojas_m = execute_query(sql_lojas_m, p_lojas_m) or []
         r_lojas_d = execute_query(sql_lojas_d, p_lojas_d) or []
+        r_outras_m = execute_query(sql_outras_m, p_outras_m) or []
+        r_outras_d = execute_query(sql_outras_d, p_outras_d) or []
         r_multi_m = execute_query(sql_multi_m, p_multi_m) or []
         r_multi_d = execute_query(sql_multi_d, p_multi_d) or []
 
@@ -537,6 +582,8 @@ def dados_fluxo_caixa(
         pedidos_dia = {_dia_str(r["dia"]): float(r["valor"]) for r in r_pedidos_d}
         lojas_mes = {r["mes"]: float(r["valor"]) for r in r_lojas_m}
         lojas_dia = {_dia_str(r["dia"]): float(r["valor"]) for r in r_lojas_d}
+        outras_mes = {r["mes"]: float(r["valor"]) for r in r_outras_m}
+        outras_dia = {_dia_str(r["dia"]): float(r["valor"]) for r in r_outras_d}
         multi_mes = {r["mes"]: float(r["valor"]) for r in r_multi_m}
         multi_dia = {_dia_str(r["dia"]): float(r["valor"]) for r in r_multi_d}
 
@@ -549,7 +596,7 @@ def dados_fluxo_caixa(
                 agr["previsao"] += v
             else:
                 agr["real"] += v
-        for outros_mes_map in (cartao_mes, boleto_mes, cheque_mes, pedidos_mes, lojas_mes, multi_mes):
+        for outros_mes_map in (cartao_mes, boleto_mes, cheque_mes, pedidos_mes, lojas_mes, outras_mes, multi_mes):
             for mes in outros_mes_map:
                 meses_map.setdefault(mes, {"previsao": 0.0, "real": 0.0, "qtd": 0})
 
@@ -562,12 +609,13 @@ def dados_fluxo_caixa(
             pedidos = pedidos_mes.get(mes, 0.0)
             lojas_raw = lojas_mes.get(mes, 0.0)
             lojas = lojas_raw - cartao if lojas_raw > cartao else 0.0
+            outras_entradas = outras_mes.get(mes, 0.0)
             multimarcas = multi_mes.get(mes, 0.0)
             meses.append({
                 "mes": mes, "previsao": agr["previsao"], "real": agr["real"], "pedidos": pedidos,
                 "totalSaidas": agr["previsao"] + agr["real"] + pedidos,
                 "cartao": cartao, "boleto": boleto, "cheque": cheque, "lojas": lojas,
-                "multimarcas": multimarcas, "qtd": agr["qtd"],
+                "outrasEntradas": outras_entradas, "multimarcas": multimarcas, "qtd": agr["qtd"],
             })
 
         dias_map: dict = {}
@@ -580,7 +628,7 @@ def dados_fluxo_caixa(
                 agr["previsao"] += v
             else:
                 agr["real"] += v
-        for outros_dia_map in (cartao_dia, boleto_dia, cheque_dia, pedidos_dia, lojas_dia, multi_dia):
+        for outros_dia_map in (cartao_dia, boleto_dia, cheque_dia, pedidos_dia, lojas_dia, outras_dia, multi_dia):
             for dia in outros_dia_map:
                 dias_map.setdefault(dia, {"previsao": 0.0, "real": 0.0, "qtd": 0})
 
@@ -600,13 +648,15 @@ def dados_fluxo_caixa(
             pedidos = pedidos_dia.get(dia, 0.0)
             lojas_raw = lojas_dia.get(dia, 0.0)
             lojas = lojas_raw - cartao if lojas_raw > cartao else 0.0
+            outras_entradas = outras_dia.get(dia, 0.0)
             multimarcas = multi_dia.get(dia, 0.0)
             total_saidas = agr["previsao"] + agr["real"] + pedidos
-            acum += cartao + boleto + cheque + lojas + multimarcas - total_saidas
+            acum += cartao + boleto + cheque + lojas + outras_entradas + multimarcas - total_saidas
             dias.append({
                 "dia": dia, "previsao": agr["previsao"], "real": agr["real"], "pedidos": pedidos,
                 "totalSaidas": total_saidas, "cartao": cartao, "boleto": boleto, "cheque": cheque,
-                "lojas": lojas, "multimarcas": multimarcas, "qtd": agr["qtd"], "saldoAcum": acum,
+                "lojas": lojas, "outrasEntradas": outras_entradas, "multimarcas": multimarcas,
+                "qtd": agr["qtd"], "saldoAcum": acum,
             })
 
         return {"data": {
@@ -711,6 +761,48 @@ def gravar_lojas_projecao(linhas: Optional[List[dict]] = None):
     except Exception as e:
         print(f"[ERROR] Erro ao gravar projecao de lojas: {e}")
         raise HTTPException(status_code=500, detail=f"Erro ao salvar projeção de lojas: {str(e)}")
+
+
+@router.get("/api/fluxo-caixa/outras-entradas-projecao")
+def obter_outras_entradas_projecao(
+    dt_inicio: Optional[str] = Query(None),
+    dt_fim: Optional[str] = Query(None),
+):
+    _criar_tabelas_fluxo_caixa()
+    hoje = date.today()
+    dt_inicio = dt_inicio or hoje.isoformat()
+    dt_fim = dt_fim or (hoje + timedelta(days=365)).isoformat()
+    rows = execute_query(
+        "SELECT dt_dia::date AS dia, vl_outras_entradas FROM fcp_outras_entradas_projecao WHERE dt_dia BETWEEN %s AND %s ORDER BY 1",
+        (dt_inicio, dt_fim),
+    ) or []
+    return [{"dia": _dia_str(r["dia"]), "valor": float(r["vl_outras_entradas"])} for r in rows]
+
+
+@router.post("/api/fluxo-caixa/outras-entradas-projecao")
+def gravar_outras_entradas_projecao(linhas: Optional[List[dict]] = None):
+    try:
+        _criar_tabelas_fluxo_caixa()
+        linhas = linhas or []
+        if not linhas:
+            return {"ok": True, "count": 0}
+        por_dia = {linha["dia"]: float(linha["valor"]) for linha in linhas}
+        itens = list(por_dia.items())
+        for i in range(0, len(itens), TAMANHO_LOTE_INSERT):
+            lote = itens[i:i + TAMANHO_LOTE_INSERT]
+            valores_sql = ", ".join(["(%s, %s, NOW())"] * len(lote))
+            params: list = []
+            for dia, valor in lote:
+                params.extend([dia, valor])
+            execute_insert(
+                f"""INSERT INTO fcp_outras_entradas_projecao (dt_dia, vl_outras_entradas, dt_atualizacao) VALUES {valores_sql}
+                    ON CONFLICT (dt_dia) DO UPDATE SET vl_outras_entradas = EXCLUDED.vl_outras_entradas, dt_atualizacao = NOW()""",
+                tuple(params),
+            )
+        return {"ok": True, "count": len(itens)}
+    except Exception as e:
+        print(f"[ERROR] Erro ao gravar outras entradas: {e}")
+        raise HTTPException(status_code=500, detail=f"Erro ao salvar outras entradas: {str(e)}")
 
 
 @router.get("/api/fluxo-caixa/faturas-descontadas")
