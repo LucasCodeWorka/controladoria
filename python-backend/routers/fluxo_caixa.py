@@ -51,6 +51,104 @@ def _criar_tabelas_fluxo_caixa():
             dt_atualizacao TIMESTAMP DEFAULT NOW()
         )
     """, ())
+    execute_insert("""
+        CREATE TABLE IF NOT EXISTS fcp_feriados_bancarios (
+            dt_feriado DATE PRIMARY KEY,
+            descr TEXT
+        )
+    """, ())
+    execute_insert("""
+        CREATE OR REPLACE FUNCTION fn_fc_proximo_dia_util_bancario(p_data DATE)
+        RETURNS DATE AS $$
+        DECLARE
+            v_data DATE := p_data;
+        BEGIN
+            LOOP
+                IF EXTRACT(DOW FROM v_data) NOT IN (0, 6)
+                   AND NOT EXISTS (SELECT 1 FROM fcp_feriados_bancarios WHERE dt_feriado = v_data) THEN
+                    RETURN v_data;
+                END IF;
+                v_data := v_data + 1;
+            END LOOP;
+        END;
+        $$ LANGUAGE plpgsql STABLE
+    """, ())
+    execute_insert("""
+        CREATE OR REPLACE FUNCTION fn_fc_dt_boleto_efetiva(p_vencimento DATE)
+        RETURNS DATE AS $$
+        DECLARE
+            v_dow INT := EXTRACT(DOW FROM p_vencimento);
+            v_base DATE;
+        BEGIN
+            v_base := CASE
+                WHEN v_dow IN (1, 2, 3, 4) THEN p_vencimento + 1
+                WHEN v_dow = 5 THEN p_vencimento + 3
+                WHEN v_dow = 6 THEN p_vencimento + 3
+                ELSE p_vencimento + 2
+            END;
+            RETURN fn_fc_proximo_dia_util_bancario(v_base);
+        END;
+        $$ LANGUAGE plpgsql STABLE
+    """, ())
+    _seed_feriados_bancarios()
+
+
+def _calcular_pascoa(ano: int) -> date:
+    """Domingo de Pascoa pelo algoritmo de Gauss/Meeus (anonymous Gregorian)."""
+    a = ano % 19
+    b = ano // 100
+    c = ano % 100
+    d = b // 4
+    e = b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i = c // 4
+    k = c % 4
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    mes = (h + l - 7 * m + 114) // 31
+    dia = ((h + l - 7 * m + 114) % 31) + 1
+    return date(ano, mes, dia)
+
+
+def _feriados_bancarios_do_ano(ano: int) -> list:
+    """Feriados bancarios nacionais (fixos + moveis a partir da Pascoa) -
+    sao os dias em que a compensacao bancaria (boletos) nao ocorre."""
+    pascoa = _calcular_pascoa(ano)
+    return [
+        (date(ano, 1, 1), "Confraternização Universal"),
+        (pascoa - timedelta(days=48), "Carnaval (segunda-feira)"),
+        (pascoa - timedelta(days=47), "Carnaval (terça-feira)"),
+        (pascoa - timedelta(days=2), "Sexta-feira Santa"),
+        (date(ano, 4, 21), "Tiradentes"),
+        (date(ano, 5, 1), "Dia do Trabalho"),
+        (pascoa + timedelta(days=60), "Corpus Christi"),
+        (date(ano, 9, 7), "Independência do Brasil"),
+        (date(ano, 10, 12), "Nossa Senhora Aparecida"),
+        (date(ano, 11, 2), "Finados"),
+        (date(ano, 11, 15), "Proclamação da República"),
+        (date(ano, 11, 20), "Dia da Consciência Negra"),
+        (date(ano, 12, 25), "Natal"),
+    ]
+
+
+def _seed_feriados_bancarios():
+    """Garante os feriados bancarios nacionais cadastrados de um ano atras
+    a seis anos pra frente (cobre qualquer periodo projetado no fluxo)."""
+    ano_atual = date.today().year
+    linhas = []
+    for ano in range(ano_atual - 1, ano_atual + 7):
+        linhas.extend(_feriados_bancarios_do_ano(ano))
+    valores_sql = ", ".join(["(%s, %s)"] * len(linhas))
+    params: list = []
+    for dt_feriado, descr in linhas:
+        params.extend([dt_feriado, descr])
+    execute_insert(
+        f"""INSERT INTO fcp_feriados_bancarios (dt_feriado, descr) VALUES {valores_sql}
+            ON CONFLICT (dt_feriado) DO NOTHING""",
+        tuple(params),
+    )
 
 
 def _parse_empresas(empresas: Optional[str]) -> list:
@@ -84,10 +182,17 @@ def _expr_dt_efetiva(coluna: str, dias_sabado: int, dias_domingo: int) -> str:
 # pra segunda-feira seguinte (regra 2).
 _EXPR_DT_SAIDA_EFETIVA = _expr_dt_efetiva("dt_vencimento", 2, 1)
 
-# Boleto e Lojas (entradas) com data em fim de semana -> projetadas pra
-# terca-feira seguinte, nao segunda (regra 3 - diferente da regra das
-# duplicatas de proposito, pedido explicito do usuario).
-_EXPR_DT_BOLETO_EFETIVA = _expr_dt_efetiva("dt_vencimento", 3, 2)
+# Boleto (entrada) - compensacao bancaria: seg a qui vence -> D+1, sexta ->
+# proxima segunda, sabado/domingo -> proxima terca; se a data resultante cair
+# em feriado bancario, avanca pro proximo dia util (fn_fc_dt_boleto_efetiva,
+# criada em _criar_tabelas_fluxo_caixa). Regra pedida explicitamente pelo
+# usuario, diferente da regra de Lojas/Outras Entradas abaixo (que so troca
+# fim de semana por terca, sem D+1 em dia util nem checagem de feriado).
+_EXPR_DT_BOLETO_EFETIVA = "fn_fc_dt_boleto_efetiva(dt_vencimento::date)"
+
+# Lojas e Outras Entradas (entradas) com data em fim de semana -> projetadas
+# pra terca-feira seguinte (regra 3) - mantida como estava, sem D+1 nem
+# feriado bancario (nao pedido pelo usuario pra essas colunas).
 _EXPR_DT_LOJAS_EFETIVA = _expr_dt_efetiva("dt_dia", 3, 2)
 
 
