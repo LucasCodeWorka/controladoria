@@ -7,8 +7,10 @@ import {
 } from 'lucide-react';
 import {
   Bar,
-  BarChart,
   CartesianGrid,
+  ComposedChart,
+  LabelList,
+  Line,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -133,6 +135,16 @@ function fmtNum(valor: number | null | undefined): string {
   return valor.toLocaleString('pt-BR');
 }
 
+// Rotulo compacto pro grafico (R$ 4,9 mi em vez de R$ 4.943.000) - full
+// precision ja fica no tooltip, o rotulo so precisa dar a ordem de grandeza
+// sem lotar a barra de texto.
+function fmtBRLCompacto(valor: number | null | undefined): string {
+  if (valor == null || isNaN(valor)) return '—';
+  const sinal = valor < 0 ? '-' : '';
+  const abs = Math.abs(valor);
+  return `${sinal}R$ ${abs.toLocaleString('pt-BR', { notation: 'compact', maximumFractionDigits: 1 })}`;
+}
+
 function fmtMes(ym: string): string {
   const [y, m] = ym.split('-');
   const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
@@ -147,11 +159,13 @@ function TooltipMes({ active, payload }: { active?: boolean; payload?: TooltipMe
   if (!active || !payload || payload.length === 0) return null;
   const m = payload[0].payload;
   const totalEntradas = m.cartao + m.boleto + m.cheque + m.lojas + m.multimarcas;
+  const saldo = totalEntradas - m.totalSaidas;
   return (
     <div className="bg-gray-900 text-white text-xs rounded px-2.5 py-1.5 shadow-lg space-y-1 max-w-xs">
       <p className="font-semibold">{fmtMes(m.mes)}</p>
       <p>Saídas: {fmtBRL(m.totalSaidas)} (Real {fmtBRL(m.real)} · Prev {fmtBRL(m.previsao)} · Pedidos {fmtBRL(m.pedidos)})</p>
       <p>Entradas: {fmtBRL(totalEntradas)} (Cartão {fmtBRL(m.cartao)} · Boleto {fmtBRL(m.boleto)} · Cheque {fmtBRL(m.cheque)} · Lojas {fmtBRL(m.lojas)} · Multi {fmtBRL(m.multimarcas)})</p>
+      <p className={saldo >= 0 ? 'text-emerald-400 font-semibold' : 'text-red-400 font-semibold'}>Saldo do mês: {fmtBRL(saldo)}</p>
     </div>
   );
 }
@@ -160,25 +174,38 @@ function GraficoMensalFC({ meses }: { meses: MesFC[] }) {
   if (!meses.length) {
     return <p className="text-sm text-gray-400 py-8 text-center">Sem dados no período.</p>;
   }
-  const dados = meses.map((m) => ({ ...m, totalEntradas: m.cartao + m.boleto + m.cheque + m.lojas + m.multimarcas }));
+  const dados = meses.map((m) => {
+    const totalEntradas = m.cartao + m.boleto + m.cheque + m.lojas + m.multimarcas;
+    return { ...m, totalEntradas, saldo: totalEntradas - m.totalSaidas };
+  });
   return (
-    <div role="img" aria-label="Saídas e entradas projetadas por mês">
-      <ResponsiveContainer width="100%" height={240}>
-        <BarChart data={dados} margin={{ top: 8, right: 8, left: 0, bottom: 4 }}>
+    <div role="img" aria-label="Saídas, entradas e saldo projetados por mês">
+      <ResponsiveContainer width="100%" height={260}>
+        <ComposedChart data={dados} margin={{ top: 24, right: 16, left: 0, bottom: 4 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#e1e0d9" vertical={false} />
           <XAxis dataKey="mes" tickFormatter={fmtMes} tick={{ fontSize: 11, fill: '#52514e' }} axisLine={{ stroke: '#c3c2b7' }} tickLine={false} />
-          <YAxis tickFormatter={(v: number) => fmtBRL(v)} tick={{ fontSize: 11, fill: '#898781' }} axisLine={false} tickLine={false} width={84} />
+          <YAxis tickFormatter={(v: number) => fmtBRLCompacto(v)} tick={{ fontSize: 11, fill: '#898781' }} axisLine={false} tickLine={false} width={64} />
           <Tooltip content={<TooltipMes />} cursor={{ fill: 'rgba(11,11,11,0.04)' }} />
-          <Bar dataKey="totalSaidas" name="Saídas" fill="#334155" radius={[4, 4, 0, 0]} maxBarSize={36} />
-          <Bar dataKey="totalEntradas" name="Entradas" fill="#059669" radius={[4, 4, 0, 0]} maxBarSize={36} />
-        </BarChart>
+          <Bar dataKey="totalSaidas" name="Saídas" fill="#dc2626" radius={[4, 4, 0, 0]} maxBarSize={36}>
+            <LabelList dataKey="totalSaidas" position="top" formatter={(v: React.ReactNode) => fmtBRLCompacto(v as number)} style={{ fontSize: 11, fontWeight: 700, fill: '#991b1b' }} />
+          </Bar>
+          <Bar dataKey="totalEntradas" name="Entradas" fill="#059669" radius={[4, 4, 0, 0]} maxBarSize={36}>
+            <LabelList dataKey="totalEntradas" position="top" formatter={(v: React.ReactNode) => fmtBRLCompacto(v as number)} style={{ fontSize: 11, fontWeight: 700, fill: '#047857' }} />
+          </Bar>
+          <Line type="monotone" dataKey="saldo" name="Saldo" stroke="#2563eb" strokeWidth={2.5} dot={{ r: 4, fill: '#2563eb', strokeWidth: 0 }} activeDot={{ r: 6 }}>
+            <LabelList dataKey="saldo" position="top" formatter={(v: React.ReactNode) => fmtBRLCompacto(v as number)} style={{ fontSize: 11, fontWeight: 700, fill: '#1d4ed8' }} />
+          </Line>
+        </ComposedChart>
       </ResponsiveContainer>
       <div className="flex items-center justify-center gap-6 mt-2">
         <span className="flex items-center gap-1.5 text-xs font-medium text-black">
-          <span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ backgroundColor: '#334155' }} /> Saídas
+          <span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ backgroundColor: '#dc2626' }} /> Saídas
         </span>
         <span className="flex items-center gap-1.5 text-xs font-medium text-black">
           <span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ backgroundColor: '#059669' }} /> Entradas
+        </span>
+        <span className="flex items-center gap-1.5 text-xs font-medium text-black">
+          <span className="w-4 h-0.5 rounded-full inline-block" style={{ backgroundColor: '#2563eb' }} /> Saldo
         </span>
       </div>
     </div>
@@ -519,7 +546,7 @@ export default function FluxoCaixaPage() {
     const v = rawVal || 0;
     const bgGrupo = grupo === 'saida' ? 'bg-red-50' : 'bg-green-50';
     return (
-      <td className={`text-right px-3 py-2 border-r border-b border-gray-300 ${bgGrupo}`} style={{ color: ativa ? cor : '#64748b', opacity: ativa ? 1 : 0.45, fontWeight: ativa && v > 0 ? 600 : 400 }}>
+      <td className={`text-right px-3 py-2 border-r border-b border-gray-300 ${bgGrupo}`} style={{ color: ativa ? cor : '#94a3b8', fontWeight: ativa && v > 0 ? 600 : 400 }}>
         {v > 0 ? <span style={!ativa ? { textDecoration: 'line-through' } : undefined}>{fmtBRL(v)}</span> : <span className="text-gray-300">—</span>}
       </td>
     );
