@@ -733,7 +733,7 @@ export default function FluxoCaixaPage() {
               </h2>
             </div>
             {saldosBancarios && saldosBancarios.contas.length > 0 ? (
-              <div className="overflow-x-auto">
+              <div className="overflow-x-auto [transform:translateZ(0)]">
                 <table className="w-full text-sm border-separate [border-spacing:0]">
                   <thead>
                     <tr>
@@ -841,7 +841,7 @@ export default function FluxoCaixaPage() {
               ))}
             </div>
 
-            <div className="overflow-x-auto max-h-[78vh] overflow-y-auto">
+            <div className="overflow-x-auto max-h-[78vh] overflow-y-auto [transform:translateZ(0)]">
               <table className="w-full text-sm min-w-[1100px] border-separate [border-spacing:0]">
                 <thead className="sticky top-0 z-10">
                   <tr className="text-left">
@@ -945,7 +945,7 @@ export default function FluxoCaixaPage() {
             <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
               <h2 className="text-sm font-semibold text-black uppercase tracking-wide">Fornecedores</h2>
             </div>
-            <div className="overflow-x-auto max-h-[520px] overflow-y-auto">
+            <div className="overflow-x-auto max-h-[520px] overflow-y-auto [transform:translateZ(0)]">
               <table className="w-full text-sm">
                 <thead className="sticky top-0 bg-gray-50 border-b border-gray-200">
                   <tr>
