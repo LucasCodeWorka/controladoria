@@ -22,6 +22,11 @@ CACHE_TTL_SEGUNDOS = 10 * 60
 _kpi_cache: Optional[dict] = None
 _kpi_ts: float = 0.0
 
+# Lojas-projecao/faturas-descontadas: tamanho do lote pro INSERT em massa
+# (usuario cola listas de milhares de linhas direto de planilha) - evita
+# montar um unico INSERT gigante de uma vez.
+TAMANHO_LOTE_INSERT = 500
+
 
 def _criar_tabelas_fluxo_caixa():
     execute_insert("""
@@ -679,20 +684,33 @@ def obter_lojas_projecao(
 
 @router.post("/api/fluxo-caixa/lojas-projecao")
 def gravar_lojas_projecao(linhas: Optional[List[dict]] = None):
-    _criar_tabelas_fluxo_caixa()
-    linhas = linhas or []
-    if not linhas:
-        return {"ok": True, "count": 0}
-    valores_sql = ", ".join(["(%s, %s, NOW())"] * len(linhas))
-    params: list = []
-    for linha in linhas:
-        params.extend([linha["dia"], float(linha["valor"])])
-    execute_insert(
-        f"""INSERT INTO fcp_lojas_projecao (dt_dia, vl_lojas, dt_atualizacao) VALUES {valores_sql}
-            ON CONFLICT (dt_dia) DO UPDATE SET vl_lojas = EXCLUDED.vl_lojas, dt_atualizacao = NOW()""",
-        tuple(params),
-    )
-    return {"ok": True, "count": len(linhas)}
+    try:
+        _criar_tabelas_fluxo_caixa()
+        linhas = linhas or []
+        if not linhas:
+            return {"ok": True, "count": 0}
+        # Dedup por dia (fica so a ultima ocorrencia) - um INSERT com
+        # ON CONFLICT DO UPDATE nao aceita a MESMA chave duplicada dentro do
+        # mesmo comando (erro do Postgres: "ON CONFLICT DO UPDATE command
+        # cannot affect row a second time"), e colar milhares de linhas de
+        # uma planilha facilmente repete algum dia sem querer.
+        por_dia = {linha["dia"]: float(linha["valor"]) for linha in linhas}
+        itens = list(por_dia.items())
+        for i in range(0, len(itens), TAMANHO_LOTE_INSERT):
+            lote = itens[i:i + TAMANHO_LOTE_INSERT]
+            valores_sql = ", ".join(["(%s, %s, NOW())"] * len(lote))
+            params: list = []
+            for dia, valor in lote:
+                params.extend([dia, valor])
+            execute_insert(
+                f"""INSERT INTO fcp_lojas_projecao (dt_dia, vl_lojas, dt_atualizacao) VALUES {valores_sql}
+                    ON CONFLICT (dt_dia) DO UPDATE SET vl_lojas = EXCLUDED.vl_lojas, dt_atualizacao = NOW()""",
+                tuple(params),
+            )
+        return {"ok": True, "count": len(itens)}
+    except Exception as e:
+        print(f"[ERROR] Erro ao gravar projecao de lojas: {e}")
+        raise HTTPException(status_code=500, detail=f"Erro ao salvar projeção de lojas: {str(e)}")
 
 
 @router.get("/api/fluxo-caixa/faturas-descontadas")
@@ -704,20 +722,32 @@ def listar_faturas_descontadas():
 
 @router.post("/api/fluxo-caixa/faturas-descontadas")
 def gravar_faturas_descontadas(linhas: Optional[List[dict]] = None):
-    _criar_tabelas_fluxo_caixa()
-    linhas = linhas or []
-    if not linhas:
-        return {"ok": True, "count": 0}
-    valores_sql = ", ".join(["(%s, %s, NOW())"] * len(linhas))
-    params: list = []
-    for linha in linhas:
-        params.extend([linha["nrFat"], linha["nrParcela"]])
-    execute_insert(
-        f"""INSERT INTO fcp_faturas_descontadas (nr_fat, nr_parcela, dt_atualizacao) VALUES {valores_sql}
-            ON CONFLICT (nr_fat, nr_parcela) DO UPDATE SET dt_atualizacao = NOW()""",
-        tuple(params),
-    )
-    return {"ok": True, "count": len(linhas)}
+    try:
+        _criar_tabelas_fluxo_caixa()
+        linhas = linhas or []
+        if not linhas:
+            return {"ok": True, "count": 0}
+        # Mesmo dedup de gravar_lojas_projecao (ver comentario la) - aqui a
+        # chave e (nr_fat, nr_parcela). Lista colada de uma planilha grande
+        # (ja visto: ~11500 linhas) frequentemente repete alguma fatura/
+        # parcela.
+        pares = {(linha["nrFat"], linha["nrParcela"]) for linha in linhas}
+        itens = list(pares)
+        for i in range(0, len(itens), TAMANHO_LOTE_INSERT):
+            lote = itens[i:i + TAMANHO_LOTE_INSERT]
+            valores_sql = ", ".join(["(%s, %s, NOW())"] * len(lote))
+            params: list = []
+            for nr_fat, nr_parcela in lote:
+                params.extend([nr_fat, nr_parcela])
+            execute_insert(
+                f"""INSERT INTO fcp_faturas_descontadas (nr_fat, nr_parcela, dt_atualizacao) VALUES {valores_sql}
+                    ON CONFLICT (nr_fat, nr_parcela) DO UPDATE SET dt_atualizacao = NOW()""",
+                tuple(params),
+            )
+        return {"ok": True, "count": len(itens)}
+    except Exception as e:
+        print(f"[ERROR] Erro ao gravar faturas descontadas: {e}")
+        raise HTTPException(status_code=500, detail=f"Erro ao salvar faturas descontadas: {str(e)}")
 
 
 @router.delete("/api/fluxo-caixa/faturas-descontadas")

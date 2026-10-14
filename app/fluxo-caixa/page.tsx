@@ -287,7 +287,7 @@ export default function FluxoCaixaPage() {
       ]);
       const json = await respDados.json();
       if (!respDados.ok || json.error) {
-        setErro(json.error || 'Erro ao carregar fluxo de caixa');
+        setErro(json.error || json.detail || 'Erro ao carregar fluxo de caixa');
         return;
       }
       setDados(json.data);
@@ -374,7 +374,7 @@ export default function FluxoCaixaPage() {
         body: JSON.stringify(linhas),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || 'Erro ao salvar');
+      if (!res.ok) throw new Error(json.error || json.detail || 'Erro ao salvar');
       setLojasStatus(`✓ ${json.count} dia(s) salvos.`);
       setLojasPaste('');
       setTimeout(() => {
@@ -394,7 +394,7 @@ export default function FluxoCaixaPage() {
     try {
       const res = await fetch('/api/fluxo-caixa/faturas-descontadas', { cache: 'no-store' });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || 'Erro ao carregar');
+      if (!res.ok) throw new Error(json.error || json.detail || 'Erro ao carregar');
       setFaturasLista(json);
     } catch (e) {
       setFaturasStatus(`Erro: ${e instanceof Error ? e.message : 'desconhecido'}`);
@@ -429,7 +429,7 @@ export default function FluxoCaixaPage() {
         body: JSON.stringify(linhas),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || 'Erro ao salvar');
+      if (!res.ok) throw new Error(json.error || json.detail || 'Erro ao salvar');
       setFaturasStatus(`✓ ${json.count} fatura(s) salvas.`);
       setFaturasPaste('');
       await faturasCarregarLista();
@@ -456,7 +456,7 @@ export default function FluxoCaixaPage() {
     try {
       const res = await fetch('/api/fluxo-caixa/faturas-descontadas', { method: 'DELETE' });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || 'Erro ao remover');
+      if (!res.ok) throw new Error(json.error || json.detail || 'Erro ao remover');
       setFaturasStatus(`✓ ${json.count} fatura(s) removidas.`);
       await faturasCarregarLista();
       buscar();
