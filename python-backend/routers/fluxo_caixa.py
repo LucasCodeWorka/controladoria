@@ -79,6 +79,35 @@ _EXPR_DT_BOLETO_EFETIVA = _expr_dt_efetiva("dt_vencimento", 3, 2)
 _EXPR_DT_LOJAS_EFETIVA = _expr_dt_efetiva("dt_dia", 3, 2)
 
 
+# ── Saldos bancarios (posicao de caixa cadastrada manualmente) ───────────
+# Tabela de saldo por dia (fin_disponibilidade_caixa, pode ter mais de uma
+# posicao por conta ao longo do tempo) - pega sempre a posicao mais recente
+# de cada conta (DISTINCT ON), nao soma o historico inteiro. Sem filtro de
+# empresa (a tabela nao tem cd_empresa - e posicao de caixa da empresa
+# como um todo, nao por loja).
+SQL_SALDOS_BANCARIOS = """
+    SELECT DISTINCT ON (fdc.cd_conta_bancaria)
+        fdc.cd_conta_bancaria, fcb.nm_banco, fcb.nr_agencia, fcb.nr_conta,
+        fdc.vl_saldo, fdc.dt_posicao
+    FROM fin_disponibilidade_caixa fdc
+    JOIN fin_contas_bancarias fcb ON fcb.id = fdc.cd_conta_bancaria
+    ORDER BY fdc.cd_conta_bancaria, fdc.dt_posicao DESC
+"""
+
+
+def _obter_saldos_bancarios() -> dict:
+    rows = execute_query(SQL_SALDOS_BANCARIOS) or []
+    contas = [
+        {
+            "nmBanco": r["nm_banco"], "nrAgencia": r["nr_agencia"], "nrConta": r["nr_conta"],
+            "vlSaldo": float(r["vl_saldo"]), "dtPosicao": _dia_str(r["dt_posicao"]),
+        }
+        for r in rows
+    ]
+    total = sum(c["vlSaldo"] for c in contas)
+    return {"contas": contas, "total": total}
+
+
 # ── Empresas presentes nas duplicatas ────────────────────────────────────
 SQL_EMPRESAS = """
     SELECT idempresa AS cd_empresa, REPLACE(empresa, 'LIEBE ', '') AS nome
@@ -445,6 +474,15 @@ def listar_empresas_fluxo_caixa():
     return [{"id": int(r["cd_empresa"]), "nome": r["nome"]} for r in rows]
 
 
+@router.get("/api/fluxo-caixa/saldos-bancarios")
+def saldos_bancarios_fluxo_caixa():
+    try:
+        return _obter_saldos_bancarios()
+    except Exception as e:
+        print(f"[ERROR] Erro ao buscar saldos bancarios: {e}")
+        raise HTTPException(status_code=500, detail="Erro ao buscar saldos bancários")
+
+
 @router.get("/api/fluxo-caixa/dados")
 def dados_fluxo_caixa(
     dt_inicio: Optional[str] = Query(None, description="Data inicial YYYY-MM-DD (default: hoje)"),
@@ -541,7 +579,13 @@ def dados_fluxo_caixa(
             for dia in outros_dia_map:
                 dias_map.setdefault(dia, {"previsao": 0.0, "real": 0.0, "qtd": 0})
 
-        acum = 0.0
+        # Saldo acumulado parte do saldo bancario REAL (posicao de caixa
+        # atual, nao 0) - pedido explicito do usuario: a soma dos saldos
+        # das contas bancarias compoe o saldo acumulado do fluxo de caixa,
+        # em vez de a projecao comecar "do zero" desconectada do dinheiro
+        # que de fato esta no banco hoje.
+        saldos_bancarios = _obter_saldos_bancarios()
+        acum = saldos_bancarios["total"]
         dias = []
         for dia in sorted(dias_map.keys()):
             agr = dias_map[dia]
@@ -560,7 +604,10 @@ def dados_fluxo_caixa(
                 "lojas": lojas, "multimarcas": multimarcas, "qtd": agr["qtd"], "saldoAcum": acum,
             })
 
-        return {"data": {**kpis, "meses": meses, "dias": dias, "geradoEm": datetime.now().strftime("%d/%m/%Y %H:%M:%S")}}
+        return {"data": {
+            **kpis, "meses": meses, "dias": dias, "saldoBancario": saldos_bancarios["total"],
+            "geradoEm": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
+        }}
     except HTTPException:
         raise
     except Exception as e:
