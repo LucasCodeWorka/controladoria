@@ -2,8 +2,8 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  Banknote, ChevronDown, Loader2, Settings, X, RotateCcw, AlertTriangle,
-  ArrowUp, ArrowDown, ArrowUpDown, Clock, CalendarDays, TrendingUp, Landmark,
+  Banknote, ChevronDown, Loader2, Settings, X, RotateCcw,
+  ArrowUp, ArrowDown, ArrowUpDown, Landmark,
 } from 'lucide-react';
 import {
   Bar,
@@ -112,12 +112,13 @@ const COL_DEFS: { group: string; cols: { key: ColKey; label: string; color: stri
     { key: 'real', label: 'Real', color: '#991b1b' },
     { key: 'pedidos', label: 'Pedidos', color: '#dc2626' },
   ]},
+  // Cartao e Multimarcas tirados temporariamente (pedido explicito do
+  // usuario) - nem aparecem na tabela nem compoem o saldo, so volta se
+  // pedir de novo. Os dados continuam vindo da API, so nao sao usados aqui.
   { group: 'Entradas', cols: [
-    { key: 'cartao', label: 'Cartão', color: '#059669' },
     { key: 'boleto', label: 'Boleto', color: '#0284c7' },
     { key: 'cheque', label: 'Cheque', color: '#059669' },
     { key: 'lojas', label: 'Lojas', color: '#0891b2' },
-    { key: 'multimarcas', label: 'Multimarcas', color: '#9333ea' },
   ]},
 ];
 
@@ -151,35 +152,46 @@ function fmtMes(ym: string): string {
   return `${MESES[parseInt(m, 10) - 1]}/${y.slice(2)}`;
 }
 
+interface MesFCComSaldo extends MesFC {
+  totalEntradas: number;
+  saldoAcumulado: number;
+}
+
 interface TooltipMesPayload {
-  payload: MesFC;
+  payload: MesFCComSaldo;
 }
 
 function TooltipMes({ active, payload }: { active?: boolean; payload?: TooltipMesPayload[] }) {
   if (!active || !payload || payload.length === 0) return null;
   const m = payload[0].payload;
-  const totalEntradas = m.cartao + m.boleto + m.cheque + m.lojas + m.multimarcas;
-  const saldo = totalEntradas - m.totalSaidas;
   return (
     <div className="bg-gray-900 text-white text-xs rounded px-2.5 py-1.5 shadow-lg space-y-1 max-w-xs">
       <p className="font-semibold">{fmtMes(m.mes)}</p>
       <p>Saídas: {fmtBRL(m.totalSaidas)} (Real {fmtBRL(m.real)} · Prev {fmtBRL(m.previsao)} · Pedidos {fmtBRL(m.pedidos)})</p>
-      <p>Entradas: {fmtBRL(totalEntradas)} (Cartão {fmtBRL(m.cartao)} · Boleto {fmtBRL(m.boleto)} · Cheque {fmtBRL(m.cheque)} · Lojas {fmtBRL(m.lojas)} · Multi {fmtBRL(m.multimarcas)})</p>
-      <p className={saldo >= 0 ? 'text-emerald-400 font-semibold' : 'text-red-400 font-semibold'}>Saldo do mês: {fmtBRL(saldo)}</p>
+      <p>Entradas: {fmtBRL(m.totalEntradas)} (Boleto {fmtBRL(m.boleto)} · Cheque {fmtBRL(m.cheque)} · Lojas {fmtBRL(m.lojas)})</p>
+      <p className={m.saldoAcumulado >= 0 ? 'text-emerald-400 font-semibold' : 'text-red-400 font-semibold'}>Saldo acumulado: {fmtBRL(m.saldoAcumulado)}</p>
     </div>
   );
 }
 
-function GraficoMensalFC({ meses }: { meses: MesFC[] }) {
+function GraficoMensalFC({ meses, saldoBancario }: { meses: MesFC[]; saldoBancario: number }) {
   if (!meses.length) {
     return <p className="text-sm text-gray-400 py-8 text-center">Sem dados no período.</p>;
   }
-  const dados = meses.map((m) => {
-    const totalEntradas = m.cartao + m.boleto + m.cheque + m.lojas + m.multimarcas;
-    return { ...m, totalEntradas, saldo: totalEntradas - m.totalSaidas };
+  // Saldo acumulado parte do saldo bancario real (mesma base da coluna
+  // "Saldo Acum." da tabela diaria) e vai somando o resultado (entradas -
+  // saidas) de cada mes, em ordem - nao e o resultado isolado do mes.
+  // Cartao e Multimarcas tirados temporariamente (pedido explicito do
+  // usuario) - nao contam nem aqui nem na tabela diaria, so volta se
+  // pedir de novo.
+  let acumulado = saldoBancario;
+  const dados: MesFCComSaldo[] = meses.map((m) => {
+    const totalEntradas = m.boleto + m.cheque + m.lojas;
+    acumulado += totalEntradas - m.totalSaidas;
+    return { ...m, totalEntradas, saldoAcumulado: acumulado };
   });
   return (
-    <div role="img" aria-label="Saídas, entradas e saldo projetados por mês">
+    <div role="img" aria-label="Saídas, entradas e saldo acumulado projetados por mês">
       <ResponsiveContainer width="100%" height={260}>
         <ComposedChart data={dados} margin={{ top: 24, right: 16, left: 0, bottom: 4 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#e1e0d9" vertical={false} />
@@ -192,8 +204,8 @@ function GraficoMensalFC({ meses }: { meses: MesFC[] }) {
           <Bar dataKey="totalEntradas" name="Entradas" fill="#059669" radius={[4, 4, 0, 0]} maxBarSize={36}>
             <LabelList dataKey="totalEntradas" position="top" formatter={(v: React.ReactNode) => fmtBRLCompacto(v as number)} style={{ fontSize: 11, fontWeight: 700, fill: '#047857' }} />
           </Bar>
-          <Line type="monotone" dataKey="saldo" name="Saldo" stroke="#2563eb" strokeWidth={2.5} dot={{ r: 4, fill: '#2563eb', strokeWidth: 0 }} activeDot={{ r: 6 }}>
-            <LabelList dataKey="saldo" position="top" formatter={(v: React.ReactNode) => fmtBRLCompacto(v as number)} style={{ fontSize: 11, fontWeight: 700, fill: '#1d4ed8' }} />
+          <Line type="monotone" dataKey="saldoAcumulado" name="Saldo Acumulado" stroke="#2563eb" strokeWidth={2.5} dot={{ r: 4, fill: '#2563eb', strokeWidth: 0 }} activeDot={{ r: 6 }}>
+            <LabelList dataKey="saldoAcumulado" position="top" formatter={(v: React.ReactNode) => fmtBRLCompacto(v as number)} style={{ fontSize: 11, fontWeight: 700, fill: '#1d4ed8' }} />
           </Line>
         </ComposedChart>
       </ResponsiveContainer>
@@ -205,7 +217,7 @@ function GraficoMensalFC({ meses }: { meses: MesFC[] }) {
           <span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ backgroundColor: '#059669' }} /> Entradas
         </span>
         <span className="flex items-center gap-1.5 text-xs font-medium text-black">
-          <span className="w-4 h-0.5 rounded-full inline-block" style={{ backgroundColor: '#2563eb' }} /> Saldo
+          <span className="w-4 h-0.5 rounded-full inline-block" style={{ backgroundColor: '#2563eb' }} /> Saldo Acumulado
         </span>
       </div>
     </div>
@@ -519,19 +531,19 @@ export default function FluxoCaixaPage() {
     const effPrev = ev('previsao', dia.previsao);
     const effReal = ev('real', dia.real);
     const effPed = ev('pedidos', dia.pedidos);
-    const effCart = ev('cartao', dia.cartao);
     const effBol = ev('boleto', dia.boleto);
     const effCheq = ev('cheque', dia.cheque);
     const effLoj = ev('lojas', adjLojas);
-    const effMulti = ev('multimarcas', adjMulti);
 
     const effSaidas = effPrev + effReal + effPed;
-    const effEntradas = effCart + effBol + effCheq + effLoj + effMulti;
+    // Cartao e Multimarcas tirados temporariamente (pedido explicito do
+    // usuario) - nao compoem mais o saldo, so volta se pedir de novo.
+    const effEntradas = effBol + effCheq + effLoj;
     const effSaldoDia = effEntradas - effSaidas;
     acumLocal += effSaldoDia;
 
     return {
-      dia, adjLojas, adjMulti, effPrev, effReal, effPed, effCart, effBol, effCheq, effLoj, effMulti,
+      dia, adjLojas, adjMulti, effPrev, effReal, effPed, effBol, effCheq, effLoj,
       effSaidas, effEntradas, effSaldoDia, saldoAcum: acumLocal,
     };
   });
@@ -541,14 +553,12 @@ export default function FluxoCaixaPage() {
     real: acc.real + l.effReal,
     pedidos: acc.pedidos + l.effPed,
     saidas: acc.saidas + l.effSaidas,
-    cartao: acc.cartao + l.effCart,
     boleto: acc.boleto + l.effBol,
     cheque: acc.cheque + l.effCheq,
     lojas: acc.lojas + l.effLoj,
-    multimarcas: acc.multimarcas + l.effMulti,
     entradas: acc.entradas + l.effEntradas,
     qtd: acc.qtd + l.dia.qtd,
-  }), { previsao: 0, real: 0, pedidos: 0, saidas: 0, cartao: 0, boleto: 0, cheque: 0, lojas: 0, multimarcas: 0, entradas: 0, qtd: 0 });
+  }), { previsao: 0, real: 0, pedidos: 0, saidas: 0, boleto: 0, cheque: 0, lojas: 0, entradas: 0, qtd: 0 });
 
   const saldoFinal = totais.entradas - totais.saidas;
   const DIAS_SEMANA = ['DOM', 'SEG', 'TER', 'QUA', 'QUI', 'SEX', 'SÁB'];
@@ -564,13 +574,6 @@ export default function FluxoCaixaPage() {
       </td>
     );
   }
-
-  const kpiCards = [
-    { label: 'Títulos Vencidos', valor: dados?.totalVencido ?? 0, icone: AlertTriangle, borda: 'border-red-500', valorCor: 'text-red-600' },
-    { label: 'A Pagar — 30 dias', valor: dados?.kpi30 ?? 0, icone: Clock, borda: 'border-amber-500', valorCor: 'text-black' },
-    { label: 'A Pagar — 90 dias', valor: dados?.kpi90 ?? 0, icone: CalendarDays, borda: 'border-blue-500', valorCor: 'text-black' },
-    { label: 'Projeção 12 meses', valor: dados?.kpi180 ?? 0, icone: TrendingUp, borda: 'border-rose-500', valorCor: 'text-black' },
-  ];
 
   return (
     <div className="max-w-[98%] mx-auto py-6 px-4 space-y-6">
@@ -652,30 +655,9 @@ export default function FluxoCaixaPage() {
 
       {dados && (
         <>
-          {/* KPIs */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            {kpiCards.map((k) => {
-              const Icone = k.icone;
-              return (
-                <div key={k.label} className={`bg-white rounded-lg shadow p-3 border-l-4 ${k.borda}`}>
-                  <div className="flex items-center gap-2 text-black text-xs font-medium">
-                    <Icone className="w-4 h-4" />
-                    {k.label}
-                  </div>
-                  <p className={`text-lg font-bold mt-1 ${k.valorCor}`}>{fmtBRL(k.valor)}</p>
-                </div>
-              );
-            })}
-          </div>
-
-          {dados.totalVencido > 0 && (
-            <div className="flex items-start gap-2 bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 text-sm">
-              <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-              <span>
-                <strong>{fmtNum(dados.vencidos.reduce((s, r) => s + r.qtd, 0))} títulos vencidos</strong> totalizam {fmtBRL(dados.totalVencido)} e ainda não foram baixados.
-              </span>
-            </div>
-          )}
+          {/* Cards de KPI (Vencidos/30d/90d/12m) e alerta de vencidos
+              tirados temporariamente (pedido explicito do usuario) - os
+              dados continuam vindo da API, so nao sao mostrados aqui. */}
 
           {/* Saldos bancarios - posicao de caixa atual, entra compondo o
               Saldo Acum. da tabela diaria abaixo (ver acumLocal) */}
@@ -719,7 +701,7 @@ export default function FluxoCaixaPage() {
           {/* Grafico mensal */}
           <div className="bg-white rounded-lg shadow-md p-4">
             <h2 className="text-sm font-semibold text-black uppercase tracking-wide mb-3">Projeção Mensal</h2>
-            <GraficoMensalFC meses={dados.meses} />
+            <GraficoMensalFC meses={dados.meses} saldoBancario={dados.saldoBancario} />
           </div>
 
           {/* Visao diaria */}
@@ -792,7 +774,7 @@ export default function FluxoCaixaPage() {
                   <tr className="text-left">
                     <th rowSpan={2} className="px-3 py-2 min-w-[90px] align-middle font-medium text-black bg-gray-50 border-b border-r border-gray-300">Data</th>
                     <th colSpan={4} className="px-3 py-1.5 text-center text-xs font-semibold uppercase tracking-wide text-red-700 bg-red-100 border-b border-r-2 border-gray-400">Saídas</th>
-                    <th colSpan={6} className="px-3 py-1.5 text-center text-xs font-semibold uppercase tracking-wide text-green-700 bg-green-100 border-b border-r-2 border-gray-400">Entradas</th>
+                    <th colSpan={4} className="px-3 py-1.5 text-center text-xs font-semibold uppercase tracking-wide text-green-700 bg-green-100 border-b border-r-2 border-gray-400">Entradas</th>
                     <th rowSpan={2} className="px-3 py-2 text-right whitespace-nowrap align-middle font-medium text-black bg-blue-50 border-b border-r border-gray-300">Saldo Dia</th>
                     <th rowSpan={2} className="px-3 py-2 text-right whitespace-nowrap align-middle font-medium text-black bg-blue-50 border-b border-r border-gray-300">Saldo Acum.</th>
                     <th rowSpan={2} className="px-3 py-2 text-right align-middle font-medium text-black bg-gray-50 border-b border-gray-300">Qtd</th>
@@ -802,17 +784,15 @@ export default function FluxoCaixaPage() {
                     <th className="px-3 py-1.5 text-right font-medium text-red-800 bg-red-50 border-b border-r border-gray-300">Real</th>
                     <th className="px-3 py-1.5 text-right font-medium text-red-600 bg-red-50 border-b border-r border-gray-300">Pedidos</th>
                     <th className="px-3 py-1.5 text-right font-semibold text-red-900 bg-red-200 border-b border-r-2 border-gray-400">Total</th>
-                    <th className="px-3 py-1.5 text-right font-medium text-green-700 bg-green-50 border-b border-r border-gray-300">Cartão</th>
                     <th className="px-3 py-1.5 text-right font-medium text-sky-700 bg-green-50 border-b border-r border-gray-300">Boleto</th>
                     <th className="px-3 py-1.5 text-right font-medium text-green-700 bg-green-50 border-b border-r border-gray-300">Cheque</th>
                     <th className="px-3 py-1.5 text-right font-medium text-cyan-700 bg-green-50 border-b border-r border-gray-300">Lojas</th>
-                    <th className="px-3 py-1.5 text-right font-medium text-purple-700 bg-green-50 border-b border-r border-gray-300">Multimarcas</th>
                     <th className="px-3 py-1.5 text-right font-semibold text-green-900 bg-green-200 border-b border-r-2 border-gray-400">Total</th>
                   </tr>
                 </thead>
                 <tbody>
                   {linhasDiarias.length === 0 && (
-                    <tr><td colSpan={14} className="text-center text-gray-500 py-8">Sem dados no período selecionado</td></tr>
+                    <tr><td colSpan={12} className="text-center text-gray-500 py-8">Sem dados no período selecionado</td></tr>
                   )}
                   {linhasDiarias.map((l, i) => {
                     const dt = new Date(`${l.dia.dia}T12:00:00`);
@@ -834,11 +814,9 @@ export default function FluxoCaixaPage() {
                         <td className="text-right px-3 py-2 font-bold text-red-900 bg-red-200 border-r-2 border-b border-gray-400">
                           {l.effSaidas > 0 ? fmtBRL(l.effSaidas) : <span className="text-gray-400">—</span>}
                         </td>
-                        {celula('cartao', l.dia.cartao, '#059669', 'entrada')}
                         {celula('boleto', l.dia.boleto, '#0284c7', 'entrada')}
                         {celula('cheque', l.dia.cheque, '#059669', 'entrada')}
                         {celula('lojas', l.adjLojas, '#0891b2', 'entrada')}
-                        {celula('multimarcas', l.adjMulti, '#9333ea', 'entrada')}
                         <td className="text-right px-3 py-2 font-bold text-green-900 bg-green-200 border-r-2 border-b border-gray-400">
                           {l.effEntradas > 0 ? fmtBRL(l.effEntradas) : <span className="text-gray-400">—</span>}
                         </td>
@@ -857,11 +835,9 @@ export default function FluxoCaixaPage() {
                       <td className="text-right px-3 py-2.5 text-red-800 bg-red-100 border-r border-gray-300">{fmtBRL(totais.real)}</td>
                       <td className="text-right px-3 py-2.5 text-red-600 bg-red-100 border-r border-gray-300">{fmtBRL(totais.pedidos)}</td>
                       <td className="text-right px-3 py-2.5 text-red-900 bg-red-300 border-r-2 border-gray-400">{fmtBRL(totais.saidas)}</td>
-                      <td className="text-right px-3 py-2.5 text-green-700 bg-green-100 border-r border-gray-300">{fmtBRL(totais.cartao)}</td>
                       <td className="text-right px-3 py-2.5 text-sky-700 bg-green-100 border-r border-gray-300">{fmtBRL(totais.boleto)}</td>
                       <td className="text-right px-3 py-2.5 text-green-700 bg-green-100 border-r border-gray-300">{fmtBRL(totais.cheque)}</td>
                       <td className="text-right px-3 py-2.5 text-cyan-700 bg-green-100 border-r border-gray-300">{fmtBRL(totais.lojas)}</td>
-                      <td className="text-right px-3 py-2.5 text-purple-700 bg-green-100 border-r border-gray-300">{fmtBRL(totais.multimarcas)}</td>
                       <td className="text-right px-3 py-2.5 text-green-900 bg-green-300 border-r-2 border-gray-400">{fmtBRL(totais.entradas)}</td>
                       <td className={`text-right px-3 py-2.5 bg-blue-100 border-r border-gray-300 ${saldoFinal >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(saldoFinal)}</td>
                       <td className={`text-right px-3 py-2.5 bg-blue-100 border-r border-gray-300 ${saldoFinal >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(saldoFinal)}</td>
