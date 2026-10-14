@@ -602,11 +602,11 @@ export default function FluxoCaixaPage() {
   const DIAS_SEMANA = ['DOM', 'SEG', 'TER', 'QUA', 'QUI', 'SEX', 'SÁB'];
   const hoje = isoHoje();
 
-  function celula(key: ColKey, rawVal: number, cor: string, extraClasse = '') {
+  function celula(key: ColKey, rawVal: number, cor: string, bgLinha: string, extraClasse = '') {
     const ativa = colsAtivas[key];
     const v = rawVal || 0;
     return (
-      <td className={`text-right px-3 py-2 border-r border-b border-gray-300 ${extraClasse}`} style={{ color: ativa ? cor : '#94a3b8', fontWeight: ativa && v > 0 ? 600 : 400 }}>
+      <td className={`text-right px-3 py-2 border-r border-b border-gray-300 ${bgLinha} ${extraClasse}`} style={{ color: ativa ? cor : '#94a3b8', fontWeight: ativa && v > 0 ? 600 : 400 }}>
         {v > 0 ? <span style={!ativa ? { textDecoration: 'line-through' } : undefined}>{fmtBRL(v)}</span> : <span className="text-gray-300">—</span>}
       </td>
     );
@@ -745,15 +745,18 @@ export default function FluxoCaixaPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {saldosBancarios.contas.map((c, i) => (
-                      <tr key={`${c.nmBanco}-${c.nrConta}-${i}`} className={`${i % 2 === 0 ? 'bg-white' : 'bg-gray-100'} hover:bg-rose-50 transition-colors`}>
-                        <td className="px-4 py-2 text-black border-r border-b border-gray-300">{c.nmBanco}</td>
-                        <td className="px-4 py-2 text-black border-r border-b border-gray-300">{c.nrAgencia}</td>
-                        <td className="px-4 py-2 text-black border-r border-b border-gray-300">{c.nrConta}</td>
-                        <td className="px-4 py-2 text-right text-gray-600 border-r border-b border-gray-300">{c.dtPosicao.split('-').reverse().join('/')}</td>
-                        <td className={`px-4 py-2 text-right font-semibold tabular-nums border-b border-gray-300 ${c.vlSaldo >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(c.vlSaldo)}</td>
+                    {saldosBancarios.contas.map((c, i) => {
+                      const bgHover = `${i % 2 === 0 ? 'bg-white' : 'bg-gray-100'} group-hover:bg-rose-50`;
+                      return (
+                      <tr key={`${c.nmBanco}-${c.nrConta}-${i}`} className="group transition-colors">
+                        <td className={`px-4 py-2 text-black border-r border-b border-gray-300 ${bgHover}`}>{c.nmBanco}</td>
+                        <td className={`px-4 py-2 text-black border-r border-b border-gray-300 ${bgHover}`}>{c.nrAgencia}</td>
+                        <td className={`px-4 py-2 text-black border-r border-b border-gray-300 ${bgHover}`}>{c.nrConta}</td>
+                        <td className={`px-4 py-2 text-right text-gray-600 border-r border-b border-gray-300 ${bgHover}`}>{c.dtPosicao.split('-').reverse().join('/')}</td>
+                        <td className={`px-4 py-2 text-right font-semibold tabular-nums border-b border-gray-300 ${bgHover} ${c.vlSaldo >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(c.vlSaldo)}</td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                   <tfoot>
                     <tr className="font-bold bg-gray-100">
@@ -875,28 +878,29 @@ export default function FluxoCaixaPage() {
                     // proprio rotulo SAB/DOM ao lado da data, sem precisar
                     // de uma 3a cor de fundo que brigava com a zebra.
                     const bg = isHoje ? 'bg-sky-50' : i % 2 === 0 ? 'bg-white' : 'bg-gray-100';
+                    const bgHover = `${bg} group-hover:bg-rose-50`;
                     return (
-                      <tr key={l.dia.dia} className={`${bg} ${isHoje ? 'font-bold' : ''} hover:bg-rose-50 transition-colors`}>
-                        <td className="px-3 py-2 whitespace-nowrap text-black border-r-2 border-b border-gray-300">
+                      <tr key={l.dia.dia} className={`group ${isHoje ? 'font-bold' : ''} transition-colors`}>
+                        <td className={`px-3 py-2 whitespace-nowrap text-black border-r-2 border-b border-gray-300 ${bgHover}`}>
                           <span className="tabular-nums">{dd}/{mm}</span>
                           <span className="text-xs text-gray-500 ml-1.5">{dow}</span>
                           {isHoje && <span className="text-xs font-medium bg-sky-600 text-white rounded px-1.5 py-0.5 ml-1.5 align-middle">hoje</span>}
                         </td>
-                        {celula('previsao', l.dia.previsao, '#ef4444')}
-                        {celula('real', l.dia.real, '#991b1b')}
-                        {celula('pedidos', l.dia.pedidos, '#dc2626')}
-                        <td className="text-right px-3 py-2 font-bold text-red-800 border-r-2 border-b border-gray-300">
+                        {celula('previsao', l.dia.previsao, '#ef4444', bgHover)}
+                        {celula('real', l.dia.real, '#991b1b', bgHover)}
+                        {celula('pedidos', l.dia.pedidos, '#dc2626', bgHover)}
+                        <td className={`text-right px-3 py-2 font-bold text-red-800 border-r-2 border-b border-gray-300 ${bgHover}`}>
                           {l.effSaidas > 0 ? fmtBRL(l.effSaidas) : <span className="text-gray-400">—</span>}
                         </td>
-                        {celula('boleto', l.dia.boleto, '#0284c7')}
-                        {celula('cheque', l.dia.cheque, '#059669')}
-                        {celula('lojas', l.adjLojas, '#0891b2')}
-                        <td className="text-right px-3 py-2 font-bold text-green-800 border-r-2 border-b border-gray-300">
+                        {celula('boleto', l.dia.boleto, '#0284c7', bgHover)}
+                        {celula('cheque', l.dia.cheque, '#059669', bgHover)}
+                        {celula('lojas', l.adjLojas, '#0891b2', bgHover)}
+                        <td className={`text-right px-3 py-2 font-bold text-green-800 border-r-2 border-b border-gray-300 ${bgHover}`}>
                           {l.effEntradas > 0 ? fmtBRL(l.effEntradas) : <span className="text-gray-400">—</span>}
                         </td>
-                        <td className={`text-right px-3 py-2 font-bold border-r border-b border-gray-300 ${l.effSaldoDia >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(l.effSaldoDia)}</td>
-                        <td className={`text-right px-3 py-2 font-bold border-r-2 border-b border-gray-300 ${l.saldoAcum >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(l.saldoAcum)}</td>
-                        <td className="text-right px-3 py-2 text-black border-b border-gray-300">{fmtNum(l.dia.qtd)}</td>
+                        <td className={`text-right px-3 py-2 font-bold border-r border-b border-gray-300 ${bgHover} ${l.effSaldoDia >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(l.effSaldoDia)}</td>
+                        <td className={`text-right px-3 py-2 font-bold border-r-2 border-b border-gray-300 ${bgHover} ${l.saldoAcum >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(l.saldoAcum)}</td>
+                        <td className={`text-right px-3 py-2 text-black border-b border-gray-300 ${bgHover}`}>{fmtNum(l.dia.qtd)}</td>
                       </tr>
                     );
                   })}
@@ -963,12 +967,15 @@ export default function FluxoCaixaPage() {
                   {fornecedoresOrdenados.length === 0 && (
                     <tr><td colSpan={2} className="text-center text-gray-500 py-8">Sem dados no período selecionado</td></tr>
                   )}
-                  {fornecedoresOrdenados.map((f, i) => (
-                    <tr key={`${f.cdFornecedor}-${i}`} className={`${i % 2 === 0 ? 'bg-white' : 'bg-gray-100'} hover:bg-rose-50 transition-colors`}>
-                      <td className="px-4 py-2 text-black border-b border-gray-200">{f.nome}</td>
-                      <td className="px-4 py-2 text-right font-semibold text-red-600 tabular-nums border-b border-gray-200">{fmtBRL(-f.valor)}</td>
+                  {fornecedoresOrdenados.map((f, i) => {
+                    const bgHover = `${i % 2 === 0 ? 'bg-white' : 'bg-gray-100'} group-hover:bg-rose-50`;
+                    return (
+                    <tr key={`${f.cdFornecedor}-${i}`} className="group transition-colors">
+                      <td className={`px-4 py-2 text-black border-b border-gray-200 ${bgHover}`}>{f.nome}</td>
+                      <td className={`px-4 py-2 text-right font-semibold text-red-600 tabular-nums border-b border-gray-200 ${bgHover}`}>{fmtBRL(-f.valor)}</td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
