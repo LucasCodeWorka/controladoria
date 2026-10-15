@@ -510,6 +510,7 @@ def _sql_cheque_diario(where: str) -> str:
 # tanto no filtro de periodo quanto no agrupamento abaixo.
 def _filtros_boleto(dt_inicio: str, dt_fim: str, empresas: list) -> tuple:
     where = f"""WHERE tp_documento IN (1) AND tp_situacao = '1' AND nr_portador < 999
+        AND tp_cobranca <> 2
         AND (vl_fatura - vl_pago) > 0
         AND {_EXPR_DT_BOLETO_EFETIVA} BETWEEN %s AND %s
         AND {_EXPR_DT_BOLETO_EFETIVA} > CURRENT_DATE
@@ -561,6 +562,7 @@ def obter_boleto_detalhe(
     _criar_tabelas_fluxo_caixa()
     cd_empresas = _parse_empresas(empresas)
     where = f"""WHERE tp_documento IN (1) AND tp_situacao = '1' AND nr_portador < 999
+        AND tp_cobranca <> 2
         AND (vl_fatura - vl_pago) > 0
         AND {_EXPR_DT_BOLETO_EFETIVA} = %s
         AND {_EXPR_DT_BOLETO_EFETIVA} > CURRENT_DATE
