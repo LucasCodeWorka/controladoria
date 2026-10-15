@@ -90,6 +90,17 @@ def _criar_tabelas_fluxo_caixa():
         END;
         $$ LANGUAGE plpgsql STABLE
     """, ())
+    execute_insert("""
+        CREATE OR REPLACE FUNCTION fn_fc_dt_cheque_efetiva(p_vencimento DATE)
+        RETURNS DATE AS $$
+        BEGIN
+            IF EXTRACT(DOW FROM p_vencimento) IN (0, 6) THEN
+                RETURN fn_fc_proximo_dia_util_bancario(p_vencimento + 1);
+            END IF;
+            RETURN p_vencimento;
+        END;
+        $$ LANGUAGE plpgsql STABLE
+    """, ())
     _seed_feriados_bancarios()
 
 
@@ -194,6 +205,11 @@ _EXPR_DT_BOLETO_EFETIVA = "fn_fc_dt_boleto_efetiva(dt_vencimento::date)"
 # pra terca-feira seguinte (regra 3) - mantida como estava, sem D+1 nem
 # feriado bancario (nao pedido pelo usuario pra essas colunas).
 _EXPR_DT_LOJAS_EFETIVA = _expr_dt_efetiva("dt_dia", 3, 2)
+
+# Cheque (entrada) - vencimento em dia util fica como esta (sem D+1); so
+# sabado/domingo avanca pro proximo dia util bancario de verdade (pulando
+# feriado em cadeia, igual o Boleto) - pedido explicito do usuario.
+_EXPR_DT_CHEQUE_EFETIVA = "fn_fc_dt_cheque_efetiva(dt_vencimento::date)"
 
 
 # ── Saldos bancarios (posicao de caixa cadastrada manualmente) ───────────
@@ -453,11 +469,12 @@ def _sql_cartao_diario(where: str) -> str:
 
 
 # ── Entradas - cheque (vr_fcr_faturai) ────────────────────────────────────
-# Mesma regra 1 do cartao - so data futura.
+# Regra 1 (so data futura) + fim de semana avanca pro proximo dia util
+# bancario (_EXPR_DT_CHEQUE_EFETIVA).
 def _filtros_cheque(dt_inicio: str, dt_fim: str, empresas: list) -> tuple:
-    where = """WHERE tp_documento IN (2) AND tp_situacao = '1' AND (vl_fatura - vl_pago) > 0
-        AND dt_vencimento BETWEEN %s AND %s
-        AND dt_vencimento > CURRENT_DATE"""
+    where = f"""WHERE tp_documento IN (2) AND tp_situacao = '1' AND (vl_fatura - vl_pago) > 0
+        AND {_EXPR_DT_CHEQUE_EFETIVA} BETWEEN %s AND %s
+        AND {_EXPR_DT_CHEQUE_EFETIVA} > CURRENT_DATE"""
     params: list = [dt_inicio, dt_fim]
     if empresas:
         where += " AND cd_empresa = ANY(%s)"
@@ -467,7 +484,7 @@ def _filtros_cheque(dt_inicio: str, dt_fim: str, empresas: list) -> tuple:
 
 def _sql_cheque_mensal(where: str) -> str:
     return f"""
-        SELECT to_char(dt_vencimento, 'YYYY-MM') AS mes,
+        SELECT to_char({_EXPR_DT_CHEQUE_EFETIVA}, 'YYYY-MM') AS mes,
             COUNT(*)::int AS qtd, ROUND(SUM(vl_fatura - vl_pago)::numeric, 2) AS valor
         FROM vr_fcr_faturai
         {where}
@@ -478,7 +495,7 @@ def _sql_cheque_mensal(where: str) -> str:
 
 def _sql_cheque_diario(where: str) -> str:
     return f"""
-        SELECT dt_vencimento::date AS dia,
+        SELECT {_EXPR_DT_CHEQUE_EFETIVA}::date AS dia,
             COUNT(*)::int AS qtd, ROUND(SUM(vl_fatura - vl_pago)::numeric, 2) AS valor
         FROM vr_fcr_faturai
         {where}

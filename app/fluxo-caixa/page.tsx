@@ -658,6 +658,17 @@ export default function FluxoCaixaPage() {
   const DIAS_SEMANA = ['DOM', 'SEG', 'TER', 'QUA', 'QUI', 'SEX', 'SÁB'];
   const hoje = isoHoje();
 
+  // Sabado/domingo nunca tem dado proprio (tudo e deslocado pro dia util
+  // seguinte pelas regras de compensacao/projecao do backend) - pedido
+  // explicito do usuario pra nem aparecer essas linhas na Visao Diaria.
+  // O acumulado (acumLocal) e os totais do rodape continuam somando TODOS
+  // os dias (inclusive fim de semana, caso Cheque - unica coluna sem
+  // deslocamento - tenha valor num sabado/domingo), so a linha em si some.
+  const linhasDiariasVisiveis = linhasDiarias.filter((l) => {
+    const dow = new Date(`${l.dia.dia}T12:00:00`).getDay();
+    return dow !== 0 && dow !== 6;
+  });
+
   function celula(key: ColKey, rawVal: number, cor: string, bgLinha: string, extraClasse = '') {
     const ativa = colsAtivas[key];
     const v = rawVal || 0;
@@ -924,10 +935,10 @@ export default function FluxoCaixaPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {linhasDiarias.length === 0 && (
+                  {linhasDiariasVisiveis.length === 0 && (
                     <tr><td colSpan={13} className="text-center text-gray-500 py-8">Sem dados no período selecionado</td></tr>
                   )}
-                  {linhasDiarias.map((l, i) => {
+                  {linhasDiariasVisiveis.map((l, i) => {
                     const dt = new Date(`${l.dia.dia}T12:00:00`);
                     const dow = DIAS_SEMANA[dt.getDay()];
                     const isHoje = l.dia.dia === hoje;
