@@ -105,6 +105,14 @@ interface SaidaDespesa {
   qtd: number;
 }
 
+interface BoletoDetalheItem {
+  cliente: string;
+  nrFat: number;
+  nrParcela: number;
+  dtVencimentoOriginal: string;
+  valor: number;
+}
+
 type ColKey = 'previsao' | 'real' | 'pedidos' | 'cartao' | 'boleto' | 'cheque' | 'lojas' | 'outrasEntradas' | 'multimarcas';
 
 const FILTRO_KEY = 'fluxo_caixa_filtros_v1';
@@ -317,6 +325,10 @@ export default function FluxoCaixaPage() {
   const [faturasPaste, setFaturasPaste] = useState('');
   const [faturasStatus, setFaturasStatus] = useState('');
   const [faturasSalvando, setFaturasSalvando] = useState(false);
+
+  const [boletoDetalheDia, setBoletoDetalheDia] = useState<string | null>(null);
+  const [boletoDetalheLista, setBoletoDetalheLista] = useState<BoletoDetalheItem[] | null>(null);
+  const [boletoDetalheErro, setBoletoDetalheErro] = useState('');
 
   useEffect(() => {
     fetch('/api/fluxo-caixa/empresas', { cache: 'no-store' })
@@ -612,6 +624,28 @@ export default function FluxoCaixaPage() {
     }
   }
 
+  // Detalhe das faturas de Boleto de um dia especifico - clique na celula
+  // Boleto da Visao Diaria. Usa o mesmo filtro de empresas selecionado no
+  // topo da tela, pra bater exatamente com o valor mostrado na celula.
+  async function boletoDetalheAbrir(dia: string) {
+    setBoletoDetalheDia(dia);
+    setBoletoDetalheLista(null);
+    setBoletoDetalheErro('');
+    try {
+      const params = new URLSearchParams({ dia });
+      if (empresasSelecionadas.size > 0 && empresasSelecionadas.size < empresasDisponiveis.length) {
+        params.set('empresas', Array.from(empresasSelecionadas).join(','));
+      }
+      const res = await fetch(`/api/fluxo-caixa/boleto-detalhe?${params.toString()}`, { cache: 'no-store' });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || json.detail || 'Erro ao buscar faturas');
+      setBoletoDetalheLista(json);
+    } catch (e) {
+      setBoletoDetalheErro(e instanceof Error ? e.message : 'Erro desconhecido');
+      setBoletoDetalheLista([]);
+    }
+  }
+
   // Linhas da tabela diaria com toggles de coluna + simulacao aplicados -
   // saldo diario/acumulado precisa ser recalculado no cliente (o valor que
   // vem do backend e o "cru", sem nenhum ajuste de simulacao/toggle). O
@@ -672,11 +706,17 @@ export default function FluxoCaixaPage() {
     return dow !== 0 && dow !== 6;
   });
 
-  function celula(key: ColKey, rawVal: number, cor: string, bgLinha: string, extraClasse = '') {
+  function celula(key: ColKey, rawVal: number, cor: string, bgLinha: string, extraClasse = '', onClick?: () => void) {
     const ativa = colsAtivas[key];
     const v = rawVal || 0;
+    const clicavel = ativa && v > 0 && !!onClick;
     return (
-      <td className={`text-right px-3 py-2 tabular-nums border-r border-b border-gray-300 ${bgLinha} ${extraClasse}`} style={{ color: ativa ? cor : '#94a3b8', fontWeight: ativa && v > 0 ? 600 : 400 }}>
+      <td
+        className={`text-right px-3 py-2 tabular-nums border-r border-b border-gray-300 ${bgLinha} ${extraClasse} ${clicavel ? 'cursor-pointer hover:underline' : ''}`}
+        style={{ color: ativa ? cor : '#94a3b8', fontWeight: ativa && v > 0 ? 600 : 400 }}
+        onClick={clicavel ? onClick : undefined}
+        title={clicavel ? 'Ver faturas' : undefined}
+      >
         {v > 0 ? <span style={!ativa ? { textDecoration: 'line-through' } : undefined}>{fmtBRL(v)}</span> : <span className="text-gray-300">—</span>}
       </td>
     );
@@ -1023,7 +1063,7 @@ export default function FluxoCaixaPage() {
                           {l.effSaidas > 0 ? fmtBRL(l.effSaidas) : <span className="text-gray-400">—</span>}
                         </td>
                         {celula('outrasEntradas', l.dia.outrasEntradas, '#7c3aed', bgHover)}
-                        {celula('boleto', l.dia.boleto, '#0284c7', bgHover)}
+                        {celula('boleto', l.dia.boleto, '#0284c7', bgHover, '', () => boletoDetalheAbrir(l.dia.dia))}
                         {celula('cheque', l.dia.cheque, '#059669', bgHover)}
                         {celula('lojas', l.adjLojas, '#0891b2', bgHover)}
                         <td className={`text-right px-3 py-2 tabular-nums font-bold text-green-800 border-r-2 border-b border-gray-300 ${bgHover}`}>
@@ -1215,6 +1255,67 @@ export default function FluxoCaixaPage() {
                   ))}
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Detalhe das faturas de Boleto de um dia (clique na celula) */}
+      {boletoDetalheDia && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setBoletoDetalheDia(null)}>
+          <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200">
+              <h2 className="text-base font-semibold text-black">
+                Boletos — {boletoDetalheDia.split('-').reverse().join('/')}
+              </h2>
+              <button onClick={() => setBoletoDetalheDia(null)} className="text-black/50 hover:text-black"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="overflow-y-auto flex-1">
+              {boletoDetalheLista === null && (
+                <div className="flex items-center justify-center py-12 text-gray-500">
+                  <Loader2 className="w-5 h-5 animate-spin mr-2" /> Carregando…
+                </div>
+              )}
+              {boletoDetalheErro && (
+                <div className="flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-md mx-5 mt-4 px-3 py-2">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" /> <span>{boletoDetalheErro}</span>
+                </div>
+              )}
+              {boletoDetalheLista !== null && !boletoDetalheErro && boletoDetalheLista.length === 0 && (
+                <p className="text-sm text-gray-500 py-12 text-center">Nenhuma fatura encontrada para esse dia.</p>
+              )}
+              {boletoDetalheLista !== null && boletoDetalheLista.length > 0 && (
+                <table className="w-full text-sm">
+                  <thead className="sticky top-0 bg-gray-50 border-b border-gray-200">
+                    <tr>
+                      <th className="text-left px-5 py-2 font-medium text-black">Cliente</th>
+                      <th className="text-left px-3 py-2 font-medium text-black">Fatura/Parcela</th>
+                      <th className="text-right px-3 py-2 font-medium text-black">Vencimento original</th>
+                      <th className="text-right px-5 py-2 font-medium text-black">Valor</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {boletoDetalheLista.map((item, i) => (
+                      <tr key={`${item.nrFat}-${item.nrParcela}-${i}`} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                        <td className="px-5 py-1.5 text-black">{item.cliente}</td>
+                        <td className="px-3 py-1.5 text-black tabular-nums">
+                          {String(item.nrFat).padStart(6, '0')}/{String(item.nrParcela).padStart(3, '0')}
+                        </td>
+                        <td className="px-3 py-1.5 text-right text-gray-600 tabular-nums">{item.dtVencimentoOriginal.split('-').reverse().join('/')}</td>
+                        <td className="px-5 py-1.5 text-right font-semibold text-sky-700 tabular-nums">{fmtBRL(item.valor)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr className="font-bold bg-gray-200 border-t-2 border-gray-400">
+                      <td colSpan={3} className="px-5 py-2 text-right uppercase text-xs tracking-wide text-black">Total</td>
+                      <td className="px-5 py-2 text-right tabular-nums text-sky-700">
+                        {fmtBRL(boletoDetalheLista.reduce((acc, item) => acc + item.valor, 0))}
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
+              )}
             </div>
           </div>
         </div>

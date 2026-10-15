@@ -548,6 +548,52 @@ def _sql_boleto_diario(where: str) -> str:
     """
 
 
+@router.get("/api/fluxo-caixa/boleto-detalhe")
+def obter_boleto_detalhe(
+    dia: str = Query(..., description="Dia efetivo (YYYY-MM-DD), mesma data mostrada na coluna Boleto"),
+    empresas: Optional[str] = Query(None),
+):
+    """Lista as faturas (boletos) individuais cuja data EFETIVA (ja com a
+    regra de compensacao bancaria/feriado - ver fn_fc_dt_boleto_efetiva) cai
+    exatamente no dia pedido - mesmo filtro de _filtros_boleto, so trocando
+    o BETWEEN por um dia unico, pra bater exatamente com o total mostrado na
+    celula clicada da Visao Diaria."""
+    _criar_tabelas_fluxo_caixa()
+    cd_empresas = _parse_empresas(empresas)
+    where = f"""WHERE tp_documento IN (1) AND tp_situacao = '1' AND nr_portador < 999
+        AND (vl_fatura - vl_pago) > 0
+        AND {_EXPR_DT_BOLETO_EFETIVA} = %s
+        AND {_EXPR_DT_BOLETO_EFETIVA} > CURRENT_DATE
+        AND NOT (
+            cd_empresa = 1 AND EXISTS (
+                SELECT 1 FROM fcp_faturas_descontadas fd
+                WHERE fd.nr_fat = vr_fcr_faturai.nr_fat AND fd.nr_parcela = vr_fcr_faturai.nr_parcela
+            )
+        )"""
+    params: list = [dia]
+    if cd_empresas:
+        where += " AND cd_empresa = ANY(%s)"
+        params.append(cd_empresas)
+    sql = f"""
+        SELECT nm_cliente, nr_fat, nr_parcela, dt_vencimento::date AS dt_vencimento_original,
+               ROUND((vl_fatura - vl_pago)::numeric, 2) AS valor
+        FROM vr_fcr_faturai
+        {where}
+        ORDER BY nm_cliente, nr_fat, nr_parcela
+    """
+    rows = execute_query(sql, tuple(params)) or []
+    return [
+        {
+            "cliente": r["nm_cliente"],
+            "nrFat": r["nr_fat"],
+            "nrParcela": r["nr_parcela"],
+            "dtVencimentoOriginal": _dia_str(r["dt_vencimento_original"]),
+            "valor": float(r["valor"]),
+        }
+        for r in rows
+    ]
+
+
 # ── Entradas - projecao manual de lojas (fcp_lojas_projecao) ─────────────
 # Mesma regra 3 do boleto (fim de semana -> terca-feira) e regra 1 (so
 # futuro) - como mais de um dia original pode cair na mesma terca-feira
