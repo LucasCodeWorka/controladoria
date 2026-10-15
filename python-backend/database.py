@@ -27,7 +27,13 @@ def get_connection_pool():
             password = os.getenv('DB_PASSWORD', '').strip('\'"')
 
             # Conexão PostgreSQL vCenter
-            connection_pool = psycopg2.pool.SimpleConnectionPool(
+            # ThreadedConnectionPool (nao SimpleConnectionPool): varios
+            # endpoints (ex: dre-x-dfc) disparam queries em paralelo via
+            # ThreadPoolExecutor - SimpleConnectionPool explicitamente "nao
+            # pode ser compartilhado entre threads" (getconn/putconn sem
+            # lock, corrida em _pool/_used/_rused), ThreadedConnectionPool e
+            # a mesma API protegida por um lock.
+            connection_pool = psycopg2.pool.ThreadedConnectionPool(
                 1,  # Min connections
                 10,  # Max connections
                 host=os.getenv('DB_HOST', 'dbexp.vcenter.com.br'),
