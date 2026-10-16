@@ -754,6 +754,11 @@ function CardConsolidado({ titulo, dado }: { titulo: string; dado: Consolidado |
   );
 }
 
+// Barra de rolagem horizontal sempre visivel e mais facil de pegar com o
+// mouse (no Mac a barra padrao e "overlay" e some ate o usuario rolar).
+const CLASSE_BARRA_ROLAGEM =
+  '[&::-webkit-scrollbar]:h-3 [&::-webkit-scrollbar-track]:bg-gray-100 [&::-webkit-scrollbar-thumb]:bg-gray-400 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb:hover]:bg-gray-500';
+
 export default function GiroPage() {
   const [mesReferencia, setMesReferencia] = useState(mesAtual());
   const [empresasDisponiveis, setEmpresasDisponiveis] = useState<EmpresaOpcao[]>([]);
@@ -911,9 +916,29 @@ export default function GiroPage() {
   // Meses FL de cada cor dela em vez de so a soma). Busca sob demanda, uma
   // referencia de cada vez, e fica em cache (nao busca de novo so por
   // recolher/expandir de novo).
+  // Barra de rolagem horizontal extra ACIMA da tabela de giro, sincronizada
+  // com a da tabela: a barra normal so aparece no fim da tabela (50 linhas
+  // depois) e no Mac ainda fica escondida ate rolar.
+  const tabelaGiroScrollRef = useRef<HTMLDivElement | null>(null);
+  const barraTopoGiroRef = useRef<HTMLDivElement | null>(null);
+  const [larguraTabelaGiro, setLarguraTabelaGiro] = useState(0);
+
+
   const [coresExpandidas, setCoresExpandidas] = useState<Set<string>>(new Set());
   const [coresPorReferencia, setCoresPorReferencia] = useState<Record<string, ItemMatrizGiro[]>>({});
   const [coresCarregando, setCoresCarregando] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    const alvo = tabelaGiroScrollRef.current;
+    if (!alvo) return;
+    const medir = () => setLarguraTabelaGiro(alvo.scrollWidth);
+    medir();
+    const observador = new ResizeObserver(medir);
+    observador.observe(alvo);
+    const tabela = alvo.querySelector('table');
+    if (tabela) observador.observe(tabela);
+    return () => observador.disconnect();
+  }, [matriz, matrizCarregando, coresExpandidas, coresPorReferencia, mostrarPrecosCheios]);
 
   // Tooltip da matriz com o calculo do giro (estoque / venda = giro) - o
   // atributo title nativo do navegador demora pra aparecer e alguns
@@ -2311,7 +2336,25 @@ export default function GiroPage() {
             )}
 
             {!matrizCarregando && matriz && itensMatrizExibidos.length > 0 && (
-              <div className="overflow-x-auto">
+              <>
+              <div
+                ref={barraTopoGiroRef}
+                className={`overflow-x-auto overflow-y-hidden ${CLASSE_BARRA_ROLAGEM}`}
+                onScroll={(e) => {
+                  const alvo = tabelaGiroScrollRef.current;
+                  if (alvo && alvo.scrollLeft !== e.currentTarget.scrollLeft) alvo.scrollLeft = e.currentTarget.scrollLeft;
+                }}
+              >
+                <div style={{ width: larguraTabelaGiro, height: 1 }} />
+              </div>
+              <div
+                ref={tabelaGiroScrollRef}
+                className={`overflow-x-auto ${CLASSE_BARRA_ROLAGEM}`}
+                onScroll={(e) => {
+                  const alvo = barraTopoGiroRef.current;
+                  if (alvo && alvo.scrollLeft !== e.currentTarget.scrollLeft) alvo.scrollLeft = e.currentTarget.scrollLeft;
+                }}
+              >
                 <table className="w-full text-sm">
                   <thead className="bg-gray-50 border-b border-gray-200">
                     <tr>
@@ -2422,6 +2465,7 @@ export default function GiroPage() {
                   </tbody>
                 </table>
               </div>
+              </>
             )}
 
             {tooltipCelula && (
