@@ -262,19 +262,33 @@ function GraficoMensalFC({ meses, saldoBancario }: { meses: MesFC[]; saldoBancar
 // Lista ranqueada estilo "barra horizontal com rotulo" (valor a esquerda,
 // barra proporcional ao maior valor da lista, nome a direita) - mesmo
 // layout do relatorio de referencia que o usuario pediu pra replicar aqui.
+// Ranking "nome+valor em cima, barra fina embaixo" - padrao mais usado em
+// dashboards financeiros (Stripe/Linear-style) pra resolver o problema do
+// layout antigo: nome e valor ficavam na MESMA linha que a barra, entao
+// nomes compridos (ex: "SECRETARIA DA RECEITA FEDERAL...") eram cortados
+// de forma feia quando a barra crescia. Com nome/valor na propria linha,
+// so competem entre si - a barra nunca rouba espaco do texto.
 function ListaBarrasRanking({ itens, cor }: { itens: { nome: string; valor: number }[]; cor: string }) {
   if (!itens.length) {
     return <p className="text-sm text-gray-400 py-8 text-center">Sem dados no período.</p>;
   }
   const maxValor = Math.max(...itens.map((i) => i.valor), 1);
   return (
-    <div className="max-h-[520px] overflow-y-auto pr-1 space-y-1.5">
+    <div className="max-h-[520px] overflow-y-auto pr-1 -mx-2 space-y-0.5">
       {itens.map((item, i) => (
-        <div key={`${item.nome}-${i}`} className="flex items-center gap-2 text-sm">
-          <span className="w-28 flex-shrink-0 text-right font-semibold text-black tabular-nums">{fmtBRL(-item.valor)}</span>
-          <div className="flex-1 flex items-center min-w-0">
-            <div className="h-5 rounded-sm" style={{ width: `${Math.max(2, (item.valor / maxValor) * 100)}%`, backgroundColor: cor }} />
-            <span className="ml-2 truncate text-black" title={item.nome}>{item.nome}</span>
+        <div key={`${item.nome}-${i}`} className="flex items-start gap-2.5 px-2 py-1.5 rounded-md hover:bg-gray-50 transition-colors">
+          <span className="w-5 flex-shrink-0 text-right text-xs text-gray-400 tabular-nums pt-0.5">{i + 1}</span>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-baseline justify-between gap-3">
+              <span className="text-sm text-black truncate" title={item.nome}>{item.nome}</span>
+              <span className="text-sm font-semibold text-black tabular-nums flex-shrink-0">{fmtBRL(-item.valor)}</span>
+            </div>
+            <div className="h-1.5 rounded-full bg-gray-100 overflow-hidden mt-1.5">
+              <div
+                className="h-full rounded-full"
+                style={{ width: `${Math.max(3, (item.valor / maxValor) * 100)}%`, backgroundColor: cor }}
+              />
+            </div>
           </div>
         </div>
       ))}
