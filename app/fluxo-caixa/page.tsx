@@ -274,7 +274,7 @@ function ListaBarrasRanking({ itens, cor }: { itens: { nome: string; valor: numb
   }
   const maxValor = Math.max(...itens.map((i) => i.valor), 1);
   return (
-    <div className="max-h-[520px] overflow-y-auto pr-1 -mx-2 space-y-0.5">
+    <div className="max-h-[420px] overflow-y-auto pr-1 -mx-2 space-y-0.5">
       {itens.map((item, i) => (
         <div key={`${item.nome}-${i}`} className="flex items-start gap-2.5 px-2 py-1.5 rounded-md hover:bg-gray-50 transition-colors">
           <span className="w-5 flex-shrink-0 text-right text-xs text-gray-400 tabular-nums pt-0.5">{i + 1}</span>
@@ -909,20 +909,20 @@ export default function FluxoCaixaPage() {
               </h2>
             </div>
             {saldosBancarios && saldosBancarios.contas.length > 0 ? (
-              <div className="overflow-x-auto overflow-y-auto max-h-[400px] [transform:translateZ(0)]">
+              <div className="overflow-x-auto [transform:translateZ(0)]">
                 <table className="w-full text-sm border-separate [border-spacing:0]">
-                  <thead className="sticky top-0 z-10">
+                  <thead>
                     <tr>
-                      <th className="text-left px-4 py-2 font-semibold text-white bg-rose-600 border-b border-r border-rose-700">Banco</th>
-                      <th className="text-left px-4 py-2 font-semibold text-white bg-rose-600 border-b border-r border-rose-700">Agência</th>
-                      <th className="text-left px-4 py-2 font-semibold text-white bg-rose-600 border-b border-r border-rose-700">Conta</th>
-                      <th className="text-right px-4 py-2 font-semibold text-white bg-rose-600 border-b border-r border-rose-700">Posição em</th>
-                      <th className="text-right px-4 py-2 font-semibold text-white bg-rose-600 border-b border-rose-700">Saldo</th>
+                      <th className="text-left px-4 py-2 font-semibold text-white bg-gray-500 border-b border-r border-gray-600">Banco</th>
+                      <th className="text-left px-4 py-2 font-semibold text-white bg-gray-500 border-b border-r border-gray-600">Agência</th>
+                      <th className="text-left px-4 py-2 font-semibold text-white bg-gray-500 border-b border-r border-gray-600">Conta</th>
+                      <th className="text-right px-4 py-2 font-semibold text-white bg-gray-500 border-b border-r border-gray-600">Posição em</th>
+                      <th className="text-right px-4 py-2 font-semibold text-white bg-gray-500 border-b border-gray-600">Saldo</th>
                     </tr>
                   </thead>
                   <tbody>
                     {saldosBancarios.contas.map((c, i) => {
-                      const bgHover = `${i % 2 === 0 ? 'bg-white' : 'bg-gray-100'} group-hover:bg-rose-50`;
+                      const bgHover = `${i % 2 === 0 ? 'bg-white' : 'bg-gray-300'} group-hover:bg-rose-50`;
                       return (
                       <tr key={`${c.nmBanco}-${c.nrConta}-${i}`} className="group transition-colors">
                         <td className={`px-4 py-2 text-black border-r border-b border-gray-300 ${bgHover}`}>{c.nmBanco}</td>
@@ -935,7 +935,7 @@ export default function FluxoCaixaPage() {
                     })}
                   </tbody>
                   <tfoot>
-                    <tr className="font-bold bg-gray-200">
+                    <tr className="font-bold bg-gray-400">
                       <td colSpan={4} className="px-4 py-2.5 text-right uppercase text-xs tracking-wide text-black border-t-2 border-r border-gray-400">Total</td>
                       <td className={`px-4 py-2.5 text-right tabular-nums border-t-2 border-gray-400 ${(saldosBancarios?.total ?? 0) >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(saldosBancarios?.total ?? 0)}</td>
                     </tr>
@@ -1027,8 +1027,8 @@ export default function FluxoCaixaPage() {
                     <th rowSpan={2} className="px-3 py-2 min-w-[90px] align-middle font-medium text-black bg-gray-100 border-b-2 border-r-2 border-gray-300">Data</th>
                     <th colSpan={4} className="px-3 py-1.5 text-center text-xs font-semibold uppercase tracking-wide text-white bg-red-600 border-b border-red-700">Saídas</th>
                     <th colSpan={5} className="px-3 py-1.5 text-center text-xs font-semibold uppercase tracking-wide text-white bg-green-600 border-b border-green-700 border-l-2 border-l-gray-300">Entradas</th>
-                    <th rowSpan={2} className="px-3 py-2 text-right whitespace-nowrap align-middle font-medium text-black bg-gray-100 border-b-2 border-r border-gray-300 border-l-2 border-l-gray-300">Saldo Dia</th>
-                    <th rowSpan={2} className="px-3 py-2 text-right whitespace-nowrap align-middle font-medium text-black bg-gray-100 border-b-2 border-r-2 border-gray-300">Saldo Acum.</th>
+                    <th rowSpan={2} className="px-3 py-2 text-right whitespace-nowrap align-middle font-medium text-white bg-blue-600 border-b-2 border-blue-700 border-r border-blue-700 border-l-2 border-l-gray-300">Saldo Dia</th>
+                    <th rowSpan={2} className="px-3 py-2 text-right whitespace-nowrap align-middle font-medium text-white bg-blue-600 border-b-2 border-blue-700 border-r-2 border-blue-700">Saldo Acum.</th>
                     <th rowSpan={2} className="px-3 py-2 text-right align-middle font-medium text-black bg-gray-100 border-b-2 border-gray-300">Qtd</th>
                   </tr>
                   <tr className="text-left">
@@ -1061,7 +1061,7 @@ export default function FluxoCaixaPage() {
                     // do usuario. O fim de semana ja fica marcado pelo
                     // proprio rotulo SAB/DOM ao lado da data, sem precisar
                     // de uma 3a cor de fundo que brigava com a zebra.
-                    const bg = isHoje ? 'bg-sky-50' : isUltimoDiaMes ? 'bg-green-200' : i % 2 === 0 ? 'bg-white' : 'bg-gray-100';
+                    const bg = isHoje ? 'bg-sky-50' : isUltimoDiaMes ? 'bg-green-200' : i % 2 === 0 ? 'bg-white' : 'bg-gray-300';
                     const bgHover = `${bg} group-hover:bg-rose-50`;
                     return (
                       <tr key={l.dia.dia} className={`group ${isHoje ? 'font-bold' : ''} transition-colors`}>
@@ -1092,7 +1092,7 @@ export default function FluxoCaixaPage() {
                 </tbody>
                 {linhasDiarias.length > 0 && (
                   <tfoot>
-                    <tr className="font-bold text-sm bg-gray-200">
+                    <tr className="font-bold text-sm bg-gray-400">
                       <td className="px-3 py-2.5 uppercase text-xs tracking-wide text-black border-t-2 border-r-2 border-gray-400">Total</td>
                       <td className="text-right px-3 py-2.5 tabular-nums text-red-700 border-t-2 border-r border-gray-400">{fmtBRL(totais.previsao)}</td>
                       <td className="text-right px-3 py-2.5 tabular-nums text-red-800 border-t-2 border-r border-gray-400">{fmtBRL(totais.real)}</td>
@@ -1113,57 +1113,64 @@ export default function FluxoCaixaPage() {
             </div>
           </div>
 
-          {/* Saidas por fornecedor e por despesa (mesmo periodo/empresas
-              filtrados acima) */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <div className="bg-white rounded-lg shadow-md p-4">
-              <h2 className="text-sm font-semibold text-black uppercase tracking-wide mb-3">Fornecedores</h2>
-              <ListaBarrasRanking itens={saidasFornecedor} cor="#dc2626" />
+          {/* Saidas por fornecedor (ranking + detalhado ordenavel) e por
+              despesa (mesmo periodo/empresas filtrados acima) - as 3 lado a
+              lado, mesma altura (pedido explicito do usuario). */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <div className="bg-white rounded-lg shadow-md overflow-hidden">
+              <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
+                <h2 className="text-sm font-semibold text-black uppercase tracking-wide">Fornecedores</h2>
+              </div>
+              <div className="p-4">
+                <ListaBarrasRanking itens={saidasFornecedor} cor="#dc2626" />
+              </div>
             </div>
-            <div className="bg-white rounded-lg shadow-md p-4">
-              <h2 className="text-sm font-semibold text-black uppercase tracking-wide mb-3">Despesas</h2>
-              <ListaBarrasRanking itens={saidasDespesa} cor="#f59e0b" />
+            <div className="bg-white rounded-lg shadow-md overflow-hidden">
+              <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
+                <h2 className="text-sm font-semibold text-black uppercase tracking-wide">Despesas</h2>
+              </div>
+              <div className="p-4">
+                <ListaBarrasRanking itens={saidasDespesa} cor="#f59e0b" />
+              </div>
             </div>
-          </div>
-
-          {/* Tabela ordenavel de fornecedores */}
-          <div className="bg-white rounded-lg shadow-md overflow-hidden">
-            <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
-              <h2 className="text-sm font-semibold text-black uppercase tracking-wide">Fornecedores</h2>
-            </div>
-            <div className="overflow-x-auto max-h-[520px] overflow-y-auto [transform:translateZ(0)]">
-              <table className="w-full text-sm">
-                <thead className="sticky top-0 bg-gray-50 border-b border-gray-200">
-                  <tr>
-                    <th className="text-left px-4 py-2 font-medium text-black cursor-pointer select-none" onClick={() => alternarOrdenacao('nome')}>
-                      <span className="inline-flex items-center gap-1">
-                        Nome
-                        {sortKey === 'nome' ? (sortDir === 'asc' ? <ArrowUp className="w-3.5 h-3.5" /> : <ArrowDown className="w-3.5 h-3.5" />) : <ArrowUpDown className="w-3.5 h-3.5 text-gray-400" />}
-                      </span>
-                    </th>
-                    <th className="text-right px-4 py-2 font-medium text-black cursor-pointer select-none" onClick={() => alternarOrdenacao('valor')}>
-                      <span className="inline-flex items-center gap-1">
-                        Valor Atual
-                        {sortKey === 'valor' ? (sortDir === 'asc' ? <ArrowUp className="w-3.5 h-3.5" /> : <ArrowDown className="w-3.5 h-3.5" />) : <ArrowUpDown className="w-3.5 h-3.5 text-gray-400" />}
-                      </span>
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {fornecedoresOrdenados.length === 0 && (
-                    <tr><td colSpan={2} className="text-center text-gray-500 py-8">Sem dados no período selecionado</td></tr>
-                  )}
-                  {fornecedoresOrdenados.map((f, i) => {
-                    const bgHover = `${i % 2 === 0 ? 'bg-white' : 'bg-gray-100'} group-hover:bg-rose-50`;
-                    return (
-                    <tr key={`${f.cdFornecedor}-${i}`} className="group transition-colors">
-                      <td className={`px-4 py-2 text-black border-b border-gray-200 ${bgHover}`}>{f.nome}</td>
-                      <td className={`px-4 py-2 text-right font-semibold text-red-600 tabular-nums border-b border-gray-200 ${bgHover}`}>{fmtBRL(-f.valor)}</td>
+            <div className="bg-white rounded-lg shadow-md overflow-hidden">
+              <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
+                <h2 className="text-sm font-semibold text-black uppercase tracking-wide">Todos os Fornecedores</h2>
+              </div>
+              <div className="overflow-x-auto max-h-[420px] overflow-y-auto [transform:translateZ(0)]">
+                <table className="w-full text-sm">
+                  <thead className="sticky top-0 bg-gray-50 border-b border-gray-200">
+                    <tr>
+                      <th className="text-left px-4 py-2 font-medium text-black cursor-pointer select-none" onClick={() => alternarOrdenacao('nome')}>
+                        <span className="inline-flex items-center gap-1">
+                          Nome
+                          {sortKey === 'nome' ? (sortDir === 'asc' ? <ArrowUp className="w-3.5 h-3.5" /> : <ArrowDown className="w-3.5 h-3.5" />) : <ArrowUpDown className="w-3.5 h-3.5 text-gray-400" />}
+                        </span>
+                      </th>
+                      <th className="text-right px-4 py-2 font-medium text-black cursor-pointer select-none" onClick={() => alternarOrdenacao('valor')}>
+                        <span className="inline-flex items-center gap-1">
+                          Valor Atual
+                          {sortKey === 'valor' ? (sortDir === 'asc' ? <ArrowUp className="w-3.5 h-3.5" /> : <ArrowDown className="w-3.5 h-3.5" />) : <ArrowUpDown className="w-3.5 h-3.5 text-gray-400" />}
+                        </span>
+                      </th>
                     </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {fornecedoresOrdenados.length === 0 && (
+                      <tr><td colSpan={2} className="text-center text-gray-500 py-8">Sem dados no período selecionado</td></tr>
+                    )}
+                    {fornecedoresOrdenados.map((f, i) => {
+                      const bgHover = `${i % 2 === 0 ? 'bg-white' : 'bg-gray-100'} group-hover:bg-rose-50`;
+                      return (
+                      <tr key={`${f.cdFornecedor}-${i}`} className="group transition-colors">
+                        <td className={`px-4 py-2 text-black border-b border-gray-200 ${bgHover}`}>{f.nome}</td>
+                        <td className={`px-4 py-2 text-right font-semibold text-red-600 tabular-nums border-b border-gray-200 ${bgHover}`}>{fmtBRL(-f.valor)}</td>
+                      </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         </>
