@@ -104,6 +104,26 @@ def _criar_tabelas_fluxo_caixa():
         END;
         $$ LANGUAGE plpgsql STABLE
     """, ())
+    # Cartao - recebimento a partir da data da VENDA (dt_emissao), regras
+    # passadas pelo usuario (Rede):
+    #   debito  = venda + 2 dias corridos; caiu em sab/dom/feriado -> proximo dia util
+    #   credito = 2o dia util bancario depois da venda (qui -> seg, sex/sab/dom -> ter)
+    execute_insert("""
+        CREATE OR REPLACE FUNCTION fn_fc_dt_cartao_debito(p_venda DATE)
+        RETURNS DATE AS $$
+        BEGIN
+            RETURN fn_fc_proximo_dia_util_bancario(p_venda + 2);
+        END;
+        $$ LANGUAGE plpgsql STABLE
+    """, ())
+    execute_insert("""
+        CREATE OR REPLACE FUNCTION fn_fc_dt_cartao_credito(p_venda DATE)
+        RETURNS DATE AS $$
+        BEGIN
+            RETURN fn_fc_proximo_dia_util_bancario(fn_fc_proximo_dia_util_bancario(p_venda + 1) + 1);
+        END;
+        $$ LANGUAGE plpgsql STABLE
+    """, ())
     _seed_feriados_bancarios()
 
 
@@ -214,6 +234,18 @@ _EXPR_DT_LOJAS_EFETIVA = _expr_dt_efetiva("dt_dia", 3, 2)
 # feriado em cadeia, igual o Boleto) - pedido explicito do usuario.
 _EXPR_DT_CHEQUE_EFETIVA = "fn_fc_dt_cheque_efetiva(dt_vencimento::date)"
 
+# Pre-filtro na data ORIGINAL (usa o indice de dt_vencimento). As datas
+# efetivas acima nunca sao ANTES do vencimento e no maximo alguns dias
+# depois (fim de semana + feriados em cadeia) - 15 dias de folga cobre com
+# sobra. Sem isso o banco roda a funcao plpgsql linha a linha na tabela de
+# faturas inteira (consulta de cartao foi de ~1s pra 20-97s). Recebe
+# (dt_inicio, dt_fim) e vem ANTES do filtro pela data efetiva, que continua
+# decidindo o dia exato.
+_FOLGA_DIAS_DT_EFETIVA = 15
+_PRE_FILTRO_VENCIMENTO = (
+    f"dt_vencimento >= (%s::date - {_FOLGA_DIAS_DT_EFETIVA}) AND dt_vencimento < (%s::date + 1)"
+)
+
 
 # ── Saldos bancarios (posicao de caixa cadastrada manualmente) ───────────
 # Tabela de saldo por dia (fin_disponibilidade_caixa, pode ter mais de uma
@@ -319,8 +351,9 @@ def _obter_kpis() -> dict:
 # caixa (regra 2) - tanto no filtro de periodo quanto no agrupamento abaixo,
 # via _EXPR_DT_SAIDA_EFETIVA. A data original de vencimento nunca e tocada.
 def _filtros_saidas(dt_inicio: str, dt_fim: str, empresas: list) -> tuple:
-    where = f"WHERE tp_situacao = 'N' AND (vl_duplicata - vl_pago) > 0 AND {_EXPR_DT_SAIDA_EFETIVA} BETWEEN %s AND %s"
-    params: list = [dt_inicio, dt_fim]
+    where = (f"WHERE tp_situacao = 'N' AND (vl_duplicata - vl_pago) > 0 AND {_PRE_FILTRO_VENCIMENTO} "
+             f"AND {_EXPR_DT_SAIDA_EFETIVA} BETWEEN %s AND %s")
+    params: list = [dt_inicio, dt_fim, dt_inicio, dt_fim]
     if empresas:
         where += " AND cd_empresa = ANY(%s)"
         params.append(empresas)
@@ -465,19 +498,31 @@ def _sql_pedidos_diario(where: str) -> str:
 
 
 # ── Entradas - cartao (vr_fcr_faturai) ────────────────────────────────────
+# tp_documento 4 = cartao de credito, 5 = cartao de debito (confirmado pelo
+# usuario - o banco nao tem tabela de descricao dos tipos).
 # Entrada so conta se for data FUTURA (regra 1) - tudo ate hoje ja esta no
 # saldo bancario inicial, contar de novo aqui duplicaria o valor.
-# Vencimento em sabado/domingo/feriado -> proximo dia util bancario (mesma
-# regra do Cheque): a tela esconde fim de semana, e sem isso o valor entrava
-# no saldo sem aparecer em linha nenhuma (achado da auditoria da Visao Diaria).
-_EXPR_DT_CARTAO_EFETIVA = "fn_fc_dt_cheque_efetiva(dt_vencimento::date)"
+# Data de recebimento calculada pela data da VENDA (dt_emissao), nao pelo
+# vencimento do ERP - regra pedida pelo usuario, diferente pra credito e
+# debito (ver fn_fc_dt_cartao_credito/debito). Todas as parcelas de uma
+# venda a credito caem no mesmo dia (a Rede antecipa).
+_EXPR_DT_CARTAO_EFETIVA = (
+    "(CASE WHEN tp_documento = 5 THEN fn_fc_dt_cartao_debito(dt_emissao::date) "
+    "ELSE fn_fc_dt_cartao_credito(dt_emissao::date) END)"
+)
+# Mesmo pre-filtro por indice do _PRE_FILTRO_VENCIMENTO, so que na data da
+# venda: o recebimento e sempre depois da venda e no maximo alguns dias.
+_PRE_FILTRO_EMISSAO = (
+    f"dt_emissao >= (%s::date - {_FOLGA_DIAS_DT_EFETIVA}) AND dt_emissao < (%s::date + 1)"
+)
 
 
 def _filtros_cartao(dt_inicio: str, dt_fim: str, empresas: list) -> tuple:
     where = f"""WHERE tp_documento IN (4, 5) AND tp_cobranca = '14' AND tp_situacao = '1'
+        AND {_PRE_FILTRO_EMISSAO}
         AND {_EXPR_DT_CARTAO_EFETIVA} BETWEEN %s AND %s
         AND {_EXPR_DT_CARTAO_EFETIVA} > CURRENT_DATE"""
-    params: list = [dt_inicio, dt_fim]
+    params: list = [dt_inicio, dt_fim, dt_inicio, dt_fim]
     if empresas:
         where += " AND cd_empresa = ANY(%s)"
         params.append(empresas)
@@ -511,9 +556,10 @@ def _sql_cartao_diario(where: str) -> str:
 # bancario (_EXPR_DT_CHEQUE_EFETIVA).
 def _filtros_cheque(dt_inicio: str, dt_fim: str, empresas: list) -> tuple:
     where = f"""WHERE tp_documento IN (2) AND tp_situacao = '1' AND (vl_fatura - vl_pago) > 0
+        AND {_PRE_FILTRO_VENCIMENTO}
         AND {_EXPR_DT_CHEQUE_EFETIVA} BETWEEN %s AND %s
         AND {_EXPR_DT_CHEQUE_EFETIVA} > CURRENT_DATE"""
-    params: list = [dt_inicio, dt_fim]
+    params: list = [dt_inicio, dt_fim, dt_inicio, dt_fim]
     if empresas:
         where += " AND cd_empresa = ANY(%s)"
         params.append(empresas)
@@ -550,6 +596,7 @@ def _filtros_boleto(dt_inicio: str, dt_fim: str, empresas: list) -> tuple:
     where = f"""WHERE tp_documento IN (1) AND tp_situacao = '1' AND nr_portador < 999
         AND tp_cobranca <> 2
         AND (vl_fatura - vl_pago) > 0
+        AND {_PRE_FILTRO_VENCIMENTO}
         AND {_EXPR_DT_BOLETO_EFETIVA} BETWEEN %s AND %s
         AND {_EXPR_DT_BOLETO_EFETIVA} > CURRENT_DATE
         AND NOT (
@@ -558,7 +605,7 @@ def _filtros_boleto(dt_inicio: str, dt_fim: str, empresas: list) -> tuple:
                 WHERE fd.nr_fat = vr_fcr_faturai.nr_fat AND fd.nr_parcela = vr_fcr_faturai.nr_parcela
             )
         )"""
-    params: list = [dt_inicio, dt_fim]
+    params: list = [dt_inicio, dt_fim, dt_inicio, dt_fim]
     if empresas:
         where += " AND cd_empresa = ANY(%s)"
         params.append(empresas)
@@ -602,6 +649,7 @@ def obter_boleto_detalhe(
     where = f"""WHERE tp_documento IN (1) AND tp_situacao = '1' AND nr_portador < 999
         AND tp_cobranca <> 2
         AND (vl_fatura - vl_pago) > 0
+        AND {_PRE_FILTRO_VENCIMENTO}
         AND {_EXPR_DT_BOLETO_EFETIVA} = %s
         AND {_EXPR_DT_BOLETO_EFETIVA} > CURRENT_DATE
         AND NOT (
@@ -610,7 +658,7 @@ def obter_boleto_detalhe(
                 WHERE fd.nr_fat = vr_fcr_faturai.nr_fat AND fd.nr_parcela = vr_fcr_faturai.nr_parcela
             )
         )"""
-    params: list = [dia]
+    params: list = [dia, dia, dia]
     if cd_empresas:
         where += " AND cd_empresa = ANY(%s)"
         params.append(cd_empresas)
