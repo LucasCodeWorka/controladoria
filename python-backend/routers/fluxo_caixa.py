@@ -106,13 +106,14 @@ def _criar_tabelas_fluxo_caixa():
     """, ())
     # Cartao - recebimento a partir da data da VENDA (dt_emissao), regras
     # passadas pelo usuario (Rede):
-    #   debito  = venda + 2 dias corridos; caiu em sab/dom/feriado -> proximo dia util
+    #   debito  = venda + 1 dia corrido; caiu em sab/dom/feriado -> proximo dia util
+    #             (sex/sab -> seg, dom -> seg)
     #   credito = 2o dia util bancario depois da venda (qui -> seg, sex/sab/dom -> ter)
     execute_insert("""
         CREATE OR REPLACE FUNCTION fn_fc_dt_cartao_debito(p_venda DATE)
         RETURNS DATE AS $$
         BEGIN
-            RETURN fn_fc_proximo_dia_util_bancario(p_venda + 2);
+            RETURN fn_fc_proximo_dia_util_bancario(p_venda + 1);
         END;
         $$ LANGUAGE plpgsql STABLE
     """, ())
