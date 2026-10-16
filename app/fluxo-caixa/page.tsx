@@ -210,7 +210,7 @@ const COR_SALDO = '#2563eb';
 
 function LinhaTooltip({ cor, rotulo, valor, detalhe, forte }: { cor?: string; rotulo: string; valor: number; detalhe?: boolean; forte?: boolean }) {
   return (
-    <div className={`flex items-center justify-between gap-6 ${detalhe ? 'pl-4 text-gray-500' : 'text-gray-900'}`}>
+    <div className={`flex items-center justify-between gap-6 ${detalhe ? 'pl-4 text-black' : 'text-black'}`}>
       <span className="flex items-center gap-1.5">
         {cor && <span className="w-2 h-2 rounded-full inline-block" style={{ backgroundColor: cor }} />}
         {rotulo}
@@ -225,7 +225,7 @@ function TooltipMes({ active, payload }: { active?: boolean; payload?: TooltipMe
   const m = payload[0].payload;
   return (
     <div className="bg-white border border-gray-200 rounded-lg shadow-lg px-3 py-2.5 text-xs space-y-1 min-w-[260px]">
-      <p className="font-semibold text-gray-900 mb-1.5">{fmtMes(m.mes)}</p>
+      <p className="font-semibold text-black mb-1.5">{fmtMes(m.mes)}</p>
       <LinhaTooltip cor={COR_ENTRADAS} rotulo="Entradas" valor={m.totalEntradas} forte />
       <LinhaTooltip rotulo="Outras entradas" valor={m.outrasEntradas} detalhe />
       <LinhaTooltip rotulo="Boleto" valor={m.boleto} detalhe />
@@ -274,7 +274,7 @@ function SeloBanco({ nome }: { nome: string }) {
   return (
     <span
       className="inline-flex items-center justify-center w-6 h-6 rounded-full font-bold flex-shrink-0 ring-1 ring-black/5"
-      style={{ backgroundColor: selo?.fundo ?? '#e5e7eb', color: selo?.texto ?? '#374151', fontSize: sigla.length >= 3 ? 8 : 10, letterSpacing: sigla.length >= 3 ? '-0.02em' : undefined }}
+      style={{ backgroundColor: selo?.fundo ?? '#e5e7eb', color: selo?.texto ?? '#000000', fontSize: sigla.length >= 3 ? 8 : 10, letterSpacing: sigla.length >= 3 ? '-0.02em' : undefined }}
       aria-hidden="true"
     >
       {sigla}
@@ -342,7 +342,7 @@ const RotuloSaldoCompacto = (props: LabelProps) => desenharPilulaSaldo(props, tr
 
 function GraficoMensalFC({ meses, saldoBancario }: { meses: MesFC[]; saldoBancario: number }) {
   if (!meses.length) {
-    return <p className="text-sm text-gray-400 py-8 text-center">Sem dados no período.</p>;
+    return <p className="text-sm text-black py-8 text-center">Sem dados no período.</p>;
   }
   // Saldo acumulado parte do saldo bancario real (mesma base da coluna
   // "Saldo Acum." da tabela diaria) e vai somando o resultado (entradas -
@@ -358,7 +358,7 @@ function GraficoMensalFC({ meses, saldoBancario }: { meses: MesFC[]; saldoBancar
   });
   return (
     <div role="img" aria-label="Saídas, entradas e saldo acumulado projetados por mês">
-      <div className="flex items-center gap-5 mb-3 text-xs text-gray-600">
+      <div className="flex items-center gap-5 mb-3 text-xs text-black">
         <span className="flex items-center gap-1.5">
           <span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ backgroundColor: COR_ENTRADAS }} /> Entradas (acima do zero)
         </span>
@@ -375,9 +375,9 @@ function GraficoMensalFC({ meses, saldoBancario }: { meses: MesFC[]; saldoBancar
       <ResponsiveContainer width="100%" height={340}>
         <ComposedChart data={dados} margin={{ top: 28, right: 24, left: 4, bottom: 4 }} barCategoryGap="35%" stackOffset="sign">
           <CartesianGrid stroke="#f1f2f4" vertical={false} />
-          <XAxis dataKey="mes" tickFormatter={fmtMes} axisLine={false} tickLine={false} interval={0} tick={{ fontSize: 13, fill: '#374151', fontWeight: 600 }} dy={6} />
+          <XAxis dataKey="mes" tickFormatter={fmtMes} axisLine={false} tickLine={false} interval={0} tick={{ fontSize: 13, fill: '#000000', fontWeight: 600 }} dy={6} />
           <YAxis
-            tickFormatter={(v: number) => fmtBRLCompacto(v)} tick={{ fontSize: 12, fill: '#9ca3af' }} axisLine={false} tickLine={false} width={88}
+            tickFormatter={(v: number) => fmtBRLCompacto(v)} tick={{ fontSize: 12, fill: '#000000' }} axisLine={false} tickLine={false} width={88}
             padding={{ top: 28, bottom: 32 }}
           />
           <ReferenceLine y={0} stroke="#9ca3af" />
@@ -431,7 +431,7 @@ function Comparativo({ atual, anterior, ano, sufixo }: { atual: number; anterior
   const variacao = anterior ? (atual / anterior - 1) * 100 : null;
   const subiu = (variacao ?? 0) >= 0;
   return (
-    <p className="text-xs text-gray-500 mt-0.5 whitespace-nowrap">
+    <p className="text-xs text-black mt-0.5 whitespace-nowrap">
       {ano}: <span className="tabular-nums">{fmtBRL(anterior)}</span>{sufixo ? <span> {sufixo}</span> : null}
       {variacao !== null && (
         <span className={`ml-1.5 inline-flex items-center rounded px-1.5 py-0.5 font-semibold tabular-nums ${subiu ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
@@ -452,10 +452,10 @@ function TooltipFaturamento({ active, payload, hoje }: { active?: boolean; paylo
   const dt = new Date(`${dia}T12:00:00`);
   return (
     <div className="bg-white border border-gray-200 rounded-lg shadow-lg px-3 py-2 text-xs">
-      <p className="font-semibold text-gray-900">
+      <p className="font-semibold text-black">
         {dia.split('-').reverse().join('/')} ({DIAS_SEMANA_CURTO[dt.getDay()]}){dia === hoje ? ' · parcial' : ''}
       </p>
-      <p className="tabular-nums text-gray-700 mt-0.5">{fmtBRL(valor)}</p>
+      <p className="tabular-nums text-black mt-0.5">{fmtBRL(valor)}</p>
     </div>
   );
 }
@@ -564,27 +564,27 @@ function GraficoFaturamentoDiario({ config }: { config: ConfigFaturamento }) {
       <div className="flex items-start justify-between flex-wrap gap-4 mb-3">
         <div>
           <h2 className="text-sm font-semibold text-black uppercase tracking-wide">{config.titulo}</h2>
-          <p className="text-xs text-gray-500 mt-0.5">
+          <p className="text-xs text-black mt-0.5">
             {dados ? `${MESES_EXTENSO[Number(mes) - 1]}/${ano} · ${config.empresas} · não depende do filtro acima${dados.anoAnterior ? ` · comparação com ${dados.anoAnterior.inicio.split('-').reverse().join('/')} a ${dados.anoAnterior.fim.split('-').reverse().join('/')}` : ''}` : `Mês atual · ${config.empresas}`}
           </p>
         </div>
         {dados && (
           <div className="flex gap-6 text-right">
             <div>
-              <p className="text-xs text-gray-500">Total no mês</p>
-              <p className="text-lg font-bold text-gray-900 whitespace-nowrap">{fmtBRL(dados.total)}</p>
+              <p className="text-xs text-black">Total no mês</p>
+              <p className="text-lg font-bold text-black whitespace-nowrap">{fmtBRL(dados.total)}</p>
               {anterior && <Comparativo atual={dados.total} anterior={anterior.total} ano={anoAnt} />}
             </div>
             <div>
-              <p className="text-xs text-gray-500">Média por dia com venda</p>
-              <p className="text-lg font-semibold text-gray-900 whitespace-nowrap">{fmtBRL(media)}</p>
+              <p className="text-xs text-black">Média por dia com venda</p>
+              <p className="text-lg font-semibold text-black whitespace-nowrap">{fmtBRL(media)}</p>
               {anterior && <Comparativo atual={media} anterior={anterior.media} ano={anoAnt} />}
             </div>
             {melhor && (
               <div>
-                <p className="text-xs text-gray-500">Melhor dia</p>
-                <p className="text-lg font-semibold text-gray-900 whitespace-nowrap">
-                  {fmtBRL(melhor.valor)} <span className="text-xs font-normal text-gray-500">em {melhor.dia.slice(8, 10)}/{mes}</span>
+                <p className="text-xs text-black">Melhor dia</p>
+                <p className="text-lg font-semibold text-black whitespace-nowrap">
+                  {fmtBRL(melhor.valor)} <span className="text-xs font-normal text-black">em {melhor.dia.slice(8, 10)}/{mes}</span>
                 </p>
                 {anterior?.melhor && (
                   <Comparativo atual={melhor.valor} anterior={anterior.melhor.valor} ano={anoAnt}
@@ -602,7 +602,7 @@ function GraficoFaturamentoDiario({ config }: { config: ConfigFaturamento }) {
         </div>
       )}
       {!dados && !erro && (
-        <div className="flex items-center justify-center py-16 text-gray-500 text-sm">
+        <div className="flex items-center justify-center py-16 text-black text-sm">
           <Loader2 className="w-5 h-5 animate-spin mr-2 text-rose-600" /> Carregando faturamento…
         </div>
       )}
@@ -612,24 +612,29 @@ function GraficoFaturamentoDiario({ config }: { config: ConfigFaturamento }) {
             <BarChart data={dados.dias} margin={{ top: 22, right: 16, left: 4, bottom: 0 }} barCategoryGap="20%">
               <CartesianGrid stroke="#f1f2f4" vertical={false} />
               <XAxis
-                dataKey="dia" axisLine={{ stroke: '#d1d5db' }} tickLine={false} interval={0}
+                dataKey="dia" axisLine={{ stroke: '#d1d5db' }} tickLine={false} interval={0} height={44}
                 tick={(p: unknown) => {
                   const { x, y, payload } = p as { x: number; y: number; payload: { value: string } };
                   const dt = new Date(`${payload.value}T12:00:00`);
                   const fds = dt.getDay() === 0 || dt.getDay() === 6;
                   return (
-                    <text x={x} y={Number(y) + 14} textAnchor="middle" fontSize={11} fontWeight={payload.value === dados.hoje ? 700 : 500} fill={fds ? '#c0c4cc' : '#4b5563'}>
-                      {payload.value.slice(8, 10)}
-                    </text>
+                    <g>
+                      <text x={x} y={Number(y) + 14} textAnchor="middle" fontSize={11} fontWeight={payload.value === dados.hoje || fds ? 700 : 500} fill="#000000">
+                        {payload.value.slice(8, 10)}
+                      </text>
+                      <text x={x} y={Number(y) + 27} textAnchor="middle" fontSize={10} fontWeight={fds ? 700 : 400} fill="#000000">
+                        {DIAS_SEMANA_CURTO[dt.getDay()]}
+                      </text>
+                    </g>
                   );
                 }}
               />
               <YAxis
-                tickFormatter={(v: number) => fmtBRLCompacto(v)} tick={{ fontSize: 12, fill: '#9ca3af' }} axisLine={false} tickLine={false} width={88}
+                tickFormatter={(v: number) => fmtBRLCompacto(v)} tick={{ fontSize: 12, fill: '#000000' }} axisLine={false} tickLine={false} width={88}
                 ticks={ticksEixo} domain={[0, ticksEixo[ticksEixo.length - 1] || 1]}
               />
               {media > 0 && (
-                <ReferenceLine y={media} stroke="#9ca3af" label={{ value: `média ${fmtBRLCompacto(media)}`, position: 'insideTopRight', fontSize: 11, fill: '#6b7280' }} />
+                <ReferenceLine y={media} stroke="#9ca3af" label={{ value: `média ${fmtBRLCompacto(media)}`, position: 'insideTopRight', fontSize: 11, fill: '#000000' }} />
               )}
               <Tooltip content={<TooltipFaturamento hoje={dados.hoje} />} cursor={{ fill: '#f3f4f6', radius: 4 }} />
               <Bar dataKey="valor" radius={[4, 4, 0, 0]} maxBarSize={36}>
@@ -640,9 +645,9 @@ function GraficoFaturamentoDiario({ config }: { config: ConfigFaturamento }) {
               </Bar>
             </BarChart>
           </ResponsiveContainer>
-          <p className="text-xs text-gray-500 mt-1 flex items-center gap-1.5">
+          <p className="text-xs text-black mt-1 flex items-center gap-1.5">
             <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: config.corHoje }} />
-            Hoje (dia ainda em andamento) · fins de semana em cinza no eixo
+            Hoje (dia ainda em andamento) · sábado e domingo em negrito no eixo
           </p>
         </div>
       )}
@@ -663,7 +668,7 @@ interface ParcelaResumo {
 
 function Operador({ simbolo }: { simbolo: string }) {
   return (
-    <span className="flex-shrink-0 w-8 h-8 rounded-full bg-gray-100 text-gray-500 text-lg font-semibold flex items-center justify-center" aria-hidden="true">
+    <span className="flex-shrink-0 w-8 h-8 rounded-full bg-gray-100 text-black text-lg font-semibold flex items-center justify-center" aria-hidden="true">
       {simbolo}
     </span>
   );
@@ -682,8 +687,8 @@ function LinhaEquacao({ parcelas, rotuloTotal, total, tom }: { parcelas: Parcela
           <div className={`relative min-w-[175px] flex-1 rounded-lg border border-gray-200 bg-white px-4 py-3 overflow-hidden ${p.ativa ? '' : 'opacity-60'}`}
             title={p.ativa ? undefined : 'Coluna desligada nos filtros - não entra no cálculo'}>
             <span className={`absolute left-0 top-0 bottom-0 w-1 ${corBarra}`} />
-            <p className="text-base text-gray-500">{p.rotulo}</p>
-            <p className={`text-xl font-semibold text-gray-900 tabular-nums whitespace-nowrap ${p.ativa ? '' : 'line-through'}`}>{fmtBRL(p.valor)}</p>
+            <p className="text-base text-black">{p.rotulo}</p>
+            <p className={`text-xl font-semibold text-black tabular-nums whitespace-nowrap ${p.ativa ? '' : 'line-through'}`}>{fmtBRL(p.valor)}</p>
           </div>
         </React.Fragment>
       ))}
@@ -707,7 +712,7 @@ function ResumoPeriodoFC({ entradas, saidas, totalEntradas, totalSaidas, saldoIn
     <div className="bg-white rounded-lg shadow-md overflow-hidden">
       <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-gray-50">
         <h2 className="text-sm font-semibold text-black uppercase tracking-wide">Resumo do Período</h2>
-        {dtIni && <span className="text-sm text-gray-500 tabular-nums">{fmtDia(dtIni)} a {fmtDia(dtFim)}</span>}
+        {dtIni && <span className="text-sm text-black tabular-nums">{fmtDia(dtIni)} a {fmtDia(dtFim)}</span>}
       </div>
       <div className="p-4 grid grid-cols-1 xl:grid-cols-[1fr_340px] gap-4">
         <div className="space-y-3 min-w-0">
@@ -716,11 +721,11 @@ function ResumoPeriodoFC({ entradas, saidas, totalEntradas, totalSaidas, saldoIn
         </div>
         <div className={`rounded-xl border-2 p-4 flex flex-col md:flex-row md:items-center md:justify-between xl:flex-col xl:items-stretch xl:justify-center gap-3 ${positivo ? 'border-green-200 bg-green-50/50' : 'border-red-200 bg-red-50/50'}`}>
           <div>
-            <p className="text-sm font-medium text-gray-600">Saldo final do período</p>
+            <p className="text-sm font-medium text-black">Saldo final do período</p>
             <p className={`text-4xl font-bold whitespace-nowrap mt-0.5 ${positivo ? 'text-green-700' : 'text-red-700'}`}>{fmtBRL(saldoFinal)}</p>
           </div>
           <div className="pt-3 border-t md:pt-0 md:border-t-0 md:pl-4 md:border-l xl:pl-0 xl:border-l-0 xl:pt-3 xl:border-t border-gray-200 space-y-1 text-sm tabular-nums md:min-w-[300px] xl:min-w-0">
-            <div className="flex justify-between gap-3 text-gray-600"><span>Saldo inicial</span><span>{fmtBRL(saldoInicial)}</span></div>
+            <div className="flex justify-between gap-3 text-black"><span>Saldo inicial</span><span>{fmtBRL(saldoInicial)}</span></div>
             <div className="flex justify-between gap-3 text-green-700"><span>+ Recebimentos</span><span>{fmtBRL(totalEntradas)}</span></div>
             <div className="flex justify-between gap-3 text-red-700"><span>− Pagamentos</span><span>{fmtBRL(totalSaidas)}</span></div>
           </div>
@@ -738,14 +743,14 @@ function ResumoPeriodoFC({ entradas, saidas, totalEntradas, totalSaidas, saldoIn
 // so competem entre si - a barra nunca rouba espaco do texto.
 function ListaBarrasRanking({ itens, cor }: { itens: { nome: string; valor: number }[]; cor: string }) {
   if (!itens.length) {
-    return <p className="text-sm text-gray-400 py-8 text-center">Sem dados no período.</p>;
+    return <p className="text-sm text-black py-8 text-center">Sem dados no período.</p>;
   }
   const maxValor = Math.max(...itens.map((i) => i.valor), 1);
   return (
     <div className="max-h-[700px] overflow-y-auto pr-1 -mx-2 space-y-0.5">
       {itens.map((item, i) => (
         <div key={`${item.nome}-${i}`} className="flex items-start gap-2.5 px-2 py-1.5 rounded-md hover:bg-gray-50 transition-colors">
-          <span className="w-5 flex-shrink-0 text-right text-xs text-gray-400 tabular-nums pt-0.5">{i + 1}</span>
+          <span className="w-5 flex-shrink-0 text-right text-xs text-black tabular-nums pt-0.5">{i + 1}</span>
           <div className="flex-1 min-w-0">
             <div className="flex items-baseline justify-between gap-3">
               <span className="text-sm text-black truncate" title={item.nome}>{item.nome}</span>
@@ -1217,11 +1222,11 @@ export default function FluxoCaixaPage() {
     return (
       <td
         className={`text-right px-3 py-2 tabular-nums border-r border-b border-gray-300 ${bgLinha} ${extraClasse} ${clicavel ? 'cursor-pointer hover:underline' : ''}`}
-        style={{ color: ativa ? cor : '#94a3b8', fontWeight: ativa && v > 0 ? 600 : 400 }}
+        style={{ color: ativa ? cor : '#000000', fontWeight: ativa && v > 0 ? 600 : 400 }}
         onClick={clicavel ? onClick : undefined}
         title={clicavel ? 'Ver faturas' : undefined}
       >
-        {v > 0 ? <span style={!ativa ? { textDecoration: 'line-through' } : undefined}>{fmtBRL(v)}</span> : <span className="text-gray-300">—</span>}
+        {v > 0 ? <span style={!ativa ? { textDecoration: 'line-through' } : undefined}>{fmtBRL(v)}</span> : <span className="text-black">—</span>}
       </td>
     );
   }
@@ -1235,10 +1240,10 @@ export default function FluxoCaixaPage() {
           </div>
           <div>
             <h1 className="text-2xl font-bold text-brand-dark">Fluxo de Caixa</h1>
-            <p className="text-sm text-gray-500">Saídas (duplicatas a pagar) e entradas projetadas/realizadas, com saldo diário acumulado.</p>
+            <p className="text-sm text-black">Saídas (duplicatas a pagar) e entradas projetadas/realizadas, com saldo diário acumulado.</p>
           </div>
         </div>
-        {dados?.geradoEm && <span className="text-sm text-gray-500">Atualizado em {dados.geradoEm}</span>}
+        {dados?.geradoEm && <span className="text-sm text-black">Atualizado em {dados.geradoEm}</span>}
       </div>
 
       {/* Filtros */}
@@ -1246,7 +1251,7 @@ export default function FluxoCaixaPage() {
         <div className="flex items-end gap-4 flex-wrap">
           <div className="flex items-end gap-3">
             <div className="flex flex-col gap-1">
-              <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">De</label>
+              <label className="text-xs font-semibold text-black uppercase tracking-wide">De</label>
               <input
                 type="date" value={dtInicio}
                 onChange={(e) => { setDtInicio(e.target.value); setUltimoAtalho(null); }}
@@ -1254,7 +1259,7 @@ export default function FluxoCaixaPage() {
               />
             </div>
             <div className="flex flex-col gap-1">
-              <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Até</label>
+              <label className="text-xs font-semibold text-black uppercase tracking-wide">Até</label>
               <input
                 type="date" value={dtFim}
                 onChange={(e) => { setDtFim(e.target.value); setUltimoAtalho(null); }}
@@ -1266,13 +1271,13 @@ export default function FluxoCaixaPage() {
           <div className="hidden sm:block self-stretch w-px bg-gray-200" />
 
           <div className="relative">
-            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide block mb-1">Empresa</label>
+            <label className="text-xs font-semibold text-black uppercase tracking-wide block mb-1">Empresa</label>
             <button
               onClick={() => setFiltroEmpresasAberto((v) => !v)}
               className="min-w-[160px] h-9 flex items-center justify-between gap-2 px-3 border border-gray-300 rounded-md text-sm text-black bg-white hover:bg-gray-50"
             >
               Empresas ({empresasSelecionadas.size}/{empresasDisponiveis.length})
-              <ChevronDown className="w-4 h-4 text-gray-500" />
+              <ChevronDown className="w-4 h-4 text-black" />
             </button>
             {filtroEmpresasAberto && (
               <div className="absolute z-30 mt-1 w-64 max-h-80 overflow-auto bg-white border border-gray-200 rounded-lg shadow-xl p-2">
@@ -1308,13 +1313,13 @@ export default function FluxoCaixaPage() {
         </div>
 
         <div className="flex items-center gap-1.5 flex-wrap mt-3 pt-3 border-t border-gray-100">
-          <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide mr-1">Período rápido</span>
+          <span className="text-xs font-semibold text-black uppercase tracking-wide mr-1">Período rápido</span>
           {ATALHOS_PERIODO_FC.map((atalho) => (
             <button
               key={atalho.id}
               onClick={() => aplicarAtalhoPeriodo(atalho)}
               className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
-                ultimoAtalho === atalho.id ? 'bg-rose-100 text-rose-700 font-medium' : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
+                ultimoAtalho === atalho.id ? 'bg-rose-100 text-rose-700 font-medium' : 'bg-gray-100 hover:bg-gray-200 text-black'
               }`}
             >
               {atalho.label}
@@ -1333,14 +1338,14 @@ export default function FluxoCaixaPage() {
       {loading && !dados && (
         <div className="flex items-center justify-center py-16">
           <Loader2 className="w-6 h-6 animate-spin text-rose-600" />
-          <span className="ml-3 text-gray-600">Carregando...</span>
+          <span className="ml-3 text-black">Carregando...</span>
         </div>
       )}
 
       {!loading && !dados && (
         <div className="bg-white rounded-lg shadow border border-gray-200 p-12 text-center">
-          <CalendarRange className="w-8 h-8 text-gray-300 mx-auto mb-2" />
-          <p className="text-gray-500">Escolha o período e clique em Aplicar.</p>
+          <CalendarRange className="w-8 h-8 text-black mx-auto mb-2" />
+          <p className="text-black">Escolha o período e clique em Aplicar.</p>
         </div>
       )}
 
@@ -1357,19 +1362,19 @@ export default function FluxoCaixaPage() {
               no DFC, pra manter consistencia visual entre as telas. */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             <div className="bg-white rounded-lg shadow-md p-4 border-l-4 border-gray-400">
-              <div className="flex items-center gap-2 text-gray-500 text-xs font-medium">
+              <div className="flex items-center gap-2 text-black text-xs font-medium">
                 <Wallet className="w-4 h-4" /> Saldo inicial
               </div>
               <p className="text-2xl font-bold tabular-nums mt-1.5 text-black">{fmtBRL(dados.saldoBancario)}</p>
             </div>
             <div className="bg-white rounded-lg shadow-md p-4 border-l-4 border-green-500">
-              <div className="flex items-center gap-2 text-gray-500 text-xs font-medium">
+              <div className="flex items-center gap-2 text-black text-xs font-medium">
                 <TrendingUp className="w-4 h-4 text-green-600" /> Entradas no período
               </div>
               <p className="text-2xl font-bold tabular-nums mt-1.5 text-green-700">{fmtBRL(totais.entradas)}</p>
             </div>
             <div className="bg-white rounded-lg shadow-md p-4 border-l-4 border-red-500">
-              <div className="flex items-center gap-2 text-gray-500 text-xs font-medium">
+              <div className="flex items-center gap-2 text-black text-xs font-medium">
                 <TrendingDown className="w-4 h-4 text-red-600" /> Saídas no período
               </div>
               <p className="text-2xl font-bold tabular-nums mt-1.5 text-red-700">{fmtBRL(totais.saidas)}</p>
@@ -1379,7 +1384,7 @@ export default function FluxoCaixaPage() {
               const positivo = saldoFinalProjetado >= 0;
               return (
                 <div className={`bg-white rounded-lg shadow-md p-4 border-l-4 ${positivo ? 'border-green-500' : 'border-red-500'}`}>
-                  <div className="flex items-center gap-2 text-gray-500 text-xs font-medium">
+                  <div className="flex items-center gap-2 text-black text-xs font-medium">
                     <Banknote className={`w-4 h-4 ${positivo ? 'text-green-600' : 'text-red-600'}`} /> Saldo final projetado
                   </div>
                   <p className={`text-2xl font-bold tabular-nums mt-1.5 ${positivo ? 'text-green-700' : 'text-red-700'}`}>{fmtBRL(saldoFinalProjetado)}</p>
@@ -1420,8 +1425,8 @@ export default function FluxoCaixaPage() {
                         </td>
                         <td className={`px-4 py-2 text-black tabular-nums border-r border-b border-gray-300 ${bgHover}`}>{c.nrAgencia}</td>
                         <td className={`px-4 py-2 text-black tabular-nums border-r border-b border-gray-300 ${bgHover}`}>{c.nrConta}</td>
-                        <td className={`px-4 py-2 text-right text-gray-600 tabular-nums border-r border-b border-gray-300 ${bgHover}`} title={c.semDados ? `Última posição: ${c.dtPosicao.split('-').reverse().join('/')}` : undefined}>
-                          {c.semDados ? <span className="italic text-gray-400">Sem dados</span> : c.dtPosicao.split('-').reverse().join('/')}
+                        <td className={`px-4 py-2 text-right text-black tabular-nums border-r border-b border-gray-300 ${bgHover}`} title={c.semDados ? `Última posição: ${c.dtPosicao.split('-').reverse().join('/')}` : undefined}>
+                          {c.semDados ? <span className="italic text-black">Sem dados</span> : c.dtPosicao.split('-').reverse().join('/')}
                         </td>
                         <td className={`px-4 py-2 text-right font-semibold tabular-nums border-b border-gray-300 ${bgHover} ${c.vlSaldo >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(c.vlSaldo)}</td>
                       </tr>
@@ -1437,7 +1442,7 @@ export default function FluxoCaixaPage() {
                 </table>
               </div>
             ) : (
-              <p className="text-sm text-gray-500 py-8 text-center">Nenhuma conta bancária cadastrada.</p>
+              <p className="text-sm text-black py-8 text-center">Nenhuma conta bancária cadastrada.</p>
             )}
           </div>
 
@@ -1472,21 +1477,21 @@ export default function FluxoCaixaPage() {
               <span className="text-xs font-bold text-black uppercase tracking-wide">Simulação</span>
               <label className="flex items-center gap-1.5 text-sm">
                 <span className="font-semibold text-purple-700">Multimarcas</span>
-                <span className="text-gray-600">Crescimento</span>
+                <span className="text-black">Crescimento</span>
                 <input type="number" step={0.5} value={crescMulti} onChange={(e) => setCrescMulti(parseFloat(e.target.value) || 0)} className="w-16 px-1.5 py-1 border border-gray-300 rounded text-right text-sm text-black" />
-                <span className="text-gray-600">%</span>
+                <span className="text-black">%</span>
               </label>
               <label className="flex items-center gap-1.5 text-sm">
                 <span className="font-semibold text-purple-700">Multimarcas</span>
-                <span className="text-gray-600">Inflação</span>
+                <span className="text-black">Inflação</span>
                 <input type="number" step={0.5} value={inflacaoMulti} onChange={(e) => setInflacaoMulti(parseFloat(e.target.value) || 0)} className="w-16 px-1.5 py-1 border border-gray-300 rounded text-right text-sm text-black" />
-                <span className="text-gray-600">%</span>
+                <span className="text-black">%</span>
               </label>
               <label className="flex items-center gap-1.5 text-sm">
                 <span className="font-semibold text-cyan-700">Lojas</span>
-                <span className="text-gray-600">Crescimento</span>
+                <span className="text-black">Crescimento</span>
                 <input type="number" step={0.5} value={crescLojas} onChange={(e) => setCrescLojas(parseFloat(e.target.value) || 0)} className="w-16 px-1.5 py-1 border border-gray-300 rounded text-right text-sm text-black" />
-                <span className="text-gray-600">%</span>
+                <span className="text-black">%</span>
               </label>
               <button onClick={resetarAjustes} className="flex items-center gap-1 text-xs font-medium text-black border border-gray-300 rounded px-2 py-1 hover:bg-white transition-colors">
                 <RotateCcw className="w-3.5 h-3.5" /> Resetar
@@ -1506,7 +1511,7 @@ export default function FluxoCaixaPage() {
                         onClick={() => toggleCol(c.key)}
                         title={on ? 'Excluir do cálculo' : 'Incluir no cálculo'}
                         className="text-xs font-semibold rounded-full px-2.5 py-1 mr-1 border transition-colors"
-                        style={{ borderColor: on ? c.color : '#cbd5e1', backgroundColor: on ? `${c.color}18` : '#f1f5f9', color: on ? c.color : '#64748b' }}
+                        style={{ borderColor: on ? c.color : '#cbd5e1', backgroundColor: on ? `${c.color}18` : '#f1f5f9', color: on ? c.color : '#000000' }}
                       >
                         {on ? '✓' : '○'} {c.label}
                       </button>
@@ -1542,7 +1547,7 @@ export default function FluxoCaixaPage() {
                 </thead>
                 <tbody>
                   {linhasDiariasVisiveis.length === 0 && (
-                    <tr><td colSpan={13} className="text-center text-gray-500 py-8">Sem dados no período selecionado</td></tr>
+                    <tr><td colSpan={13} className="text-center text-black py-8">Sem dados no período selecionado</td></tr>
                   )}
                   {linhasDiariasVisiveis.map((l, i) => {
                     const dt = new Date(`${l.dia.dia}T12:00:00`);
@@ -1564,21 +1569,21 @@ export default function FluxoCaixaPage() {
                       <tr key={l.dia.dia} className={`group ${isHoje ? 'font-bold' : ''} transition-colors`}>
                         <td className={`px-3 py-2 whitespace-nowrap text-black border-r-2 border-b border-gray-300 ${bgHover}`}>
                           <span className="tabular-nums font-bold">{dd}/{mm}</span>
-                          <span className="text-xs text-gray-500 ml-1.5">{dow}</span>
+                          <span className="text-xs text-black ml-1.5">{dow}</span>
                           {isHoje && <span className="text-xs font-medium bg-sky-600 text-white rounded px-1.5 py-0.5 ml-1.5 align-middle">hoje</span>}
                         </td>
                         {celula('previsao', l.dia.previsao, '#ef4444', bgHover)}
                         {celula('real', l.dia.real, '#991b1b', bgHover)}
                         {celula('pedidos', l.dia.pedidos, '#dc2626', bgHover)}
                         <td className={`text-right px-3 py-2 tabular-nums font-bold text-red-800 border-r-2 border-b border-gray-300 ${bgHover}`}>
-                          {l.effSaidas > 0 ? fmtBRL(l.effSaidas) : <span className="text-gray-400">—</span>}
+                          {l.effSaidas > 0 ? fmtBRL(l.effSaidas) : <span className="text-black">—</span>}
                         </td>
                         {celula('outrasEntradas', l.dia.outrasEntradas, '#7c3aed', bgHover)}
                         {celula('boleto', l.dia.boleto, '#0284c7', bgHover, '', () => boletoDetalheAbrir(l.dia.dia))}
                         {celula('cheque', l.dia.cheque, '#059669', bgHover)}
                         {celula('lojas', l.adjLojas, '#0891b2', bgHover)}
                         <td className={`text-right px-3 py-2 tabular-nums font-bold text-green-800 border-r-2 border-b border-gray-300 ${bgHover}`}>
-                          {l.effEntradas > 0 ? fmtBRL(l.effEntradas) : <span className="text-gray-400">—</span>}
+                          {l.effEntradas > 0 ? fmtBRL(l.effEntradas) : <span className="text-black">—</span>}
                         </td>
                         <td className={`text-right px-3 py-2 tabular-nums font-bold border-r border-b border-gray-300 ${bgHover} ${l.effSaldoDia >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(l.effSaldoDia)}</td>
                         <td className={`text-right px-3 py-2 tabular-nums font-bold border-r-2 border-b border-gray-300 ${bgHover} ${l.saldoAcum >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(l.saldoAcum)}</td>
@@ -1660,20 +1665,20 @@ export default function FluxoCaixaPage() {
                       <th className="text-left px-4 py-2 font-medium text-black cursor-pointer select-none" onClick={() => alternarOrdenacao('nome')}>
                         <span className="inline-flex items-center gap-1">
                           Nome
-                          {sortKey === 'nome' ? (sortDir === 'asc' ? <ArrowUp className="w-3.5 h-3.5" /> : <ArrowDown className="w-3.5 h-3.5" />) : <ArrowUpDown className="w-3.5 h-3.5 text-gray-400" />}
+                          {sortKey === 'nome' ? (sortDir === 'asc' ? <ArrowUp className="w-3.5 h-3.5" /> : <ArrowDown className="w-3.5 h-3.5" />) : <ArrowUpDown className="w-3.5 h-3.5 text-black" />}
                         </span>
                       </th>
                       <th className="text-right px-4 py-2 font-medium text-black cursor-pointer select-none" onClick={() => alternarOrdenacao('valor')}>
                         <span className="inline-flex items-center gap-1">
                           Valor Atual
-                          {sortKey === 'valor' ? (sortDir === 'asc' ? <ArrowUp className="w-3.5 h-3.5" /> : <ArrowDown className="w-3.5 h-3.5" />) : <ArrowUpDown className="w-3.5 h-3.5 text-gray-400" />}
+                          {sortKey === 'valor' ? (sortDir === 'asc' ? <ArrowUp className="w-3.5 h-3.5" /> : <ArrowDown className="w-3.5 h-3.5" />) : <ArrowUpDown className="w-3.5 h-3.5 text-black" />}
                         </span>
                       </th>
                     </tr>
                   </thead>
                   <tbody>
                     {fornecedoresOrdenados.length === 0 && (
-                      <tr><td colSpan={2} className="text-center text-gray-500 py-8">Sem dados no período selecionado</td></tr>
+                      <tr><td colSpan={2} className="text-center text-black py-8">Sem dados no período selecionado</td></tr>
                     )}
                     {fornecedoresOrdenados.map((f, i) => {
                       const bgHover = `${i % 2 === 0 ? 'bg-white' : 'bg-gray-300'} group-hover:bg-rose-50`;
@@ -1698,10 +1703,10 @@ export default function FluxoCaixaPage() {
           <div className="bg-white rounded-lg shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200 sticky top-0 bg-white">
               <h2 className="text-base font-semibold text-black">Projeção de Lojas</h2>
-              <button onClick={() => setLojasModalAberto(false)} className="text-black/50 hover:text-black"><X className="w-5 h-5" /></button>
+              <button onClick={() => setLojasModalAberto(false)} className="text-black hover:text-black"><X className="w-5 h-5" /></button>
             </div>
             <div className="p-5">
-              <p className="text-sm text-gray-600 mb-3">
+              <p className="text-sm text-black mb-3">
                 Cole os dados da planilha abaixo — uma linha por dia.<br />
                 Formatos aceitos: <code>DD/MM/AAAA;valor</code> ou <code>DD/MM/AAAA[tab]valor</code> (tab do Excel)
               </p>
@@ -1713,7 +1718,7 @@ export default function FluxoCaixaPage() {
                 className="w-full box-border font-mono text-sm text-black p-2.5 border border-gray-300 rounded resize-vertical"
               />
               <div className="flex gap-2 mt-3 justify-end items-center">
-                <span className="flex-1 text-sm text-gray-600">{lojasStatus}</span>
+                <span className="flex-1 text-sm text-black">{lojasStatus}</span>
                 <button onClick={() => setLojasModalAberto(false)} className="px-4 py-2 border border-gray-300 rounded text-sm text-black hover:bg-gray-50">Cancelar</button>
                 <button onClick={lojasGravar} disabled={lojasSalvando} className="px-5 py-2 bg-green-600 hover:bg-green-700 text-white rounded text-sm font-semibold disabled:opacity-50 transition-colors">Salvar</button>
               </div>
@@ -1728,10 +1733,10 @@ export default function FluxoCaixaPage() {
           <div className="bg-white rounded-lg shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200 sticky top-0 bg-white">
               <h2 className="text-base font-semibold text-black">Outras Entradas</h2>
-              <button onClick={() => setOutrasEntradasModalAberto(false)} className="text-black/50 hover:text-black"><X className="w-5 h-5" /></button>
+              <button onClick={() => setOutrasEntradasModalAberto(false)} className="text-black hover:text-black"><X className="w-5 h-5" /></button>
             </div>
             <div className="p-5">
-              <p className="text-sm text-gray-600 mb-3">
+              <p className="text-sm text-black mb-3">
                 Cole os dados da planilha abaixo — uma linha por dia.<br />
                 Formatos aceitos: <code>DD/MM/AAAA;valor</code> ou <code>DD/MM/AAAA[tab]valor</code> (tab do Excel)
               </p>
@@ -1743,7 +1748,7 @@ export default function FluxoCaixaPage() {
                 className="w-full box-border font-mono text-sm text-black p-2.5 border border-gray-300 rounded resize-vertical"
               />
               <div className="flex gap-2 mt-3 justify-end items-center">
-                <span className="flex-1 text-sm text-gray-600">{outrasEntradasStatus}</span>
+                <span className="flex-1 text-sm text-black">{outrasEntradasStatus}</span>
                 <button onClick={() => setOutrasEntradasModalAberto(false)} className="px-4 py-2 border border-gray-300 rounded text-sm text-black hover:bg-gray-50">Cancelar</button>
                 <button onClick={outrasEntradasGravar} disabled={outrasEntradasSalvando} className="px-5 py-2 bg-green-600 hover:bg-green-700 text-white rounded text-sm font-semibold disabled:opacity-50 transition-colors">Salvar</button>
               </div>
@@ -1758,10 +1763,10 @@ export default function FluxoCaixaPage() {
           <div className="bg-white rounded-lg shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200 sticky top-0 bg-white">
               <h2 className="text-base font-semibold text-black">Faturas Descontadas (Empresa 001)</h2>
-              <button onClick={() => setFaturasModalAberto(false)} className="text-black/50 hover:text-black"><X className="w-5 h-5" /></button>
+              <button onClick={() => setFaturasModalAberto(false)} className="text-black hover:text-black"><X className="w-5 h-5" /></button>
             </div>
             <div className="p-5">
-              <p className="text-sm text-gray-600 mb-3">
+              <p className="text-sm text-black mb-3">
                 Faturas já descontadas junto ao banco não entram mais no Boleto futuro. Cole abaixo — uma linha por fatura/parcela.<br />
                 Formato: <code>102045/002</code>
               </p>
@@ -1773,7 +1778,7 @@ export default function FluxoCaixaPage() {
                 className="w-full box-border font-mono text-sm text-black p-2.5 border border-gray-300 rounded resize-vertical"
               />
               <div className="flex gap-2 mt-3 justify-end items-center">
-                <span className="flex-1 text-sm text-gray-600">{faturasStatus}</span>
+                <span className="flex-1 text-sm text-black">{faturasStatus}</span>
                 <button onClick={faturasGravar} disabled={faturasSalvando} className="px-5 py-2 bg-green-600 hover:bg-green-700 text-white rounded text-sm font-semibold disabled:opacity-50 transition-colors">Salvar</button>
               </div>
               <div className="mt-4 border-t border-gray-200 pt-3">
@@ -1782,8 +1787,8 @@ export default function FluxoCaixaPage() {
                   <button onClick={faturasRemoverTudo} className="text-xs font-medium border border-red-600 text-red-600 rounded px-2 py-0.5 hover:bg-red-50">Remover tudo</button>
                 </div>
                 <div className="mt-2 max-h-44 overflow-y-auto text-sm">
-                  {faturasLista === null && <span className="text-gray-500">Carregando…</span>}
-                  {faturasLista !== null && faturasLista.length === 0 && <span className="text-gray-500">Nenhuma fatura cadastrada.</span>}
+                  {faturasLista === null && <span className="text-black">Carregando…</span>}
+                  {faturasLista !== null && faturasLista.length === 0 && <span className="text-black">Nenhuma fatura cadastrada.</span>}
                   {faturasLista?.map((f) => (
                     <div key={`${f.nrFat}-${f.nrParcela}`} className="flex justify-between items-center py-1 border-b border-gray-100 text-black">
                       <span>{String(f.nrFat).padStart(6, '0')}/{String(f.nrParcela).padStart(3, '0')}</span>
@@ -1805,11 +1810,11 @@ export default function FluxoCaixaPage() {
               <h2 className="text-base font-semibold text-black">
                 Boletos — {boletoDetalheDia.split('-').reverse().join('/')}
               </h2>
-              <button onClick={() => setBoletoDetalheDia(null)} className="text-black/50 hover:text-black"><X className="w-5 h-5" /></button>
+              <button onClick={() => setBoletoDetalheDia(null)} className="text-black hover:text-black"><X className="w-5 h-5" /></button>
             </div>
             <div className="overflow-y-auto flex-1">
               {boletoDetalheLista === null && (
-                <div className="flex items-center justify-center py-12 text-gray-500">
+                <div className="flex items-center justify-center py-12 text-black">
                   <Loader2 className="w-5 h-5 animate-spin mr-2" /> Carregando…
                 </div>
               )}
@@ -1819,7 +1824,7 @@ export default function FluxoCaixaPage() {
                 </div>
               )}
               {boletoDetalheLista !== null && !boletoDetalheErro && boletoDetalheLista.length === 0 && (
-                <p className="text-sm text-gray-500 py-12 text-center">Nenhuma fatura encontrada para esse dia.</p>
+                <p className="text-sm text-black py-12 text-center">Nenhuma fatura encontrada para esse dia.</p>
               )}
               {boletoDetalheLista !== null && boletoDetalheLista.length > 0 && (
                 <table className="w-full text-sm">
@@ -1838,7 +1843,7 @@ export default function FluxoCaixaPage() {
                         <td className="px-3 py-1.5 text-black tabular-nums">
                           {String(item.nrFat).padStart(6, '0')}/{String(item.nrParcela).padStart(3, '0')}
                         </td>
-                        <td className="px-3 py-1.5 text-right text-gray-600 tabular-nums">{item.dtVencimentoOriginal.split('-').reverse().join('/')}</td>
+                        <td className="px-3 py-1.5 text-right text-black tabular-nums">{item.dtVencimentoOriginal.split('-').reverse().join('/')}</td>
                         <td className="px-5 py-1.5 text-right font-semibold text-sky-700 tabular-nums">{fmtBRL(item.valor)}</td>
                       </tr>
                     ))}
