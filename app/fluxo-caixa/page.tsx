@@ -8,7 +8,9 @@ import {
 } from 'lucide-react';
 import {
   Bar,
+  BarChart,
   CartesianGrid,
+  Cell,
   ComposedChart,
   LabelList,
   Line,
@@ -241,6 +243,45 @@ function TooltipMes({ active, payload }: { active?: boolean; payload?: TooltipMe
   );
 }
 
+// Selo do banco (sigla nas cores da marca) ao lado do nome em Saldos
+// Bancarios - sem imagem externa. Banco fora da lista ganha selo cinza com
+// as iniciais; pra dar cor a um banco novo, basta incluir aqui.
+const SELOS_BANCO: { chaves: string[]; sigla: string; fundo: string; texto: string }[] = [
+  { chaves: ['itau'], sigla: 'it', fundo: '#EC7000', texto: '#002D72' },
+  { chaves: ['santander'], sigla: 'S', fundo: '#EC0000', texto: '#FFFFFF' },
+  { chaves: ['banco do brasil', 'bb'], sigla: 'BB', fundo: '#FAE128', texto: '#0038A8' },
+  { chaves: ['abc'], sigla: 'ABC', fundo: '#00335E', texto: '#FFFFFF' },
+  { chaves: ['bnb', 'nordeste'], sigla: 'BNB', fundo: '#B5121B', texto: '#FFFFFF' },
+  { chaves: ['safra'], sigla: 'S', fundo: '#0B2240', texto: '#C9A54C' },
+  { chaves: ['bradesco'], sigla: 'B', fundo: '#CC092F', texto: '#FFFFFF' },
+  { chaves: ['caixa', 'cef'], sigla: 'CX', fundo: '#005CA9', texto: '#F39200' },
+  { chaves: ['sicoob'], sigla: 'SC', fundo: '#003641', texto: '#00AE9D' },
+  { chaves: ['sicredi'], sigla: 'SI', fundo: '#3FA110', texto: '#FFFFFF' },
+  { chaves: ['nubank', 'nu pagamentos'], sigla: 'nu', fundo: '#820AD1', texto: '#FFFFFF' },
+  { chaves: ['inter'], sigla: 'in', fundo: '#FF7A00', texto: '#FFFFFF' },
+  { chaves: ['btg'], sigla: 'BTG', fundo: '#0D1F3C', texto: '#FFFFFF' },
+];
+
+function normalizarNome(nome: string): string {
+  return nome.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
+}
+
+function SeloBanco({ nome }: { nome: string }) {
+  const n = normalizarNome(nome);
+  const selo = SELOS_BANCO.find((s) => s.chaves.some((k) => n === k || n.startsWith(`${k} `) || n.includes(k)));
+  const palavras = nome.split(/\s+/).filter((p) => p && !['banco', 'do', 'da', 'de', 's.a.', 'sa'].includes(normalizarNome(p)));
+  const sigla = selo?.sigla ?? (palavras.length ? palavras : [nome]).slice(0, 2).map((p) => p[0]).join('').toUpperCase();
+  return (
+    <span
+      className="inline-flex items-center justify-center w-6 h-6 rounded-full font-bold flex-shrink-0 ring-1 ring-black/5"
+      style={{ backgroundColor: selo?.fundo ?? '#e5e7eb', color: selo?.texto ?? '#374151', fontSize: sigla.length >= 3 ? 8 : 10, letterSpacing: sigla.length >= 3 ? '-0.02em' : undefined }}
+      aria-hidden="true"
+    >
+      {sigla}
+    </span>
+  );
+}
+
 // Rotulos nas pontas da coluna: entrada acima do topo do verde, saida abaixo
 // da base do vermelho, saldo numa pilula sobre o ponto azul. Desenhados a mao
 // (<text> puro) porque o rotulo padrao do recharts quebra o texto na largura
@@ -364,6 +405,150 @@ function GraficoMensalFC({ meses, saldoBancario }: { meses: MesFC[]; saldoBancar
 // Lista ranqueada estilo "barra horizontal com rotulo" (valor a esquerda,
 // barra proporcional ao maior valor da lista, nome a direita) - mesmo
 // layout do relatorio de referencia que o usuario pediu pra replicar aqui.
+// Faturamento diario da fabrica (empresa 1) no mes atual - busca sozinho,
+// sem depender do filtro de periodo/empresas da tela.
+interface FaturamentoFabricaMes {
+  mes: string;
+  hoje: string;
+  dias: { dia: string; valor: number | null }[];
+  total: number;
+}
+
+const COR_FATURAMENTO = '#4f46e5';
+const COR_FATURAMENTO_HOJE = '#a5b4fc';
+const MESES_EXTENSO = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+const DIAS_SEMANA_CURTO = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb'];
+
+function TooltipFaturamento({ active, payload, hoje }: { active?: boolean; payload?: { payload: { dia: string; valor: number | null } }[]; hoje: string }) {
+  if (!active || !payload?.length) return null;
+  const { dia, valor } = payload[0].payload;
+  if (valor === null) return null;
+  const dt = new Date(`${dia}T12:00:00`);
+  return (
+    <div className="bg-white border border-gray-200 rounded-lg shadow-lg px-3 py-2 text-xs">
+      <p className="font-semibold text-gray-900">
+        {dia.split('-').reverse().join('/')} ({DIAS_SEMANA_CURTO[dt.getDay()]}){dia === hoje ? ' · parcial' : ''}
+      </p>
+      <p className="tabular-nums text-gray-700 mt-0.5">{fmtBRL(valor)}</p>
+    </div>
+  );
+}
+
+function GraficoFaturamentoFabrica() {
+  const [dados, setDados] = useState<FaturamentoFabricaMes | null>(null);
+  const [erro, setErro] = useState('');
+
+  useEffect(() => {
+    fetch('/api/fluxo-caixa/faturamento-fabrica-mes', { cache: 'no-store' })
+      .then(async (r) => {
+        const json = await r.json();
+        if (!r.ok) throw new Error(json.detail || json.error || 'Erro ao buscar faturamento');
+        setDados(json);
+      })
+      .catch((e) => setErro(e instanceof Error ? e.message : 'Erro ao buscar faturamento'));
+  }, []);
+
+  const [ano, mes] = (dados?.mes ?? '').split('-');
+  const comVenda = (dados?.dias ?? []).filter((d) => (d.valor ?? 0) > 0);
+  const media = comVenda.length ? comVenda.reduce((a, d) => a + (d.valor ?? 0), 0) / comVenda.length : 0;
+  const melhor = comVenda.reduce<{ dia: string; valor: number | null } | null>((m, d) => (!m || (d.valor ?? 0) > (m.valor ?? 0) ? d : m), null);
+
+  // Marcacoes redondas no eixo (0, 100 mil, 200 mil...) - o automatico do
+  // recharts dava 65 mil / 130 mil / 195 mil.
+  const maxValor = Math.max(...(dados?.dias ?? []).map((d) => d.valor ?? 0), 0);
+  const ticksEixo = (() => {
+    if (maxValor <= 0) return [0];
+    const bruto = maxValor / 4;
+    const mag = 10 ** Math.floor(Math.log10(bruto));
+    const passo = [1, 2, 2.5, 5, 10].map((f) => f * mag).find((p) => p >= bruto) ?? 10 * mag;
+    const n = Math.ceil(maxValor / passo);
+    return Array.from({ length: n + 1 }, (_, i) => i * passo);
+  })();
+
+  return (
+    <div className="bg-white rounded-lg shadow-md p-4">
+      <div className="flex items-start justify-between flex-wrap gap-4 mb-3">
+        <div>
+          <h2 className="text-sm font-semibold text-black uppercase tracking-wide">Faturamento Diário — Fábrica</h2>
+          <p className="text-xs text-gray-500 mt-0.5">
+            {dados ? `${MESES_EXTENSO[Number(mes) - 1]}/${ano} · empresa 001 · não depende do filtro acima` : 'Mês atual · empresa 001'}
+          </p>
+        </div>
+        {dados && (
+          <div className="flex gap-6 text-right">
+            <div>
+              <p className="text-xs text-gray-500">Total no mês</p>
+              <p className="text-lg font-bold text-gray-900 whitespace-nowrap">{fmtBRL(dados.total)}</p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-500">Média por dia com venda</p>
+              <p className="text-lg font-semibold text-gray-900 whitespace-nowrap">{fmtBRL(media)}</p>
+            </div>
+            {melhor && (
+              <div>
+                <p className="text-xs text-gray-500">Melhor dia</p>
+                <p className="text-lg font-semibold text-gray-900 whitespace-nowrap">
+                  {fmtBRL(melhor.valor)} <span className="text-xs font-normal text-gray-500">em {melhor.dia.slice(8, 10)}/{mes}</span>
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {erro && (
+        <div className="flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-md px-3 py-2">
+          <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" /> <span>{erro}</span>
+        </div>
+      )}
+      {!dados && !erro && (
+        <div className="flex items-center justify-center py-16 text-gray-500 text-sm">
+          <Loader2 className="w-5 h-5 animate-spin mr-2 text-rose-600" /> Carregando faturamento…
+        </div>
+      )}
+      {dados && (
+        <div role="img" aria-label={`Faturamento diário da fábrica em ${MESES_EXTENSO[Number(mes) - 1]} de ${ano}`}>
+          <ResponsiveContainer width="100%" height={260}>
+            <BarChart data={dados.dias} margin={{ top: 8, right: 16, left: 4, bottom: 0 }} barCategoryGap="20%">
+              <CartesianGrid stroke="#f1f2f4" vertical={false} />
+              <XAxis
+                dataKey="dia" axisLine={{ stroke: '#d1d5db' }} tickLine={false} interval={0}
+                tick={(p: unknown) => {
+                  const { x, y, payload } = p as { x: number; y: number; payload: { value: string } };
+                  const dt = new Date(`${payload.value}T12:00:00`);
+                  const fds = dt.getDay() === 0 || dt.getDay() === 6;
+                  return (
+                    <text x={x} y={Number(y) + 14} textAnchor="middle" fontSize={11} fontWeight={payload.value === dados.hoje ? 700 : 500} fill={fds ? '#c0c4cc' : '#4b5563'}>
+                      {payload.value.slice(8, 10)}
+                    </text>
+                  );
+                }}
+              />
+              <YAxis
+                tickFormatter={(v: number) => fmtBRLCompacto(v)} tick={{ fontSize: 12, fill: '#9ca3af' }} axisLine={false} tickLine={false} width={88}
+                ticks={ticksEixo} domain={[0, ticksEixo[ticksEixo.length - 1] || 1]}
+              />
+              {media > 0 && (
+                <ReferenceLine y={media} stroke="#9ca3af" label={{ value: `média ${fmtBRLCompacto(media)}`, position: 'insideTopRight', fontSize: 11, fill: '#6b7280' }} />
+              )}
+              <Tooltip content={<TooltipFaturamento hoje={dados.hoje} />} cursor={{ fill: '#f3f4f6', radius: 4 }} />
+              <Bar dataKey="valor" radius={[4, 4, 0, 0]} maxBarSize={36}>
+                {dados.dias.map((d) => (
+                  <Cell key={d.dia} fill={d.dia === dados.hoje ? COR_FATURAMENTO_HOJE : COR_FATURAMENTO} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+          <p className="text-xs text-gray-500 mt-1 flex items-center gap-1.5">
+            <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: COR_FATURAMENTO_HOJE }} />
+            Hoje (dia ainda em andamento) · fins de semana em cinza no eixo
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Resumo do periodo em forma de "conta": componentes de entrada somam no
 // total de recebimentos, componentes de saida no total de pagamentos, e os
 // dois fecham no saldo final (saldo inicial + recebimentos - pagamentos).
@@ -1129,7 +1314,9 @@ export default function FluxoCaixaPage() {
                       const bgHover = `${i % 2 === 0 ? 'bg-white' : 'bg-gray-300'} group-hover:bg-rose-50`;
                       return (
                       <tr key={`${c.nmBanco}-${c.nrConta}-${i}`} className="group transition-colors">
-                        <td className={`px-4 py-2 text-black border-r border-b border-gray-300 ${bgHover}`}>{c.nmBanco}</td>
+                        <td className={`px-4 py-2 text-black border-r border-b border-gray-300 ${bgHover}`}>
+                          <span className="flex items-center gap-2"><SeloBanco nome={c.nmBanco} />{c.nmBanco}</span>
+                        </td>
                         <td className={`px-4 py-2 text-black tabular-nums border-r border-b border-gray-300 ${bgHover}`}>{c.nrAgencia}</td>
                         <td className={`px-4 py-2 text-black tabular-nums border-r border-b border-gray-300 ${bgHover}`}>{c.nrConta}</td>
                         <td className={`px-4 py-2 text-right text-gray-600 tabular-nums border-r border-b border-gray-300 ${bgHover}`} title={c.semDados ? `Última posição: ${c.dtPosicao.split('-').reverse().join('/')}` : undefined}>
@@ -1158,6 +1345,8 @@ export default function FluxoCaixaPage() {
             <h2 className="text-sm font-semibold text-black uppercase tracking-wide mb-3">Projeção Mensal</h2>
             <GraficoMensalFC meses={dados.meses} saldoBancario={dados.saldoBancario} />
           </div>
+
+          <GraficoFaturamentoFabrica />
 
           {/* Visao diaria */}
           <div className="bg-white rounded-lg shadow-md overflow-hidden">
@@ -1272,7 +1461,7 @@ export default function FluxoCaixaPage() {
                     return (
                       <tr key={l.dia.dia} className={`group ${isHoje ? 'font-bold' : ''} transition-colors`}>
                         <td className={`px-3 py-2 whitespace-nowrap text-black border-r-2 border-b border-gray-300 ${bgHover}`}>
-                          <span className="tabular-nums">{dd}/{mm}</span>
+                          <span className="tabular-nums font-bold">{dd}/{mm}</span>
                           <span className="text-xs text-gray-500 ml-1.5">{dow}</span>
                           {isHoje && <span className="text-xs font-medium bg-sky-600 text-white rounded px-1.5 py-0.5 ml-1.5 align-middle">hoje</span>}
                         </td>

@@ -16,6 +16,7 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 import time
 from database import execute_query, execute_insert
+from routers.indicadores import OPERACOES_EXCLUIDAS, REPRESENTANTES_EXCLUIDOS
 
 router = APIRouter()
 
@@ -705,6 +706,57 @@ def saldos_bancarios_fluxo_caixa():
     except Exception as e:
         print(f"[ERROR] Erro ao buscar saldos bancarios: {e}")
         raise HTTPException(status_code=500, detail="Erro ao buscar saldos bancários")
+
+
+# Faturamento da fabrica (empresa 1) - mesma regra do indicador
+# "faturamento_fabrica" do painel de Indicadores (_calcular_faturamento_fabrica):
+# venda liquida = saidas (modalidade 4/8) menos devolucoes (modalidade 3, E),
+# excluindo as mesmas operacoes e representantes. Reaproveita as constantes de
+# la pra continuar batendo se a regra mudar.
+SQL_FATURAMENTO_FABRICA_DIARIO = """
+    SELECT t.dt_transacao::date AS dia,
+        COALESCE(SUM(CASE WHEN t.tp_operacao = 'S' THEN i.vl_totalliquido ELSE -i.vl_totalliquido END), 0) AS liquido
+    FROM vr_tra_transacao t
+    LEFT JOIN vr_tra_transitem i
+        ON i.cd_empresa = t.cd_empresa AND i.dt_transacao = t.dt_transacao AND i.nr_transacao = t.nr_transacao
+    WHERE t.cd_empresa = 1
+      AND t.tp_situacao = 4
+      AND t.cd_representant IS NOT NULL
+      AND t.cd_representant <> ALL (%s)
+      AND t.cd_operacao <> ALL (%s)
+      AND t.dt_transacao >= %s
+      AND t.dt_transacao < %s
+      AND ((t.tp_modalidade IN ('4', '8') AND t.tp_operacao = 'S')
+           OR (t.tp_modalidade IN ('3') AND t.tp_operacao = 'E'))
+    GROUP BY 1
+    ORDER BY 1
+"""
+
+
+@router.get("/api/fluxo-caixa/faturamento-fabrica-mes")
+def faturamento_fabrica_mes():
+    """Faturamento diario da fabrica no mes atual (horario de Brasilia), sem
+    depender dos filtros da tela. Dias futuros vem com valor None (sem barra);
+    dias passados sem venda vem com 0."""
+    try:
+        hoje = datetime.now(ZoneInfo("America/Sao_Paulo")).date()
+        inicio = hoje.replace(day=1)
+        proximo = (inicio + timedelta(days=32)).replace(day=1)
+        rows = execute_query(
+            SQL_FATURAMENTO_FABRICA_DIARIO,
+            (list(REPRESENTANTES_EXCLUIDOS), list(OPERACOES_EXCLUIDAS), inicio.isoformat(), proximo.isoformat()),
+        ) or []
+        por_dia = {_dia_str(r["dia"]): float(r["liquido"]) for r in rows}
+        dias = []
+        d = inicio
+        while d < proximo:
+            iso = d.isoformat()
+            dias.append({"dia": iso, "valor": por_dia.get(iso, 0.0) if d <= hoje else None})
+            d += timedelta(days=1)
+        return {"mes": inicio.isoformat()[:7], "hoje": hoje.isoformat(), "dias": dias, "total": sum(por_dia.values())}
+    except Exception as e:
+        print(f"[ERROR] Erro ao buscar faturamento da fabrica: {e}")
+        raise HTTPException(status_code=500, detail="Erro ao buscar faturamento da fábrica")
 
 
 @router.get("/api/fluxo-caixa/dados")
