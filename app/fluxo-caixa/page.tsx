@@ -12,11 +12,13 @@ import {
   ComposedChart,
   LabelList,
   Line,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from 'recharts';
+import type { LabelProps } from 'recharts';
 import { carregarFiltro, salvarFiltro } from '../utils/persistirFiltro';
 
 interface EmpresaFC {
@@ -196,16 +198,80 @@ interface TooltipMesPayload {
   payload: MesFCComSaldo;
 }
 
+const COR_SAIDAS = '#dc2626';
+const COR_ENTRADAS = '#059669';
+const COR_SALDO = '#2563eb';
+
+function LinhaTooltip({ cor, rotulo, valor, detalhe, forte }: { cor?: string; rotulo: string; valor: number; detalhe?: boolean; forte?: boolean }) {
+  return (
+    <div className={`flex items-center justify-between gap-6 ${detalhe ? 'pl-4 text-gray-500' : 'text-gray-900'}`}>
+      <span className="flex items-center gap-1.5">
+        {cor && <span className="w-2 h-2 rounded-full inline-block" style={{ backgroundColor: cor }} />}
+        {rotulo}
+      </span>
+      <span className={`tabular-nums ${forte ? 'font-semibold' : ''}`}>{fmtBRL(valor)}</span>
+    </div>
+  );
+}
+
 function TooltipMes({ active, payload }: { active?: boolean; payload?: TooltipMesPayload[] }) {
   if (!active || !payload || payload.length === 0) return null;
   const m = payload[0].payload;
   return (
-    <div className="bg-gray-900 text-white text-xs rounded px-2.5 py-1.5 shadow-lg space-y-1 max-w-xs">
-      <p className="font-semibold">{fmtMes(m.mes)}</p>
-      <p>Saídas: {fmtBRL(m.totalSaidas)} (Real {fmtBRL(m.real)} · Prev {fmtBRL(m.previsao)} · Pedidos {fmtBRL(m.pedidos)})</p>
-      <p>Entradas: {fmtBRL(m.totalEntradas)} (Outras {fmtBRL(m.outrasEntradas)} · Boleto {fmtBRL(m.boleto)} · Cheque {fmtBRL(m.cheque)} · Lojas {fmtBRL(m.lojas)})</p>
-      <p className={m.saldoAcumulado >= 0 ? 'text-emerald-400 font-semibold' : 'text-red-400 font-semibold'}>Saldo acumulado: {fmtBRL(m.saldoAcumulado)}</p>
+    <div className="bg-white border border-gray-200 rounded-lg shadow-lg px-3 py-2.5 text-xs space-y-1 min-w-[260px]">
+      <p className="font-semibold text-gray-900 mb-1.5">{fmtMes(m.mes)}</p>
+      <LinhaTooltip cor={COR_ENTRADAS} rotulo="Entradas" valor={m.totalEntradas} forte />
+      <LinhaTooltip rotulo="Outras entradas" valor={m.outrasEntradas} detalhe />
+      <LinhaTooltip rotulo="Boleto" valor={m.boleto} detalhe />
+      <LinhaTooltip rotulo="Cheque" valor={m.cheque} detalhe />
+      <LinhaTooltip rotulo="Lojas" valor={m.lojas} detalhe />
+      <div className="pt-1" />
+      <LinhaTooltip cor={COR_SAIDAS} rotulo="Saídas" valor={m.totalSaidas} forte />
+      <LinhaTooltip rotulo="Real" valor={m.real} detalhe />
+      <LinhaTooltip rotulo="Previsão" valor={m.previsao} detalhe />
+      <LinhaTooltip rotulo="Pedidos" valor={m.pedidos} detalhe />
+      <div className="border-t border-gray-100 mt-1.5 pt-1.5">
+        <LinhaTooltip cor={COR_SALDO} rotulo="Saldo acumulado" valor={m.saldoAcumulado} forte />
+      </div>
     </div>
+  );
+}
+
+// Rotulos desenhados a mao (<text> puro): o rotulo padrao do recharts recebe
+// a largura da barra e quebra "R$ 3 mi" em duas linhas quando a barra e fina.
+function caixaRotulo(props: LabelProps) {
+  const vb = (props.viewBox ?? {}) as { x?: number; y?: number; width?: number };
+  return {
+    x: Number(vb.x ?? props.x ?? 0),
+    y: Number(vb.y ?? props.y ?? 0),
+    width: Number(vb.width ?? props.width ?? 0),
+    valor: Number(props.value ?? 0),
+  };
+}
+
+function RotuloBarra(props: LabelProps) {
+  const { x, y, width, valor } = caixaRotulo(props);
+  if (!valor) return null;
+  return (
+    <text x={x + width / 2} y={y - 6} textAnchor="middle" fontSize={12} fontWeight={600} fill="#374151">
+      {fmtBRLCompacto(valor)}
+    </text>
+  );
+}
+
+// Saldo acumulado ganha uma "pilula" branca atras do texto - a linha passa
+// por cima/ao lado das barras e sem fundo o numero sumia no meio delas.
+function RotuloSaldo(props: LabelProps) {
+  const { x, y, valor } = caixaRotulo(props);
+  const texto = fmtBRLCompacto(valor);
+  const largura = texto.length * 6.6 + 14;
+  return (
+    <g>
+      <rect x={x - largura / 2} y={y - 30} width={largura} height={20} rx={10} fill="#ffffff" stroke="#bfdbfe" />
+      <text x={x} y={y - 16} textAnchor="middle" fontSize={12} fontWeight={600} fill={valor >= 0 ? '#1e3a8a' : '#b91c1c'}>
+        {texto}
+      </text>
+    </g>
   );
 }
 
@@ -227,34 +293,43 @@ function GraficoMensalFC({ meses, saldoBancario }: { meses: MesFC[]; saldoBancar
   });
   return (
     <div role="img" aria-label="Saídas, entradas e saldo acumulado projetados por mês">
-      <ResponsiveContainer width="100%" height={300}>
-        <ComposedChart data={dados} margin={{ top: 32, right: 16, left: 0, bottom: 16 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#e1e0d9" vertical={false} />
-          <XAxis dataKey="mes" tickFormatter={fmtMes} tick={{ fontSize: 13, fill: '#52514e' }} axisLine={{ stroke: '#c3c2b7' }} tickLine={false} />
-          <YAxis tickFormatter={(v: number) => fmtBRLCompacto(v)} tick={{ fontSize: 13, fill: '#898781' }} axisLine={false} tickLine={false} width={80} />
-          <Tooltip content={<TooltipMes />} cursor={{ fill: 'rgba(11,11,11,0.04)' }} />
-          <Bar dataKey="totalSaidas" name="Saídas" fill="#dc2626" radius={[4, 4, 0, 0]} maxBarSize={40}>
-            <LabelList dataKey="totalSaidas" position="top" formatter={(v: React.ReactNode) => fmtBRLCompacto(v as number)} style={{ fontSize: 13, fontWeight: 700, fill: '#991b1b' }} />
+      <div className="flex items-center gap-5 mb-3 text-xs text-gray-600">
+        <span className="flex items-center gap-1.5">
+          <span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ backgroundColor: COR_SAIDAS }} /> Saídas
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ backgroundColor: COR_ENTRADAS }} /> Entradas
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="relative w-4 h-0.5 rounded-full inline-block" style={{ backgroundColor: COR_SALDO }}>
+            <span className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-2 h-2 rounded-full ring-2 ring-white" style={{ backgroundColor: COR_SALDO }} />
+          </span>
+          Saldo acumulado
+        </span>
+      </div>
+      <ResponsiveContainer width="100%" height={320}>
+        <ComposedChart data={dados} margin={{ top: 36, right: 24, left: 4, bottom: 4 }} barGap={2} barCategoryGap="30%">
+          <CartesianGrid stroke="#f1f2f4" vertical={false} />
+          <XAxis dataKey="mes" tickFormatter={fmtMes} tick={{ fontSize: 12, fill: '#4b5563' }} axisLine={false} tickLine={false} dy={6} />
+          <YAxis tickFormatter={(v: number) => fmtBRLCompacto(v)} tick={{ fontSize: 12, fill: '#9ca3af' }} axisLine={false} tickLine={false} width={76} />
+          <ReferenceLine y={0} stroke="#d1d5db" />
+          <Tooltip content={<TooltipMes />} cursor={{ fill: '#f3f4f6', radius: 6 }} />
+          <Bar dataKey="totalSaidas" name="Saídas" fill={COR_SAIDAS} radius={[4, 4, 0, 0]} maxBarSize={24}>
+            <LabelList dataKey="totalSaidas" content={RotuloBarra} />
           </Bar>
-          <Bar dataKey="totalEntradas" name="Entradas" fill="#059669" radius={[4, 4, 0, 0]} maxBarSize={40}>
-            <LabelList dataKey="totalEntradas" position="top" formatter={(v: React.ReactNode) => fmtBRLCompacto(v as number)} style={{ fontSize: 13, fontWeight: 700, fill: '#047857' }} />
+          <Bar dataKey="totalEntradas" name="Entradas" fill={COR_ENTRADAS} radius={[4, 4, 0, 0]} maxBarSize={24}>
+            <LabelList dataKey="totalEntradas" content={RotuloBarra} />
           </Bar>
-          <Line type="monotone" dataKey="saldoAcumulado" name="Saldo Acumulado" stroke="#2563eb" strokeWidth={3} dot={{ r: 5, fill: '#2563eb', strokeWidth: 0 }} activeDot={{ r: 7 }}>
-            <LabelList dataKey="saldoAcumulado" position="top" formatter={(v: React.ReactNode) => fmtBRLCompacto(v as number)} style={{ fontSize: 13, fontWeight: 700, fill: '#1d4ed8' }} />
+          <Line
+            type="monotone" dataKey="saldoAcumulado" name="Saldo acumulado" stroke={COR_SALDO} strokeWidth={2}
+            strokeLinecap="round" strokeLinejoin="round"
+            dot={{ r: 4, fill: COR_SALDO, stroke: '#ffffff', strokeWidth: 2 }}
+            activeDot={{ r: 6, fill: COR_SALDO, stroke: '#ffffff', strokeWidth: 2 }}
+          >
+            <LabelList dataKey="saldoAcumulado" content={RotuloSaldo} />
           </Line>
         </ComposedChart>
       </ResponsiveContainer>
-      <div className="flex items-center justify-center gap-6 mt-2">
-        <span className="flex items-center gap-1.5 text-sm font-medium text-black">
-          <span className="w-3 h-3 rounded-sm inline-block" style={{ backgroundColor: '#dc2626' }} /> Saídas
-        </span>
-        <span className="flex items-center gap-1.5 text-sm font-medium text-black">
-          <span className="w-3 h-3 rounded-sm inline-block" style={{ backgroundColor: '#059669' }} /> Entradas
-        </span>
-        <span className="flex items-center gap-1.5 text-sm font-medium text-black">
-          <span className="w-4 h-0.5 rounded-full inline-block" style={{ backgroundColor: '#2563eb' }} /> Saldo Acumulado
-        </span>
-      </div>
     </div>
   );
 }
@@ -274,7 +349,7 @@ function ListaBarrasRanking({ itens, cor }: { itens: { nome: string; valor: numb
   }
   const maxValor = Math.max(...itens.map((i) => i.valor), 1);
   return (
-    <div className="max-h-[420px] overflow-y-auto pr-1 -mx-2 space-y-0.5">
+    <div className="max-h-[700px] overflow-y-auto pr-1 -mx-2 space-y-0.5">
       {itens.map((item, i) => (
         <div key={`${item.nome}-${i}`} className="flex items-start gap-2.5 px-2 py-1.5 rounded-md hover:bg-gray-50 transition-colors">
           <span className="w-5 flex-shrink-0 text-right text-xs text-gray-400 tabular-nums pt-0.5">{i + 1}</span>
@@ -1024,12 +1099,12 @@ export default function FluxoCaixaPage() {
               <table className="w-full text-sm min-w-[1100px] border-separate [border-spacing:0]">
                 <thead className="sticky top-0 z-10">
                   <tr className="text-left">
-                    <th rowSpan={2} className="px-3 py-2 min-w-[90px] align-middle font-medium text-black bg-gray-100 border-b-2 border-r-2 border-gray-300">Data</th>
+                    <th rowSpan={2} className="px-3 py-2 min-w-[90px] align-middle font-medium text-white bg-gray-500 border-b-2 border-r-2 border-gray-600">Data</th>
                     <th colSpan={4} className="px-3 py-1.5 text-center text-xs font-semibold uppercase tracking-wide text-white bg-red-600 border-b border-red-700">Saídas</th>
                     <th colSpan={5} className="px-3 py-1.5 text-center text-xs font-semibold uppercase tracking-wide text-white bg-green-600 border-b border-green-700 border-l-2 border-l-gray-300">Entradas</th>
                     <th rowSpan={2} className="px-3 py-2 text-right whitespace-nowrap align-middle font-medium text-white bg-blue-600 border-b-2 border-blue-700 border-r border-blue-700 border-l-2 border-l-gray-300">Saldo Dia</th>
                     <th rowSpan={2} className="px-3 py-2 text-right whitespace-nowrap align-middle font-medium text-white bg-blue-600 border-b-2 border-blue-700 border-r-2 border-blue-700">Saldo Acum.</th>
-                    <th rowSpan={2} className="px-3 py-2 text-right align-middle font-medium text-black bg-gray-100 border-b-2 border-gray-300">Qtd</th>
+                    <th rowSpan={2} className="px-3 py-2 text-right align-middle font-medium text-white bg-gray-500 border-b-2 border-gray-600">Qtd</th>
                   </tr>
                   <tr className="text-left">
                     <th className="px-3 py-1.5 text-right font-medium text-white/90 bg-red-500 border-b-2 border-red-300 border-r border-red-400">Prev.</th>
@@ -1137,7 +1212,7 @@ export default function FluxoCaixaPage() {
               <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
                 <h2 className="text-sm font-semibold text-black uppercase tracking-wide">Todos os Fornecedores</h2>
               </div>
-              <div className="overflow-x-auto max-h-[420px] overflow-y-auto [transform:translateZ(0)]">
+              <div className="overflow-x-auto max-h-[732px] overflow-y-auto [transform:translateZ(0)]">
                 <table className="w-full text-sm">
                   <thead className="sticky top-0 bg-gray-50 border-b border-gray-200">
                     <tr>
@@ -1160,7 +1235,7 @@ export default function FluxoCaixaPage() {
                       <tr><td colSpan={2} className="text-center text-gray-500 py-8">Sem dados no período selecionado</td></tr>
                     )}
                     {fornecedoresOrdenados.map((f, i) => {
-                      const bgHover = `${i % 2 === 0 ? 'bg-white' : 'bg-gray-100'} group-hover:bg-rose-50`;
+                      const bgHover = `${i % 2 === 0 ? 'bg-white' : 'bg-gray-300'} group-hover:bg-rose-50`;
                       return (
                       <tr key={`${f.cdFornecedor}-${i}`} className="group transition-colors">
                         <td className={`px-4 py-2 text-black border-b border-gray-200 ${bgHover}`}>{f.nome}</td>
