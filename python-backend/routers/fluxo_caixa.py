@@ -369,6 +369,27 @@ def _sql_saidas_por_fornecedor(where: str) -> str:
     """
 
 
+# Fornecedores de uma (ou mais) despesa - clique na despesa da tela filtra
+# os paineis de fornecedor. Usa a tabela de rateio (a unica com
+# cd_despesaitem) com a mesma proporcao em aberto de _sql_saidas_por_despesa,
+# pra soma dos fornecedores bater com o valor da despesa clicada.
+def _sql_saidas_por_fornecedor_despesa(where: str) -> str:
+    return f"""
+        SELECT d.cd_fornecedor,
+            CASE WHEN p.nm_fantasia IS NULL OR TRIM(p.nm_fantasia) = '' OR p.nm_fantasia ~ '^\\*+$'
+                 THEN COALESCE(p.nm_pessoa, pf.nm_pessoa, 'Fornecedor ' || d.cd_fornecedor::text)
+                 ELSE p.nm_fantasia END AS nome,
+            ROUND(SUM(d.vl_rateio * (d.vl_duplicata - d.vl_pago) / NULLIF(d.vl_duplicata, 0))::numeric, 2) AS valor,
+            COUNT(*)::int AS qtd
+        FROM vr_fcp_despduplicatai d
+        LEFT JOIN vr_pes_pessoa p ON p.cd_pessoa = d.cd_fornecedor
+        LEFT JOIN vr_pes_pesfisica pf ON pf.cd_pessoa = d.cd_fornecedor
+        {where} AND d.cd_despesaitem = ANY(%s)
+        GROUP BY 1, 2
+        ORDER BY 3 DESC
+    """
+
+
 # Saidas por despesa - precisa da tabela de rateio (vr_fcp_despduplicatai),
 # que e a unica que carrega cd_despesaitem (vr_fcp_duplicatai, usada no
 # resto da tela, so tem cd_componente, um codigo interno sem nome
@@ -605,6 +626,84 @@ def obter_boleto_detalhe(
         }
         for r in rows
     ]
+
+
+_NOME_FORNECEDOR = """CASE WHEN p.nm_fantasia IS NULL OR TRIM(p.nm_fantasia) = '' OR p.nm_fantasia ~ '^\\*+$'
+                 THEN COALESCE(p.nm_pessoa, pf.nm_pessoa, 'Fornecedor ' || d.cd_fornecedor::text)
+                 ELSE p.nm_fantasia END"""
+
+
+@router.get("/api/fluxo-caixa/saidas-detalhe")
+def obter_saidas_detalhe(
+    dia: str = Query(..., description="Dia efetivo (YYYY-MM-DD), mesma data da linha da Visao Diaria"),
+    tipo: str = Query(..., description="previsao | real | pedidos"),
+    empresas: Optional[str] = Query(None),
+):
+    """O que compoe a celula Prev./Real/Pedidos clicada na Visao Diaria. Usa
+    os MESMOS filtros do /dados (_filtros_saidas / _filtros_pedidos) com o
+    periodo travado num dia so - a soma tem que bater com a celula."""
+    cd_empresas = _parse_empresas(empresas)
+    try:
+        if tipo in ("previsao", "real"):
+            where, params = _filtros_saidas(dia, dia, cd_empresas)
+            where += " AND COALESCE(d.tp_previsaoreal, 0) " + ("= 1" if tipo == "previsao" else "<> 1")
+            # Uma parcela pode ser rateada entre varias despesas - lista os
+            # nomes juntos (o valor e da parcela inteira, igual na celula).
+            sql = f"""
+                SELECT {_NOME_FORNECEDOR} AS fornecedor,
+                    d.cd_empresa, d.nr_duplicata, d.nr_parcela,
+                    d.dt_vencimento::date AS dt_vencimento_original,
+                    ROUND((d.vl_duplicata - d.vl_pago)::numeric, 2) AS valor,
+                    (SELECT string_agg(DISTINCT i.ds_despesaitem, ', ')
+                       FROM vr_fcp_despduplicatai r
+                       JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = r.cd_despesaitem
+                      WHERE r.cd_empresa = d.cd_empresa AND r.cd_fornecedor = d.cd_fornecedor
+                        AND r.nr_duplicata = d.nr_duplicata AND r.nr_parcela = d.nr_parcela) AS despesas
+                FROM vr_fcp_duplicatai d
+                LEFT JOIN vr_pes_pessoa p ON p.cd_pessoa = d.cd_fornecedor
+                LEFT JOIN vr_pes_pesfisica pf ON pf.cd_pessoa = d.cd_fornecedor
+                {where}
+                ORDER BY valor DESC
+            """
+            rows = execute_query(sql, tuple(params)) or []
+            return [
+                {
+                    "fornecedor": r["fornecedor"],
+                    "documento": f"{r['nr_duplicata']}/{r['nr_parcela']}",
+                    "empresa": r["cd_empresa"],
+                    "dtOriginal": _dia_str(r["dt_vencimento_original"]),
+                    "despesa": r["despesas"],
+                    "valor": float(r["valor"]),
+                }
+                for r in rows
+            ]
+        if tipo == "pedidos":
+            where, params = _filtros_pedidos(dia, dia, cd_empresas)
+            sql = f"""
+                SELECT p.nm_fornecedor AS fornecedor, p.cd_empresa, p.cd_pedido, c.nr_parcela, c.qt_parcela,
+                    (p.dt_basepgto::date + (c.qt_dia || ' days')::interval)::date AS dt_parcela_original,
+                    ROUND((p.vl_pendente / NULLIF(c.qt_parcela, 0))::numeric, 2) AS valor
+                {where}
+                ORDER BY valor DESC
+            """
+            rows = execute_query(sql, tuple(params)) or []
+            return [
+                {
+                    "fornecedor": r["fornecedor"],
+                    "documento": f"Pedido {r['cd_pedido']} — parcela {r['nr_parcela']}/{r['qt_parcela']}",
+                    "empresa": r["cd_empresa"],
+                    "dtOriginal": _dia_str(r["dt_parcela_original"]),
+                    "despesa": None,
+                    "valor": float(r["valor"] or 0),
+                }
+                for r in rows
+            ]
+        raise HTTPException(status_code=400, detail="tipo deve ser previsao, real ou pedidos")
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[ERROR] Erro ao buscar detalhe das saidas: {e}")
+        raise HTTPException(status_code=500, detail="Erro ao buscar o detalhe das saídas")
 
 
 # ── Entradas - projecao manual de lojas (fcp_lojas_projecao) ─────────────
@@ -1081,13 +1180,20 @@ def saidas_por_fornecedor(
     dt_inicio: Optional[str] = Query(None),
     dt_fim: Optional[str] = Query(None),
     empresas: Optional[str] = Query(None),
+    despesas: Optional[str] = Query(None, description="cd_despesaitem separados por virgula - so fornecedores dessas despesas"),
 ):
     try:
         hoje = date.today()
         dt_inicio = dt_inicio or hoje.isoformat()
         dt_fim = dt_fim or (hoje + timedelta(days=30)).isoformat()
         where, params = _filtros_saidas(dt_inicio, dt_fim, _parse_empresas(empresas))
-        rows = execute_query(_sql_saidas_por_fornecedor(where), tuple(params)) or []
+        ids_despesa = [int(x) for x in (despesas or "").split(",") if x.strip().isdigit()]
+        if ids_despesa:
+            sql = _sql_saidas_por_fornecedor_despesa(where)
+            params.append(ids_despesa)
+        else:
+            sql = _sql_saidas_por_fornecedor(where)
+        rows = execute_query(sql, tuple(params)) or []
         return [
             {"cdFornecedor": int(r["cd_fornecedor"]) if r["cd_fornecedor"] is not None else None,
              "nome": r["nome"], "valor": float(r["valor"]), "qtd": r["qtd"]}

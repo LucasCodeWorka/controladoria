@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Banknote, ChevronDown, Loader2, Settings, X, RotateCcw,
   ArrowUp, ArrowDown, ArrowUpDown, Landmark,
@@ -114,7 +114,18 @@ interface SaidaDespesa {
 interface ItemRanking {
   nome: string;
   valor: number;
-  composicao?: { nome: string; valor: number }[];
+  // cd_despesaitem por tras da linha - clique filtra os fornecedores por elas
+  ids?: number[];
+  composicao?: ItemRanking[];
+}
+
+interface DespesaSelecionada {
+  nome: string;
+  ids: number[];
+}
+
+function idsDespesa(d: SaidaDespesa) {
+  return d.cdDespesaItem !== null ? [d.cdDespesaItem] : [];
 }
 
 // Materia prima vira uma linha so no ranking de despesas (pedido explicito do
@@ -131,14 +142,17 @@ function ehMateriaPrima(d: SaidaDespesa) {
 }
 
 function agruparMateriaPrima(despesas: SaidaDespesa[]): ItemRanking[] {
+  const paraItem = (d: SaidaDespesa): ItemRanking => ({ nome: d.nome, valor: d.valor, ids: idsDespesa(d) });
   const mp = despesas.filter(ehMateriaPrima);
-  if (!mp.length) return despesas;
+  const outras = despesas.filter((d) => !ehMateriaPrima(d)).map(paraItem);
+  if (!mp.length) return outras;
   const linhaMp: ItemRanking = {
     nome: 'MATÉRIA PRIMA',
     valor: mp.reduce((a, d) => a + d.valor, 0),
-    composicao: [...mp].sort((a, b) => b.valor - a.valor).map((d) => ({ nome: d.nome, valor: d.valor })),
+    ids: mp.flatMap(idsDespesa),
+    composicao: [...mp].sort((a, b) => b.valor - a.valor).map(paraItem),
   };
-  return [linhaMp, ...despesas.filter((d) => !ehMateriaPrima(d))].sort((a, b) => b.valor - a.valor);
+  return [linhaMp, ...outras].sort((a, b) => b.valor - a.valor);
 }
 
 interface BoletoDetalheItem {
@@ -1047,7 +1061,12 @@ function ResumoPeriodoFC({ entradas, saidas, totalEntradas, totalSaidas, saldoIn
 // nomes compridos (ex: "SECRETARIA DA RECEITA FEDERAL...") eram cortados
 // de forma feia quando a barra crescia. Com nome/valor na propria linha,
 // so competem entre si - a barra nunca rouba espaco do texto.
-function ListaBarrasRanking({ itens, cor }: { itens: ItemRanking[]; cor: string }) {
+function ListaBarrasRanking({ itens, cor, selecionado, onSelecionar }: {
+  itens: ItemRanking[]; cor: string;
+  // Opcional: linha clicavel (usado nas Despesas pra filtrar os fornecedores)
+  selecionado?: string | null;
+  onSelecionar?: (item: ItemRanking) => void;
+}) {
   const [abertos, setAbertos] = useState<Set<string>>(new Set());
   if (!itens.length) {
     return <p className="text-sm text-black py-8 text-center">Sem dados no período.</p>;
@@ -1061,24 +1080,39 @@ function ListaBarrasRanking({ itens, cor }: { itens: ItemRanking[]; cor: string 
       return novo;
     });
   }
+  const clicavel = !!onSelecionar;
   return (
     <div className="max-h-[700px] overflow-y-auto pr-1 -mx-2 space-y-0.5">
       {itens.map((item, i) => {
         const temComposicao = !!item.composicao?.length;
         const aberto = abertos.has(item.nome);
+        const ativo = selecionado === item.nome;
         return (
           <div key={`${item.nome}-${i}`}>
             <div
-              className={`flex items-start gap-2.5 px-2 py-1.5 rounded-md hover:bg-gray-50 transition-colors ${temComposicao ? 'cursor-pointer' : ''}`}
-              onClick={temComposicao ? () => alternar(item.nome) : undefined}
-              role={temComposicao ? 'button' : undefined}
-              aria-expanded={temComposicao ? aberto : undefined}
+              className={`flex items-start gap-2.5 px-2 py-1.5 rounded-md transition-colors ${
+                ativo ? 'bg-amber-100 ring-1 ring-amber-400' : 'hover:bg-gray-50'
+              } ${clicavel || temComposicao ? 'cursor-pointer' : ''}`}
+              onClick={clicavel ? () => onSelecionar!(item) : temComposicao ? () => alternar(item.nome) : undefined}
+              role={clicavel || temComposicao ? 'button' : undefined}
+              aria-pressed={clicavel ? ativo : undefined}
+              title={clicavel ? `Ver os fornecedores de ${item.nome}` : undefined}
             >
               <span className="w-5 flex-shrink-0 text-right text-xs text-black tabular-nums pt-0.5">{i + 1}</span>
               <div className="flex-1 min-w-0">
                 <div className="flex items-baseline justify-between gap-3">
-                  <span className={`text-sm text-black truncate ${temComposicao ? 'font-semibold' : ''}`} title={item.nome}>
-                    {temComposicao && <span className="inline-block w-3 text-xs">{aberto ? '▾' : '▸'}</span>}
+                  <span className={`text-sm text-black truncate ${temComposicao || ativo ? 'font-semibold' : ''}`} title={item.nome}>
+                    {temComposicao && (
+                      <button
+                        type="button"
+                        className="inline-block w-4 text-xs hover:text-amber-700"
+                        onClick={(e) => { e.stopPropagation(); alternar(item.nome); }}
+                        aria-expanded={aberto}
+                        aria-label={aberto ? 'Recolher itens' : 'Ver itens'}
+                      >
+                        {aberto ? '▾' : '▸'}
+                      </button>
+                    )}
                     {item.nome}
                     {temComposicao && <span className="ml-1.5 text-xs font-normal">({item.composicao!.length} itens)</span>}
                   </span>
@@ -1095,7 +1129,15 @@ function ListaBarrasRanking({ itens, cor }: { itens: ItemRanking[]; cor: string 
             {temComposicao && aberto && (
               <div className="ml-9 mr-2 mb-1 border-l-2 pl-3 py-1 space-y-0.5" style={{ borderColor: cor }}>
                 {item.composicao!.map((c, j) => (
-                  <div key={`${c.nome}-${j}`} className="flex items-baseline justify-between gap-3 text-xs text-black">
+                  <div
+                    key={`${c.nome}-${j}`}
+                    className={`flex items-baseline justify-between gap-3 text-xs text-black rounded px-1 -mx-1 ${
+                      selecionado === c.nome ? 'bg-amber-100 font-semibold' : clicavel ? 'hover:bg-gray-50' : ''
+                    } ${clicavel ? 'cursor-pointer' : ''}`}
+                    onClick={clicavel ? () => onSelecionar!(c) : undefined}
+                    role={clicavel ? 'button' : undefined}
+                    aria-pressed={clicavel ? selecionado === c.nome : undefined}
+                  >
                     <span className="truncate" title={c.nome}>{c.nome}</span>
                     <span className="tabular-nums flex-shrink-0">
                       {fmtBRL(-c.valor)}
@@ -1110,6 +1152,148 @@ function ListaBarrasRanking({ itens, cor }: { itens: ItemRanking[]; cor: string 
           </div>
         );
       })}
+    </div>
+  );
+}
+
+type TipoSaidaDetalhe = 'previsao' | 'real' | 'pedidos';
+
+const TITULO_SAIDA_DETALHE: Record<TipoSaidaDetalhe, { titulo: string; cor: string; doc: string }> = {
+  previsao: { titulo: 'Saídas previstas', cor: '#ef4444', doc: 'Duplicata/Parcela' },
+  real: { titulo: 'Saídas reais', cor: '#991b1b', doc: 'Duplicata/Parcela' },
+  pedidos: { titulo: 'Pedidos de compra', cor: '#dc2626', doc: 'Pedido' },
+};
+
+interface SaidaDetalheItem {
+  fornecedor: string;
+  documento: string;
+  empresa: number;
+  dtOriginal: string;
+  despesa: string | null;
+  valor: number;
+}
+
+// Clique na celula Prev./Real/Pedidos da Visao Diaria: o que compoe aquele
+// valor naquele dia (mesmo filtro de empresas da ultima consulta).
+function ModalSaidasDetalhe({ dia, tipo, empresas, onFechar }: {
+  dia: string; tipo: TipoSaidaDetalhe; empresas: string | null; onFechar: () => void;
+}) {
+  const [lista, setLista] = useState<SaidaDetalheItem[] | null>(null);
+  const [erro, setErro] = useState('');
+  const cfg = TITULO_SAIDA_DETALHE[tipo];
+
+  useEffect(() => {
+    let ativo = true;
+    const params = new URLSearchParams({ dia, tipo });
+    if (empresas) params.set('empresas', empresas);
+    fetch(`/api/fluxo-caixa/saidas-detalhe?${params.toString()}`, { cache: 'no-store' })
+      .then(async (r) => {
+        const json = await r.json();
+        if (!r.ok) throw new Error(json.detail || json.error || 'Erro ao buscar o detalhe');
+        if (ativo) setLista(json);
+      })
+      .catch((e) => { if (ativo) { setErro(e instanceof Error ? e.message : 'Erro desconhecido'); setLista([]); } });
+    return () => { ativo = false; };
+  }, [dia, tipo, empresas]);
+
+  useEffect(() => {
+    const fechar = (e: KeyboardEvent) => { if (e.key === 'Escape') onFechar(); };
+    window.addEventListener('keydown', fechar);
+    return () => window.removeEventListener('keydown', fechar);
+  }, [onFechar]);
+
+  const total = (lista ?? []).reduce((a, i) => a + i.valor, 0);
+  const fmtData = (iso: string) => iso.split('-').reverse().join('/');
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={onFechar}>
+      <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200">
+          <div>
+            <h2 className="text-base font-semibold text-black">
+              {cfg.titulo} — {fmtDiaSemana(dia)}
+            </h2>
+            {lista !== null && lista.length > 0 && (
+              <p className="text-xs text-black mt-0.5">{lista.length} {lista.length === 1 ? 'lançamento' : 'lançamentos'}</p>
+            )}
+          </div>
+          <button onClick={onFechar} className="text-black hover:text-black" aria-label="Fechar"><X className="w-5 h-5" /></button>
+        </div>
+        <div className="overflow-y-auto flex-1">
+          {lista === null && (
+            <div className="flex items-center justify-center py-12 text-black">
+              <Loader2 className="w-5 h-5 animate-spin mr-2" /> Carregando…
+            </div>
+          )}
+          {erro && (
+            <div className="flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-md mx-5 mt-4 px-3 py-2">
+              <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" /> <span>{erro}</span>
+            </div>
+          )}
+          {lista !== null && !erro && lista.length === 0 && (
+            <p className="text-sm text-black py-12 text-center">Nenhum lançamento encontrado para esse dia.</p>
+          )}
+          {lista !== null && lista.length > 0 && (
+            <table className="w-full text-sm">
+              <thead className="sticky top-0 bg-gray-50 border-b border-gray-200">
+                <tr>
+                  <th className="text-left px-5 py-2 font-medium text-black">Fornecedor</th>
+                  <th className="text-left px-3 py-2 font-medium text-black">{cfg.doc}</th>
+                  <th className="text-right px-3 py-2 font-medium text-black">Empresa</th>
+                  <th className="text-right px-3 py-2 font-medium text-black">{tipo === 'pedidos' ? 'Vencimento da parcela' : 'Vencimento original'}</th>
+                  <th className="text-right px-5 py-2 font-medium text-black">Valor</th>
+                </tr>
+              </thead>
+              <tbody>
+                {lista.map((item, i) => (
+                  <tr key={`${item.documento}-${i}`} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                    <td className="px-5 py-1.5 text-black">
+                      {item.fornecedor}
+                      {item.despesa && <span className="block text-xs text-black">{item.despesa}</span>}
+                    </td>
+                    <td className="px-3 py-1.5 text-black tabular-nums whitespace-nowrap">{item.documento}</td>
+                    <td className="px-3 py-1.5 text-right text-black tabular-nums">{String(item.empresa).padStart(3, '0')}</td>
+                    <td className="px-3 py-1.5 text-right text-black tabular-nums">{item.dtOriginal ? fmtData(item.dtOriginal) : '—'}</td>
+                    <td className="px-5 py-1.5 text-right font-semibold tabular-nums whitespace-nowrap" style={{ color: cfg.cor }}>{fmtBRL(item.valor)}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="font-bold bg-gray-200 border-t-2 border-gray-400">
+                  <td colSpan={4} className="px-5 py-2 text-right uppercase text-xs tracking-wide text-black">Total</td>
+                  <td className="px-5 py-2 text-right tabular-nums whitespace-nowrap" style={{ color: cfg.cor }}>{fmtBRL(total)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CabecalhoFornecedores({ titulo, despesa, carregando, onLimpar }: {
+  titulo: string; despesa: DespesaSelecionada | null; carregando: boolean; onLimpar: () => void;
+}) {
+  return (
+    <div className={`px-4 py-3 border-b ${despesa ? 'bg-amber-50 border-amber-200' : 'bg-gray-50 border-gray-200'}`}>
+      <h2 className="text-sm font-semibold text-black uppercase tracking-wide">{titulo}</h2>
+      {despesa && (
+        <div className="flex items-center gap-2 mt-1">
+          <span className="text-xs text-black truncate">
+            Só da despesa <strong>{despesa.nome}</strong>
+            {carregando && <Loader2 className="inline w-3 h-3 animate-spin ml-1.5" />}
+          </span>
+          <button
+            type="button"
+            onClick={onLimpar}
+            className="ml-auto flex-shrink-0 inline-flex items-center gap-1 text-xs font-medium text-black bg-white border border-gray-300 rounded px-1.5 py-0.5 hover:bg-gray-100"
+            title="Mostrar todos os fornecedores"
+          >
+            <X className="w-3 h-3" /> Todos
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -1129,6 +1313,15 @@ export default function FluxoCaixaPage() {
 
   const [saidasFornecedor, setSaidasFornecedor] = useState<SaidaFornecedor[]>([]);
   const [saidasDespesa, setSaidasDespesa] = useState<SaidaDespesa[]>([]);
+  // Clique numa despesa: os paineis de fornecedor mostram so os dela.
+  // Usa a mesma consulta (periodo/empresas) do ultimo "Aplicar".
+  const [despesaSel, setDespesaSel] = useState<DespesaSelecionada | null>(null);
+  const [fornecedoresDespesa, setFornecedoresDespesa] = useState<SaidaFornecedor[] | null>(null);
+  const [carregandoFornDespesa, setCarregandoFornDespesa] = useState(false);
+  const consultaRef = useRef('');
+  const [saidaDetalhe, setSaidaDetalhe] = useState<{ dia: string; tipo: TipoSaidaDetalhe } | null>(null);
+  const fecharSaidaDetalhe = useCallback(() => setSaidaDetalhe(null), []);
+  const pedidoFornDespesaRef = useRef(0);
   const [saldosBancarios, setSaldosBancarios] = useState<SaldosBancarios | null>(null);
   const [sortKey, setSortKey] = useState<'nome' | 'valor'>('valor');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
@@ -1237,6 +1430,8 @@ export default function FluxoCaixaPage() {
         params.set('empresas', Array.from(empresasSelecionadas).join(','));
       }
       const qs = params.toString();
+      consultaRef.current = qs;
+      limparDespesaSel();
       const [respDados, respFornecedor, respDespesa, respSaldos] = await Promise.all([
         fetch(`/api/fluxo-caixa/dados?${qs}`, { cache: 'no-store' }),
         fetch(`/api/fluxo-caixa/saidas-por-fornecedor?${qs}`, { cache: 'no-store' }),
@@ -1269,7 +1464,37 @@ export default function FluxoCaixaPage() {
     }
   }
 
-  const fornecedoresOrdenados = [...saidasFornecedor].sort((a, b) => {
+  function limparDespesaSel() {
+    pedidoFornDespesaRef.current += 1;
+    setDespesaSel(null);
+    setFornecedoresDespesa(null);
+    setCarregandoFornDespesa(false);
+  }
+
+  async function selecionarDespesa(item: ItemRanking) {
+    if (despesaSel?.nome === item.nome) { limparDespesaSel(); return; }
+    const ids = item.ids ?? [];
+    if (!ids.length) return;
+    const pedido = ++pedidoFornDespesaRef.current;
+    setDespesaSel({ nome: item.nome, ids });
+    setCarregandoFornDespesa(true);
+    try {
+      const params = new URLSearchParams(consultaRef.current);
+      params.set('despesas', ids.join(','));
+      const resp = await fetch(`/api/fluxo-caixa/saidas-por-fornecedor?${params.toString()}`, { cache: 'no-store' });
+      const json = resp.ok ? await resp.json() : [];
+      if (pedido === pedidoFornDespesaRef.current) setFornecedoresDespesa(Array.isArray(json) ? json : []);
+    } catch (e) {
+      console.error('Erro ao buscar fornecedores da despesa:', e);
+      if (pedido === pedidoFornDespesaRef.current) setFornecedoresDespesa([]);
+    } finally {
+      if (pedido === pedidoFornDespesaRef.current) setCarregandoFornDespesa(false);
+    }
+  }
+
+  const fornecedoresVisiveis = despesaSel ? (fornecedoresDespesa ?? []) : saidasFornecedor;
+
+  const fornecedoresOrdenados = [...fornecedoresVisiveis].sort((a, b) => {
     const mult = sortDir === 'asc' ? 1 : -1;
     if (sortKey === 'nome') return a.nome.localeCompare(b.nome) * mult;
     return (a.valor - b.valor) * mult;
@@ -1533,8 +1758,6 @@ export default function FluxoCaixaPage() {
     qtd: acc.qtd + l.dia.qtd,
   }), { previsao: 0, real: 0, pedidos: 0, saidas: 0, outrasEntradas: 0, boleto: 0, cheque: 0, lojas: 0, entradas: 0, qtd: 0 });
 
-  const saldoFinal = totais.entradas - totais.saidas;
-
   // Mesmos totais, mas sem o toggle de coluna - so pra exibir (riscado) quanto
   // uma coluna desligada valeria no Resumo do Periodo.
   const totaisBrutos = linhasDiarias.reduce((acc, l) => ({
@@ -1560,7 +1783,7 @@ export default function FluxoCaixaPage() {
     return dow !== 0 && dow !== 6;
   });
 
-  function celula(key: ColKey, rawVal: number, cor: string, bgLinha: string, extraClasse = '', onClick?: () => void) {
+  function celula(key: ColKey, rawVal: number, cor: string, bgLinha: string, extraClasse = '', onClick?: () => void, dica = 'Ver faturas') {
     const ativa = colsAtivas[key];
     const v = rawVal || 0;
     const clicavel = ativa && v > 0 && !!onClick;
@@ -1569,7 +1792,7 @@ export default function FluxoCaixaPage() {
         className={`text-right px-3 py-2 tabular-nums border-r border-b border-gray-300 ${bgLinha} ${extraClasse} ${clicavel ? 'cursor-pointer hover:underline' : ''}`}
         style={{ color: ativa ? cor : '#000000', fontWeight: ativa && v > 0 ? 600 : 400 }}
         onClick={clicavel ? onClick : undefined}
-        title={clicavel ? 'Ver faturas' : undefined}
+        title={clicavel ? dica : undefined}
       >
         {v > 0 ? <span style={!ativa ? { textDecoration: 'line-through' } : undefined}>{fmtBRL(v)}</span> : <span className="text-black">—</span>}
       </td>
@@ -1918,9 +2141,9 @@ export default function FluxoCaixaPage() {
                           <span className="text-xs text-black ml-1.5">{dow}</span>
                           {isHoje && <span className="text-xs font-medium bg-sky-600 text-white rounded px-1.5 py-0.5 ml-1.5 align-middle">hoje</span>}
                         </td>
-                        {celula('previsao', l.dia.previsao, '#ef4444', bgHover)}
-                        {celula('real', l.dia.real, '#991b1b', bgHover)}
-                        {celula('pedidos', l.dia.pedidos, '#dc2626', bgHover)}
+                        {celula('previsao', l.dia.previsao, '#ef4444', bgHover, '', () => setSaidaDetalhe({ dia: l.dia.dia, tipo: 'previsao' }), 'Ver o que compõe esse valor')}
+                        {celula('real', l.dia.real, '#991b1b', bgHover, '', () => setSaidaDetalhe({ dia: l.dia.dia, tipo: 'real' }), 'Ver o que compõe esse valor')}
+                        {celula('pedidos', l.dia.pedidos, '#dc2626', bgHover, '', () => setSaidaDetalhe({ dia: l.dia.dia, tipo: 'pedidos' }), 'Ver os pedidos desse dia')}
                         <td className={`text-right px-3 py-2 tabular-nums font-bold text-red-800 border-r-2 border-b border-gray-300 ${bgHover}`}>
                           {l.effSaidas > 0 ? fmtBRL(l.effSaidas) : <span className="text-black">—</span>}
                         </td>
@@ -1938,25 +2161,6 @@ export default function FluxoCaixaPage() {
                     );
                   })}
                 </tbody>
-                {linhasDiarias.length > 0 && (
-                  <tfoot>
-                    <tr className="font-bold text-sm bg-gray-400">
-                      <td className="px-3 py-2.5 uppercase text-xs tracking-wide text-black border-t-2 border-r-2 border-gray-400">Total</td>
-                      <td className="text-right px-3 py-2.5 tabular-nums text-red-700 border-t-2 border-r border-gray-400">{fmtBRL(totais.previsao)}</td>
-                      <td className="text-right px-3 py-2.5 tabular-nums text-red-800 border-t-2 border-r border-gray-400">{fmtBRL(totais.real)}</td>
-                      <td className="text-right px-3 py-2.5 tabular-nums text-red-600 border-t-2 border-r border-gray-400">{fmtBRL(totais.pedidos)}</td>
-                      <td className="text-right px-3 py-2.5 tabular-nums text-red-800 border-t-2 border-r-2 border-gray-400">{fmtBRL(totais.saidas)}</td>
-                      <td className="text-right px-3 py-2.5 tabular-nums text-violet-700 border-t-2 border-r border-gray-400">{fmtBRL(totais.outrasEntradas)}</td>
-                      <td className="text-right px-3 py-2.5 tabular-nums text-sky-700 border-t-2 border-r border-gray-400">{fmtBRL(totais.boleto)}</td>
-                      <td className="text-right px-3 py-2.5 tabular-nums text-green-700 border-t-2 border-r border-gray-400">{fmtBRL(totais.cheque)}</td>
-                      <td className="text-right px-3 py-2.5 tabular-nums text-cyan-700 border-t-2 border-r border-gray-400">{fmtBRL(totais.lojas)}</td>
-                      <td className="text-right px-3 py-2.5 tabular-nums text-green-800 border-t-2 border-r-2 border-gray-400">{fmtBRL(totais.entradas)}</td>
-                      <td className={`text-right px-3 py-2.5 tabular-nums border-t-2 border-r border-gray-400 ${saldoFinal >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(saldoFinal)}</td>
-                      <td className={`text-right px-3 py-2.5 tabular-nums border-t-2 border-r-2 border-gray-400 ${saldoFinal >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(saldoFinal)}</td>
-                      <td className="text-right px-3 py-2.5 tabular-nums text-black border-t-2 border-gray-400">{fmtNum(totais.qtd)}</td>
-                    </tr>
-                  </tfoot>
-                )}
               </table>
             </div>
           </div>
@@ -1985,25 +2189,33 @@ export default function FluxoCaixaPage() {
               lado, mesma altura (pedido explicito do usuario). */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             <div className="bg-white rounded-lg shadow-md overflow-hidden">
-              <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
-                <h2 className="text-sm font-semibold text-black uppercase tracking-wide">Fornecedores</h2>
-              </div>
+              <CabecalhoFornecedores titulo="Fornecedores" despesa={despesaSel} carregando={carregandoFornDespesa} onLimpar={limparDespesaSel} />
               <div className="p-4">
-                <ListaBarrasRanking itens={saidasFornecedor} cor="#dc2626" />
+                {despesaSel && carregandoFornDespesa ? (
+                  <p className="text-sm text-black py-8 text-center flex items-center justify-center">
+                    <Loader2 className="w-4 h-4 animate-spin mr-2 text-rose-600" /> Buscando fornecedores…
+                  </p>
+                ) : (
+                  <ListaBarrasRanking itens={fornecedoresVisiveis} cor="#dc2626" />
+                )}
               </div>
             </div>
             <div className="bg-white rounded-lg shadow-md overflow-hidden">
               <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
                 <h2 className="text-sm font-semibold text-black uppercase tracking-wide">Despesas</h2>
+                <p className="text-xs text-black mt-0.5">Clique numa despesa para ver os fornecedores dela</p>
               </div>
               <div className="p-4">
-                <ListaBarrasRanking itens={agruparMateriaPrima(saidasDespesa)} cor="#f59e0b" />
+                <ListaBarrasRanking
+                  itens={agruparMateriaPrima(saidasDespesa)}
+                  cor="#f59e0b"
+                  selecionado={despesaSel?.nome ?? null}
+                  onSelecionar={selecionarDespesa}
+                />
               </div>
             </div>
             <div className="bg-white rounded-lg shadow-md overflow-hidden">
-              <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
-                <h2 className="text-sm font-semibold text-black uppercase tracking-wide">Todos os Fornecedores</h2>
-              </div>
+              <CabecalhoFornecedores titulo="Todos os Fornecedores" despesa={despesaSel} carregando={carregandoFornDespesa} onLimpar={limparDespesaSel} />
               <div className="overflow-x-auto max-h-[732px] overflow-y-auto [transform:translateZ(0)]">
                 <table className="w-full text-sm">
                   <thead className="sticky top-0 bg-gray-50 border-b border-gray-200">
@@ -2023,7 +2235,7 @@ export default function FluxoCaixaPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {fornecedoresOrdenados.length === 0 && (
+                    {fornecedoresOrdenados.length === 0 && !carregandoFornDespesa && (
                       <tr><td colSpan={2} className="text-center text-black py-8">Sem dados no período selecionado</td></tr>
                     )}
                     {fornecedoresOrdenados.map((f, i) => {
@@ -2146,6 +2358,15 @@ export default function FluxoCaixaPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {saidaDetalhe && (
+        <ModalSaidasDetalhe
+          dia={saidaDetalhe.dia}
+          tipo={saidaDetalhe.tipo}
+          empresas={new URLSearchParams(consultaRef.current).get('empresas')}
+          onFechar={fecharSaidaDetalhe}
+        />
       )}
 
       {/* Modal: Detalhe das faturas de Boleto de um dia (clique na celula) */}

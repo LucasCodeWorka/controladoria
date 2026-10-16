@@ -10,11 +10,13 @@ export async function GET(request: NextRequest) {
     const dtInicio = searchParams.get('dt_inicio');
     const dtFim = searchParams.get('dt_fim');
     const empresas = searchParams.get('empresas');
+    const despesas = searchParams.get('despesas');
 
     const params = new URLSearchParams();
     if (dtInicio) params.set('dt_inicio', dtInicio);
     if (dtFim) params.set('dt_fim', dtFim);
     if (empresas) params.set('empresas', empresas);
+    if (despesas) params.set('despesas', despesas);
 
     const response = await fetch(`${PYTHON_API_URL}/api/fluxo-caixa/saidas-por-fornecedor?${params.toString()}`, {
       method: 'GET',
