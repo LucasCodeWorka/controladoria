@@ -6,6 +6,7 @@ from database import execute_query, execute_insert
 import services
 import unicodedata
 import calendar
+import json
 from plano_contas_dfc import (
     PLANO_CONTAS_DFC,
     PLANO_RECEITA_DFC,
@@ -1450,6 +1451,42 @@ def get_dfc_por_centro_custo(
     return _calcular_dfc_por_centro_custo(dataInicio, dataFim)
 
 
+def _criar_tabela_dre_x_dfc_snapshot():
+    execute_insert("""
+        CREATE TABLE IF NOT EXISTS fcp_dre_x_dfc_snapshot (
+            filtro TEXT NOT NULL,
+            dt_inicio DATE NOT NULL,
+            dt_fim DATE NOT NULL,
+            resultado JSONB NOT NULL,
+            dt_calculado TIMESTAMP DEFAULT NOW(),
+            PRIMARY KEY (filtro, dt_inicio, dt_fim)
+        )
+    """)
+
+
+def _calcular_e_salvar_snapshot_dre_x_dfc(dataInicio: str, dataFim: str, filtro: str) -> dict:
+    """Roda o calculo pesado de sempre (_calcular_dre_x_dfc_operacional, sem
+    nenhuma mudanca) e guarda o resultado em fcp_dre_x_dfc_snapshot, pra
+    proxima consulta do MESMO periodo/filtro vir do cache em vez de
+    recalcular do zero (~3min pra um ano inteiro, ver investigacao de
+    performance - a causa raiz e falta de indice numa tabela do ERP que nao
+    temos privilegio pra criar, entao isso aqui e o jeito pratico de nao
+    fazer o usuario esperar toda vez)."""
+    resultado = _calcular_dre_x_dfc_operacional(dataInicio, dataFim, filtro)
+    try:
+        execute_insert(
+            """INSERT INTO fcp_dre_x_dfc_snapshot (filtro, dt_inicio, dt_fim, resultado, dt_calculado)
+               VALUES (%s, %s, %s, %s::jsonb, NOW())
+               ON CONFLICT (filtro, dt_inicio, dt_fim) DO UPDATE
+               SET resultado = EXCLUDED.resultado, dt_calculado = NOW()""",
+            (filtro, dataInicio, dataFim, json.dumps(resultado))
+        )
+    except Exception as e:
+        print(f"[DRE-X-DFC] Aviso: nao foi possivel salvar snapshot: {e}")
+    resultado.setdefault("metadata", {})["cacheado"] = False
+    return resultado
+
+
 @router.get("/api/dre-dfc/comparativo-operacional")
 def get_dre_x_dfc_operacional(
     dataInicio: str = Query("2026-01-01", description="Data inicial (YYYY-MM-DD)"),
@@ -1461,8 +1498,41 @@ def get_dre_x_dfc_operacional(
     ANTECIPACAO) - so o grupo OP/REC do DFC, sem Investimentos/Financiamento
     (sem contrapartida na DRE). Ve _calcular_dre_x_dfc_operacional para a
     logica completa.
+
+    O calculo em si e pesado (varias queries sequenciais contra uma tabela
+    de ~3 milhoes de linhas sem indice adequado - ver investigacao de
+    performance no historico do projeto). Sem privilegio pra criar indice
+    no banco, a saida pratica foi cachear o resultado por (filtro, periodo)
+    em fcp_dre_x_dfc_snapshot: a primeira consulta de um periodo/filtro
+    calcula e salva (lento, igual sempre foi), qualquer consulta seguinte
+    do MESMO periodo/filtro responde na hora. Forcar recalculo: POST
+    /api/dre-dfc/comparativo-operacional/recalcular.
     """
-    return _calcular_dre_x_dfc_operacional(dataInicio, dataFim, filtro)
+    _criar_tabela_dre_x_dfc_snapshot()
+    rows = execute_query(
+        "SELECT resultado, dt_calculado FROM fcp_dre_x_dfc_snapshot WHERE filtro = %s AND dt_inicio = %s AND dt_fim = %s",
+        (filtro, dataInicio, dataFim)
+    )
+    if rows:
+        resultado = rows[0]["resultado"]
+        resultado.setdefault("metadata", {})["cacheado"] = True
+        resultado["metadata"]["dtCalculado"] = rows[0]["dt_calculado"].isoformat()
+        return resultado
+    return _calcular_e_salvar_snapshot_dre_x_dfc(dataInicio, dataFim, filtro)
+
+
+@router.post("/api/dre-dfc/comparativo-operacional/recalcular")
+def recalcular_dre_x_dfc_operacional(
+    dataInicio: str = Query("2026-01-01", description="Data inicial (YYYY-MM-DD)"),
+    dataFim: str = Query("2026-12-31", description="Data final (YYYY-MM-DD)"),
+    filtro: str = Query("consolidado", description="Filtro: 'consolidado', 'fabrica', ou codigo do centro de custo")
+):
+    """Forca recalculo do comparativo DRE x DFC pro periodo/filtro pedido,
+    sobrescrevendo o snapshot salvo - usar quando o usuario sabe que os
+    dados mudaram e nao quer esperar o proximo refresh natural (que so
+    acontece se alguem consultar um periodo ainda sem snapshot)."""
+    _criar_tabela_dre_x_dfc_snapshot()
+    return _calcular_e_salvar_snapshot_dre_x_dfc(dataInicio, dataFim, filtro)
 
 
 @router.get("/api/dfc/plano-contas")

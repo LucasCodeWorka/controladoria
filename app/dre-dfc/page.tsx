@@ -46,6 +46,9 @@ interface RespostaComparativo {
     nomeFiltro: string;
     dataInicio: string;
     dataFim: string;
+    dataConsulta?: string;
+    cacheado?: boolean;
+    dtCalculado?: string;
   };
 }
 
@@ -145,12 +148,20 @@ export default function DreXDfcPage() {
     try {
       // Um ano inteiro em "consolidado" roda duas passadas completas (DRE +
       // DFC) em paralelo com o detalhamento por subgrupo - mesmo assim pode
-      // passar de alguns minutos. 900s de folga pra nao abortar uma consulta
-      // que so esta demorando, e nao travada.
+      // passar de alguns minutos NA PRIMEIRA vez que alguem consulta esse
+      // periodo/filtro (o backend guarda o resultado num snapshot, entao
+      // consultas seguintes do MESMO periodo respondem na hora). 900s de
+      // folga pra nao abortar uma consulta que so esta demorando, e nao
+      // travada. "forcar" ignora tanto o cache local (Map) quanto o
+      // snapshot do backend, recalculando de verdade (POST /recalcular).
       const controller = new AbortController();
       const timeout = window.setTimeout(() => controller.abort(), 900000);
       const params = new URLSearchParams({ dataInicio, dataFim, filtro });
-      const response = await fetch(`/api/dre-dfc/comparativo-operacional?${params.toString()}`, {
+      const url = forcar
+        ? `/api/dre-dfc/comparativo-operacional/recalcular?${params.toString()}`
+        : `/api/dre-dfc/comparativo-operacional?${params.toString()}`;
+      const response = await fetch(url, {
+        method: forcar ? 'POST' : 'GET',
         signal: controller.signal,
         cache: 'no-store',
       });
@@ -423,13 +434,21 @@ export default function DreXDfcPage() {
           <button
             onClick={() => buscarDados(true)}
             disabled={loading}
-            title="Atualizar dados (ignora o cache e busca de novo)"
+            title="Recalcular de verdade (ignora o cache local e o snapshot salvo no banco - pode demorar alguns minutos)"
             className="p-2 text-sm bg-gray-100 text-gray-600 rounded-md hover:bg-gray-200 transition-colors disabled:opacity-50"
           >
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
           <AtalhosPeriodo onSelecionar={aplicarPeriodo} />
         </div>
+
+        {!loading && dados?.metadata && (dados.metadata.dtCalculado || dados.metadata.dataConsulta) && (
+          <p className="mt-2 text-xs text-gray-500">
+            {dados.metadata.cacheado ? 'Dados em cache, calculados em ' : 'Calculado agora em '}
+            {new Date(dados.metadata.dtCalculado || dados.metadata.dataConsulta || '').toLocaleString('pt-BR')}
+            {dados.metadata.cacheado && ' — use o botão de atualizar para recalcular na hora.'}
+          </p>
+        )}
 
         {statusCarregamento && (
           <div className="mt-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2">
