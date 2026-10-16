@@ -770,7 +770,7 @@ def dados_fluxo_caixa(
             agr = meses_map.setdefault(r["mes"], {"previsao": 0.0, "real": 0.0, "qtd": 0})
             v = float(r["valor"])
             agr["qtd"] += r["qtd"]
-            if r["tp_previsaoreal"] == "1":
+            if int(r["tp_previsaoreal"] or 0) == 1:
                 agr["previsao"] += v
             else:
                 agr["real"] += v
@@ -802,7 +802,7 @@ def dados_fluxo_caixa(
             agr = dias_map.setdefault(dia, {"previsao": 0.0, "real": 0.0, "qtd": 0})
             v = float(r["valor"])
             agr["qtd"] += r["qtd"]
-            if r["tp_previsaoreal"] == "1":
+            if int(r["tp_previsaoreal"] or 0) == 1:
                 agr["previsao"] += v
             else:
                 agr["real"] += v
