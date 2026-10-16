@@ -1295,6 +1295,7 @@ def matriz_produtos_giro(
     dimensaoFiltro: Optional[str] = Query(None, description="grupo, linha, familia, colecao ou status - filtra so as referencias dessa categoria (ex: clicou numa barra do grafico por dimensao)"),
     categoriaFiltro: Optional[str] = Query(None, description="Valor da categoria (ex: 'BODY', 'SEM CLASSIFICACAO') - exige dimensaoFiltro junto."),
     oportunidadeDesconto: bool = Query(False, description="Quando true, so retorna referencias que batem na regra 'pode ganhar ou aumentar desconto' (mesma logica do card de totais) - filtra a base INTEIRA antes de paginar, nao so a pagina atual"),
+    canaisDesconto: Optional[str] = Query(None, description="Canais dos flags de oportunidade: atacado, varejo ou atacado,varejo (default: os dois)"),
     linha: Optional[str] = Query(None, description="Lista de linha separadas por virgula (default: todas) - filtro independente do dimensaoFiltro"),
     familia: Optional[str] = Query(None, description="Lista de familia separadas por virgula (default: todas)"),
     grupo: Optional[str] = Query(None, description="Lista de grupo separados por virgula (default: todos)"),
@@ -1377,6 +1378,7 @@ def matriz_produtos_giro(
                 if _cores_no_filtro(
                     i, precos_cor, promocoes_cor, primeiras_por_cor, hoje_filtro_cor,
                     giroMinimo, mesesFLMinimo, oportunidadeDesconto, mista_dict.get(i["referencia"]),
+                    _parse_canais_desconto(canaisDesconto),
                 )
             ]
 
@@ -1531,7 +1533,8 @@ def matriz_produtos_giro_por_cor(
     status: Optional[str] = Query(None, description="Lista de status de produto separados por virgula (default: todos)"),
     giroMinimo: Optional[float] = Query(None, description="Mesmo filtro 'Giro maior que' da tabela - aplicado ao giro DA COR"),
     mesesFLMinimo: Optional[int] = Query(None, description="Mesmo filtro 'Meses FL maior que' da tabela - aplicado ao Meses FL DA COR"),
-    oportunidadeDesconto: bool = Query(False, description="Mesmo checkbox da tabela - so as cores que, sozinhas, podem ganhar ou aumentar desconto")
+    oportunidadeDesconto: bool = Query(False, description="Mesmo checkbox da tabela - so as cores que, sozinhas, podem ganhar ou aumentar desconto"),
+    canaisDesconto: Optional[str] = Query(None, description="Canais dos flags de oportunidade: atacado, varejo ou atacado,varejo (default: os dois)"),
 ):
     """
     Abre UMA referencia por cor - mesma estrutura da matriz principal
@@ -1584,7 +1587,7 @@ def matriz_produtos_giro_por_cor(
             if not _cor_bate_filtros(
                 item["giroTotal"], meses_oportunidade, preco, promo,
                 giroMinimo, mesesFLMinimo, oportunidadeDesconto, item.get("familia"), tem_cor_sem_meses_fl,
-                item.get("linha"),
+                item.get("linha"), _parse_canais_desconto(canaisDesconto),
             ):
                 continue
 
@@ -1905,6 +1908,21 @@ def _variacao_percentual(preco_base: Optional[float], preco: Optional[float]) ->
     return ((preco - preco_base) / preco_base) * 100
 
 
+def _preco_cheio_canal(preco_cadastro: Optional[float], promo_canal: Optional[dict]) -> Optional[float]:
+    """Preco cheio que serve de base pra campanha num canal: o preco de
+    cadastro, se for > 0; senao o "preco anterior" gravado na promocao ativa
+    daquele canal (o preco de antes da promo), se for > 0; senao nenhum.
+    Preco cheio zerado no cadastro gerava campanha de R$ 0,00 e um "ganho"
+    falso contra a promocao atual (ex: ref 601037, atacado R$ 0,00 com promo
+    R$ 11,90 entrava no filtro "pode ganhar desconto" sem ganho nenhum)."""
+    if preco_cadastro is not None and preco_cadastro > 0:
+        return preco_cadastro
+    anterior = (promo_canal or {}).get("precoAnterior")
+    if anterior is not None and anterior > 0:
+        return anterior
+    return None
+
+
 def _ganho_desconto_canal(preco_cheio: Optional[float], promo_canal: Optional[dict], percentual: float) -> float:
     """Quanto, em R$ por peca, o preco sugerido melhora o que o canal
     (atacado OU varejo) pratica hoje. Zero = nao ha ganho nenhum.
@@ -1917,6 +1935,7 @@ def _ganho_desconto_canal(preco_cheio: Optional[float], promo_canal: Optional[di
     sugerido (50%) sendo maior que o praticado (48,5%). Essa e exatamente
     a conta que os cards usam pro valor do desconto, entao filtro e valor
     nunca discordam (pedido explicito do usuario)."""
+    preco_cheio = _preco_cheio_canal(preco_cheio, promo_canal)
     if preco_cheio is None:
         return 0.0
     preco_campanha = _calcular_preco_campanha(preco_cheio, percentual)
@@ -1944,6 +1963,7 @@ def _acrescimo_canal(preco_cheio: Optional[float], promo_canal: Optional[dict], 
     cedo com 0, e o que faz esse card capturar o caso real: cor que esta
     com desconto hoje mas deixaria de ter desconto nenhum (pedido
     explicito do usuario - esse caso estava saindo do card antes)."""
+    preco_cheio = _preco_cheio_canal(preco_cheio, promo_canal)
     if preco_cheio is None or not promo_canal:
         return 0.0
     base = promo_canal["precoPromo"]
@@ -1953,9 +1973,22 @@ def _acrescimo_canal(preco_cheio: Optional[float], promo_canal: Optional[dict], 
     return max(0.0, preco_resultante - base)
 
 
+CANAIS_DESCONTO = ("atacado", "varejo")
+
+
+def _parse_canais_desconto(canais: Optional[str]) -> tuple:
+    """Canais dos flags "pode ganhar desconto no Atacado/Varejo" da tela -
+    sem parametro (ou invalido) = os dois, comportamento de antes."""
+    if not canais:
+        return CANAIS_DESCONTO
+    escolhidos = tuple(c for c in CANAIS_DESCONTO if c in {v.strip().lower() for v in canais.split(",")})
+    return escolhidos or CANAIS_DESCONTO
+
+
 def _tem_oportunidade_desconto(
     giro_total, meses_oportunidade, promo: dict, preco_atacado, preco_varejo,
     familia: Optional[str] = None, tem_cor_sem_meses_fl: bool = False, linha: Optional[str] = None,
+    canais: tuple = CANAIS_DESCONTO,
 ) -> bool:
     tem_promo = bool(promo.get("atacado") or promo.get("varejo"))
     percentual = _calcular_percentual_campanha(giro_total, meses_oportunidade, tem_promo, familia, tem_cor_sem_meses_fl, linha)
@@ -1966,9 +1999,10 @@ def _tem_oportunidade_desconto(
     # referencia unica, o que barrava o canal sem promocao quando o outro
     # ja estava com desconto alto (ex: varejo ja com 50%, atacado sem promo
     # nenhuma, e a referencia inteira ficava de fora).
+    # Com os flags separados da tela, so os canais marcados contam.
     return (
-        _ganho_desconto_canal(preco_atacado, promo.get("atacado"), percentual) > 0
-        or _ganho_desconto_canal(preco_varejo, promo.get("varejo"), percentual) > 0
+        ("atacado" in canais and _ganho_desconto_canal(preco_atacado, promo.get("atacado"), percentual) > 0)
+        or ("varejo" in canais and _ganho_desconto_canal(preco_varejo, promo.get("varejo"), percentual) > 0)
     )
 
 
@@ -1976,7 +2010,7 @@ def _cor_bate_filtros(
     giro_cor: Optional[float], meses_cor: Optional[int], preco_cor: dict, promo_cor: dict,
     giro_minimo: Optional[float] = None, meses_fl_minimo: Optional[int] = None,
     oportunidade_desconto: bool = False, familia: Optional[str] = None, tem_cor_sem_meses_fl: bool = False,
-    linha: Optional[str] = None,
+    linha: Optional[str] = None, canais: tuple = CANAIS_DESCONTO,
 ) -> bool:
     """Se UMA cor, sozinha, bate em TODOS os filtros ativos da tela ao mesmo
     tempo. O "ao mesmo tempo" e o ponto: avaliar cada filtro de forma
@@ -1991,7 +2025,8 @@ def _cor_bate_filtros(
     if meses_fl_minimo is not None and not (meses_cor is not None and meses_cor > meses_fl_minimo):
         return False
     if oportunidade_desconto and not _tem_oportunidade_desconto(
-        giro_cor, meses_cor, promo_cor, preco_cor.get("precoAtacado"), preco_cor.get("precoVarejo"), familia, tem_cor_sem_meses_fl, linha
+        giro_cor, meses_cor, promo_cor, preco_cor.get("precoAtacado"), preco_cor.get("precoVarejo"), familia, tem_cor_sem_meses_fl, linha,
+        canais,
     ):
         return False
     return True
@@ -2073,6 +2108,7 @@ def _cores_no_filtro(
     item: dict, precos_cor: dict, promocoes_cor: dict, primeiras_por_cor: dict, hoje,
     giro_minimo: Optional[float] = None, meses_fl_minimo: Optional[int] = None,
     oportunidade_desconto: bool = False, tem_cor_sem_meses_fl: Optional[bool] = None,
+    canais: tuple = CANAIS_DESCONTO,
 ) -> list:
     """Cores da referencia que batem em todos os filtros ativos. Lista vazia
     = a referencia inteira fica de fora. Sem nenhum filtro ativo, devolve
@@ -2095,7 +2131,7 @@ def _cores_no_filtro(
             meses_cor = (hoje.year - dt_primeira_cor.year) * 12 + (hoje.month - dt_primeira_cor.month)
         if _cor_bate_filtros(
             cor_item["giroTotal"], meses_cor, preco_cor, promo_cor,
-            giro_minimo, meses_fl_minimo, oportunidade_desconto, familia, tem_cor_sem_meses_fl, linha,
+            giro_minimo, meses_fl_minimo, oportunidade_desconto, familia, tem_cor_sem_meses_fl, linha, canais,
         ):
             cores_ok.append(cor_item)
     return cores_ok
@@ -2110,6 +2146,7 @@ def totais_desconto_giro(
     dimensaoFiltro: Optional[str] = Query(None, description="grupo, linha, familia, colecao ou status"),
     categoriaFiltro: Optional[str] = Query(None, description="Valor da categoria - exige dimensaoFiltro junto"),
     oportunidadeDesconto: bool = Query(False, description="Quando true, so soma quem bate na regra 'pode ganhar ou aumentar desconto' (mesmo checkbox da tela)"),
+    canaisDesconto: Optional[str] = Query(None, description="Canais dos flags de oportunidade: atacado, varejo ou atacado,varejo (default: os dois)"),
     linha: Optional[str] = Query(None, description="Mesmo filtro de linha da tabela"),
     familia: Optional[str] = Query(None, description="Mesmo filtro de familia da tabela"),
     grupo: Optional[str] = Query(None, description="Mesmo filtro de grupo da tabela"),
@@ -2175,6 +2212,7 @@ def totais_desconto_giro(
             cores_ok = _cores_no_filtro(
                 item, precos_cor, promocoes_cor, primeiras_por_cor, hoje,
                 giroMinimo, mesesFLMinimo, oportunidadeDesconto, mista_dict.get(item["referencia"]),
+                _parse_canais_desconto(canaisDesconto),
             )
             if cores_ok:
                 cores_por_referencia[item["referencia"]] = cores_ok

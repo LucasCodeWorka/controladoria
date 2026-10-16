@@ -533,6 +533,16 @@ function calcularPrecoCampanhaReal(precoBase: number | null, percentual: number)
   return precoBase * (1 - percentual / 100);
 }
 
+// Mesma regra do backend (_preco_cheio_canal): base da campanha e o preco de
+// cadastro se > 0; senao o "preco anterior" da promocao ativa do canal, se
+// > 0; senao nenhum (canal fica "sem preço cheio" - nao gera campanha). Preco
+// zerado no cadastro gerava "Camp R$ 0,00" e um ganho falso no filtro.
+function precoCheioCanal(precoCadastro: number | null, promo?: { precoAnterior: number | null } | null): number | null {
+  if (precoCadastro !== null && precoCadastro > 0) return precoCadastro;
+  if (promo?.precoAnterior != null && promo.precoAnterior > 0) return promo.precoAnterior;
+  return null;
+}
+
 function calcularPrecoCampanha(precoBase: number | null, percentual: number): number | null {
   const precoComDesconto = calcularPrecoCampanhaReal(precoBase, percentual);
   if (precoComDesconto === null) return null;
@@ -880,7 +890,10 @@ export default function GiroPage() {
   // Campanha (percentualCampanha > 0) E ainda nao tem promo ativo nesse
   // nivel de desconto - ou seja, quem nao tem desconto nenhum mas poderia
   // ter, ou quem ja tem um desconto menor do que a regra sugere.
-  const [mostrarApenasOportunidadeDesconto, setMostrarApenasOportunidadeDesconto] = useState(false);
+  // Dois flags separados (Atacado / Varejo): guarda os canais marcados -
+  // '' (nenhum), 'atacado', 'varejo' ou 'atacado,varejo'. A cor entra se
+  // tiver ganho em pelo menos um dos canais marcados.
+  const [canaisOportunidade, setCanaisOportunidade] = useState('');
 
   // Totais pros 2 cards acima da tabela (Estoque total e Valor do desconto
   // sugerido) - diferente do filtro acima (que so enxerga a pagina atual da
@@ -1022,7 +1035,7 @@ export default function GiroPage() {
     giroMinimo: string,
     statusParam: string,
     filtroDimensao: { dimensao: DimensaoGiro; categoria: string } | null = null,
-    oportunidadeDesconto: boolean = mostrarApenasOportunidadeDesconto,
+    oportunidadeDesconto: string = canaisOportunidade,
     mesesFLMinimo: string = matrizMesesFLMinimo
   ) {
     setMatrizCarregando(true);
@@ -1048,6 +1061,7 @@ export default function GiroPage() {
       }
       if (oportunidadeDesconto) {
         params.set('oportunidadeDesconto', 'true');
+        params.set('canaisDesconto', oportunidadeDesconto);
       }
       const mesesFLMinimoNum = Number(mesesFLMinimo.trim());
       if (mesesFLMinimo.trim() !== '' && !Number.isNaN(mesesFLMinimoNum)) {
@@ -1087,7 +1101,7 @@ export default function GiroPage() {
     giroMinimo: string,
     statusParam: string,
     filtroDimensao: { dimensao: DimensaoGiro; categoria: string } | null,
-    oportunidadeDesconto: boolean,
+    oportunidadeDesconto: string,
     mesesFLMinimo: string = matrizMesesFLMinimo
   ) {
     setTotaisDescontoCarregando(true);
@@ -1106,6 +1120,7 @@ export default function GiroPage() {
       }
       if (oportunidadeDesconto) {
         params.set('oportunidadeDesconto', 'true');
+        params.set('canaisDesconto', oportunidadeDesconto);
       }
       const mesesFLMinimoNum = Number(mesesFLMinimo.trim());
       if (mesesFLMinimo.trim() !== '' && !Number.isNaN(mesesFLMinimoNum)) {
@@ -1188,8 +1203,9 @@ export default function GiroPage() {
       if (matrizMesesFLMinimo.trim() !== '' && !Number.isNaN(mesesFLMinimoNum)) {
         params.set('mesesFLMinimo', String(mesesFLMinimoNum));
       }
-      if (mostrarApenasOportunidadeDesconto) {
+      if (canaisOportunidade) {
         params.set('oportunidadeDesconto', 'true');
+        params.set('canaisDesconto', canaisOportunidade);
       }
       const response = await fetch(`/api/giro/matriz-produtos/cores?${params.toString()}`, { cache: 'no-store' });
       const data = await response.json();
@@ -1322,12 +1338,12 @@ export default function GiroPage() {
   }
 
   function aplicarFiltroMesesFLMinimo() {
-    buscarMatriz(mesReferencia, empresasParaMatriz(), 1, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','), filtroDimensaoMatriz, mostrarApenasOportunidadeDesconto, matrizMesesFLMinimo);
+    buscarMatriz(mesReferencia, empresasParaMatriz(), 1, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','), filtroDimensaoMatriz, canaisOportunidade, matrizMesesFLMinimo);
   }
 
   function limparFiltroMesesFLMinimo() {
     setMatrizMesesFLMinimo('');
-    buscarMatriz(mesReferencia, empresasParaMatriz(), 1, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','), filtroDimensaoMatriz, mostrarApenasOportunidadeDesconto, '');
+    buscarMatriz(mesReferencia, empresasParaMatriz(), 1, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','), filtroDimensaoMatriz, canaisOportunidade, '');
   }
 
   // Clique numa barra do grafico "Giro por dimensao" - filtra a tabela de
@@ -1537,14 +1553,18 @@ export default function GiroPage() {
         {(() => {
           const promoAtacado = item.promocoes?.find((p) => p.tipo === 'Atacado');
           const promoVarejo = item.promocoes?.find((p) => p.tipo === 'Varejo');
-          const pctPromoAtacado = promoAtacado ? variacaoPercentual(item.precoAtacado, promoAtacado.precoPromo) : null;
-          const pctPromoVarejo = promoVarejo ? variacaoPercentual(item.precoVarejo, promoVarejo.precoPromo) : null;
+          const cheioAtacado = precoCheioCanal(item.precoAtacado, promoAtacado);
+          const cheioVarejo = precoCheioCanal(item.precoVarejo, promoVarejo);
+          const pctPromoAtacado = promoAtacado ? variacaoPercentual(cheioAtacado, promoAtacado.precoPromo) : null;
+          const pctPromoVarejo = promoVarejo ? variacaoPercentual(cheioVarejo, promoVarejo.precoPromo) : null;
           const percentualCampanha = PERCENTUAL_POR_REGRA[regraCampanha];
           const descricaoRegra = DESCRICAO_REGRA_CAMPANHA[regraCampanha];
-          const precoAtacadoCampanha = calcularPrecoCampanha(item.precoAtacado, percentualCampanha);
-          const precoVarejoCampanha = calcularPrecoCampanha(item.precoVarejo, percentualCampanha);
-          const precoAtacadoCampanhaReal = calcularPrecoCampanhaReal(item.precoAtacado, percentualCampanha);
-          const precoVarejoCampanhaReal = calcularPrecoCampanhaReal(item.precoVarejo, percentualCampanha);
+          const precoAtacadoCampanha = calcularPrecoCampanha(cheioAtacado, percentualCampanha);
+          const precoVarejoCampanha = calcularPrecoCampanha(cheioVarejo, percentualCampanha);
+          const precoAtacadoCampanhaReal = calcularPrecoCampanhaReal(cheioAtacado, percentualCampanha);
+          const precoVarejoCampanhaReal = calcularPrecoCampanhaReal(cheioVarejo, percentualCampanha);
+          const semCheioAtacado = percentualCampanha > 0 && cheioAtacado === null;
+          const semCheioVarejo = percentualCampanha > 0 && cheioVarejo === null;
           const tooltipAtacado = precoAtacadoCampanhaReal !== null
             ? `${descricaoRegra}\nPreço real (sem arredondamento): ${formatarPreco(precoAtacadoCampanhaReal)}`
             : descricaoRegra;
@@ -1584,6 +1604,8 @@ export default function GiroPage() {
                     <div className="text-[10px] text-rose-500 leading-tight">-{percentualCampanha}%</div>
                     {formatarPreco(precoAtacadoCampanha)}
                   </>
+                ) : semCheioAtacado ? (
+                  <span className="text-[11px] text-gray-500 italic" title="Preço de atacado zerado no cadastro e na promoção - sem base para calcular a campanha">sem preço cheio</span>
                 ) : (
                   <span className="text-black">-</span>
                 )}
@@ -1599,6 +1621,8 @@ export default function GiroPage() {
                     <div className="text-[10px] text-rose-500 leading-tight">-{percentualCampanha}%</div>
                     {formatarPreco(precoVarejoCampanha)}
                   </>
+                ) : semCheioVarejo ? (
+                  <span className="text-[11px] text-gray-500 italic" title="Preço de varejo zerado no cadastro e na promoção - sem base para calcular a campanha">sem preço cheio</span>
                 ) : (
                   <span className="text-black">-</span>
                 )}
@@ -2005,7 +2029,7 @@ export default function GiroPage() {
                 </div>
                 <p className="text-xs text-black mt-1">
                   {totaisDescontoGiro?.totalReferencias ?? 0} referência(s) no filtro
-                  {mostrarApenasOportunidadeDesconto ? ' — com o filtro "oportunidade de desconto" ligado' : ''}
+                  {canaisOportunidade ? ` — com o filtro "pode ganhar desconto" (${canaisOportunidade === 'atacado,varejo' ? 'Atacado ou Varejo' : canaisOportunidade === 'atacado' ? 'Atacado' : 'Varejo'}) ligado` : ''}
                 </p>
               </div>
               <div className="bg-white rounded-lg shadow-lg p-4">
@@ -2187,20 +2211,25 @@ export default function GiroPage() {
                   Limpar
                 </button>
               )}
-              <label className="flex items-center gap-1.5 text-sm text-black cursor-pointer ml-2">
-                <input
-                  type="checkbox"
-                  checked={mostrarApenasOportunidadeDesconto}
-                  disabled={matrizCarregando}
-                  onChange={(e) => {
-                    const novoValor = e.target.checked;
-                    setMostrarApenasOportunidadeDesconto(novoValor);
-                    buscarMatriz(mesReferencia, empresasParaMatriz(), 1, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','), filtroDimensaoMatriz, novoValor);
-                  }}
-                />
-                Só quem pode ganhar ou aumentar desconto (todas as páginas)
-              </label>
-              {mostrarApenasOportunidadeDesconto && matriz && (
+              <span className="text-sm text-black ml-2">Só quem pode ganhar ou aumentar desconto (todas as páginas):</span>
+              {(['atacado', 'varejo'] as const).map((canal) => (
+                <label key={canal} className="flex items-center gap-1.5 text-sm text-black cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={canaisOportunidade.split(',').includes(canal)}
+                    disabled={matrizCarregando}
+                    onChange={(e) => {
+                      const atuais = new Set(canaisOportunidade.split(',').filter(Boolean));
+                      if (e.target.checked) atuais.add(canal); else atuais.delete(canal);
+                      const novoValor = (['atacado', 'varejo'] as const).filter((c) => atuais.has(c)).join(',');
+                      setCanaisOportunidade(novoValor);
+                      buscarMatriz(mesReferencia, empresasParaMatriz(), 1, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','), filtroDimensaoMatriz, novoValor);
+                    }}
+                  />
+                  {canal === 'atacado' ? 'Atacado' : 'Varejo'}
+                </label>
+              ))}
+              {canaisOportunidade && matriz && (
                 <span className="text-xs text-black">{formatarQtd(matriz.totalProdutos)} referência(s) no filtro</span>
               )}
             </div>
@@ -2275,8 +2304,8 @@ export default function GiroPage() {
 
             {!matrizCarregando && matriz && matriz.itens.length === 0 && (
               <p className="text-sm text-black py-8 text-center">
-                {mostrarApenasOportunidadeDesconto
-                  ? 'Nenhuma referência no filtro bate com "pode ganhar ou aumentar desconto".'
+                {canaisOportunidade
+                  ? 'Nenhuma referência no filtro pode ganhar ou aumentar desconto nos canais marcados.'
                   : 'Nenhum produto encontrado.'}
               </p>
             )}
