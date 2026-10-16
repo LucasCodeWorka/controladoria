@@ -173,14 +173,16 @@ const COL_DEFS: { group: string; cols: { key: ColKey; label: string; color: stri
     { key: 'real', label: 'Real', color: '#991b1b' },
     { key: 'pedidos', label: 'Pedidos', color: '#dc2626' },
   ]},
-  // Cartao e Multimarcas tirados temporariamente (pedido explicito do
-  // usuario) - nem aparecem na tabela nem compoem o saldo, so volta se
-  // pedir de novo. Os dados continuam vindo da API, so nao sao usados aqui.
+  // Multimarcas tirado temporariamente (pedido explicito do usuario) - nem
+  // aparece na tabela nem compoe o saldo. Cartao VOLTOU (pedido explicito):
+  // o backend ja desconta o cartao da coluna Lojas (meta), entao sem somar o
+  // Cartao essa parte sumia das entradas.
   { group: 'Entradas', cols: [
     { key: 'outrasEntradas', label: 'Outras Entradas', color: '#7c3aed' },
     { key: 'boleto', label: 'Boleto', color: '#0284c7' },
     { key: 'cheque', label: 'Cheque', color: '#059669' },
     { key: 'lojas', label: 'Lojas', color: '#0891b2' },
+    { key: 'cartao', label: 'Cartão', color: '#4d7c0f' },
   ]},
 ];
 
@@ -276,6 +278,7 @@ function TooltipMes({ active, payload }: { active?: boolean; payload?: TooltipMe
       <LinhaTooltip rotulo="Boleto" valor={m.boleto} detalhe />
       <LinhaTooltip rotulo="Cheque" valor={m.cheque} detalhe />
       <LinhaTooltip rotulo="Lojas" valor={m.lojas} detalhe />
+      <LinhaTooltip rotulo="Cartão" valor={m.cartao} detalhe />
       <div className="pt-1" />
       <LinhaTooltip cor={COR_SAIDAS} rotulo="Saídas" valor={m.totalSaidas} forte />
       <LinhaTooltip rotulo="Real" valor={m.real} detalhe />
@@ -392,12 +395,11 @@ function GraficoMensalFC({ meses, saldoBancario }: { meses: MesFC[]; saldoBancar
   // Saldo acumulado parte do saldo bancario real (mesma base da coluna
   // "Saldo Acum." da tabela diaria) e vai somando o resultado (entradas -
   // saidas) de cada mes, em ordem - nao e o resultado isolado do mes.
-  // Cartao e Multimarcas tirados temporariamente (pedido explicito do
-  // usuario) - nao contam nem aqui nem na tabela diaria, so volta se
-  // pedir de novo.
+  // Multimarcas tirado temporariamente (pedido explicito do usuario) - nao
+  // conta nem aqui nem na tabela diaria. Cartao voltou (ver COL_DEFS).
   let acumulado = saldoBancario;
   const dados: MesFCComSaldo[] = meses.map((m) => {
-    const totalEntradas = m.outrasEntradas + m.boleto + m.cheque + m.lojas;
+    const totalEntradas = m.outrasEntradas + m.boleto + m.cheque + m.lojas + m.cartao;
     acumulado += totalEntradas - m.totalSaidas;
     return { ...m, totalEntradas, saldoAcumulado: acumulado, saidasAbaixoZero: -m.totalSaidas };
   });
@@ -1731,16 +1733,18 @@ export default function FluxoCaixaPage() {
     const effBol = ev('boleto', dia.boleto);
     const effCheq = ev('cheque', dia.cheque);
     const effLoj = ev('lojas', adjLojas);
+    const effCart = ev('cartao', dia.cartao);
 
     const effSaidas = effPrev + effReal + effPed;
-    // Cartao e Multimarcas tirados temporariamente (pedido explicito do
-    // usuario) - nao compoem mais o saldo, so volta se pedir de novo.
-    const effEntradas = effOutras + effBol + effCheq + effLoj;
+    // Multimarcas tirado temporariamente (pedido explicito do usuario).
+    // Cartao voltou: Lojas ja vem do backend sem o cartao, os dois juntos
+    // fecham com a meta de lojas.
+    const effEntradas = effOutras + effBol + effCheq + effLoj + effCart;
     const effSaldoDia = effEntradas - effSaidas;
     acumLocal += effSaldoDia;
 
     return {
-      dia, adjLojas, adjMulti, effPrev, effReal, effPed, effOutras, effBol, effCheq, effLoj,
+      dia, adjLojas, adjMulti, effPrev, effReal, effPed, effOutras, effBol, effCheq, effLoj, effCart,
       effSaidas, effEntradas, effSaldoDia, saldoAcum: acumLocal,
     };
   });
@@ -1754,9 +1758,10 @@ export default function FluxoCaixaPage() {
     boleto: acc.boleto + l.effBol,
     cheque: acc.cheque + l.effCheq,
     lojas: acc.lojas + l.effLoj,
+    cartao: acc.cartao + l.effCart,
     entradas: acc.entradas + l.effEntradas,
     qtd: acc.qtd + l.dia.qtd,
-  }), { previsao: 0, real: 0, pedidos: 0, saidas: 0, outrasEntradas: 0, boleto: 0, cheque: 0, lojas: 0, entradas: 0, qtd: 0 });
+  }), { previsao: 0, real: 0, pedidos: 0, saidas: 0, outrasEntradas: 0, boleto: 0, cheque: 0, lojas: 0, cartao: 0, entradas: 0, qtd: 0 });
 
   // Mesmos totais, mas sem o toggle de coluna - so pra exibir (riscado) quanto
   // uma coluna desligada valeria no Resumo do Periodo.
@@ -1768,7 +1773,8 @@ export default function FluxoCaixaPage() {
     boleto: acc.boleto + (l.dia.boleto || 0),
     cheque: acc.cheque + (l.dia.cheque || 0),
     lojas: acc.lojas + l.adjLojas,
-  }), { previsao: 0, real: 0, pedidos: 0, outrasEntradas: 0, boleto: 0, cheque: 0, lojas: 0 });
+    cartao: acc.cartao + (l.dia.cartao || 0),
+  }), { previsao: 0, real: 0, pedidos: 0, outrasEntradas: 0, boleto: 0, cheque: 0, lojas: 0, cartao: 0 });
   const DIAS_SEMANA = ['DOM', 'SEG', 'TER', 'QUA', 'QUI', 'SEX', 'SÁB'];
   const hoje = isoHoje();
 
@@ -2097,7 +2103,7 @@ export default function FluxoCaixaPage() {
                   <tr className="text-left">
                     <th rowSpan={2} className="px-3 py-2 min-w-[90px] align-middle font-medium text-white bg-gray-500 border-b-2 border-r-2 border-gray-600">Data</th>
                     <th colSpan={4} className="px-3 py-1.5 text-center text-xs font-semibold uppercase tracking-wide text-white bg-red-600 border-b border-red-700">Saídas</th>
-                    <th colSpan={5} className="px-3 py-1.5 text-center text-xs font-semibold uppercase tracking-wide text-white bg-green-600 border-b border-green-700 border-l-2 border-l-gray-300">Entradas</th>
+                    <th colSpan={6} className="px-3 py-1.5 text-center text-xs font-semibold uppercase tracking-wide text-white bg-green-600 border-b border-green-700 border-l-2 border-l-gray-300">Entradas</th>
                     <th rowSpan={2} className="px-3 py-2 text-right whitespace-nowrap align-middle font-medium text-white bg-blue-600 border-b-2 border-blue-700 border-r border-blue-700 border-l-2 border-l-gray-300">Saldo Dia</th>
                     <th rowSpan={2} className="px-3 py-2 text-right whitespace-nowrap align-middle font-medium text-white bg-blue-600 border-b-2 border-blue-700 border-r-2 border-blue-700">Saldo Acum.</th>
                     <th rowSpan={2} className="px-3 py-2 text-right align-middle font-medium text-white bg-gray-500 border-b-2 border-gray-600">Qtd</th>
@@ -2111,12 +2117,13 @@ export default function FluxoCaixaPage() {
                     <th className="px-3 py-1.5 text-right font-medium text-white/90 bg-green-500 border-b-2 border-green-300 border-r border-green-400">Boleto</th>
                     <th className="px-3 py-1.5 text-right font-medium text-white/90 bg-green-500 border-b-2 border-green-300 border-r border-green-400">Cheque</th>
                     <th className="px-3 py-1.5 text-right font-medium text-white/90 bg-green-500 border-b-2 border-green-300 border-r border-green-400">Lojas</th>
+                    <th className="px-3 py-1.5 text-right font-medium text-white/90 bg-green-500 border-b-2 border-green-300 border-r border-green-400">Cartão</th>
                     <th className="px-3 py-1.5 text-right font-semibold text-white bg-green-700 border-b-2 border-green-300 border-r-2 border-gray-300">Total</th>
                   </tr>
                 </thead>
                 <tbody>
                   {linhasDiariasVisiveis.length === 0 && (
-                    <tr><td colSpan={13} className="text-center text-black py-8">Sem dados no período selecionado</td></tr>
+                    <tr><td colSpan={14} className="text-center text-black py-8">Sem dados no período selecionado</td></tr>
                   )}
                   {linhasDiariasVisiveis.map((l, i) => {
                     const dt = new Date(`${l.dia.dia}T12:00:00`);
@@ -2151,6 +2158,7 @@ export default function FluxoCaixaPage() {
                         {celula('boleto', l.dia.boleto, '#0284c7', bgHover, '', () => boletoDetalheAbrir(l.dia.dia))}
                         {celula('cheque', l.dia.cheque, '#059669', bgHover)}
                         {celula('lojas', l.adjLojas, '#0891b2', bgHover)}
+                        {celula('cartao', l.dia.cartao, '#4d7c0f', bgHover)}
                         <td className={`text-right px-3 py-2 tabular-nums font-bold text-green-800 border-r-2 border-b border-gray-300 ${bgHover}`}>
                           {l.effEntradas > 0 ? fmtBRL(l.effEntradas) : <span className="text-black">—</span>}
                         </td>
@@ -2171,6 +2179,7 @@ export default function FluxoCaixaPage() {
               { rotulo: 'Boletos', valor: totaisBrutos.boleto, ativa: colsAtivas.boleto },
               { rotulo: 'Cheques', valor: totaisBrutos.cheque, ativa: colsAtivas.cheque },
               { rotulo: 'Lojas', valor: totaisBrutos.lojas, ativa: colsAtivas.lojas },
+              { rotulo: 'Cartão', valor: totaisBrutos.cartao, ativa: colsAtivas.cartao },
             ]}
             saidas={[
               { rotulo: 'Previsão', valor: totaisBrutos.previsao, ativa: colsAtivas.previsao },

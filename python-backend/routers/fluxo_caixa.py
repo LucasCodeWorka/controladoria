@@ -467,10 +467,16 @@ def _sql_pedidos_diario(where: str) -> str:
 # ── Entradas - cartao (vr_fcr_faturai) ────────────────────────────────────
 # Entrada so conta se for data FUTURA (regra 1) - tudo ate hoje ja esta no
 # saldo bancario inicial, contar de novo aqui duplicaria o valor.
+# Vencimento em sabado/domingo/feriado -> proximo dia util bancario (mesma
+# regra do Cheque): a tela esconde fim de semana, e sem isso o valor entrava
+# no saldo sem aparecer em linha nenhuma (achado da auditoria da Visao Diaria).
+_EXPR_DT_CARTAO_EFETIVA = "fn_fc_dt_cheque_efetiva(dt_vencimento::date)"
+
+
 def _filtros_cartao(dt_inicio: str, dt_fim: str, empresas: list) -> tuple:
-    where = """WHERE tp_documento IN (4, 5) AND tp_cobranca = '14' AND tp_situacao = '1'
-        AND dt_vencimento BETWEEN %s AND %s
-        AND dt_vencimento > CURRENT_DATE"""
+    where = f"""WHERE tp_documento IN (4, 5) AND tp_cobranca = '14' AND tp_situacao = '1'
+        AND {_EXPR_DT_CARTAO_EFETIVA} BETWEEN %s AND %s
+        AND {_EXPR_DT_CARTAO_EFETIVA} > CURRENT_DATE"""
     params: list = [dt_inicio, dt_fim]
     if empresas:
         where += " AND cd_empresa = ANY(%s)"
@@ -480,7 +486,7 @@ def _filtros_cartao(dt_inicio: str, dt_fim: str, empresas: list) -> tuple:
 
 def _sql_cartao_mensal(where: str) -> str:
     return f"""
-        SELECT to_char(dt_vencimento, 'YYYY-MM') AS mes,
+        SELECT to_char({_EXPR_DT_CARTAO_EFETIVA}, 'YYYY-MM') AS mes,
             COUNT(*)::int AS qtd, ROUND(SUM(vl_fatura - COALESCE(vl_desconto, 0))::numeric, 2) AS valor
         FROM vr_fcr_faturai
         {where}
@@ -491,7 +497,7 @@ def _sql_cartao_mensal(where: str) -> str:
 
 def _sql_cartao_diario(where: str) -> str:
     return f"""
-        SELECT dt_vencimento::date AS dia,
+        SELECT {_EXPR_DT_CARTAO_EFETIVA}::date AS dia,
             COUNT(*)::int AS qtd, ROUND(SUM(vl_fatura - COALESCE(vl_desconto, 0))::numeric, 2) AS valor
         FROM vr_fcr_faturai
         {where}
