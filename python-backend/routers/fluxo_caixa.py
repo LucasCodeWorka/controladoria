@@ -13,6 +13,7 @@ ja foram descontadas junto ao banco, e por isso saem do Boleto futuro).
 from fastapi import APIRouter, HTTPException, Query
 from typing import List, Optional
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 import time
 from database import execute_query, execute_insert
 
@@ -229,14 +230,21 @@ SQL_SALDOS_BANCARIOS = """
 
 
 def _obter_saldos_bancarios() -> dict:
+    """Conta cuja ultima posicao nao e de HOJE (horario de Brasilia) entra
+    com saldo 0 e semDados=True - saldo de dias anteriores nao vale como
+    posicao de caixa atual (pedido explicito do usuario). Vale pra tabela,
+    pro total e pro saldo inicial do fluxo, que usam todos este total."""
+    hoje = datetime.now(ZoneInfo("America/Sao_Paulo")).date().isoformat()
     rows = execute_query(SQL_SALDOS_BANCARIOS) or []
-    contas = [
-        {
+    contas = []
+    for r in rows:
+        dt_posicao = _dia_str(r["dt_posicao"])
+        sem_dados = dt_posicao != hoje
+        contas.append({
             "nmBanco": r["nm_banco"], "nrAgencia": r["nr_agencia"], "nrConta": r["nr_conta"],
-            "vlSaldo": float(r["vl_saldo"]), "dtPosicao": _dia_str(r["dt_posicao"]),
-        }
-        for r in rows
-    ]
+            "vlSaldo": 0.0 if sem_dados else float(r["vl_saldo"]),
+            "dtPosicao": dt_posicao, "semDados": sem_dados,
+        })
     total = sum(c["vlSaldo"] for c in contas)
     return {"contas": contas, "total": total}
 
