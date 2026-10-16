@@ -412,6 +412,34 @@ interface FaturamentoFabricaMes {
   hoje: string;
   dias: { dia: string; valor: number | null }[];
   total: number;
+  anoAnterior?: { inicio: string; fim: string; dias: { dia: string; valor: number }[]; total: number };
+}
+
+interface ResumoDias { total: number; media: number; melhor: { dia: string; valor: number } | null }
+
+function resumirDias(dias: { dia: string; valor: number | null }[]): ResumoDias {
+  const comVenda = dias.filter((d) => (d.valor ?? 0) > 0) as { dia: string; valor: number }[];
+  const total = dias.reduce((a, d) => a + (d.valor ?? 0), 0);
+  const media = comVenda.length ? comVenda.reduce((a, d) => a + d.valor, 0) / comVenda.length : 0;
+  const melhor = comVenda.reduce<{ dia: string; valor: number } | null>((m, d) => (!m || d.valor > m.valor ? d : m), null);
+  return { total, media, melhor };
+}
+
+// Comparacao com o mesmo periodo do ano anterior embaixo de cada indicador:
+// "2025: R$ X" + variacao % (verde se subiu, vermelho se caiu).
+function Comparativo({ atual, anterior, ano, sufixo }: { atual: number; anterior: number; ano: string; sufixo?: string }) {
+  const variacao = anterior ? (atual / anterior - 1) * 100 : null;
+  const subiu = (variacao ?? 0) >= 0;
+  return (
+    <p className="text-xs text-gray-500 mt-0.5 whitespace-nowrap">
+      {ano}: <span className="tabular-nums">{fmtBRL(anterior)}</span>{sufixo ? <span> {sufixo}</span> : null}
+      {variacao !== null && (
+        <span className={`ml-1.5 inline-flex items-center rounded px-1.5 py-0.5 font-semibold tabular-nums ${subiu ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+          {subiu ? '▲' : '▼'} {Math.abs(variacao).toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%
+        </span>
+      )}
+    </p>
+  );
 }
 
 const MESES_EXTENSO = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
@@ -432,25 +460,47 @@ function TooltipFaturamento({ active, payload, hoje }: { active?: boolean; paylo
   );
 }
 
-// Rotulo em cima de cada coluna so com o numero em milhares ("247"): com ate
-// 31 colunas lado a lado, ate "247 mil" encostava no dia vizinho em tela de
-// notebook. O subtitulo do grafico avisa que os rotulos estao em R$ mil.
+// Rotulo em dinheiro em cima de cada coluna ("R$ 247 mil", "R$ 873").
+// Quando o texto nao cabe na largura da coluna (tela estreita / mes cheio),
+// vira vertical: dentro da coluna, em branco, se ela for alta o bastante;
+// senao, acima dela. Assim nunca encosta no rotulo do dia vizinho.
 function fmtRotuloDia(v: number): string {
-  return Math.round(v / 1000).toLocaleString('pt-BR');
+  const abs = Math.abs(v);
+  const sinal = v < 0 ? '-' : '';
+  if (abs >= 1_000_000) return `${sinal}R$ ${(abs / 1_000_000).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} mi`;
+  if (abs >= 1000) return `${sinal}R$ ${Math.round(abs / 1000).toLocaleString('pt-BR')} mil`;
+  return `${sinal}R$ ${Math.round(abs).toLocaleString('pt-BR')}`;
 }
 
-function rotuloFaturamentoDia(corTexto: string) {
+function rotuloFaturamentoDia(corTexto: string, valorColunaClara: number | null) {
   return function RotuloFaturamentoDia(props: LabelProps) {
-  const vb = (props.viewBox ?? {}) as { x?: number; y?: number; width?: number };
-  const valor = Number(props.value ?? 0);
-  if (!valor) return null;
-  const x = Number(vb.x ?? props.x ?? 0) + Number(vb.width ?? props.width ?? 0) / 2;
-  return (
-    <text x={x} y={Number(vb.y ?? props.y ?? 0) - 6} textAnchor="middle" fontSize={12} fontWeight={600} fill={corTexto}
-      stroke="#ffffff" strokeWidth={3} paintOrder="stroke">
-      {fmtRotuloDia(valor)}
-    </text>
-  );
+    const vb = (props.viewBox ?? {}) as { x?: number; y?: number; width?: number; height?: number };
+    const valor = Number(props.value ?? 0);
+    if (!valor) return null;
+    const largura = Number(vb.width ?? props.width ?? 0);
+    const altura = Math.abs(Number(vb.height ?? props.height ?? 0));
+    const x = Number(vb.x ?? props.x ?? 0) + largura / 2;
+    const topo = Number(vb.y ?? props.y ?? 0);
+    const texto = fmtRotuloDia(valor);
+    const larguraTexto = texto.length * 6.4;
+    // barCategoryGap 20%: o espaco do dia e ~largura da coluna / 0,8
+    if (larguraTexto <= largura / 0.8 + 2) {
+      return (
+        <text x={x} y={topo - 6} textAnchor="middle" fontSize={11} fontWeight={600} fill={corTexto}
+          stroke="#ffffff" strokeWidth={3} paintOrder="stroke">
+          {texto}
+        </text>
+      );
+    }
+    const dentro = altura >= larguraTexto + 10;
+    const y = dentro ? topo + 6 : topo - 6;
+    return (
+      <text x={x} y={y} transform={`rotate(-90, ${x}, ${y})`} textAnchor={dentro ? 'end' : 'start'} dominantBaseline="central"
+        fontSize={11} fontWeight={600} fill={dentro && valor !== valorColunaClara ? '#ffffff' : corTexto}
+        stroke={dentro ? 'none' : '#ffffff'} strokeWidth={dentro ? 0 : 3} paintOrder="stroke">
+        {texto}
+      </text>
+    );
   };
 }
 
@@ -486,11 +536,16 @@ function GraficoFaturamentoDiario({ config }: { config: ConfigFaturamento }) {
       .catch((e) => setErro(e instanceof Error ? e.message : 'Erro ao buscar faturamento'));
   }, [config.endpoint]);
 
-  const rotulo = React.useMemo(() => rotuloFaturamentoDia(config.corRotulo), [config.corRotulo]);
+  // Coluna de hoje usa tom claro: texto branco dentro dela some, entao vai
+  // escuro (identificada pelo valor - o rotulo do recharts nao recebe o indice).
+  const rotulo = React.useMemo(
+    () => rotuloFaturamentoDia(config.corRotulo, dados?.dias.find((d) => d.dia === dados.hoje)?.valor ?? null),
+    [config.corRotulo, dados],
+  );
   const [ano, mes] = (dados?.mes ?? '').split('-');
-  const comVenda = (dados?.dias ?? []).filter((d) => (d.valor ?? 0) > 0);
-  const media = comVenda.length ? comVenda.reduce((a, d) => a + (d.valor ?? 0), 0) / comVenda.length : 0;
-  const melhor = comVenda.reduce<{ dia: string; valor: number | null } | null>((m, d) => (!m || (d.valor ?? 0) > (m.valor ?? 0) ? d : m), null);
+  const { media, melhor } = resumirDias(dados?.dias ?? []);
+  const anterior = dados?.anoAnterior ? resumirDias(dados.anoAnterior.dias) : null;
+  const anoAnt = dados?.anoAnterior?.inicio.slice(0, 4) ?? '';
 
   // Marcacoes redondas no eixo (0, 100 mil, 200 mil...) - o automatico do
   // recharts dava 65 mil / 130 mil / 195 mil.
@@ -510,7 +565,7 @@ function GraficoFaturamentoDiario({ config }: { config: ConfigFaturamento }) {
         <div>
           <h2 className="text-sm font-semibold text-black uppercase tracking-wide">{config.titulo}</h2>
           <p className="text-xs text-gray-500 mt-0.5">
-            {dados ? `${MESES_EXTENSO[Number(mes) - 1]}/${ano} · ${config.empresas} · rótulos em R$ mil · não depende do filtro acima` : `Mês atual · ${config.empresas}`}
+            {dados ? `${MESES_EXTENSO[Number(mes) - 1]}/${ano} · ${config.empresas} · não depende do filtro acima${dados.anoAnterior ? ` · comparação com ${dados.anoAnterior.inicio.split('-').reverse().join('/')} a ${dados.anoAnterior.fim.split('-').reverse().join('/')}` : ''}` : `Mês atual · ${config.empresas}`}
           </p>
         </div>
         {dados && (
@@ -518,10 +573,12 @@ function GraficoFaturamentoDiario({ config }: { config: ConfigFaturamento }) {
             <div>
               <p className="text-xs text-gray-500">Total no mês</p>
               <p className="text-lg font-bold text-gray-900 whitespace-nowrap">{fmtBRL(dados.total)}</p>
+              {anterior && <Comparativo atual={dados.total} anterior={anterior.total} ano={anoAnt} />}
             </div>
             <div>
               <p className="text-xs text-gray-500">Média por dia com venda</p>
               <p className="text-lg font-semibold text-gray-900 whitespace-nowrap">{fmtBRL(media)}</p>
+              {anterior && <Comparativo atual={media} anterior={anterior.media} ano={anoAnt} />}
             </div>
             {melhor && (
               <div>
@@ -529,6 +586,10 @@ function GraficoFaturamentoDiario({ config }: { config: ConfigFaturamento }) {
                 <p className="text-lg font-semibold text-gray-900 whitespace-nowrap">
                   {fmtBRL(melhor.valor)} <span className="text-xs font-normal text-gray-500">em {melhor.dia.slice(8, 10)}/{mes}</span>
                 </p>
+                {anterior?.melhor && (
+                  <Comparativo atual={melhor.valor} anterior={anterior.melhor.valor} ano={anoAnt}
+                    sufixo={`em ${anterior.melhor.dia.slice(8, 10)}/${anterior.melhor.dia.slice(5, 7)}`} />
+                )}
               </div>
             )}
           </div>

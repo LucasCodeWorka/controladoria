@@ -774,7 +774,25 @@ def _faturamento_diario_mes_atual(sql: str, params_extra: tuple) -> dict:
         iso = d.isoformat()
         dias.append({"dia": iso, "valor": por_dia.get(iso, 0.0) if d <= hoje else None})
         d += timedelta(days=1)
-    return {"mes": inicio.isoformat()[:7], "hoje": hoje.isoformat(), "dias": dias, "total": sum(por_dia.values())}
+
+    # Mesmo periodo do ano anterior (dia 1 ate o mesmo dia de hoje, um ano
+    # antes) com a mesma regra - pra comparacao/variacao nos indicadores.
+    # 29/02 sem par no ano anterior vira o ultimo dia de fevereiro.
+    ini_ant = inicio.replace(year=inicio.year - 1)
+    ultimo_dia_ant = (ini_ant + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+    fim_ant = ini_ant.replace(day=min(hoje.day, ultimo_dia_ant.day))
+    rows_ant = execute_query(sql, (*params_extra, ini_ant.isoformat(), (fim_ant + timedelta(days=1)).isoformat())) or []
+    por_dia_ant = {_dia_str(r["dia"]): float(r["liquido"]) for r in rows_ant}
+    dias_ant = []
+    d = ini_ant
+    while d <= fim_ant:
+        dias_ant.append({"dia": d.isoformat(), "valor": por_dia_ant.get(d.isoformat(), 0.0)})
+        d += timedelta(days=1)
+
+    return {
+        "mes": inicio.isoformat()[:7], "hoje": hoje.isoformat(), "dias": dias, "total": sum(por_dia.values()),
+        "anoAnterior": {"inicio": ini_ant.isoformat(), "fim": fim_ant.isoformat(), "dias": dias_ant, "total": sum(por_dia_ant.values())},
+    }
 
 
 @router.get("/api/fluxo-caixa/faturamento-fabrica-mes")
