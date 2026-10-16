@@ -414,8 +414,6 @@ interface FaturamentoFabricaMes {
   total: number;
 }
 
-const COR_FATURAMENTO = '#4f46e5';
-const COR_FATURAMENTO_HOJE = '#a5b4fc';
 const MESES_EXTENSO = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
 const DIAS_SEMANA_CURTO = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb'];
 
@@ -434,20 +432,61 @@ function TooltipFaturamento({ active, payload, hoje }: { active?: boolean; paylo
   );
 }
 
-function GraficoFaturamentoFabrica() {
+// Rotulo em cima de cada coluna so com o numero em milhares ("247"): com ate
+// 31 colunas lado a lado, ate "247 mil" encostava no dia vizinho em tela de
+// notebook. O subtitulo do grafico avisa que os rotulos estao em R$ mil.
+function fmtRotuloDia(v: number): string {
+  return Math.round(v / 1000).toLocaleString('pt-BR');
+}
+
+function rotuloFaturamentoDia(corTexto: string) {
+  return function RotuloFaturamentoDia(props: LabelProps) {
+  const vb = (props.viewBox ?? {}) as { x?: number; y?: number; width?: number };
+  const valor = Number(props.value ?? 0);
+  if (!valor) return null;
+  const x = Number(vb.x ?? props.x ?? 0) + Number(vb.width ?? props.width ?? 0) / 2;
+  return (
+    <text x={x} y={Number(vb.y ?? props.y ?? 0) - 6} textAnchor="middle" fontSize={12} fontWeight={600} fill={corTexto}
+      stroke="#ffffff" strokeWidth={3} paintOrder="stroke">
+      {fmtRotuloDia(valor)}
+    </text>
+  );
+  };
+}
+
+interface ConfigFaturamento {
+  titulo: string;
+  empresas: string;
+  endpoint: string;
+  cor: string;
+  corHoje: string;
+  corRotulo: string;
+}
+
+const FATURAMENTO_FABRICA: ConfigFaturamento = {
+  titulo: 'Faturamento Diário — Fábrica', empresas: 'empresa 001', endpoint: '/api/fluxo-caixa/faturamento-fabrica-mes',
+  cor: '#4f46e5', corHoje: '#a5b4fc', corRotulo: '#3730a3',
+};
+const FATURAMENTO_LOJAS: ConfigFaturamento = {
+  titulo: 'Faturamento Diário — Lojas', empresas: 'empresas 002 a 120 somadas', endpoint: '/api/fluxo-caixa/faturamento-lojas-mes',
+  cor: '#0891b2', corHoje: '#a5f3fc', corRotulo: '#155e75',
+};
+
+function GraficoFaturamentoDiario({ config }: { config: ConfigFaturamento }) {
   const [dados, setDados] = useState<FaturamentoFabricaMes | null>(null);
   const [erro, setErro] = useState('');
 
   useEffect(() => {
-    fetch('/api/fluxo-caixa/faturamento-fabrica-mes', { cache: 'no-store' })
+    fetch(config.endpoint, { cache: 'no-store' })
       .then(async (r) => {
         const json = await r.json();
         if (!r.ok) throw new Error(json.detail || json.error || 'Erro ao buscar faturamento');
         setDados(json);
       })
       .catch((e) => setErro(e instanceof Error ? e.message : 'Erro ao buscar faturamento'));
-  }, []);
+  }, [config.endpoint]);
 
+  const rotulo = React.useMemo(() => rotuloFaturamentoDia(config.corRotulo), [config.corRotulo]);
   const [ano, mes] = (dados?.mes ?? '').split('-');
   const comVenda = (dados?.dias ?? []).filter((d) => (d.valor ?? 0) > 0);
   const media = comVenda.length ? comVenda.reduce((a, d) => a + (d.valor ?? 0), 0) / comVenda.length : 0;
@@ -469,9 +508,9 @@ function GraficoFaturamentoFabrica() {
     <div className="bg-white rounded-lg shadow-md p-4">
       <div className="flex items-start justify-between flex-wrap gap-4 mb-3">
         <div>
-          <h2 className="text-sm font-semibold text-black uppercase tracking-wide">Faturamento Diário — Fábrica</h2>
+          <h2 className="text-sm font-semibold text-black uppercase tracking-wide">{config.titulo}</h2>
           <p className="text-xs text-gray-500 mt-0.5">
-            {dados ? `${MESES_EXTENSO[Number(mes) - 1]}/${ano} · empresa 001 · não depende do filtro acima` : 'Mês atual · empresa 001'}
+            {dados ? `${MESES_EXTENSO[Number(mes) - 1]}/${ano} · ${config.empresas} · rótulos em R$ mil · não depende do filtro acima` : `Mês atual · ${config.empresas}`}
           </p>
         </div>
         {dados && (
@@ -507,9 +546,9 @@ function GraficoFaturamentoFabrica() {
         </div>
       )}
       {dados && (
-        <div role="img" aria-label={`Faturamento diário da fábrica em ${MESES_EXTENSO[Number(mes) - 1]} de ${ano}`}>
+        <div role="img" aria-label={`${config.titulo} em ${MESES_EXTENSO[Number(mes) - 1]} de ${ano}`}>
           <ResponsiveContainer width="100%" height={260}>
-            <BarChart data={dados.dias} margin={{ top: 8, right: 16, left: 4, bottom: 0 }} barCategoryGap="20%">
+            <BarChart data={dados.dias} margin={{ top: 22, right: 16, left: 4, bottom: 0 }} barCategoryGap="20%">
               <CartesianGrid stroke="#f1f2f4" vertical={false} />
               <XAxis
                 dataKey="dia" axisLine={{ stroke: '#d1d5db' }} tickLine={false} interval={0}
@@ -533,14 +572,15 @@ function GraficoFaturamentoFabrica() {
               )}
               <Tooltip content={<TooltipFaturamento hoje={dados.hoje} />} cursor={{ fill: '#f3f4f6', radius: 4 }} />
               <Bar dataKey="valor" radius={[4, 4, 0, 0]} maxBarSize={36}>
+                <LabelList dataKey="valor" content={rotulo} />
                 {dados.dias.map((d) => (
-                  <Cell key={d.dia} fill={d.dia === dados.hoje ? COR_FATURAMENTO_HOJE : COR_FATURAMENTO} />
+                  <Cell key={d.dia} fill={d.dia === dados.hoje ? config.corHoje : config.cor} />
                 ))}
               </Bar>
             </BarChart>
           </ResponsiveContainer>
           <p className="text-xs text-gray-500 mt-1 flex items-center gap-1.5">
-            <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: COR_FATURAMENTO_HOJE }} />
+            <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: config.corHoje }} />
             Hoje (dia ainda em andamento) · fins de semana em cinza no eixo
           </p>
         </div>
@@ -1346,7 +1386,8 @@ export default function FluxoCaixaPage() {
             <GraficoMensalFC meses={dados.meses} saldoBancario={dados.saldoBancario} />
           </div>
 
-          <GraficoFaturamentoFabrica />
+          <GraficoFaturamentoDiario config={FATURAMENTO_FABRICA} />
+          <GraficoFaturamentoDiario config={FATURAMENTO_LOJAS} />
 
           {/* Visao diaria */}
           <div className="bg-white rounded-lg shadow-md overflow-hidden">
