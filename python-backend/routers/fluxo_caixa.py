@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException, Query
 from typing import List, Optional
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
+import threading
 import time
 from database import execute_query, execute_insert
 from routers.indicadores import OPERACOES_EXCLUIDAS, OPERACOES_EXCLUIDAS_LOJAS, REPRESENTANTES_EXCLUIDOS
@@ -381,14 +382,15 @@ def _sql_saidas_por_fornecedor(where: str) -> str:
 # cd_empresa).
 def _sql_saidas_por_despesa(where: str) -> str:
     return f"""
-        SELECT d.cd_despesaitem, i.ds_despesaitem AS nome,
+        SELECT d.cd_despesaitem, i.ds_despesaitem AS nome, c.conta_dfc,
             ROUND(SUM(d.vl_rateio * (d.vl_duplicata - d.vl_pago) / NULLIF(d.vl_duplicata, 0))::numeric, 2) AS valor,
             COUNT(*)::int AS qtd
         FROM vr_fcp_despduplicatai d
         JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
+        LEFT JOIN classificacao_despesas_dfc c ON c.cd_despesaitem = d.cd_despesaitem
         {where}
-        GROUP BY 1, 2
-        ORDER BY 3 DESC
+        GROUP BY 1, 2, 3
+        ORDER BY 4 DESC
     """
 
 
@@ -815,6 +817,122 @@ def faturamento_lojas_mes():
         raise HTTPException(status_code=500, detail="Erro ao buscar faturamento das lojas")
 
 
+# ── Acumulado do ano (faturamento fabrica / lojas) ───────────────────────
+# A consulta de faturamento e pesada (fabrica jan-set ~87s), entao cada MES
+# FECHADO e calculado uma vez e guardado em fcp_faturamento_mensal. Meses do
+# ano corrente sao recalculados se o calculo tiver mais de 24h (devolucao
+# lancada depois); meses do ano anterior ficam fixos. O mes atual NAO entra
+# aqui - a tela soma o total do mes que ja vem de faturamento-*-mes.
+_SEGMENTOS_FATURAMENTO = {
+    "fabrica": (SQL_FATURAMENTO_FABRICA_DIARIO, lambda: (list(REPRESENTANTES_EXCLUIDOS), list(OPERACOES_EXCLUIDAS))),
+    "lojas": (SQL_FATURAMENTO_LOJAS_DIARIO, lambda: (list(OPERACOES_EXCLUIDAS_LOJAS),)),
+}
+_calculo_ano_lock = threading.Lock()
+_calculo_ano_rodando = False
+
+
+def _criar_tabela_faturamento_mensal():
+    execute_insert("""
+        CREATE TABLE IF NOT EXISTS fcp_faturamento_mensal (
+            segmento TEXT NOT NULL,
+            mes DATE NOT NULL,
+            valor NUMERIC(16,2) NOT NULL,
+            dt_calculado TIMESTAMP DEFAULT NOW(),
+            PRIMARY KEY (segmento, mes)
+        )
+    """, ())
+
+
+def _meses_fechados_do_ano(hoje: date) -> tuple:
+    """(meses do ano corrente ja fechados, mesmos meses do ano anterior) -
+    em janeiro, os dois ficam vazios."""
+    atuais = [date(hoje.year, m, 1) for m in range(1, hoje.month)]
+    anteriores = [date(hoje.year - 1, m, 1) for m in range(1, hoje.month)]
+    return atuais, anteriores
+
+
+def _meses_pendentes(hoje: date) -> list:
+    atuais, anteriores = _meses_fechados_do_ano(hoje)
+    rows = execute_query(
+        "SELECT segmento, mes, dt_calculado FROM fcp_faturamento_mensal WHERE mes >= %s",
+        (date(hoje.year - 1, 1, 1).isoformat(),),
+    ) or []
+    calculado = {(r["segmento"], _dia_str(r["mes"])): r["dt_calculado"] for r in rows}
+    limite = datetime.now() - timedelta(hours=24)
+    pendentes = []
+    for seg in _SEGMENTOS_FATURAMENTO:
+        for mes in anteriores:
+            if (seg, mes.isoformat()) not in calculado:
+                pendentes.append((seg, mes))
+        for mes in atuais:
+            quando = calculado.get((seg, mes.isoformat()))
+            if quando is None or quando < limite:
+                pendentes.append((seg, mes))
+    return pendentes
+
+
+def _calcular_meses_faturamento(pendentes: list):
+    global _calculo_ano_rodando
+    try:
+        for seg, mes in pendentes:
+            sql, params = _SEGMENTOS_FATURAMENTO[seg]
+            proximo = (mes + timedelta(days=32)).replace(day=1)
+            rows = execute_query(sql, (*params(), mes.isoformat(), proximo.isoformat())) or []
+            valor = round(sum(float(r["liquido"]) for r in rows), 2)
+            execute_insert(
+                """INSERT INTO fcp_faturamento_mensal (segmento, mes, valor, dt_calculado) VALUES (%s, %s, %s, NOW())
+                   ON CONFLICT (segmento, mes) DO UPDATE SET valor = EXCLUDED.valor, dt_calculado = NOW()""",
+                (seg, mes.isoformat(), valor),
+            )
+            print(f"[FATURAMENTO-ANO] {seg} {mes.isoformat()[:7]} = {valor}")
+    except Exception as e:
+        print(f"[ERROR] Erro ao calcular faturamento mensal: {e}")
+    finally:
+        with _calculo_ano_lock:
+            _calculo_ano_rodando = False
+
+
+@router.get("/api/fluxo-caixa/faturamento-ano")
+def faturamento_ano():
+    """Faturamento dos meses fechados do ano (fabrica e lojas) e dos mesmos
+    meses do ano anterior. Se faltar algum mes no cache, dispara o calculo
+    em segundo plano e responde calculando=True (a tela tenta de novo)."""
+    global _calculo_ano_rodando
+    try:
+        _criar_tabela_faturamento_mensal()
+        hoje = datetime.now(ZoneInfo("America/Sao_Paulo")).date()
+        pendentes = _meses_pendentes(hoje)
+        atuais, anteriores = _meses_fechados_do_ano(hoje)
+        # Mes do ano corrente com calculo velho (>24h) ainda serve enquanto
+        # recalcula; so bloqueia se algum mes nunca foi calculado.
+        rows = execute_query(
+            "SELECT segmento, mes, valor FROM fcp_faturamento_mensal WHERE mes >= %s",
+            (date(hoje.year - 1, 1, 1).isoformat(),),
+        ) or []
+        valores = {(r["segmento"], _dia_str(r["mes"])): float(r["valor"]) for r in rows}
+        faltando = any((seg, mes.isoformat()) not in valores for seg, mes in pendentes)
+        if pendentes:
+            with _calculo_ano_lock:
+                if not _calculo_ano_rodando:
+                    _calculo_ano_rodando = True
+                    threading.Thread(target=_calcular_meses_faturamento, args=(pendentes,), daemon=True).start()
+        resposta = {
+            "ano": hoje.year,
+            "ateMes": atuais[-1].isoformat()[:7] if atuais else None,
+            "calculando": faltando,
+            "mesesPendentes": len(pendentes),
+        }
+        for seg in _SEGMENTOS_FATURAMENTO:
+            resposta[seg] = {
+                "atual": sum(valores.get((seg, m.isoformat()), 0.0) for m in atuais),
+                "anterior": sum(valores.get((seg, m.isoformat()), 0.0) for m in anteriores),
+            }
+        return resposta
+    except Exception as e:
+        print(f"[ERROR] Erro ao buscar faturamento do ano: {e}")
+        raise HTTPException(status_code=500, detail="Erro ao buscar faturamento do ano")
+
+
 @router.get("/api/fluxo-caixa/dados")
 def dados_fluxo_caixa(
     dt_inicio: Optional[str] = Query(None, description="Data inicial YYYY-MM-DD (default: hoje)"),
@@ -994,7 +1112,7 @@ def saidas_por_despesa(
         rows = execute_query(_sql_saidas_por_despesa(where), tuple(params)) or []
         return [
             {"cdDespesaItem": int(r["cd_despesaitem"]) if r["cd_despesaitem"] is not None else None,
-             "nome": r["nome"], "valor": float(r["valor"]), "qtd": r["qtd"]}
+             "nome": r["nome"], "contaDfc": r["conta_dfc"], "valor": float(r["valor"]), "qtd": r["qtd"]}
             for r in rows
         ]
     except Exception as e:

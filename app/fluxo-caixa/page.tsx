@@ -106,8 +106,39 @@ interface SaidaFornecedor {
 interface SaidaDespesa {
   cdDespesaItem: number | null;
   nome: string;
+  contaDfc: string | null;
   valor: number;
   qtd: number;
+}
+
+interface ItemRanking {
+  nome: string;
+  valor: number;
+  composicao?: { nome: string; valor: number }[];
+}
+
+// Materia prima vira uma linha so no ranking de despesas (pedido explicito do
+// usuario). Criterio principal: a classificacao DFC OP.01 (Custos com Materia
+// Prima). Item ainda sem classificacao cai na heuristica pelo nome.
+// Classificado em outra conta (ex.: EDGE 700 = INV.01) NAO entra.
+const CONTA_DFC_MATERIA_PRIMA = 'OP.01';
+const NOME_MATERIA_PRIMA =
+  /\b(MATERIA ?PRIMA|M\.? ?PRIMA|TECIDOS?|MALHAS?|RENDAS?|LYCRA|ELASTICOS?|BOJOS?|LINHAS?|FIOS?|TULES?|CETIM|COTTON|MANTAS?|ARCOS?|ABOTOADOR(ES)?|CADARCOS?|ENFEITES?|ETIQUETAS?|TAGS?|AVIAMENTOS?|EMBALAGE(M|NS)|BOTO(ES)|BOTAO|ZIPER|FECHOS?|ALCAS?|REGULADOR(ES)?|COLCHETES?|ENTRETELAS?)\b/;
+
+function ehMateriaPrima(d: SaidaDespesa) {
+  if (d.contaDfc) return d.contaDfc.startsWith(CONTA_DFC_MATERIA_PRIMA);
+  return NOME_MATERIA_PRIMA.test(d.nome.normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase());
+}
+
+function agruparMateriaPrima(despesas: SaidaDespesa[]): ItemRanking[] {
+  const mp = despesas.filter(ehMateriaPrima);
+  if (!mp.length) return despesas;
+  const linhaMp: ItemRanking = {
+    nome: 'MATÉRIA PRIMA',
+    valor: mp.reduce((a, d) => a + d.valor, 0),
+    composicao: [...mp].sort((a, b) => b.valor - a.valor).map((d) => ({ nome: d.nome, valor: d.valor })),
+  };
+  return [linhaMp, ...despesas.filter((d) => !ehMateriaPrima(d))].sort((a, b) => b.valor - a.valor);
 }
 
 interface BoletoDetalheItem {
@@ -445,9 +476,9 @@ function Comparativo({ atual, anterior, ano, sufixo }: { atual: number; anterior
 const MESES_EXTENSO = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
 const DIAS_SEMANA_CURTO = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb'];
 
-function TooltipFaturamento({ active, payload, hoje }: { active?: boolean; payload?: { payload: { dia: string; valor: number | null } }[]; hoje: string }) {
+function TooltipFaturamento({ active, payload, hoje }: { active?: boolean; payload?: { payload: { dia: string; valor: number | null; fabrica?: number | null; lojas?: number | null } }[]; hoje: string }) {
   if (!active || !payload?.length) return null;
-  const { dia, valor } = payload[0].payload;
+  const { dia, valor, fabrica, lojas } = payload[0].payload;
   if (valor === null) return null;
   const dt = new Date(`${dia}T12:00:00`);
   return (
@@ -455,7 +486,13 @@ function TooltipFaturamento({ active, payload, hoje }: { active?: boolean; paylo
       <p className="font-semibold text-black">
         {dia.split('-').reverse().join('/')} ({DIAS_SEMANA_CURTO[dt.getDay()]}){dia === hoje ? ' · parcial' : ''}
       </p>
-      <p className="tabular-nums text-black mt-0.5">{fmtBRL(valor)}</p>
+      <p className="tabular-nums text-black mt-0.5 font-semibold">{fmtBRL(valor)}</p>
+      {fabrica !== undefined && lojas !== undefined && (
+        <div className="mt-1 pt-1 border-t border-gray-100 space-y-0.5 tabular-nums text-black">
+          <p className="flex justify-between gap-4"><span>Fábrica</span><span>{fmtBRL(fabrica ?? 0)}</span></p>
+          <p className="flex justify-between gap-4"><span>Lojas</span><span>{fmtBRL(lojas ?? 0)}</span></p>
+        </div>
+      )}
     </div>
   );
 }
@@ -507,35 +544,206 @@ function rotuloFaturamentoDia(corTexto: string, valorColunaClara: number | null)
 interface ConfigFaturamento {
   titulo: string;
   empresas: string;
-  endpoint: string;
   cor: string;
   corHoje: string;
   corRotulo: string;
 }
 
-const FATURAMENTO_FABRICA: ConfigFaturamento = {
-  titulo: 'Faturamento Diário — Fábrica', empresas: 'empresa 001', endpoint: '/api/fluxo-caixa/faturamento-fabrica-mes',
-  cor: '#4f46e5', corHoje: '#a5b4fc', corRotulo: '#3730a3',
-};
-const FATURAMENTO_LOJAS: ConfigFaturamento = {
-  titulo: 'Faturamento Diário — Lojas', empresas: 'empresas 002 a 120 somadas', endpoint: '/api/fluxo-caixa/faturamento-lojas-mes',
-  cor: '#0891b2', corHoje: '#a5f3fc', corRotulo: '#155e75',
+type VisaoFaturamento = 'fabrica' | 'lojas' | 'ambos';
+
+const CONFIG_FATURAMENTO: Record<VisaoFaturamento, ConfigFaturamento> = {
+  fabrica: { titulo: 'Fábrica', empresas: 'empresa 001', cor: '#4f46e5', corHoje: '#a5b4fc', corRotulo: '#3730a3' },
+  lojas: { titulo: 'Lojas', empresas: 'empresas 002 a 120 somadas', cor: '#0891b2', corHoje: '#a5f3fc', corRotulo: '#155e75' },
+  ambos: { titulo: 'Fábrica + Lojas', empresas: 'empresas 001 a 120 somadas', cor: '#334155', corHoje: '#94a3b8', corRotulo: '#0f172a' },
 };
 
-function GraficoFaturamentoDiario({ config }: { config: ConfigFaturamento }) {
-  const [dados, setDados] = useState<FaturamentoFabricaMes | null>(null);
+const CHAVE_VISAO_FATURAMENTO = 'fluxo_caixa_faturamento_visao';
+
+// Acumulado do ano: meses FECHADOS (backend, com cache) + o mes atual ate
+// hoje (que ja vem do endpoint do mes) - evita refazer a consulta pesada
+// do mes atual duas vezes.
+interface FaturamentoAno {
+  ano: number;
+  ateMes: string | null;
+  calculando: boolean;
+  mesesPendentes: number;
+  fabrica: { atual: number; anterior: number };
+  lojas: { atual: number; anterior: number };
+}
+
+// Soma fabrica + lojas dia a dia (mesmo mes, mesmos dias). Guarda a parte de
+// cada um pro tooltip. Dia futuro (null nos dois) continua null.
+function somarDiasFaturamento(x: { dia: string; valor: number | null }[], y: { dia: string; valor: number | null }[]) {
+  return x.map((d, i) => {
+    const outro = y[i]?.valor ?? null;
+    return {
+      dia: d.dia,
+      valor: d.valor === null && outro === null ? null : (d.valor ?? 0) + (outro ?? 0),
+      fabrica: d.valor,
+      lojas: outro,
+    };
+  });
+}
+
+function somarFaturamento(a: FaturamentoFabricaMes, b: FaturamentoFabricaMes): FaturamentoFabricaMes {
+  return {
+    mes: a.mes,
+    hoje: a.hoje,
+    dias: somarDiasFaturamento(a.dias, b.dias),
+    total: a.total + b.total,
+    anoAnterior: a.anoAnterior && b.anoAnterior
+      ? {
+          inicio: a.anoAnterior.inicio,
+          fim: a.anoAnterior.fim,
+          dias: somarDiasFaturamento(a.anoAnterior.dias, b.anoAnterior.dias).map((d) => ({ dia: d.dia, valor: d.valor ?? 0 })),
+          total: a.anoAnterior.total + b.anoAnterior.total,
+        }
+      : undefined,
+  };
+}
+
+function GraficoFaturamentoUnificado() {
+  const [fabrica, setFabrica] = useState<FaturamentoFabricaMes | null>(null);
+  const [lojas, setLojas] = useState<FaturamentoFabricaMes | null>(null);
+  const [ano, setAno] = useState<FaturamentoAno | null>(null);
+  const [anoErro, setAnoErro] = useState(false);
   const [erro, setErro] = useState('');
+  const [visao, setVisao] = useState<VisaoFaturamento>('ambos');
 
   useEffect(() => {
-    fetch(config.endpoint, { cache: 'no-store' })
-      .then(async (r) => {
-        const json = await r.json();
-        if (!r.ok) throw new Error(json.detail || json.error || 'Erro ao buscar faturamento');
-        setDados(json);
-      })
-      .catch((e) => setErro(e instanceof Error ? e.message : 'Erro ao buscar faturamento'));
-  }, [config.endpoint]);
+    try {
+      const salva = localStorage.getItem(CHAVE_VISAO_FATURAMENTO);
+      if (salva === 'fabrica' || salva === 'lojas' || salva === 'ambos') setVisao(salva);
+    } catch { /* sem localStorage: fica no padrao */ }
+    const buscarJson = async (url: string) => {
+      const r = await fetch(url, { cache: 'no-store' });
+      const json = await r.json();
+      if (!r.ok) throw new Error(json.detail || json.error || 'Erro ao buscar faturamento');
+      return json;
+    };
+    const msg = (e: unknown) => (e instanceof Error ? e.message : 'Erro ao buscar faturamento');
+    buscarJson('/api/fluxo-caixa/faturamento-fabrica-mes').then(setFabrica).catch((e) => setErro(msg(e)));
+    buscarJson('/api/fluxo-caixa/faturamento-lojas-mes').then(setLojas).catch((e) => setErro(msg(e)));
+    // Primeira vez (cache vazio) o backend calcula em segundo plano e responde
+    // calculando=true - tenta de novo a cada 30s ate ficar pronto.
+    let tentativa: ReturnType<typeof setTimeout> | undefined;
+    const buscarAno = () => {
+      buscarJson('/api/fluxo-caixa/faturamento-ano')
+        .then((r: FaturamentoAno) => {
+          setAno(r);
+          if (r.calculando) tentativa = setTimeout(buscarAno, 30000);
+        })
+        .catch(() => setAnoErro(true));
+    };
+    buscarAno();
+    return () => { if (tentativa) clearTimeout(tentativa); };
+  }, []);
 
+  function escolherVisao(v: VisaoFaturamento) {
+    setVisao(v);
+    try { localStorage.setItem(CHAVE_VISAO_FATURAMENTO, v); } catch { /* ignora */ }
+  }
+
+  const config = CONFIG_FATURAMENTO[visao];
+  const dados: FaturamentoFabricaMes | null =
+    visao === 'fabrica' ? fabrica : visao === 'lojas' ? lojas : fabrica && lojas ? somarFaturamento(fabrica, lojas) : null;
+
+  // Acumulado do ano conforme a visao: meses fechados + mes atual ate hoje.
+  const acumulado = (() => {
+    if (!ano || ano.calculando || !fabrica || !lojas) return null;
+    const partes = visao === 'fabrica' ? [ano.fabrica] : visao === 'lojas' ? [ano.lojas] : [ano.fabrica, ano.lojas];
+    const mesAtual = visao === 'fabrica' ? [fabrica] : visao === 'lojas' ? [lojas] : [fabrica, lojas];
+    return {
+      atual: partes.reduce((a, p) => a + p.atual, 0) + mesAtual.reduce((a, m) => a + m.total, 0),
+      anterior: partes.reduce((a, p) => a + p.anterior, 0) + mesAtual.reduce((a, m) => a + (m.anoAnterior?.total ?? 0), 0),
+      ate: fabrica.hoje,
+      ateAnterior: fabrica.anoAnterior?.fim ?? null,
+    };
+  })();
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-sm font-semibold text-black uppercase tracking-wide mr-1">Faturamento</span>
+        <div className="inline-flex rounded-lg border border-gray-300 bg-white p-0.5" role="group" aria-label="Escolher fábrica, lojas ou os dois">
+          {(['fabrica', 'lojas', 'ambos'] as const).map((v) => (
+            <button
+              key={v}
+              type="button"
+              onClick={() => escolherVisao(v)}
+              aria-pressed={visao === v}
+              className={`px-3 py-1.5 text-sm rounded-md transition-colors ${visao === v ? 'bg-gray-900 text-white font-semibold' : 'text-black hover:bg-gray-100'}`}
+            >
+              {CONFIG_FATURAMENTO[v].titulo}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <AcumuladoAno
+        acumulado={acumulado}
+        carregando={!anoErro && !erro && (!ano || ano.calculando)}
+        mensagem={ano?.calculando ? `Calculando o acumulado do ano pela primeira vez (${ano.mesesPendentes} meses) — leva alguns minutos, a tela atualiza sozinha.` : 'Calculando acumulado do ano…'}
+        titulo={config.titulo}
+      />
+
+      <GraficoFaturamentoDiario config={config} dados={dados} erro={erro} />
+    </div>
+  );
+}
+
+function AcumuladoAno({ acumulado, carregando, mensagem, titulo }: {
+  acumulado: { atual: number; anterior: number; ate: string; ateAnterior: string | null } | null;
+  carregando: boolean; mensagem: string; titulo: string;
+}) {
+  if (!acumulado) {
+    return carregando ? (
+      <div className="bg-white rounded-lg shadow-md p-4 text-sm text-black flex items-center">
+        <Loader2 className="w-4 h-4 animate-spin mr-2 text-rose-600" /> {mensagem}
+      </div>
+    ) : null;
+  }
+  const variacao = acumulado.anterior ? (acumulado.atual / acumulado.anterior - 1) * 100 : null;
+  const subiu = (variacao ?? 0) >= 0;
+  const anoAtual = acumulado.ate.slice(0, 4);
+  const anoAnt = acumulado.ateAnterior?.slice(0, 4) ?? String(Number(anoAtual) - 1);
+  const fmtAte = (iso: string) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}`;
+  return (
+    <div className={`bg-white rounded-lg shadow-md p-4 border-l-4 ${subiu ? 'border-green-500' : 'border-red-500'}`}>
+      <div className="flex items-center justify-between flex-wrap gap-4">
+        <div>
+          <p className="text-sm font-semibold text-black">Acumulado do ano — {titulo}</p>
+          <p className="text-xs text-black mt-0.5">
+            01/01 a {fmtAte(acumulado.ate)} de {anoAtual}, comparado com o mesmo período de {anoAnt}
+          </p>
+        </div>
+        <div className="flex items-end gap-8 flex-wrap">
+          <div className="text-right">
+            <p className="text-xs text-black">{anoAtual}</p>
+            <p className="text-2xl font-bold text-black tabular-nums whitespace-nowrap">{fmtBRL(acumulado.atual)}</p>
+          </div>
+          <div className="text-right">
+            <p className="text-xs text-black">{anoAnt}</p>
+            <p className="text-lg font-semibold text-black tabular-nums whitespace-nowrap">{fmtBRL(acumulado.anterior)}</p>
+          </div>
+          {variacao !== null && (
+            <div className="text-right">
+              <p className="text-xs text-black">Variação</p>
+              <p className={`text-2xl font-bold tabular-nums whitespace-nowrap ${subiu ? 'text-green-700' : 'text-red-700'}`}>
+                {subiu ? '▲' : '▼'} {Math.abs(variacao).toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%
+              </p>
+              <p className={`text-xs tabular-nums ${subiu ? 'text-green-700' : 'text-red-700'}`}>
+                {subiu ? '+' : '−'}{fmtBRL(Math.abs(acumulado.atual - acumulado.anterior))}
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function GraficoFaturamentoDiario({ config, dados, erro }: { config: ConfigFaturamento; dados: FaturamentoFabricaMes | null; erro: string }) {
   // Coluna de hoje usa tom claro: texto branco dentro dela some, entao vai
   // escuro (identificada pelo valor - o rotulo do recharts nao recebe o indice).
   const rotulo = React.useMemo(
@@ -563,7 +771,7 @@ function GraficoFaturamentoDiario({ config }: { config: ConfigFaturamento }) {
     <div className="bg-white rounded-lg shadow-md p-4">
       <div className="flex items-start justify-between flex-wrap gap-4 mb-3">
         <div>
-          <h2 className="text-sm font-semibold text-black uppercase tracking-wide">{config.titulo}</h2>
+          <h2 className="text-sm font-semibold text-black uppercase tracking-wide">Faturamento Diário — {config.titulo}</h2>
           <p className="text-xs text-black mt-0.5">
             {dados ? `${MESES_EXTENSO[Number(mes) - 1]}/${ano} · ${config.empresas} · não depende do filtro acima${dados.anoAnterior ? ` · comparação com ${dados.anoAnterior.inicio.split('-').reverse().join('/')} a ${dados.anoAnterior.fim.split('-').reverse().join('/')}` : ''}` : `Mês atual · ${config.empresas}`}
           </p>
@@ -655,6 +863,104 @@ function GraficoFaturamentoDiario({ config }: { config: ConfigFaturamento }) {
   );
 }
 
+// Pontos de atencao do periodo: o dia de menor saldo acumulado (e se/quando o
+// saldo fica negativo) e os 5 dias com mais saidas. Usa as mesmas linhas da
+// Visao Diaria (com toggles de coluna e simulacao), entao bate com a tabela.
+interface LinhaAtencao {
+  dia: { dia: string };
+  effSaidas: number;
+  effReal: number;
+  effPrev: number;
+  effPed: number;
+  saldoAcum: number;
+}
+
+function fmtDiaSemana(iso: string): string {
+  const dt = new Date(`${iso}T12:00:00`);
+  return `${iso.slice(8, 10)}/${iso.slice(5, 7)} (${DIAS_SEMANA_CURTO[dt.getDay()]})`;
+}
+
+function PontosAtencaoCaixa({ linhas, totalSaidas }: { linhas: LinhaAtencao[]; totalSaidas: number }) {
+  if (!linhas.length) return null;
+  const pior = linhas.reduce((m, l) => (l.saldoAcum < m.saldoAcum ? l : m), linhas[0]);
+  const negativos = linhas.filter((l) => l.saldoAcum < 0);
+  const primeiroNegativo = negativos[0];
+  const ultimoNegativo = negativos[negativos.length - 1];
+  const terminaNegativo = linhas[linhas.length - 1].saldoAcum < 0;
+  const picos = linhas.filter((l) => l.effSaidas > 0).sort((a, b) => b.effSaidas - a.effSaidas).slice(0, 5);
+  const maiorPico = picos[0]?.effSaidas ?? 0;
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+      <div className={`bg-white rounded-lg shadow-md p-4 border-l-4 ${pior.saldoAcum < 0 ? 'border-red-500' : 'border-green-500'}`}>
+        <div className="flex items-center gap-2 text-black text-xs font-medium">
+          <AlertCircle className={`w-4 h-4 ${pior.saldoAcum < 0 ? 'text-red-600' : 'text-green-600'}`} /> Dia crítico do caixa
+        </div>
+        <p className="text-sm text-black mt-2">Menor saldo acumulado do período</p>
+        <p className="flex items-baseline gap-2 flex-wrap">
+          <span className={`text-2xl font-bold tabular-nums ${pior.saldoAcum < 0 ? 'text-red-700' : 'text-green-700'}`}>{fmtBRL(pior.saldoAcum)}</span>
+          <span className="text-sm text-black">em {fmtDiaSemana(pior.dia.dia)}</span>
+        </p>
+        <div className="mt-3 pt-3 border-t border-gray-100 text-sm text-black">
+          {negativos.length === 0 ? (
+            <p>O saldo não fica negativo em nenhum dia do período.</p>
+          ) : (
+            <p>
+              Saldo negativo em <strong>{negativos.length} dia{negativos.length > 1 ? 's' : ''}</strong> do período —
+              a partir de <strong>{fmtDiaSemana(primeiroNegativo.dia.dia)}</strong>
+              {terminaNegativo
+                ? ', e continua negativo até o fim do período.'
+                : <> até <strong>{fmtDiaSemana(ultimoNegativo.dia.dia)}</strong>.</>}
+            </p>
+          )}
+        </div>
+      </div>
+
+      <div className="bg-white rounded-lg shadow-md p-4 border-l-4 border-red-500">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 text-black text-xs font-medium">
+            <TrendingDown className="w-4 h-4 text-red-600" /> Picos de pagamento
+          </div>
+          <span className="text-xs text-black">5 dias com mais saídas</span>
+        </div>
+        {picos.length === 0 ? (
+          <p className="text-sm text-black mt-3">Nenhuma saída no período.</p>
+        ) : (
+          <div className="mt-2 space-y-1.5">
+            {picos.map((l) => {
+              const pct = totalSaidas > 0 ? (l.effSaidas / totalSaidas) * 100 : 0;
+              const partes = [
+                l.effReal > 0 ? `Real ${fmtBRL(l.effReal)}` : null,
+                l.effPrev > 0 ? `Prev. ${fmtBRL(l.effPrev)}` : null,
+                l.effPed > 0 ? `Pedidos ${fmtBRL(l.effPed)}` : null,
+              ].filter(Boolean).join(' · ');
+              return (
+                <div key={l.dia.dia} title={partes}>
+                  <div className="flex items-baseline justify-between gap-3 text-sm">
+                    <span className="text-black font-medium tabular-nums">{fmtDiaSemana(l.dia.dia)}</span>
+                    <span className="flex items-baseline gap-2">
+                      <span className="font-semibold text-red-700 tabular-nums">{fmtBRL(l.effSaidas)}</span>
+                      <span className="text-xs text-black tabular-nums w-12 text-right">{pct.toLocaleString('pt-BR', { maximumFractionDigits: 1 })}%</span>
+                    </span>
+                  </div>
+                  <div className="h-1.5 rounded-full bg-gray-100 overflow-hidden mt-1">
+                    <div className="h-full rounded-full bg-red-500" style={{ width: `${Math.max(3, (l.effSaidas / maxOr1(maiorPico)) * 100)}%` }} />
+                  </div>
+                </div>
+              );
+            })}
+            <p className="text-xs text-black pt-1">% sobre o total de saídas do período ({fmtBRL(totalSaidas)}) · passe o mouse para ver a composição</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function maxOr1(v: number): number {
+  return v > 0 ? v : 1;
+}
+
 // Resumo do periodo em forma de "conta": componentes de entrada somam no
 // total de recebimentos, componentes de saida no total de pagamentos, e os
 // dois fecham no saldo final (saldo inicial + recebimentos - pagamentos).
@@ -741,30 +1047,69 @@ function ResumoPeriodoFC({ entradas, saidas, totalEntradas, totalSaidas, saldoIn
 // nomes compridos (ex: "SECRETARIA DA RECEITA FEDERAL...") eram cortados
 // de forma feia quando a barra crescia. Com nome/valor na propria linha,
 // so competem entre si - a barra nunca rouba espaco do texto.
-function ListaBarrasRanking({ itens, cor }: { itens: { nome: string; valor: number }[]; cor: string }) {
+function ListaBarrasRanking({ itens, cor }: { itens: ItemRanking[]; cor: string }) {
+  const [abertos, setAbertos] = useState<Set<string>>(new Set());
   if (!itens.length) {
     return <p className="text-sm text-black py-8 text-center">Sem dados no período.</p>;
   }
   const maxValor = Math.max(...itens.map((i) => i.valor), 1);
+  function alternar(nome: string) {
+    setAbertos((atual) => {
+      const novo = new Set(atual);
+      if (novo.has(nome)) novo.delete(nome);
+      else novo.add(nome);
+      return novo;
+    });
+  }
   return (
     <div className="max-h-[700px] overflow-y-auto pr-1 -mx-2 space-y-0.5">
-      {itens.map((item, i) => (
-        <div key={`${item.nome}-${i}`} className="flex items-start gap-2.5 px-2 py-1.5 rounded-md hover:bg-gray-50 transition-colors">
-          <span className="w-5 flex-shrink-0 text-right text-xs text-black tabular-nums pt-0.5">{i + 1}</span>
-          <div className="flex-1 min-w-0">
-            <div className="flex items-baseline justify-between gap-3">
-              <span className="text-sm text-black truncate" title={item.nome}>{item.nome}</span>
-              <span className="text-sm font-semibold text-black tabular-nums flex-shrink-0">{fmtBRL(-item.valor)}</span>
+      {itens.map((item, i) => {
+        const temComposicao = !!item.composicao?.length;
+        const aberto = abertos.has(item.nome);
+        return (
+          <div key={`${item.nome}-${i}`}>
+            <div
+              className={`flex items-start gap-2.5 px-2 py-1.5 rounded-md hover:bg-gray-50 transition-colors ${temComposicao ? 'cursor-pointer' : ''}`}
+              onClick={temComposicao ? () => alternar(item.nome) : undefined}
+              role={temComposicao ? 'button' : undefined}
+              aria-expanded={temComposicao ? aberto : undefined}
+            >
+              <span className="w-5 flex-shrink-0 text-right text-xs text-black tabular-nums pt-0.5">{i + 1}</span>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-baseline justify-between gap-3">
+                  <span className={`text-sm text-black truncate ${temComposicao ? 'font-semibold' : ''}`} title={item.nome}>
+                    {temComposicao && <span className="inline-block w-3 text-xs">{aberto ? '▾' : '▸'}</span>}
+                    {item.nome}
+                    {temComposicao && <span className="ml-1.5 text-xs font-normal">({item.composicao!.length} itens)</span>}
+                  </span>
+                  <span className="text-sm font-semibold text-black tabular-nums flex-shrink-0">{fmtBRL(-item.valor)}</span>
+                </div>
+                <div className="h-1.5 rounded-full bg-gray-100 overflow-hidden mt-1.5">
+                  <div
+                    className="h-full rounded-full"
+                    style={{ width: `${Math.max(3, (item.valor / maxValor) * 100)}%`, backgroundColor: cor }}
+                  />
+                </div>
+              </div>
             </div>
-            <div className="h-1.5 rounded-full bg-gray-100 overflow-hidden mt-1.5">
-              <div
-                className="h-full rounded-full"
-                style={{ width: `${Math.max(3, (item.valor / maxValor) * 100)}%`, backgroundColor: cor }}
-              />
-            </div>
+            {temComposicao && aberto && (
+              <div className="ml-9 mr-2 mb-1 border-l-2 pl-3 py-1 space-y-0.5" style={{ borderColor: cor }}>
+                {item.composicao!.map((c, j) => (
+                  <div key={`${c.nome}-${j}`} className="flex items-baseline justify-between gap-3 text-xs text-black">
+                    <span className="truncate" title={c.nome}>{c.nome}</span>
+                    <span className="tabular-nums flex-shrink-0">
+                      {fmtBRL(-c.valor)}
+                      <span className="ml-1.5 inline-block w-10 text-right">
+                        {((c.valor / item.valor) * 100).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}%
+                      </span>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -1393,6 +1738,8 @@ export default function FluxoCaixaPage() {
             })()}
           </div>
 
+          <PontosAtencaoCaixa linhas={linhasDiariasVisiveis} totalSaidas={totais.saidas} />
+
           {/* Saldos bancarios - posicao de caixa atual, entra compondo o
               Saldo Acum. da tabela diaria abaixo (ver acumLocal). Mesmo
               estilo visual da Visao Diaria (cabecalho solido, zebra,
@@ -1452,8 +1799,7 @@ export default function FluxoCaixaPage() {
             <GraficoMensalFC meses={dados.meses} saldoBancario={dados.saldoBancario} />
           </div>
 
-          <GraficoFaturamentoDiario config={FATURAMENTO_FABRICA} />
-          <GraficoFaturamentoDiario config={FATURAMENTO_LOJAS} />
+          <GraficoFaturamentoUnificado />
 
           {/* Visao diaria */}
           <div className="bg-white rounded-lg shadow-md overflow-hidden">
@@ -1651,7 +1997,7 @@ export default function FluxoCaixaPage() {
                 <h2 className="text-sm font-semibold text-black uppercase tracking-wide">Despesas</h2>
               </div>
               <div className="p-4">
-                <ListaBarrasRanking itens={saidasDespesa} cor="#f59e0b" />
+                <ListaBarrasRanking itens={agruparMateriaPrima(saidasDespesa)} cor="#f59e0b" />
               </div>
             </div>
             <div className="bg-white rounded-lg shadow-md overflow-hidden">
