@@ -261,7 +261,7 @@ function RotuloEntrada(props: LabelProps) {
   if (!valor) return null;
   const topo = Math.min(y, y + height);
   return (
-    <text x={x + width / 2} y={topo - 8} textAnchor="middle" fontSize={12} fontWeight={600} fill="#065f46">
+    <text x={x + width / 2} y={topo - 9} textAnchor="middle" fontSize={14} fontWeight={600} fill="#065f46">
       {fmtBRLCompacto(valor)}
     </text>
   );
@@ -272,25 +272,32 @@ function RotuloSaida(props: LabelProps) {
   if (!valor) return null;
   const base = Math.max(y, y + height);
   return (
-    <text x={x + width / 2} y={base + 18} textAnchor="middle" fontSize={12} fontWeight={600} fill="#991b1b">
+    <text x={x + width / 2} y={base + 21} textAnchor="middle" fontSize={14} fontWeight={600} fill="#991b1b">
       {fmtBRLCompacto(Math.abs(valor))}
     </text>
   );
 }
 
-function RotuloSaldo(props: LabelProps) {
+// Com muitos meses (colunas estreitas) a pilula grande encosta na do mes
+// vizinho - acima de 8 meses usa a versao compacta.
+function desenharPilulaSaldo(props: LabelProps, compacto: boolean) {
   const { x, y, valor } = caixaRotulo(props);
   const texto = fmtBRLCompacto(valor);
-  const largura = texto.length * 6.1 + 10;
+  const fonte = compacto ? 11 : 13;
+  const altura = compacto ? 18 : 22;
+  const largura = texto.length * (compacto ? 6.1 : 7.3) + (compacto ? 10 : 14);
   return (
     <g>
-      <rect x={x - largura / 2} y={y - 29} width={largura} height={18} rx={9} fill="#ffffff" stroke={COR_SALDO} strokeWidth={1} />
-      <text x={x} y={y - 16.5} textAnchor="middle" fontSize={11} fontWeight={600} fill={valor >= 0 ? '#1e3a8a' : '#b91c1c'}>
+      <rect x={x - largura / 2} y={y - altura - 11} width={largura} height={altura} rx={altura / 2} fill="#ffffff" stroke={COR_SALDO} strokeWidth={1} />
+      <text x={x} y={y - 11 - altura / 2 + fonte * 0.36} textAnchor="middle" fontSize={fonte} fontWeight={600} fill={valor >= 0 ? '#1e3a8a' : '#b91c1c'}>
         {texto}
       </text>
     </g>
   );
 }
+
+const RotuloSaldo = (props: LabelProps) => desenharPilulaSaldo(props, false);
+const RotuloSaldoCompacto = (props: LabelProps) => desenharPilulaSaldo(props, true);
 
 function GraficoMensalFC({ meses, saldoBancario }: { meses: MesFC[]; saldoBancario: number }) {
   if (!meses.length) {
@@ -327,17 +334,17 @@ function GraficoMensalFC({ meses, saldoBancario }: { meses: MesFC[]; saldoBancar
       <ResponsiveContainer width="100%" height={340}>
         <ComposedChart data={dados} margin={{ top: 28, right: 24, left: 4, bottom: 4 }} barCategoryGap="35%" stackOffset="sign">
           <CartesianGrid stroke="#f1f2f4" vertical={false} />
-          <XAxis dataKey="mes" tickFormatter={fmtMes} axisLine={false} tickLine={false} interval={0} tick={{ fontSize: 12, fill: '#374151', fontWeight: 600 }} dy={6} />
+          <XAxis dataKey="mes" tickFormatter={fmtMes} axisLine={false} tickLine={false} interval={0} tick={{ fontSize: 13, fill: '#374151', fontWeight: 600 }} dy={6} />
           <YAxis
-            tickFormatter={(v: number) => fmtBRLCompacto(v)} tick={{ fontSize: 12, fill: '#9ca3af' }} axisLine={false} tickLine={false} width={76}
-            padding={{ top: 24, bottom: 28 }}
+            tickFormatter={(v: number) => fmtBRLCompacto(v)} tick={{ fontSize: 12, fill: '#9ca3af' }} axisLine={false} tickLine={false} width={88}
+            padding={{ top: 28, bottom: 32 }}
           />
           <ReferenceLine y={0} stroke="#9ca3af" />
           <Tooltip content={<TooltipMes />} cursor={{ fill: '#f3f4f6', radius: 6 }} />
-          <Bar dataKey="totalEntradas" name="Entradas" stackId="fluxo" fill={COR_ENTRADAS} radius={[6, 6, 0, 0]} maxBarSize={72}>
+          <Bar dataKey="totalEntradas" name="Entradas" stackId="fluxo" fill={COR_ENTRADAS} radius={[6, 6, 0, 0]} maxBarSize={108}>
             <LabelList dataKey="totalEntradas" content={RotuloEntrada} />
           </Bar>
-          <Bar dataKey="saidasAbaixoZero" name="Saídas" stackId="fluxo" fill={COR_SAIDAS} radius={[6, 6, 0, 0]} maxBarSize={72}>
+          <Bar dataKey="saidasAbaixoZero" name="Saídas" stackId="fluxo" fill={COR_SAIDAS} radius={[6, 6, 0, 0]} maxBarSize={108}>
             <LabelList dataKey="saidasAbaixoZero" content={RotuloSaida} />
           </Bar>
           <Line
@@ -346,7 +353,7 @@ function GraficoMensalFC({ meses, saldoBancario }: { meses: MesFC[]; saldoBancar
             dot={{ r: 4, fill: COR_SALDO, stroke: '#ffffff', strokeWidth: 2 }}
             activeDot={{ r: 6, fill: COR_SALDO, stroke: '#ffffff', strokeWidth: 2 }}
           >
-            <LabelList dataKey="saldoAcumulado" content={RotuloSaldo} />
+            <LabelList dataKey="saldoAcumulado" content={dados.length > 8 ? RotuloSaldoCompacto : RotuloSaldo} />
           </Line>
         </ComposedChart>
       </ResponsiveContainer>
@@ -370,7 +377,7 @@ interface ParcelaResumo {
 
 function Operador({ simbolo }: { simbolo: string }) {
   return (
-    <span className="flex-shrink-0 w-7 h-7 rounded-full bg-gray-100 text-gray-500 text-base font-semibold flex items-center justify-center" aria-hidden="true">
+    <span className="flex-shrink-0 w-8 h-8 rounded-full bg-gray-100 text-gray-500 text-lg font-semibold flex items-center justify-center" aria-hidden="true">
       {simbolo}
     </span>
   );
@@ -386,18 +393,18 @@ function LinhaEquacao({ parcelas, rotuloTotal, total, tom }: { parcelas: Parcela
       {parcelas.map((p, i) => (
         <React.Fragment key={p.rotulo}>
           {i > 0 && <div className="flex items-center"><Operador simbolo="+" /></div>}
-          <div className={`relative min-w-[150px] flex-1 rounded-lg border border-gray-200 bg-white px-3.5 py-3 overflow-hidden ${p.ativa ? '' : 'opacity-60'}`}
+          <div className={`relative min-w-[175px] flex-1 rounded-lg border border-gray-200 bg-white px-4 py-3 overflow-hidden ${p.ativa ? '' : 'opacity-60'}`}
             title={p.ativa ? undefined : 'Coluna desligada nos filtros - não entra no cálculo'}>
             <span className={`absolute left-0 top-0 bottom-0 w-1 ${corBarra}`} />
-            <p className="text-sm text-gray-500">{p.rotulo}</p>
-            <p className={`text-lg font-semibold text-gray-900 tabular-nums whitespace-nowrap ${p.ativa ? '' : 'line-through'}`}>{fmtBRL(p.valor)}</p>
+            <p className="text-base text-gray-500">{p.rotulo}</p>
+            <p className={`text-xl font-semibold text-gray-900 tabular-nums whitespace-nowrap ${p.ativa ? '' : 'line-through'}`}>{fmtBRL(p.valor)}</p>
           </div>
         </React.Fragment>
       ))}
       <div className="flex items-center"><Operador simbolo="=" /></div>
-      <div className={`min-w-[180px] flex-1 rounded-lg border px-3.5 py-3 ${estiloTotal}`}>
-        <p className="text-sm font-medium opacity-80">{rotuloTotal}</p>
-        <p className="text-xl font-bold tabular-nums whitespace-nowrap">{fmtBRL(total)}</p>
+      <div className={`min-w-[210px] flex-1 rounded-lg border px-4 py-3 ${estiloTotal}`}>
+        <p className="text-base font-medium opacity-80">{rotuloTotal}</p>
+        <p className="text-2xl font-bold tabular-nums whitespace-nowrap">{fmtBRL(total)}</p>
       </div>
     </div>
   );
