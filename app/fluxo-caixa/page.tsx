@@ -10,7 +10,6 @@ import {
   Bar,
   CartesianGrid,
   ComposedChart,
-  LabelList,
   Line,
   ReferenceLine,
   ResponsiveContainer,
@@ -18,7 +17,6 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import type { LabelProps } from 'recharts';
 import { carregarFiltro, salvarFiltro } from '../utils/persistirFiltro';
 
 interface EmpresaFC {
@@ -81,6 +79,7 @@ interface ContaBancaria {
   nrConta: string;
   vlSaldo: number;
   dtPosicao: string;
+  semDados?: boolean;
 }
 
 interface SaldosBancarios {
@@ -192,6 +191,9 @@ function fmtMes(ym: string): string {
 interface MesFCComSaldo extends MesFC {
   totalEntradas: number;
   saldoAcumulado: number;
+  // Saidas plotadas abaixo do zero (coluna unica: entradas sobem, saidas
+  // descem) - so pro desenho; valores exibidos continuam vindo de totalSaidas.
+  saidasAbaixoZero: number;
 }
 
 interface TooltipMesPayload {
@@ -237,40 +239,32 @@ function TooltipMes({ active, payload }: { active?: boolean; payload?: TooltipMe
   );
 }
 
-// Rotulos desenhados a mao (<text> puro): o rotulo padrao do recharts recebe
-// a largura da barra e quebra "R$ 3 mi" em duas linhas quando a barra e fina.
-function caixaRotulo(props: LabelProps) {
-  const vb = (props.viewBox ?? {}) as { x?: number; y?: number; width?: number };
-  return {
-    x: Number(vb.x ?? props.x ?? 0),
-    y: Number(vb.y ?? props.y ?? 0),
-    width: Number(vb.width ?? props.width ?? 0),
-    valor: Number(props.value ?? 0),
-  };
+// Valores do mes ficam embaixo do nome do mes (no eixo X), e nao em cima das
+// barras: duas barras de 24px lado a lado nao tem largura pra dois rotulos
+// de ~60px, e o rotulo do saldo caia em cima delas. Assim nada se sobrepoe.
+interface TickMesProps {
+  x?: number | string;
+  y?: number | string;
+  payload?: { value?: string };
 }
 
-function RotuloBarra(props: LabelProps) {
-  const { x, y, width, valor } = caixaRotulo(props);
-  if (!valor) return null;
+function TickMes({ x, y, payload, dados }: TickMesProps & { dados: MesFCComSaldo[] }) {
+  const m = dados.find((d) => d.mes === payload?.value);
+  if (!m) return null;
+  const linhas = [
+    { cor: COR_ENTRADAS, valor: m.totalEntradas, texto: '#374151' },
+    { cor: COR_SAIDAS, valor: m.totalSaidas, texto: '#374151' },
+    { cor: COR_SALDO, valor: m.saldoAcumulado, texto: m.saldoAcumulado >= 0 ? '#1e3a8a' : '#b91c1c' },
+  ];
   return (
-    <text x={x + width / 2} y={y - 6} textAnchor="middle" fontSize={12} fontWeight={600} fill="#374151">
-      {fmtBRLCompacto(valor)}
-    </text>
-  );
-}
-
-// Saldo acumulado ganha uma "pilula" branca atras do texto - a linha passa
-// por cima/ao lado das barras e sem fundo o numero sumia no meio delas.
-function RotuloSaldo(props: LabelProps) {
-  const { x, y, valor } = caixaRotulo(props);
-  const texto = fmtBRLCompacto(valor);
-  const largura = texto.length * 6.6 + 14;
-  return (
-    <g>
-      <rect x={x - largura / 2} y={y - 30} width={largura} height={20} rx={10} fill="#ffffff" stroke="#bfdbfe" />
-      <text x={x} y={y - 16} textAnchor="middle" fontSize={12} fontWeight={600} fill={valor >= 0 ? '#1e3a8a' : '#b91c1c'}>
-        {texto}
-      </text>
+    <g transform={`translate(${Number(x ?? 0)},${Number(y ?? 0)})`}>
+      <text y={16} textAnchor="middle" fontSize={12} fontWeight={600} fill="#111827">{fmtMes(m.mes)}</text>
+      {linhas.map((l, i) => (
+        <g key={i} transform={`translate(0,${34 + i * 16})`}>
+          <circle cx={-36} cy={-4} r={3.5} fill={l.cor} />
+          <text x={-28} fontSize={11} fontWeight={i === 2 ? 600 : 500} fill={l.texto}>{fmtBRLCompacto(l.valor)}</text>
+        </g>
+      ))}
     </g>
   );
 }
@@ -289,16 +283,16 @@ function GraficoMensalFC({ meses, saldoBancario }: { meses: MesFC[]; saldoBancar
   const dados: MesFCComSaldo[] = meses.map((m) => {
     const totalEntradas = m.outrasEntradas + m.boleto + m.cheque + m.lojas;
     acumulado += totalEntradas - m.totalSaidas;
-    return { ...m, totalEntradas, saldoAcumulado: acumulado };
+    return { ...m, totalEntradas, saldoAcumulado: acumulado, saidasAbaixoZero: -m.totalSaidas };
   });
   return (
     <div role="img" aria-label="Saídas, entradas e saldo acumulado projetados por mês">
       <div className="flex items-center gap-5 mb-3 text-xs text-gray-600">
         <span className="flex items-center gap-1.5">
-          <span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ backgroundColor: COR_SAIDAS }} /> Saídas
+          <span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ backgroundColor: COR_ENTRADAS }} /> Entradas (acima do zero)
         </span>
         <span className="flex items-center gap-1.5">
-          <span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ backgroundColor: COR_ENTRADAS }} /> Entradas
+          <span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ backgroundColor: COR_SAIDAS }} /> Saídas (abaixo do zero)
         </span>
         <span className="flex items-center gap-1.5">
           <span className="relative w-4 h-0.5 rounded-full inline-block" style={{ backgroundColor: COR_SALDO }}>
@@ -307,27 +301,24 @@ function GraficoMensalFC({ meses, saldoBancario }: { meses: MesFC[]; saldoBancar
           Saldo acumulado
         </span>
       </div>
-      <ResponsiveContainer width="100%" height={320}>
-        <ComposedChart data={dados} margin={{ top: 36, right: 24, left: 4, bottom: 4 }} barGap={2} barCategoryGap="30%">
+      <ResponsiveContainer width="100%" height={360}>
+        <ComposedChart data={dados} margin={{ top: 12, right: 24, left: 4, bottom: 4 }} barCategoryGap="35%" stackOffset="sign">
           <CartesianGrid stroke="#f1f2f4" vertical={false} />
-          <XAxis dataKey="mes" tickFormatter={fmtMes} tick={{ fontSize: 12, fill: '#4b5563' }} axisLine={false} tickLine={false} dy={6} />
+          <XAxis
+            dataKey="mes" axisLine={false} tickLine={false} interval={0} height={86}
+            tick={(p: unknown) => <TickMes {...(p as TickMesProps)} dados={dados} />}
+          />
           <YAxis tickFormatter={(v: number) => fmtBRLCompacto(v)} tick={{ fontSize: 12, fill: '#9ca3af' }} axisLine={false} tickLine={false} width={76} />
-          <ReferenceLine y={0} stroke="#d1d5db" />
+          <ReferenceLine y={0} stroke="#9ca3af" />
           <Tooltip content={<TooltipMes />} cursor={{ fill: '#f3f4f6', radius: 6 }} />
-          <Bar dataKey="totalSaidas" name="Saídas" fill={COR_SAIDAS} radius={[4, 4, 0, 0]} maxBarSize={24}>
-            <LabelList dataKey="totalSaidas" content={RotuloBarra} />
-          </Bar>
-          <Bar dataKey="totalEntradas" name="Entradas" fill={COR_ENTRADAS} radius={[4, 4, 0, 0]} maxBarSize={24}>
-            <LabelList dataKey="totalEntradas" content={RotuloBarra} />
-          </Bar>
+          <Bar dataKey="totalEntradas" name="Entradas" stackId="fluxo" fill={COR_ENTRADAS} radius={[4, 4, 0, 0]} maxBarSize={44} />
+          <Bar dataKey="saidasAbaixoZero" name="Saídas" stackId="fluxo" fill={COR_SAIDAS} radius={[4, 4, 0, 0]} maxBarSize={44} />
           <Line
             type="monotone" dataKey="saldoAcumulado" name="Saldo acumulado" stroke={COR_SALDO} strokeWidth={2}
             strokeLinecap="round" strokeLinejoin="round"
             dot={{ r: 4, fill: COR_SALDO, stroke: '#ffffff', strokeWidth: 2 }}
             activeDot={{ r: 6, fill: COR_SALDO, stroke: '#ffffff', strokeWidth: 2 }}
-          >
-            <LabelList dataKey="saldoAcumulado" content={RotuloSaldo} />
-          </Line>
+          />
         </ComposedChart>
       </ResponsiveContainer>
     </div>
@@ -337,6 +328,86 @@ function GraficoMensalFC({ meses, saldoBancario }: { meses: MesFC[]; saldoBancar
 // Lista ranqueada estilo "barra horizontal com rotulo" (valor a esquerda,
 // barra proporcional ao maior valor da lista, nome a direita) - mesmo
 // layout do relatorio de referencia que o usuario pediu pra replicar aqui.
+// Resumo do periodo em forma de "conta": componentes de entrada somam no
+// total de recebimentos, componentes de saida no total de pagamentos, e os
+// dois fecham no saldo final (saldo inicial + recebimentos - pagamentos).
+// Usa os mesmos totais do rodape da Visao Diaria, entao respeita os toggles
+// de coluna e a simulacao - coluna desligada aparece riscada, valendo 0.
+interface ParcelaResumo {
+  rotulo: string;
+  valor: number;
+  ativa: boolean;
+}
+
+function Operador({ simbolo }: { simbolo: string }) {
+  return (
+    <span className="flex-shrink-0 w-6 h-6 rounded-full bg-gray-100 text-gray-500 text-sm font-semibold flex items-center justify-center" aria-hidden="true">
+      {simbolo}
+    </span>
+  );
+}
+
+function LinhaEquacao({ parcelas, rotuloTotal, total, tom }: { parcelas: ParcelaResumo[]; rotuloTotal: string; total: number; tom: 'entrada' | 'saida' }) {
+  const estiloTotal = tom === 'entrada'
+    ? 'bg-green-50 border-green-200 text-green-800'
+    : 'bg-red-50 border-red-200 text-red-800';
+  const corBarra = tom === 'entrada' ? 'bg-green-500' : 'bg-red-500';
+  return (
+    <div className="flex items-stretch gap-2 flex-wrap">
+      {parcelas.map((p, i) => (
+        <React.Fragment key={p.rotulo}>
+          {i > 0 && <div className="flex items-center"><Operador simbolo="+" /></div>}
+          <div className={`relative min-w-[130px] flex-1 rounded-lg border border-gray-200 bg-white px-3 py-2.5 overflow-hidden ${p.ativa ? '' : 'opacity-60'}`}
+            title={p.ativa ? undefined : 'Coluna desligada nos filtros - não entra no cálculo'}>
+            <span className={`absolute left-0 top-0 bottom-0 w-1 ${corBarra}`} />
+            <p className="text-xs text-gray-500">{p.rotulo}</p>
+            <p className={`text-base font-semibold text-gray-900 tabular-nums whitespace-nowrap ${p.ativa ? '' : 'line-through'}`}>{fmtBRL(p.valor)}</p>
+          </div>
+        </React.Fragment>
+      ))}
+      <div className="flex items-center"><Operador simbolo="=" /></div>
+      <div className={`min-w-[160px] flex-1 rounded-lg border px-3 py-2.5 ${estiloTotal}`}>
+        <p className="text-xs font-medium opacity-80">{rotuloTotal}</p>
+        <p className="text-lg font-bold tabular-nums whitespace-nowrap">{fmtBRL(total)}</p>
+      </div>
+    </div>
+  );
+}
+
+function ResumoPeriodoFC({ entradas, saidas, totalEntradas, totalSaidas, saldoInicial, dtIni, dtFim }: {
+  entradas: ParcelaResumo[]; saidas: ParcelaResumo[]; totalEntradas: number; totalSaidas: number;
+  saldoInicial: number; dtIni: string; dtFim: string;
+}) {
+  const saldoFinal = saldoInicial + totalEntradas - totalSaidas;
+  const positivo = saldoFinal >= 0;
+  const fmtDia = (iso: string) => iso.split('-').reverse().join('/');
+  return (
+    <div className="bg-white rounded-lg shadow-md overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-gray-50">
+        <h2 className="text-sm font-semibold text-black uppercase tracking-wide">Resumo do Período</h2>
+        {dtIni && <span className="text-xs text-gray-500 tabular-nums">{fmtDia(dtIni)} a {fmtDia(dtFim)}</span>}
+      </div>
+      <div className="p-4 grid grid-cols-1 xl:grid-cols-[1fr_300px] gap-4">
+        <div className="space-y-3 min-w-0">
+          <LinhaEquacao parcelas={entradas} rotuloTotal="Total de recebimentos" total={totalEntradas} tom="entrada" />
+          <LinhaEquacao parcelas={saidas} rotuloTotal="Total de pagamentos" total={totalSaidas} tom="saida" />
+        </div>
+        <div className={`rounded-xl border-2 p-4 flex flex-col md:flex-row md:items-center md:justify-between xl:flex-col xl:items-stretch xl:justify-center gap-3 ${positivo ? 'border-green-200 bg-green-50/50' : 'border-red-200 bg-red-50/50'}`}>
+          <div>
+            <p className="text-xs font-medium text-gray-600">Saldo final do período</p>
+            <p className={`text-3xl font-bold whitespace-nowrap mt-0.5 ${positivo ? 'text-green-700' : 'text-red-700'}`}>{fmtBRL(saldoFinal)}</p>
+          </div>
+          <div className="pt-3 border-t md:pt-0 md:border-t-0 md:pl-4 md:border-l xl:pl-0 xl:border-l-0 xl:pt-3 xl:border-t border-gray-200 space-y-1 text-xs tabular-nums md:min-w-[260px] xl:min-w-0">
+            <div className="flex justify-between gap-3 text-gray-600"><span>Saldo inicial</span><span>{fmtBRL(saldoInicial)}</span></div>
+            <div className="flex justify-between gap-3 text-green-700"><span>+ Recebimentos</span><span>{fmtBRL(totalEntradas)}</span></div>
+            <div className="flex justify-between gap-3 text-red-700"><span>− Pagamentos</span><span>{fmtBRL(totalSaidas)}</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Ranking "nome+valor em cima, barra fina embaixo" - padrao mais usado em
 // dashboards financeiros (Stripe/Linear-style) pra resolver o problema do
 // layout antigo: nome e valor ficavam na MESMA linha que a barra, entao
@@ -781,6 +852,18 @@ export default function FluxoCaixaPage() {
   }), { previsao: 0, real: 0, pedidos: 0, saidas: 0, outrasEntradas: 0, boleto: 0, cheque: 0, lojas: 0, entradas: 0, qtd: 0 });
 
   const saldoFinal = totais.entradas - totais.saidas;
+
+  // Mesmos totais, mas sem o toggle de coluna - so pra exibir (riscado) quanto
+  // uma coluna desligada valeria no Resumo do Periodo.
+  const totaisBrutos = linhasDiarias.reduce((acc, l) => ({
+    previsao: acc.previsao + (l.dia.previsao || 0),
+    real: acc.real + (l.dia.real || 0),
+    pedidos: acc.pedidos + (l.dia.pedidos || 0),
+    outrasEntradas: acc.outrasEntradas + (l.dia.outrasEntradas || 0),
+    boleto: acc.boleto + (l.dia.boleto || 0),
+    cheque: acc.cheque + (l.dia.cheque || 0),
+    lojas: acc.lojas + l.adjLojas,
+  }), { previsao: 0, real: 0, pedidos: 0, outrasEntradas: 0, boleto: 0, cheque: 0, lojas: 0 });
   const DIAS_SEMANA = ['DOM', 'SEG', 'TER', 'QUA', 'QUI', 'SEX', 'SÁB'];
   const hoje = isoHoje();
 
@@ -1003,7 +1086,9 @@ export default function FluxoCaixaPage() {
                         <td className={`px-4 py-2 text-black border-r border-b border-gray-300 ${bgHover}`}>{c.nmBanco}</td>
                         <td className={`px-4 py-2 text-black tabular-nums border-r border-b border-gray-300 ${bgHover}`}>{c.nrAgencia}</td>
                         <td className={`px-4 py-2 text-black tabular-nums border-r border-b border-gray-300 ${bgHover}`}>{c.nrConta}</td>
-                        <td className={`px-4 py-2 text-right text-gray-600 tabular-nums border-r border-b border-gray-300 ${bgHover}`}>{c.dtPosicao.split('-').reverse().join('/')}</td>
+                        <td className={`px-4 py-2 text-right text-gray-600 tabular-nums border-r border-b border-gray-300 ${bgHover}`} title={c.semDados ? `Última posição: ${c.dtPosicao.split('-').reverse().join('/')}` : undefined}>
+                          {c.semDados ? <span className="italic text-gray-400">Sem dados</span> : c.dtPosicao.split('-').reverse().join('/')}
+                        </td>
                         <td className={`px-4 py-2 text-right font-semibold tabular-nums border-b border-gray-300 ${bgHover} ${c.vlSaldo >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(c.vlSaldo)}</td>
                       </tr>
                       );
@@ -1187,6 +1272,25 @@ export default function FluxoCaixaPage() {
               </table>
             </div>
           </div>
+
+          <ResumoPeriodoFC
+            entradas={[
+              { rotulo: 'Outras entradas', valor: totaisBrutos.outrasEntradas, ativa: colsAtivas.outrasEntradas },
+              { rotulo: 'Boletos', valor: totaisBrutos.boleto, ativa: colsAtivas.boleto },
+              { rotulo: 'Cheques', valor: totaisBrutos.cheque, ativa: colsAtivas.cheque },
+              { rotulo: 'Lojas', valor: totaisBrutos.lojas, ativa: colsAtivas.lojas },
+            ]}
+            saidas={[
+              { rotulo: 'Previsão', valor: totaisBrutos.previsao, ativa: colsAtivas.previsao },
+              { rotulo: 'Real', valor: totaisBrutos.real, ativa: colsAtivas.real },
+              { rotulo: 'Pedidos de compra', valor: totaisBrutos.pedidos, ativa: colsAtivas.pedidos },
+            ]}
+            totalEntradas={totais.entradas}
+            totalSaidas={totais.saidas}
+            saldoInicial={dados.saldoBancario}
+            dtIni={dados.dias[0]?.dia ?? ''}
+            dtFim={dados.dias[dados.dias.length - 1]?.dia ?? ''}
+          />
 
           {/* Saidas por fornecedor (ranking + detalhado ordenavel) e por
               despesa (mesmo periodo/empresas filtrados acima) - as 3 lado a
