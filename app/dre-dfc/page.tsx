@@ -283,10 +283,9 @@ export default function DreXDfcPage() {
             <h1 className="text-2xl font-bold text-brand-dark">DRE x DFC — Competência x Caixa</h1>
             <p className="text-sm text-gray-500">
               Compara o Lucro Líquido da DRE (regime de competência) com o Saldo de Caixa Operacional do DFC (regime de
-              caixa, base <strong>sem antecipação</strong> — fatura pelo vencimento original, cartão de crédito por
-              parcela). Os dois números no resumo batem exatamente com o que aparece nas telas separadas da DRE e do
-              DFC — no DFC, com o card &quot;Saldo de Caixa (após Operacional)&quot;, que exclui Investimentos e
-              Financiamento.
+              caixa real, o mesmo da aba <strong>Mensal</strong> do DFC, com a antecipação de recebíveis). Os dois números
+              no resumo batem exatamente com o que aparece nas telas separadas da DRE e do DFC — no DFC, com o card
+              &quot;Saldo de Caixa (após Operacional)&quot;, que exclui Investimentos e Financiamento.
             </p>
           </div>
         </div>
@@ -345,7 +344,7 @@ export default function DreXDfcPage() {
                 {formatarValor(resultadoCaixaTotal)}
               </p>
               <p className="text-[11px] text-gray-400 mt-1">
-                igual ao card &quot;Saldo de Caixa (após Operacional)&quot; da aba &quot;Mensal - Sem Antecipação&quot;
+                igual ao card &quot;Saldo de Caixa (após Operacional)&quot; da aba &quot;Mensal&quot; do DFC
               </p>
             </div>
           </div>

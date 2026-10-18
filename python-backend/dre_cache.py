@@ -1,5 +1,5 @@
-"""Cache da DRE (Analitica, Sintetica e Por Empresa) e do DFC (Mensal, Mensal
-sem antecipacao e Por Centro de Custo) - guardado no banco.
+"""Cache da DRE (Analitica, Sintetica e Por Empresa), do DFC (Mensal, Mensal
+sem antecipacao e Por Centro de Custo) e do DRE x DFC - guardado no banco.
 
 Problema (pedido explicito do usuario): a DRE leva de 10 a 60s pra
 calcular, e o cache da propria tela so vale no navegador que consultou.
@@ -17,8 +17,15 @@ Validade (regras combinadas com o usuario):
 - periodo ja fechado depois disso (jul/2026 ate o mes passado): refeito
   toda noite (HORA_RECALCULO_NOTURNO);
 - periodo que inclui o mes atual: refeito a cada INTERVALO_AGENDADOR_SEG.
-Qualquer mudanca de classificacao/plano de contas/CMV apaga tudo
-(invalidar) e o agendador recalcula em seguida.
+Mudanca de classificacao apaga o cache afetado (invalidar) e o agendador
+recalcula em seguida.
+
+Memoria (servidor do Render): um calculo pesado de cada vez (CALCULO_PESADO)
+- o DRE x DFC de um ano chega a ~650 MB e, somado a outro calculo ao mesmo
+tempo, derrubava o processo ("Erro ao buscar comparativo DRE x DFC"). E se
+mesmo assim um calculo do agendador derrubar o servidor, ele fica marcado em
+fcp_dre_cache_tentativa e nao e tentado de novo por 24h (senao o servidor
+reiniciaria, o agendador tentaria o mesmo periodo e cairia de novo, em loop).
 """
 import asyncio
 import json
@@ -49,22 +56,32 @@ FILTRO_PADRAO = "consolidado"
 
 # visao -> (filtro mantido pronto pelo agendador, faz comparativo com o ano
 # anterior na tela?). Visao sem filtro na API usa "".
+# visao -> (filtro mantido pronto pelo agendador, faz comparativo com o ano
+# anterior na tela?, agendador so pre-calcula os atalhos de periodo e nao
+# cada mes?). Visao sem filtro na API usa "".
 VISOES = {
-    "analitica": (FILTRO_PADRAO, True),
-    "sintetica": (FILTRO_PADRAO, True),
-    "por-empresa": ("", False),
-    "dfc-mensal": (FILTRO_PADRAO, False),
-    "dfc-sem-antecipacao": (FILTRO_PADRAO, False),
-    "dfc-por-ccusto": ("", False),
+    "analitica": (FILTRO_PADRAO, True, False),
+    "sintetica": (FILTRO_PADRAO, True, False),
+    "por-empresa": ("", False, False),
+    "dfc-mensal": (FILTRO_PADRAO, False, False),
+    "dfc-sem-antecipacao": (FILTRO_PADRAO, False, False),
+    "dfc-por-ccusto": ("", False, False),
+    # Cada periodo leva de 1 a 3 min e bastante memoria - so os atalhos.
+    "dre-x-dfc": (FILTRO_PADRAO, False, True),
 }
-VISOES_DRE = ["analitica", "sintetica", "por-empresa"]
-VISOES_DFC = ["dfc-mensal", "dfc-sem-antecipacao", "dfc-por-ccusto"]
+VISOES_DRE = ["analitica", "sintetica", "por-empresa", "dre-x-dfc"]
+VISOES_DFC = ["dfc-mensal", "dfc-sem-antecipacao", "dfc-por-ccusto", "dre-x-dfc"]
+# Calculo que derrubou o servidor fica esse tempo sem nova tentativa.
+PAUSA_APOS_QUEDA_SEG = 24 * 3600
 
 _calculadoras: dict = {}
 _locks: dict = {}
 _locks_guarda = threading.Lock()
 _tabela_criada = False
 _acordar_agendador = threading.Event()
+# Um calculo pesado de cada vez no processo (agendador e telas) - ver
+# docstring do modulo (memoria do servidor).
+CALCULO_PESADO = threading.Lock()
 
 
 def registrar(visao: str, calcular: Callable[[str, str, str], dict]) -> None:
@@ -86,6 +103,16 @@ def _criar_tabela() -> None:
             payload TEXT NOT NULL,
             dt_calculado TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             seg_calculo NUMERIC(8, 1),
+            PRIMARY KEY (visao, dt_inicio, dt_fim, filtro)
+        )
+    """, ())
+    execute_insert("""
+        CREATE TABLE IF NOT EXISTS fcp_dre_cache_tentativa (
+            visao TEXT NOT NULL,
+            dt_inicio DATE NOT NULL,
+            dt_fim DATE NOT NULL,
+            filtro TEXT NOT NULL,
+            dt_tentativa TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             PRIMARY KEY (visao, dt_inicio, dt_fim, filtro)
         )
     """, ())
@@ -164,9 +191,10 @@ def _anotar(payload: dict, dt_calculado: datetime, do_cache: bool) -> dict:
 
 
 def _calcular_e_salvar(chave: tuple, calcular: Callable[[], dict]) -> tuple:
-    inicio = time.time()
-    payload = jsonable_encoder(calcular())
-    segundos = time.time() - inicio
+    with CALCULO_PESADO:
+        inicio = time.time()
+        payload = jsonable_encoder(calcular())
+        segundos = time.time() - inicio
     # Resposta de erro nao vai pro cache (senao o erro ficaria "congelado").
     if isinstance(payload, dict) and not payload.get("error"):
         try:
@@ -259,8 +287,8 @@ def periodos_alvo(hoje: date) -> list:
     comparativos = [(_ano_anterior(i), _ano_anterior(f)) for i, f in atalhos]
 
     alvos = []
-    for visao, (filtro, tem_comparativo) in VISOES.items():
-        for i, f in atalhos + meses:
+    for visao, (filtro, tem_comparativo, so_atalhos) in VISOES.items():
+        for i, f in (atalhos if so_atalhos else atalhos + meses):
             alvos.append((visao, i.isoformat(), f.isoformat(), filtro))
         if tem_comparativo:
             for i, f in comparativos:
@@ -285,7 +313,19 @@ def aquecer() -> None:
         (r["visao"], r["dt_inicio"].isoformat(), r["dt_fim"].isoformat(), r["filtro"]): r["dt_calculado"]
         for r in execute_query("SELECT visao, dt_inicio, dt_fim, filtro, dt_calculado FROM fcp_dre_cache") or []
     }
-    pendentes = [a for a in periodos_alvo(agora.date()) if _precisa_aquecer(a[2], calculados.get(a), agora)]
+    # Tentativa que ficou registrada e nunca terminou = o servidor caiu no
+    # meio daquele calculo (sem memoria) - pula por PAUSA_APOS_QUEDA_SEG.
+    quedas = {}
+    for r in execute_query("SELECT visao, dt_inicio, dt_fim, filtro, dt_tentativa FROM fcp_dre_cache_tentativa") or []:
+        chave = (r["visao"], r["dt_inicio"].isoformat(), r["dt_fim"].isoformat(), r["filtro"])
+        if (agora - r["dt_tentativa"]).total_seconds() < PAUSA_APOS_QUEDA_SEG:
+            quedas[chave] = r["dt_tentativa"]
+    for chave in quedas:
+        print(f"[DRE-CACHE] Pulando {chave}: o servidor caiu calculando isso em {quedas[chave]:%d/%m %H:%M}")
+    pendentes = [
+        a for a in periodos_alvo(agora.date())
+        if a not in quedas and _precisa_aquecer(a[2], calculados.get(a), agora)
+    ]
     if not pendentes:
         return
     print(f"[DRE-CACHE] Agendador: {len(pendentes)} periodo(s) para recalcular")
@@ -296,9 +336,21 @@ def aquecer() -> None:
         chave = (visao, ini, fim, filtro)
         try:
             with _lock_da(chave):
+                execute_insert("""
+                    INSERT INTO fcp_dre_cache_tentativa (visao, dt_inicio, dt_fim, filtro, dt_tentativa)
+                    VALUES (%s, %s, %s, %s, NOW())
+                    ON CONFLICT (visao, dt_inicio, dt_fim, filtro) DO UPDATE SET dt_tentativa = NOW()
+                """, chave)
                 inicio = time.time()
-                _calcular_e_salvar(chave, lambda: calcular(ini, fim, filtro or FILTRO_PADRAO))
-                print(f"[DRE-CACHE] {visao} {ini}..{fim} {filtro or '-'}: {time.time() - inicio:.1f}s")
+                try:
+                    _calcular_e_salvar(chave, lambda: calcular(ini, fim, filtro or FILTRO_PADRAO))
+                    print(f"[DRE-CACHE] {visao} {ini}..{fim} {filtro or '-'}: {time.time() - inicio:.1f}s")
+                finally:
+                    # Terminou (com ou sem erro de Python) - nao foi queda.
+                    execute_insert(
+                        "DELETE FROM fcp_dre_cache_tentativa WHERE visao = %s AND dt_inicio = %s AND dt_fim = %s AND filtro = %s",
+                        chave,
+                    )
         except Exception as e:
             print(f"[DRE-CACHE] Erro ao calcular {chave}: {e}")
         if _acordar_agendador.is_set():

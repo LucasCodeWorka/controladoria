@@ -1472,39 +1472,13 @@ def get_dfc_por_centro_custo(
     )
 
 
-def _criar_tabela_dre_x_dfc_snapshot():
-    execute_insert("""
-        CREATE TABLE IF NOT EXISTS fcp_dre_x_dfc_snapshot (
-            filtro TEXT NOT NULL,
-            dt_inicio DATE NOT NULL,
-            dt_fim DATE NOT NULL,
-            resultado JSONB NOT NULL,
-            dt_calculado TIMESTAMP DEFAULT NOW(),
-            PRIMARY KEY (filtro, dt_inicio, dt_fim)
-        )
-    """)
-
-
-def _calcular_e_salvar_snapshot_dre_x_dfc(dataInicio: str, dataFim: str, filtro: str) -> dict:
-    """Roda o calculo pesado de sempre (_calcular_dre_x_dfc_operacional, sem
-    nenhuma mudanca) e guarda o resultado em fcp_dre_x_dfc_snapshot, pra
-    proxima consulta do MESMO periodo/filtro vir do cache em vez de
-    recalcular do zero (~3min pra um ano inteiro, ver investigacao de
-    performance - a causa raiz e falta de indice numa tabela do ERP que nao
-    temos privilegio pra criar, entao isso aqui e o jeito pratico de nao
-    fazer o usuario esperar toda vez)."""
-    resultado = _calcular_dre_x_dfc_operacional(dataInicio, dataFim, filtro)
-    try:
-        execute_insert(
-            """INSERT INTO fcp_dre_x_dfc_snapshot (filtro, dt_inicio, dt_fim, resultado, dt_calculado)
-               VALUES (%s, %s, %s, %s::jsonb, NOW())
-               ON CONFLICT (filtro, dt_inicio, dt_fim) DO UPDATE
-               SET resultado = EXCLUDED.resultado, dt_calculado = NOW()""",
-            (filtro, dataInicio, dataFim, json.dumps(resultado))
-        )
-    except Exception as e:
-        print(f"[DRE-X-DFC] Aviso: nao foi possivel salvar snapshot: {e}")
-    resultado.setdefault("metadata", {})["cacheado"] = False
+def _dre_x_dfc_resposta(resultado: dict) -> dict:
+    """Mantem os campos que a tela ja usa (metadata.cacheado/dtCalculado)."""
+    cache = resultado.get("_cache") or {}
+    metadata = resultado.setdefault("metadata", {})
+    metadata["cacheado"] = bool(cache.get("doCache"))
+    if cache.get("calculadoEm"):
+        metadata["dtCalculado"] = cache["calculadoEm"]
     return resultado
 
 
@@ -1524,22 +1498,16 @@ def get_dre_x_dfc_operacional(
     de ~3 milhoes de linhas sem indice adequado - ver investigacao de
     performance no historico do projeto). Sem privilegio pra criar indice
     no banco, a saida pratica foi cachear o resultado por (filtro, periodo)
-    em fcp_dre_x_dfc_snapshot: a primeira consulta de um periodo/filtro
-    calcula e salva (lento, igual sempre foi), qualquer consulta seguinte
-    do MESMO periodo/filtro responde na hora. Forcar recalculo: POST
+    no cache da DRE (dre_cache.py, visao "dre-x-dfc"): a primeira consulta
+    de um periodo/filtro calcula e salva, as seguintes respondem na hora, e
+    o agendador mantem prontos os atalhos de periodo (mesmas regras de
+    validade da DRE/DFC). Forcar recalculo: POST
     /api/dre-dfc/comparativo-operacional/recalcular.
     """
-    _criar_tabela_dre_x_dfc_snapshot()
-    rows = execute_query(
-        "SELECT resultado, dt_calculado FROM fcp_dre_x_dfc_snapshot WHERE filtro = %s AND dt_inicio = %s AND dt_fim = %s",
-        (filtro, dataInicio, dataFim)
-    )
-    if rows:
-        resultado = rows[0]["resultado"]
-        resultado.setdefault("metadata", {})["cacheado"] = True
-        resultado["metadata"]["dtCalculado"] = rows[0]["dt_calculado"].isoformat()
-        return resultado
-    return _calcular_e_salvar_snapshot_dre_x_dfc(dataInicio, dataFim, filtro)
+    return _dre_x_dfc_resposta(dre_cache.obter(
+        "dre-x-dfc", dataInicio, dataFim, filtro, False,
+        lambda: _calcular_dre_x_dfc_operacional(dataInicio, dataFim, filtro),
+    ))
 
 
 @router.post("/api/dre-dfc/comparativo-operacional/recalcular")
@@ -1549,11 +1517,12 @@ def recalcular_dre_x_dfc_operacional(
     filtro: str = Query("consolidado", description="Filtro: 'consolidado', 'fabrica', ou codigo do centro de custo")
 ):
     """Forca recalculo do comparativo DRE x DFC pro periodo/filtro pedido,
-    sobrescrevendo o snapshot salvo - usar quando o usuario sabe que os
-    dados mudaram e nao quer esperar o proximo refresh natural (que so
-    acontece se alguem consultar um periodo ainda sem snapshot)."""
-    _criar_tabela_dre_x_dfc_snapshot()
-    return _calcular_e_salvar_snapshot_dre_x_dfc(dataInicio, dataFim, filtro)
+    sobrescrevendo o cache - usar quando o usuario sabe que os dados mudaram
+    e nao quer esperar o recalculo automatico."""
+    return _dre_x_dfc_resposta(dre_cache.obter(
+        "dre-x-dfc", dataInicio, dataFim, filtro, True,
+        lambda: _calcular_dre_x_dfc_operacional(dataInicio, dataFim, filtro),
+    ))
 
 
 @router.get("/api/dfc/plano-contas")
@@ -2418,16 +2387,14 @@ def _calcular_dfc_por_centro_custo(dataInicio: str, dataFim: str):
 def _calcular_dre_x_dfc_operacional(dataInicio: str, dataFim: str, filtro: str):
     """
     Compara DRE (regime de competencia) com DFC Operacional (regime de
-    caixa, base SEM ANTECIPACAO) - so o grupo OP/REC do DFC, sem
-    Investimentos/Financiamento (esses nao tem contrapartida na DRE).
+    caixa) - so o grupo OP/REC do DFC, sem Investimentos/Financiamento
+    (esses nao tem contrapartida na DRE).
 
-    O lado caixa usa sempre a base "sem antecipacao" (mesma logica da aba
-    "Mensal - Sem Antecipacao" do DFC): fatura ja baixada entra no mes do
-    VENCIMENTO original (nao no mes da baixa, que pode vir antecipada), e
-    cartao de credito e reconhecido por parcela (emissao + 30*parcela dias)
-    em vez de tudo somado em emissao + 2 dias uteis. Faz mais sentido pra
-    esse comparativo: descasamento de prazo "de verdade" (competencia x
-    caixa normal), sem misturar com o efeito de antecipar recebiveis.
+    O lado caixa e o DFC REAL - o mesmo da aba "Mensal" do DFC, COM a
+    antecipacao de recebiveis (pedido explicito do usuario: a aba "Sem
+    Antecipacao" e so uma simulacao, o comparativo tem que bater com o caixa
+    de verdade). Receita de caixa e o total do caixa vem direto de
+    _calcular_valores_dfc (mesmos numeros da tela do DFC).
 
     A ideia central do lado despesa: toda despesa classificada no DFC
     (cd_despesaitem) ja carrega, na mesma linha, tanto dt_emissao (o que a
@@ -2460,7 +2427,7 @@ def _calcular_dre_x_dfc_operacional(dataInicio: str, dataFim: str, filtro: str):
             _calcular_valores_unificada, dataInicio, dataFim, filtro, campo_data_despesa='dt_emissao'
         )
         future_dfc_real = executor.submit(
-            _calcular_valores_dfc, dataInicio, dataFim, filtro, sem_antecipacao=True
+            _calcular_valores_dfc, dataInicio, dataFim, filtro
         )
 
         if filtro == "consolidado":
@@ -2600,13 +2567,6 @@ def _calcular_dre_x_dfc_operacional(dataInicio: str, dataFim: str, filtro: str):
                     if periodo in periodos:
                         _add(competencia_despesa, subgrupo_competencia, periodo, valor)
 
-            # Lado caixa usa a base "sem antecipacao": juros e recompra de
-            # titulos sao o custo direto de antecipar recebiveis - como o
-            # lado caixa desconsidera a antecipacao, essas duas despesas
-            # somem daqui tambem (continuam normalmente na competencia).
-            if cd_despesaitem in DESPESAS_ZERADAS_SEM_ANTECIPACAO:
-                continue
-
             dt_liq = d.get('dt_liq')
             if dt_liq:
                 periodo = dt_liq.strftime('%Y-%m')
@@ -2698,7 +2658,6 @@ def _calcular_dre_x_dfc_operacional(dataInicio: str, dataFim: str, filtro: str):
         # RECEITA: duas fontes diferentes - vendas (DRE) x recebimentos (DFC).
         # =====================================================================
         receita_competencia = _init_valores_periodo(periodos)
-        receita_caixa = _init_valores_periodo(periodos)
 
         if empresas_filtro:
             empresa_placeholders = ",".join(["%s"] * len(empresas_filtro))
@@ -2746,136 +2705,6 @@ def _calcular_dre_x_dfc_operacional(dataInicio: str, dataFim: str, filtro: str):
                 valor = abs(float(row['valor'] or 0))
                 receita_competencia[periodo] -= valor
                 receita_competencia['total'] -= valor
-                # Mesma fonte/data que a DRE usa - devolucao entra igual nas
-                # duas visoes (nao e um item que "descasa" prazo).
-                receita_caixa[periodo] -= valor
-                receita_caixa['total'] -= valor
-
-            # --- Caixa (DFC), base SEM ANTECIPACAO ---
-            # tp_documento 3 (dinheiro) e 9 (troco) e 2 (cheque) continuam
-            # por dt_baixa normal - antecipacao so existe pra fatura e cartao
-            # de credito. Fatura (1) sai daqui e vira uma consulta a parte,
-            # por dt_vencimento (ver abaixo).
-            tp_sinal = {3: 1, 9: -1, 2: 1}
-            query_tipo_documento = f"""
-                SELECT f.dt_baixa, f.tp_documento, SUM(f.vl_pago) as valor
-                FROM vr_fcr_faturai f
-                WHERE f.dt_baixa >= %s AND f.dt_baixa <= %s
-                  AND f.tp_situacao = '1'
-                  AND f.tp_documento IN (3, 9, 2)
-                  AND f.cd_empresa IN ({empresa_placeholders})
-                GROUP BY f.dt_baixa, f.tp_documento
-            """
-            for row in execute_query(query_tipo_documento, (dataInicio, dataFim, *empresas_filtro)) or []:
-                dt_baixa = row['dt_baixa']
-                if not dt_baixa:
-                    continue
-                periodo = dt_baixa.strftime('%Y-%m')
-                if periodo not in periodos:
-                    continue
-                sinal = tp_sinal.get(row['tp_documento'], 1)
-                valor = sinal * float(row['valor'] or 0)
-                receita_caixa[periodo] += valor
-                receita_caixa['total'] += valor
-
-            # Fatura/boleto SEM antecipacao: so entram faturas ja baixadas,
-            # alocadas no mes do VENCIMENTO original (nao no mes da baixa,
-            # que pode vir antecipada) - restrito a nr_portador<999, mesma
-            # regra da aba "Mensal - Sem Antecipacao" do DFC.
-            query_fatura_sem_antecipacao = f"""
-                SELECT f.dt_vencimento, f.vl_pago
-                FROM vr_fcr_faturai f
-                WHERE f.dt_baixa IS NOT NULL
-                  AND f.tp_situacao = '1'
-                  AND f.tp_documento = 1
-                  AND f.nr_portador < 999
-                  AND f.cd_empresa IN ({empresa_placeholders})
-                  AND f.dt_vencimento >= %s
-                  AND f.dt_vencimento <= %s
-            """
-            for row in execute_query(query_fatura_sem_antecipacao, (*empresas_filtro, dataInicio, dataFim)) or []:
-                dt_vencimento = row['dt_vencimento']
-                if not dt_vencimento:
-                    continue
-                periodo = dt_vencimento.strftime('%Y-%m')
-                if periodo not in periodos:
-                    continue
-                valor = float(row['vl_pago'] or 0)
-                receita_caixa[periodo] += valor
-                receita_caixa['total'] += valor
-
-            data_inicio_dt = datetime.strptime(dataInicio, '%Y-%m-%d')
-            data_fim_dt = datetime.strptime(dataFim, '%Y-%m-%d')
-            data_inicio_buffer = (data_inicio_dt - timedelta(days=10)).strftime('%Y-%m-%d')
-            data_inicio_buffer_cartao = (data_inicio_dt - timedelta(days=630)).strftime('%Y-%m-%d')
-
-            for scodigo, cfg in RECEBIMENTOS_DATA_CONSTRUIDA.items():
-                if scodigo == 'REC.04':
-                    # Cartao de credito SEM antecipacao: cada parcela e
-                    # reconhecida em emissao + 30*nr_parcela dias corridos,
-                    # em vez de tudo somado em emissao + 2 dias uteis.
-                    query_cartao = f"""
-                        SELECT f.dt_emissao, f.nr_parcela, f.vl_fatura
-                        FROM vr_fcr_faturai f
-                        WHERE f.tp_situacao = '1'
-                          AND f.tp_documento = %s
-                          AND f.tp_cobranca = %s
-                          AND f.cd_empresa IN ({empresa_placeholders})
-                          AND f.dt_emissao >= %s
-                          AND f.dt_emissao <= %s
-                    """
-                    rows_cartao = execute_query(
-                        query_cartao,
-                        (cfg['tp_documento'], cfg['tp_cobranca'], *empresas_filtro, data_inicio_buffer_cartao, dataFim)
-                    )
-                    for row in rows_cartao or []:
-                        dt_emissao = row['dt_emissao']
-                        nr_parcela = row.get('nr_parcela')
-                        if not dt_emissao or not nr_parcela or nr_parcela < 1:
-                            continue
-                        dt_construida = dt_emissao + timedelta(days=30 * nr_parcela)
-                        if dt_construida < data_inicio_dt or dt_construida > data_fim_dt:
-                            continue
-                        periodo = dt_construida.strftime('%Y-%m')
-                        if periodo not in periodos:
-                            continue
-                        valor = float(row['vl_fatura'] or 0)
-                        receita_caixa[periodo] += valor
-                        receita_caixa['total'] += valor
-                    continue
-
-                where_extra = ""
-                params_extra = []
-                if cfg.get('tp_cobranca') is not None:
-                    where_extra = "AND f.tp_cobranca = %s"
-                    params_extra = [cfg['tp_cobranca']]
-                query_construida = f"""
-                    SELECT f.dt_emissao, f.vl_fatura
-                    FROM vr_fcr_faturai f
-                    WHERE f.tp_situacao = '1'
-                      AND f.tp_documento = %s
-                      {where_extra}
-                      AND f.cd_empresa IN ({empresa_placeholders})
-                      AND f.dt_emissao >= %s
-                      AND f.dt_emissao <= %s
-                """
-                rows_construida = execute_query(
-                    query_construida,
-                    (cfg['tp_documento'], *params_extra, *empresas_filtro, data_inicio_buffer, dataFim)
-                )
-                for row in rows_construida or []:
-                    dt_emissao = row['dt_emissao']
-                    if not dt_emissao:
-                        continue
-                    dt_construida = _somar_dias_uteis(dt_emissao, cfg['dias_uteis'])
-                    if dt_construida < data_inicio_dt or dt_construida > data_fim_dt:
-                        continue
-                    periodo = dt_construida.strftime('%Y-%m')
-                    if periodo not in periodos:
-                        continue
-                    valor = float(row['vl_fatura'] or 0)
-                    receita_caixa[periodo] += valor
-                    receita_caixa['total'] += valor
 
         # =====================================================================
         # RESUMO EXECUTIVO (ponte): Resultado (DRE) -> ajustes -> Caixa (DFC).
@@ -2890,9 +2719,9 @@ def _calcular_dre_x_dfc_operacional(dataInicio: str, dataFim: str, filtro: str):
         # Operacionais e Despesas Tributarias que essa bucketizacao nao
         # cobre), eles vem DIRETO das mesmas funcoes que alimentam as telas
         # oficiais: _calcular_valores_unificada (DRE Analitica, Lucro
-        # Liquido = conta '14') e _calcular_valores_dfc com sem_antecipacao
-        # (aba "Mensal - Sem Antecipacao" do DFC, card "Saldo de Caixa (apos
-        # Operacional)" = REC + OP + NAO_CLASSIFICADO). NAO e o 'SALDO' geral
+        # Liquido = conta '14') e _calcular_valores_dfc (aba "Mensal" do
+        # DFC, o caixa real, card "Saldo de Caixa (apos Operacional)" = REC +
+        # OP + NAO_CLASSIFICADO). NAO e o 'SALDO' geral
         # dessa mesma tela - esse inclui INVESTIMENTOS e FINANCIAMENTO
         # (emprestimo, aporte, amortizacao de divida), que nao tem
         # correspondente na DRE e nao faz parte do escopo "DFC Operacional"
@@ -2911,6 +2740,10 @@ def _calcular_dre_x_dfc_operacional(dataInicio: str, dataFim: str, filtro: str):
         resultado_caixa = _init_valores_periodo(periodos)
         for p in periodos + ['total']:
             resultado_caixa[p] = dfc_rec[p] + dfc_op[p] + dfc_nao_classificado[p]
+
+        # Receita de caixa = recebimentos do DFC real (mesmo numero da tela
+        # do DFC), em vez de um calculo paralelo aqui.
+        receita_caixa = {p: dfc_rec[p] for p in periodos + ['total']}
 
         # Ajuste de descasamento de prazo (receita/despesa), so do recorte
         # Operacional - continua util pro detalhamento por subgrupo abaixo.
@@ -5123,3 +4956,4 @@ dre_cache.registrar("por-empresa", lambda ini, fim, filtro: _calcular_dre_por_em
 dre_cache.registrar("dfc-mensal", lambda ini, fim, filtro: _calcular_valores_dfc(ini, fim, filtro))
 dre_cache.registrar("dfc-sem-antecipacao", lambda ini, fim, filtro: _calcular_valores_dfc(ini, fim, filtro, sem_antecipacao=True))
 dre_cache.registrar("dfc-por-ccusto", lambda ini, fim, filtro: _calcular_dfc_por_centro_custo(ini, fim))
+dre_cache.registrar("dre-x-dfc", _calcular_dre_x_dfc_operacional)
