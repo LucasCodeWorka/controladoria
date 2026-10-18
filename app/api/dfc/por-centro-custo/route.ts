@@ -10,6 +10,8 @@ export async function GET(request: NextRequest) {
     const dataInicio = searchParams.get('dataInicio') || '2026-01-01';
     const dataFim = searchParams.get('dataFim') || '2026-12-31';
     const params = new URLSearchParams({ dataInicio, dataFim });
+    // Botao atualizar da tela: ignora o cache do DFC no backend
+    if (searchParams.get('forcar') === '1') params.set('forcar', 'true');
 
     const response = await fetch(
       `${PYTHON_API_URL}/api/dfc/por-centro-custo?${params.toString()}`,

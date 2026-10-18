@@ -2,6 +2,7 @@ import asyncio
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+import dre_cache
 from database import close_all_connections
 
 from routers import health, indicadores, dre, classificacao, analise_executiva, cmv_detalhado, giro, estoque_tempo, foto, analisador_dre, balanco_patrimonial, fluxo_caixa
@@ -60,6 +61,10 @@ async def startup_event():
     # empresas desatualizadas - ver loop_recalculo_automatico_giro) - fica
     # rodando pra sempre em paralelo, sem bloquear a API.
     asyncio.create_task(loop_recalculo_automatico_giro())
+    # Cache da DRE (Analitica/Sintetica/Por Empresa) - mantem prontos os
+    # periodos usados na tela pra abrir na hora em qualquer computador (ver
+    # dre_cache.py).
+    asyncio.create_task(dre_cache.loop_agendador())
 
 
 @app.on_event("shutdown")

@@ -12,6 +12,8 @@ export async function GET(request: NextRequest) {
     const filtro = searchParams.get('filtro') || 'consolidado';
     const semAntecipacao = searchParams.get('semAntecipacao') || 'false';
     const params = new URLSearchParams({ dataInicio, dataFim, filtro, semAntecipacao });
+    // Botao atualizar da tela: ignora o cache do DFC no backend
+    if (searchParams.get('forcar') === '1') params.set('forcar', 'true');
 
     const response = await fetch(
       `${PYTHON_API_URL}/api/dfc/unificada?${params.toString()}`,

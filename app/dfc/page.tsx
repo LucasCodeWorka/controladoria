@@ -280,6 +280,14 @@ function GraficoBarrasSaldo({ dados }: { dados: PontoGraficoSaldo[] }) {
   );
 }
 
+// Hora em que o DFC foi CALCULADO - pode ter vindo pronto do cache do
+// servidor (ver python-backend/dre_cache.py), entao nao e a hora em que a
+// tela recebeu a resposta.
+function rotuloAtualizacao(data: any): string {
+  const calculadoEm = data?._cache?.calculadoEm;
+  return (calculadoEm ? new Date(calculadoEm) : new Date()).toLocaleString('pt-BR');
+}
+
 export default function DFCPage() {
   const [loading, setLoading] = useState(false);
   const [consultaExecutada, setConsultaExecutada] = useState(false);
@@ -481,7 +489,7 @@ export default function DFCPage() {
     // reagindo aos grupos ocultos - ver useMemo `checkpointsSaldo` abaixo.
     setValores(data.valores || {});
     setDespesasPorSubgrupo(data.despesasPorSubgrupo || {});
-    setUltimaAtualizacao(new Date().toLocaleString('pt-BR'));
+    setUltimaAtualizacao(rotuloAtualizacao(data));
     setConsultaExecutada(true);
   }
 
@@ -517,6 +525,8 @@ export default function DFCPage() {
         filtro,
         semAntecipacao: String(visaoDFC === 'mensal-sem-antecipacao'),
       });
+      // Botao atualizar: pede pro backend ignorar o cache do DFC tambem
+      if (forcar) params.set('forcar', '1');
       const response = await fetch(`/api/dfc/unificada?${params.toString()}`, {
         signal: controller.signal,
         cache: 'no-store',
@@ -561,7 +571,7 @@ export default function DFCPage() {
     setPeriodos(colunas);
     setValores(data.valores || {});
     setDespesasPorSubgrupo({});
-    setUltimaAtualizacao(new Date().toLocaleString('pt-BR'));
+    setUltimaAtualizacao(rotuloAtualizacao(data));
     setConsultaExecutada(true);
   }
 
@@ -582,6 +592,7 @@ export default function DFCPage() {
       const controller = new AbortController();
       const timeout = window.setTimeout(() => controller.abort(), 300000);
       const params = new URLSearchParams({ dataInicio, dataFim });
+      if (forcar) params.set('forcar', '1');
       const response = await fetch(`/api/dfc/por-centro-custo?${params.toString()}`, {
         signal: controller.signal,
         cache: 'no-store',
@@ -1444,7 +1455,9 @@ export default function DFCPage() {
           </div>
         )}
         {ultimaAtualizacao && (
-          <p className="mt-2 text-xs text-gray-400">Última atualização: {ultimaAtualizacao}</p>
+          <p className="mt-2 text-xs text-gray-400" title="Os períodos mais usados ficam calculados no servidor e são atualizados sozinhos. Use o botão de atualizar para recalcular agora.">
+            Dados calculados em: {ultimaAtualizacao}
+          </p>
         )}
       </div>
 

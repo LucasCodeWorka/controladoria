@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from database import execute_query, execute_insert
+import dre_cache
 import unicodedata
 
 router = APIRouter()
@@ -970,6 +971,11 @@ def salvar_classificacao_despesas_dre(data: dict):
 
         print(f"[SALVAR-DRE] Concluído: {salvos} salvas, {removidos} removidas")
 
+        # Classificacao muda a DRE de QUALQUER periodo (inclusive os meses
+        # congelados do cache) - apaga e o agendador recalcula.
+        if salvos or removidos:
+            dre_cache.invalidar(f"classificacao DRE alterada ({salvos} salvas, {removidos} removidas)", dre_cache.VISOES_DRE)
+
         return {
             "success": True,
             "salvos": salvos,
@@ -1079,6 +1085,11 @@ def salvar_classificacao_despesas_dfc(data: dict):
             """
             execute_insert(query, (cd_despesaitem, ds_despesaitem, conta_dfc, usuario))
             salvos += 1
+
+        # Classificacao DFC muda o DFC de qualquer periodo - apaga so o cache
+        # do DFC (a DRE usa outra tabela de classificacao).
+        if salvos or removidos:
+            dre_cache.invalidar(f"classificacao DFC alterada ({salvos} salvas, {removidos} removidas)", dre_cache.VISOES_DFC)
 
         return {
             "success": True,
@@ -1386,6 +1397,9 @@ def sincronizar_classificacoes_com_oficial():
         print(f"  - Corrigidas: {len(corrigidas)}")
         print(f"  - Inseridas: {len(inseridas)}")
         print(f"  - Sem mapeamento oficial: {sem_mapeamento}")
+
+        if corrigidas or inseridas:
+            dre_cache.invalidar(f"classificacao DRE sincronizada com a oficial ({len(corrigidas)} corrigidas, {len(inseridas)} inseridas)", dre_cache.VISOES_DRE)
 
         return {
             "success": True,

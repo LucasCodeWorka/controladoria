@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, Query
 from typing import Optional
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
+import dre_cache
 from database import execute_query, execute_insert
 import services
 import unicodedata
@@ -1021,8 +1022,16 @@ def get_dre_fabrica_por_ccusto(
 @router.get("/api/dre/por-empresa")
 def get_dre_por_empresa(
     dataInicio: str = Query("2026-01-01", description="Data inicial (YYYY-MM-DD)"),
-    dataFim: str = Query("2026-12-31", description="Data final (YYYY-MM-DD)")
+    dataFim: str = Query("2026-12-31", description="Data final (YYYY-MM-DD)"),
+    forcar: bool = Query(False, description="Ignora o cache e recalcula (botao atualizar da tela)")
 ):
+    return dre_cache.obter(
+        "por-empresa", dataInicio, dataFim, "", forcar,
+        lambda: _calcular_dre_por_empresa(dataInicio, dataFim),
+    )
+
+
+def _calcular_dre_por_empresa(dataInicio: str, dataFim: str):
     """
     Retorna dados da DRE agrupados por empresa.
     Baseado na mesma lógica da DRE analítica, apenas trocando período por empresa.
@@ -1399,7 +1408,8 @@ def get_centros_custo():
 def get_dre_unificada(
     dataInicio: str = Query("2026-01-01", description="Data inicial (YYYY-MM-DD)"),
     dataFim: str = Query("2026-12-31", description="Data final (YYYY-MM-DD)"),
-    filtro: str = Query("consolidado", description="Filtro: 'consolidado', 'fabrica', ou codigo do centro de custo")
+    filtro: str = Query("consolidado", description="Filtro: 'consolidado', 'fabrica', ou codigo do centro de custo"),
+    forcar: bool = Query(False, description="Ignora o cache e recalcula (botao atualizar da tela)")
 ):
     """
     DRE Unificada com filtro flexível.
@@ -1409,7 +1419,10 @@ def get_dre_unificada(
     - fabrica: Apenas centros de custo da fabrica (1, 500-514)
     - [numero]: Centro de custo específico (ex: 2 para LIEBE MARAPONGA)
     """
-    return _calcular_valores_unificada(dataInicio, dataFim, filtro, campo_data_despesa='dt_emissao')
+    return dre_cache.obter(
+        "analitica", dataInicio, dataFim, filtro, forcar,
+        lambda: _calcular_valores_unificada(dataInicio, dataFim, filtro, campo_data_despesa='dt_emissao'),
+    )
 
 
 @router.get("/api/dfc/unificada")
@@ -1423,7 +1436,8 @@ def get_dfc_unificada(
                     "reconhecido por parcela (emissao + 30*nr_parcela dias) em vez de emissao+2 dias uteis; faturas "
                     "(REC.03, tp_documento=1, nr_portador<999) ja baixadas sao alocadas no mes do VENCIMENTO "
                     "original, nao no mes da baixa (que pode vir antecipada)."
-    )
+    ),
+    forcar: bool = Query(False, description="Ignora o cache e recalcula (botao atualizar da tela)")
 ):
     """
     DFC (regime de caixa) com plano de contas PROPRIO (GRUPO > SUBGRUPO,
@@ -1434,13 +1448,17 @@ def get_dfc_unificada(
     realmente saiu - dt_liq e a data real do pagamento.
     Receita/devolucoes usam dt_transacao (nao regime de caixa), igual a DRE.
     """
-    return _calcular_valores_dfc(dataInicio, dataFim, filtro, sem_antecipacao=semAntecipacao)
+    return dre_cache.obter(
+        "dfc-sem-antecipacao" if semAntecipacao else "dfc-mensal", dataInicio, dataFim, filtro, forcar,
+        lambda: _calcular_valores_dfc(dataInicio, dataFim, filtro, sem_antecipacao=semAntecipacao),
+    )
 
 
 @router.get("/api/dfc/por-centro-custo")
 def get_dfc_por_centro_custo(
     dataInicio: str = Query("2026-01-01", description="Data inicial (YYYY-MM-DD)"),
-    dataFim: str = Query("2026-12-31", description="Data final (YYYY-MM-DD)")
+    dataFim: str = Query("2026-12-31", description="Data final (YYYY-MM-DD)"),
+    forcar: bool = Query(False, description="Ignora o cache e recalcula (botao atualizar da tela)")
 ):
     """
     DFC agrupado por centro de custo: cada loja ativa e uma coluna, e todos os
@@ -1448,7 +1466,10 @@ def get_dfc_por_centro_custo(
     coluna "FABRICA" - mesmo padrao de agrupamento da aba "Por Empresa" da DRE.
     Valores sao o total do periodo selecionado (sem quebra por mes).
     """
-    return _calcular_dfc_por_centro_custo(dataInicio, dataFim)
+    return dre_cache.obter(
+        "dfc-por-ccusto", dataInicio, dataFim, "", forcar,
+        lambda: _calcular_dfc_por_centro_custo(dataInicio, dataFim),
+    )
 
 
 def _criar_tabela_dre_x_dfc_snapshot():
@@ -4167,8 +4188,16 @@ def get_auditoria_alertas(
 def get_dre_unificada_sintetico(
     dataInicio: str = Query("2026-01-01", description="Data inicial (YYYY-MM-DD)"),
     dataFim: str = Query("2026-12-31", description="Data final (YYYY-MM-DD)"),
-    filtro: str = Query("consolidado", description="Filtro: 'consolidado', 'fabrica', codigo ou codigos de lojas")
+    filtro: str = Query("consolidado", description="Filtro: 'consolidado', 'fabrica', codigo ou codigos de lojas"),
+    forcar: bool = Query(False, description="Ignora o cache e recalcula (botao atualizar da tela)")
 ):
+    return dre_cache.obter(
+        "sintetica", dataInicio, dataFim, filtro, forcar,
+        lambda: _calcular_dre_sintetico(dataInicio, dataFim, filtro),
+    )
+
+
+def _calcular_dre_sintetico(dataInicio: str, dataFim: str, filtro: str):
     """
     Retorna visao sintetica da DRE com metricas principais por centro de custo.
     Mostra: Receita Liquida, CMV, Margem de Contribuicao, EBITDA, Lucro Liquido
@@ -4564,59 +4593,13 @@ def get_dre_unificada_sintetico(
         inicio_12m = _inicio_janela_meses(dataFim, 12)
         inicio_6m = _inicio_janela_meses(dataFim, 6)
         inicio_3m = _inicio_janela_meses(dataFim, 3)
-        lucros_janelas, receitas_janelas, cmv_incompleto_janelas = _calcular_lucro_liquido_janelas(
-            inicio_12m,
-            dataFim,
-            {"12m": inicio_12m, "6m": inicio_6m, "3m": inicio_3m}
-        )
-        lucro_12m_por_ccusto, lucro_12m_total = lucros_janelas["12m"]
-        lucro_6m_por_ccusto, lucro_6m_total = lucros_janelas["6m"]
-        lucro_3m_por_ccusto, lucro_3m_total = lucros_janelas["3m"]
-        receita_12m_por_ccusto, receita_12m_total = receitas_janelas["12m"]
-        receita_6m_por_ccusto, receita_6m_total = receitas_janelas["6m"]
-        receita_3m_por_ccusto, receita_3m_total = receitas_janelas["3m"]
-
-        resultados = []
-        totais = {
-            "receitaLiquida": 0,
-            "cmv": 0,
-            "cmvCalculado": 0,
-            "custosFixos": 0,
-            "margemContribuicao": 0,
-            "lucroOperacionalBruto": 0,
-            "despesasOperacionais": 0,
-            "ebitda": 0,
-            "resultadoNaoOperacional": 0,
-            "despesasFinanceiras": 0,
-            "despesasTributarias": 0,
-            "receitaFrete": 0,
-            "creditoInadimplencia": 0,
-            "debitoInadimplencia": 0,
-            "resultadoInadimplencia": 0,
-            # Despesas detalhadas
-            "despOcupacao": 0,
-            "despAdministrativas": 0,
-            "despManutencao": 0,
-            "despPessoal": 0,
-            "despMarketing": 0,
-            "despVendas": 0,
-            "despCobranca": 0,
-            "despVeiculos": 0,
-            "despBancarias": 0,
-            "freteVendas": 0,
-            "comissaoRepresentante": 0,
-            "premiacaoComercial": 0,
-            # Janelas de lucro
-            "lucroLiquido12m": lucro_12m_total,
-            "lucroLiquido6m": lucro_6m_total,
-            "lucroLiquido3m": lucro_3m_total,
-            "receitaLiquida12m": receita_12m_total,
-            "receitaLiquida6m": receita_6m_total,
-            "receitaLiquida3m": receita_3m_total,
-            "lucroLiquido": 0
-        }
-
-        for item in todos_ccustos:
+        # Cada centro de custo e independente (so LE classificacoes/CMV ja
+        # calculados acima) - roda em paralelo com as janelas de 3/6/12m, em
+        # vez das ~97 consultas uma atras da outra (30-60s; no site publicado
+        # passava do tempo limite e a visao "nao executava"). Poucos workers:
+        # o pool do banco tem no maximo 10 conexoes e e compartilhado com as
+        # outras telas.
+        def _processar_item_sintetico(item):
             ccustos = item["ccustos"]
             ccusto_placeholders = ",".join(["%s"] * len(ccustos))
 
@@ -4851,47 +4834,88 @@ def get_dre_unificada_sintetico(
                 "freteVendas": frete_vendas,
                 "comissaoRepresentante": comissao_representante,
                 "premiacaoComercial": premiacao_comercial,
-                # Janelas de lucro
-                "lucroLiquido12m": lucro_12m_por_ccusto.get(item["codigo"], 0),
-                "lucroLiquido6m": lucro_6m_por_ccusto.get(item["codigo"], 0),
-                "lucroLiquido3m": lucro_3m_por_ccusto.get(item["codigo"], 0),
-                "receitaLiquida12m": receita_12m_por_ccusto.get(item["codigo"], 0),
-                "receitaLiquida6m": receita_6m_por_ccusto.get(item["codigo"], 0),
-                "receitaLiquida3m": receita_3m_por_ccusto.get(item["codigo"], 0),
                 "lucroLiquido": lucro_liquido
             }
 
-            resultados.append(resultado)
+            return resultado
 
-            totais["receitaLiquida"] += receita_liquida
-            totais["cmv"] += custos_variaveis
-            totais["cmvCalculado"] += cmv
-            totais["custosFixos"] += custos_fixos
-            totais["margemContribuicao"] += margem_contribuicao
-            totais["lucroOperacionalBruto"] += lucro_operacional_bruto
-            totais["despesasOperacionais"] += despesas_operacionais
-            totais["ebitda"] += ebitda
-            totais["resultadoNaoOperacional"] += despesas_financeiras
-            totais["despesasFinanceiras"] += despesas_financeiras
-            totais["despesasTributarias"] += despesas_tributarias
-            totais["receitaFrete"] += receita_frete
-            totais["creditoInadimplencia"] += credito_inadimplencia_item
-            totais["debitoInadimplencia"] += debito_inadimplencia_item
-            totais["resultadoInadimplencia"] += resultado_inadimplencia
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            futuro_janelas = pool.submit(
+                _calcular_lucro_liquido_janelas,
+                inicio_12m,
+                dataFim,
+                {"12m": inicio_12m, "6m": inicio_6m, "3m": inicio_3m}
+            )
+            futuros_itens = [pool.submit(_processar_item_sintetico, item) for item in todos_ccustos]
+            resultados = [futuro.result() for futuro in futuros_itens]
+            lucros_janelas, receitas_janelas, cmv_incompleto_janelas = futuro_janelas.result()
+
+        lucro_12m_por_ccusto, lucro_12m_total = lucros_janelas["12m"]
+        lucro_6m_por_ccusto, lucro_6m_total = lucros_janelas["6m"]
+        lucro_3m_por_ccusto, lucro_3m_total = lucros_janelas["3m"]
+        receita_12m_por_ccusto, receita_12m_total = receitas_janelas["12m"]
+        receita_6m_por_ccusto, receita_6m_total = receitas_janelas["6m"]
+        receita_3m_por_ccusto, receita_3m_total = receitas_janelas["3m"]
+
+        totais = {
+            "receitaLiquida": 0,
+            "cmv": 0,
+            "cmvCalculado": 0,
+            "custosFixos": 0,
+            "margemContribuicao": 0,
+            "lucroOperacionalBruto": 0,
+            "despesasOperacionais": 0,
+            "ebitda": 0,
+            "resultadoNaoOperacional": 0,
+            "despesasFinanceiras": 0,
+            "despesasTributarias": 0,
+            "receitaFrete": 0,
+            "creditoInadimplencia": 0,
+            "debitoInadimplencia": 0,
+            "resultadoInadimplencia": 0,
             # Despesas detalhadas
-            totais["despOcupacao"] += desp_ocupacao
-            totais["despAdministrativas"] += desp_administrativas
-            totais["despManutencao"] += desp_manutencao
-            totais["despPessoal"] += desp_pessoal
-            totais["despMarketing"] += desp_marketing
-            totais["despVendas"] += desp_vendas
-            totais["despCobranca"] += desp_cobranca
-            totais["despVeiculos"] += desp_veiculos
-            totais["despBancarias"] += desp_bancarias
-            totais["freteVendas"] += frete_vendas
-            totais["comissaoRepresentante"] += comissao_representante
-            totais["premiacaoComercial"] += premiacao_comercial
-            totais["lucroLiquido"] += lucro_liquido
+            "despOcupacao": 0,
+            "despAdministrativas": 0,
+            "despManutencao": 0,
+            "despPessoal": 0,
+            "despMarketing": 0,
+            "despVendas": 0,
+            "despCobranca": 0,
+            "despVeiculos": 0,
+            "despBancarias": 0,
+            "freteVendas": 0,
+            "comissaoRepresentante": 0,
+            "premiacaoComercial": 0,
+            # Janelas de lucro
+            "lucroLiquido12m": lucro_12m_total,
+            "lucroLiquido6m": lucro_6m_total,
+            "lucroLiquido3m": lucro_3m_total,
+            "receitaLiquida12m": receita_12m_total,
+            "receitaLiquida6m": receita_6m_total,
+            "receitaLiquida3m": receita_3m_total,
+            "lucroLiquido": 0
+        }
+
+        # Somados na mesma ordem de antes (ordem de todos_ccustos)
+        chaves_somadas = [
+            "receitaLiquida", "cmv", "cmvCalculado", "custosFixos", "margemContribuicao",
+            "lucroOperacionalBruto", "despesasOperacionais", "ebitda", "resultadoNaoOperacional",
+            "despesasFinanceiras", "despesasTributarias", "receitaFrete", "creditoInadimplencia",
+            "debitoInadimplencia", "resultadoInadimplencia", "despOcupacao", "despAdministrativas",
+            "despManutencao", "despPessoal", "despMarketing", "despVendas", "despCobranca",
+            "despVeiculos", "despBancarias", "freteVendas", "comissaoRepresentante",
+            "premiacaoComercial", "lucroLiquido",
+        ]
+        for resultado in resultados:
+            codigo_item = resultado["codigo"]
+            resultado["lucroLiquido12m"] = lucro_12m_por_ccusto.get(codigo_item, 0)
+            resultado["lucroLiquido6m"] = lucro_6m_por_ccusto.get(codigo_item, 0)
+            resultado["lucroLiquido3m"] = lucro_3m_por_ccusto.get(codigo_item, 0)
+            resultado["receitaLiquida12m"] = receita_12m_por_ccusto.get(codigo_item, 0)
+            resultado["receitaLiquida6m"] = receita_6m_por_ccusto.get(codigo_item, 0)
+            resultado["receitaLiquida3m"] = receita_3m_por_ccusto.get(codigo_item, 0)
+            for chave in chaves_somadas:
+                totais[chave] += resultado[chave]
 
         if totais["receitaLiquida"] > 0:
             totais["margemPct"] = round(totais["margemContribuicao"] / totais["receitaLiquida"] * 100, 1)
@@ -5090,3 +5114,12 @@ def get_duplicatas_por_empresa(
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
+
+# Calculadoras usadas pelo agendador do cache da DRE (dre_cache.py) - mesmo
+# calculo dos endpoints acima, chamado direto (sem HTTP).
+dre_cache.registrar("analitica", lambda ini, fim, filtro: _calcular_valores_unificada(ini, fim, filtro, campo_data_despesa='dt_emissao'))
+dre_cache.registrar("sintetica", _calcular_dre_sintetico)
+dre_cache.registrar("por-empresa", lambda ini, fim, filtro: _calcular_dre_por_empresa(ini, fim))
+dre_cache.registrar("dfc-mensal", lambda ini, fim, filtro: _calcular_valores_dfc(ini, fim, filtro))
+dre_cache.registrar("dfc-sem-antecipacao", lambda ini, fim, filtro: _calcular_valores_dfc(ini, fim, filtro, sem_antecipacao=True))
+dre_cache.registrar("dfc-por-ccusto", lambda ini, fim, filtro: _calcular_dfc_por_centro_custo(ini, fim))

@@ -11,6 +11,8 @@ export async function GET(request: NextRequest) {
     const dataFim = searchParams.get('dataFim') || '2026-12-31';
     const filtro = searchParams.get('filtro') || 'consolidado';
     const params = new URLSearchParams({ dataInicio, dataFim, filtro });
+    // Botao atualizar da tela: ignora o cache da DRE no backend
+    if (searchParams.get('forcar') === '1') params.set('forcar', 'true');
 
     const response = await fetch(
       `${PYTHON_API_URL}/api/dre/unificada?${params.toString()}`,

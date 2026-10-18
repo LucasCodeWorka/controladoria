@@ -264,6 +264,14 @@ function detectarAnomalia(
 
 
 
+// Hora em que a DRE foi CALCULADA - pode ter vindo pronta do cache do
+// servidor (ver python-backend/dre_cache.py), entao nao e a hora em que a
+// tela recebeu a resposta.
+function rotuloAtualizacao(data: any): string {
+  const calculadoEm = data?._cache?.calculadoEm;
+  return (calculadoEm ? new Date(calculadoEm) : new Date()).toLocaleString('pt-BR');
+}
+
 export default function DREPage() {
   const [loading, setLoading] = useState(false);
   const [consultaExecutada, setConsultaExecutada] = useState(false);
@@ -1516,7 +1524,9 @@ export default function DREPage() {
       }
       const controller = new AbortController();
       const timeout = window.setTimeout(() => controller.abort(), 300000);
-      const response = await fetch(url, { signal: controller.signal, cache: 'no-store' });
+      // Botao atualizar: pede pro backend ignorar o cache da DRE tambem
+      const urlFinal = forcar ? `${url}${url.includes('?') ? '&' : '?'}forcar=1` : url;
+      const response = await fetch(urlFinal, { signal: controller.signal, cache: 'no-store' });
       window.clearTimeout(timeout);
       // Resposta que nao e JSON (ex.: 502/504 do servidor quando a consulta
       // passa do tempo limite) virava um SyntaxError silencioso no catch
@@ -1610,7 +1620,7 @@ export default function DREPage() {
         somarFilhos(dadosProcessados, periodosAtuais);
         const dadosOrdenados = calcularLinhasOrdenadas(dadosProcessados, periodosAtuais, contasTotalizadoras);
         setDadosDRE(dadosOrdenados);
-        setUltimaAtualizacao(new Date().toLocaleString('pt-BR'));
+        setUltimaAtualizacao(rotuloAtualizacao(data));
         setConsultaExecutada(true);
 
       } else if (tipoVisao === 'sintetica') {
@@ -1634,7 +1644,7 @@ export default function DREPage() {
 
         setDadosSinteticos(data.resumo || []);
         setTotaisSinteticos(data.totais || {});
-        setUltimaAtualizacao(new Date().toLocaleString('pt-BR'));
+        setUltimaAtualizacao(rotuloAtualizacao(data));
         setConsultaExecutada(true);
 
         if (compararAnoAnteriorSintetico) buscarDadosSinteticoAno();
@@ -1652,7 +1662,7 @@ export default function DREPage() {
         const dadosEstrutura = JSON.parse(JSON.stringify(ESTRUTURA_DRE)) as ContaDREValores[];
         const dadosOrdenados = calcularLinhasOrdenadas(dadosEstrutura, []);
         setDadosDRE(dadosOrdenados);
-        setUltimaAtualizacao(new Date().toLocaleString('pt-BR'));
+        setUltimaAtualizacao(rotuloAtualizacao(data));
         setConsultaExecutada(true);
       } else if (tipoVisao === 'por-ccusto') {
         const data = await buscarComCache(`/api/dre/fabrica/por-ccusto?dataInicio=${dataInicio}&dataFim=${dataFim}`);
@@ -1668,7 +1678,7 @@ export default function DREPage() {
         const dadosEstrutura = JSON.parse(JSON.stringify(ESTRUTURA_DRE)) as ContaDREValores[];
         const dadosOrdenados = calcularLinhasOrdenadas(dadosEstrutura, []);
         setDadosDRE(dadosOrdenados);
-        setUltimaAtualizacao(new Date().toLocaleString('pt-BR'));
+        setUltimaAtualizacao(rotuloAtualizacao(data));
         setConsultaExecutada(true);
       }
 
@@ -2119,7 +2129,9 @@ export default function DREPage() {
               </h1>
               <p className="text-gray-600">Demonstracao do Resultado do Exercicio</p>
               {ultimaAtualizacao && (
-                <p className="text-xs text-gray-400 mt-1">Carregado em: {ultimaAtualizacao}</p>
+                <p className="text-xs text-gray-400 mt-1" title="Os períodos mais usados ficam calculados no servidor e são atualizados sozinhos. Use o botão de atualizar para recalcular agora.">
+                  Dados calculados em: {ultimaAtualizacao}
+                </p>
               )}
             </div>
           </div>

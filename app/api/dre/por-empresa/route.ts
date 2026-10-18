@@ -9,9 +9,11 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const dataInicio = searchParams.get('dataInicio') || '2026-01-01';
     const dataFim = searchParams.get('dataFim') || '2026-12-31';
+    // Botao atualizar da tela: ignora o cache da DRE no backend
+    const forcar = searchParams.get('forcar') === '1' ? '&forcar=true' : '';
 
     const response = await fetch(
-      `${PYTHON_API_URL}/api/dre/por-empresa?dataInicio=${dataInicio}&dataFim=${dataFim}`,
+      `${PYTHON_API_URL}/api/dre/por-empresa?dataInicio=${dataInicio}&dataFim=${dataFim}${forcar}`,
       {
         method: 'GET',
         cache: 'no-store',

@@ -18,6 +18,8 @@ export async function GET(request: NextRequest) {
       filtro,
       t: String(Date.now()),
     });
+    // Botao atualizar da tela: ignora o cache da DRE no backend
+    if (searchParams.get('forcar') === '1') params.set('forcar', 'true');
 
     const response = await fetch(
       `${PYTHON_API_URL}/api/dre/unificada/sintetico?${params.toString()}`,
