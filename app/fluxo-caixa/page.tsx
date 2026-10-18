@@ -91,11 +91,6 @@ interface SaldosBancarios {
   total: number;
 }
 
-interface FaturaDescontada {
-  nrFat: number;
-  nrParcela: number;
-}
-
 interface SaidaFornecedor {
   cdFornecedor: number | null;
   nome: string;
@@ -1347,12 +1342,6 @@ export default function FluxoCaixaPage() {
   const [outrasEntradasStatus, setOutrasEntradasStatus] = useState('');
   const [outrasEntradasSalvando, setOutrasEntradasSalvando] = useState(false);
 
-  const [faturasModalAberto, setFaturasModalAberto] = useState(false);
-  const [faturasLista, setFaturasLista] = useState<FaturaDescontada[] | null>(null);
-  const [faturasPaste, setFaturasPaste] = useState('');
-  const [faturasStatus, setFaturasStatus] = useState('');
-  const [faturasSalvando, setFaturasSalvando] = useState(false);
-
   const [boletoDetalheDia, setBoletoDetalheDia] = useState<string | null>(null);
   const [boletoDetalheLista, setBoletoDetalheLista] = useState<BoletoDetalheItem[] | null>(null);
   const [boletoDetalheErro, setBoletoDetalheErro] = useState('');
@@ -1614,82 +1603,6 @@ export default function FluxoCaixaPage() {
       setOutrasEntradasStatus(`Erro: ${e instanceof Error ? e.message : 'desconhecido'}`);
     } finally {
       setOutrasEntradasSalvando(false);
-    }
-  }
-
-  async function faturasCarregarLista() {
-    setFaturasLista(null);
-    try {
-      const res = await fetch('/api/fluxo-caixa/faturas-descontadas', { cache: 'no-store' });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || json.detail || 'Erro ao carregar');
-      setFaturasLista(json);
-    } catch (e) {
-      setFaturasStatus(`Erro: ${e instanceof Error ? e.message : 'desconhecido'}`);
-      setFaturasLista([]);
-    }
-  }
-
-  function faturasAbrir() {
-    setFaturasModalAberto(true);
-    setFaturasStatus('');
-    faturasCarregarLista();
-  }
-
-  async function faturasGravar() {
-    const raw = faturasPaste.trim();
-    if (!raw) { setFaturasStatus('Cole os dados primeiro.'); return; }
-
-    const linhas: { nrFat: number; nrParcela: number }[] = [];
-    for (const linha of raw.split('\n')) {
-      const m = linha.trim().match(/^(\d+)\s*\/\s*(\d+)$/);
-      if (!m) continue;
-      linhas.push({ nrFat: parseInt(m[1], 10), nrParcela: parseInt(m[2], 10) });
-    }
-
-    if (!linhas.length) { setFaturasStatus('Nenhuma linha válida encontrada (formato: fatura/parcela).'); return; }
-    setFaturasStatus(`Salvando ${linhas.length} fatura(s)…`);
-    setFaturasSalvando(true);
-    try {
-      const res = await fetch('/api/fluxo-caixa/faturas-descontadas', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(linhas),
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || json.detail || 'Erro ao salvar');
-      setFaturasStatus(`✓ ${json.count} fatura(s) salvas.`);
-      setFaturasPaste('');
-      await faturasCarregarLista();
-      buscar();
-    } catch (e) {
-      setFaturasStatus(`Erro: ${e instanceof Error ? e.message : 'desconhecido'}`);
-    } finally {
-      setFaturasSalvando(false);
-    }
-  }
-
-  async function faturasRemover(nrFat: number, nrParcela: number) {
-    try {
-      await fetch(`/api/fluxo-caixa/faturas-descontadas/${nrFat}/${nrParcela}`, { method: 'DELETE' });
-      await faturasCarregarLista();
-      buscar();
-    } catch (e) {
-      console.error('Erro ao remover fatura descontada:', e);
-    }
-  }
-
-  async function faturasRemoverTudo() {
-    if (!confirm('Remover TODAS as faturas descontadas cadastradas? Essa ação não pode ser desfeita.')) return;
-    try {
-      const res = await fetch('/api/fluxo-caixa/faturas-descontadas', { method: 'DELETE' });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || json.detail || 'Erro ao remover');
-      setFaturasStatus(`✓ ${json.count} fatura(s) removidas.`);
-      await faturasCarregarLista();
-      buscar();
-    } catch (e) {
-      setFaturasStatus(`Erro: ${e instanceof Error ? e.message : 'desconhecido'}`);
     }
   }
 
@@ -2035,9 +1948,6 @@ export default function FluxoCaixaPage() {
             <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-gray-50">
               <h2 className="text-sm font-semibold text-black uppercase tracking-wide">Visão Diária</h2>
               <div className="flex gap-2">
-                <button onClick={faturasAbrir} className="flex items-center gap-1 text-xs font-medium bg-gray-200 hover:bg-gray-300 text-black rounded px-2 py-1 transition-colors">
-                  <Settings className="w-3.5 h-3.5" /> Faturas Descontadas
-                </button>
                 <button onClick={() => setLojasModalAberto(true)} className="flex items-center gap-1 text-xs font-medium bg-gray-200 hover:bg-gray-300 text-black rounded px-2 py-1 transition-colors">
                   <Settings className="w-3.5 h-3.5" /> Projeção Lojas
                 </button>
@@ -2322,60 +2232,6 @@ export default function FluxoCaixaPage() {
             </div>
           </div>
         </div>
-      )}
-
-      {/* Modal: Faturas Descontadas */}
-      {faturasModalAberto && (
-        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setFaturasModalAberto(false)}>
-          <div className="bg-white rounded-lg shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200 sticky top-0 bg-white">
-              <h2 className="text-base font-semibold text-black">Faturas Descontadas (Empresa 001)</h2>
-              <button onClick={() => setFaturasModalAberto(false)} className="text-black hover:text-black"><X className="w-5 h-5" /></button>
-            </div>
-            <div className="p-5">
-              <p className="text-sm text-black mb-3">
-                Faturas já descontadas junto ao banco não entram mais no Boleto futuro. Cole abaixo — uma linha por fatura/parcela.<br />
-                Formato: <code>102045/002</code>
-              </p>
-              <textarea
-                value={faturasPaste}
-                onChange={(e) => setFaturasPaste(e.target.value)}
-                rows={8}
-                placeholder={'102045/002\n102045/003\n...'}
-                className="w-full box-border font-mono text-sm text-black p-2.5 border border-gray-300 rounded resize-vertical"
-              />
-              <div className="flex gap-2 mt-3 justify-end items-center">
-                <span className="flex-1 text-sm text-black">{faturasStatus}</span>
-                <button onClick={faturasGravar} disabled={faturasSalvando} className="px-5 py-2 bg-green-600 hover:bg-green-700 text-white rounded text-sm font-semibold disabled:opacity-50 transition-colors">Salvar</button>
-              </div>
-              <div className="mt-4 border-t border-gray-200 pt-3">
-                <div className="flex justify-between items-center">
-                  <strong className="text-sm text-black">Já cadastradas</strong>
-                  <button onClick={faturasRemoverTudo} className="text-xs font-medium border border-red-600 text-red-600 rounded px-2 py-0.5 hover:bg-red-50">Remover tudo</button>
-                </div>
-                <div className="mt-2 max-h-44 overflow-y-auto text-sm">
-                  {faturasLista === null && <span className="text-black">Carregando…</span>}
-                  {faturasLista !== null && faturasLista.length === 0 && <span className="text-black">Nenhuma fatura cadastrada.</span>}
-                  {faturasLista?.map((f) => (
-                    <div key={`${f.nrFat}-${f.nrParcela}`} className="flex justify-between items-center py-1 border-b border-gray-100 text-black">
-                      <span>{String(f.nrFat).padStart(6, '0')}/{String(f.nrParcela).padStart(3, '0')}</span>
-                      <button onClick={() => faturasRemover(f.nrFat, f.nrParcela)} className="text-red-600 hover:text-red-800 text-sm">remover</button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {saidaDetalhe && (
-        <ModalSaidasDetalhe
-          dia={saidaDetalhe.dia}
-          tipo={saidaDetalhe.tipo}
-          empresas={new URLSearchParams(consultaRef.current).get('empresas')}
-          onFechar={fecharSaidaDetalhe}
-        />
       )}
 
       {/* Modal: Detalhe das faturas de Boleto de um dia (clique na celula) */}

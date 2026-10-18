@@ -5,10 +5,11 @@ diario acumulado. Portado do app_controladoria (routes/fluxo-caixa.js), que
 ja roda em producao contra o mesmo banco (mesmo host/schema) - mesma logica
 de calculo, so traduzida de Node/Express pra Python/FastAPI.
 
-Duas tabelas proprias (criadas sob demanda, mesmo padrao do giro_snapshot em
-giro.py): fcp_lojas_projecao (projecao manual de recebimento das lojas,
-colada pelo usuario) e fcp_faturas_descontadas (faturas da empresa 001 que
-ja foram descontadas junto ao banco, e por isso saem do Boleto futuro).
+Tabelas proprias (criadas sob demanda, mesmo padrao do giro_snapshot em
+giro.py): fcp_lojas_projecao e fcp_outras_entradas_projecao (projecoes
+manuais coladas pelo usuario). Faturas da empresa 001 ja descontadas junto ao
+banco (que saem do Boleto futuro) vem da tabela borderos - ver
+_SQL_FATURAS_DESCONTADAS.
 """
 from fastapi import APIRouter, HTTPException, Query
 from typing import List, Optional
@@ -25,21 +26,13 @@ CACHE_TTL_SEGUNDOS = 10 * 60
 _kpi_cache: Optional[dict] = None
 _kpi_ts: float = 0.0
 
-# Lojas-projecao/faturas-descontadas: tamanho do lote pro INSERT em massa
+# Lojas-projecao/outras-entradas: tamanho do lote pro INSERT em massa
 # (usuario cola listas de milhares de linhas direto de planilha) - evita
 # montar um unico INSERT gigante de uma vez.
 TAMANHO_LOTE_INSERT = 500
 
 
 def _criar_tabelas_fluxo_caixa():
-    execute_insert("""
-        CREATE TABLE IF NOT EXISTS fcp_faturas_descontadas (
-            nr_fat BIGINT NOT NULL,
-            nr_parcela BIGINT NOT NULL,
-            dt_atualizacao TIMESTAMP DEFAULT NOW(),
-            PRIMARY KEY (nr_fat, nr_parcela)
-        )
-    """, ())
     execute_insert("""
         CREATE TABLE IF NOT EXISTS fcp_lojas_projecao (
             dt_dia DATE PRIMARY KEY,
@@ -590,7 +583,21 @@ def _sql_cheque_diario(where: str) -> str:
 
 
 # ── Entradas - boleto (vr_fcr_faturai), excluindo faturas ja descontadas
-# junto ao banco (empresa 001 - ver fcp_faturas_descontadas) ──────────────
+# junto ao banco (empresa 001 - ver _SQL_FATURAS_DESCONTADAS) ─────────────
+# Faturas descontadas = tabela borderos (todo bordero de desconto importado
+# no banco, campo dcto no formato "fatura/parcela", ex.: "102037/002").
+# Antes era uma lista colada a mao no Fluxo de Caixa (fcp_faturas_descontadas)
+# - substituida pelo borderos a pedido do usuario: bordero novo passa a valer
+# sozinho, sem colar nada. Na troca, todas as faturas da lista colada
+# estavam no borderos (nada se perdeu).
+_SQL_FATURAS_DESCONTADAS = """
+    SELECT split_part(dcto, '/', 1)::bigint, split_part(dcto, '/', 2)::bigint
+    FROM borderos
+    WHERE dcto ~ '^[0-9]+/[0-9]+$'
+"""
+_FILTRO_SEM_DESCONTADAS = f"""NOT (
+            cd_empresa = 1 AND (nr_fat, nr_parcela) IN ({_SQL_FATURAS_DESCONTADAS})
+        )"""
 # Fim de semana -> terca-feira seguinte (regra 3) e so data futura (regra 1),
 # tanto no filtro de periodo quanto no agrupamento abaixo.
 def _filtros_boleto(dt_inicio: str, dt_fim: str, empresas: list) -> tuple:
@@ -600,12 +607,7 @@ def _filtros_boleto(dt_inicio: str, dt_fim: str, empresas: list) -> tuple:
         AND {_PRE_FILTRO_VENCIMENTO}
         AND {_EXPR_DT_BOLETO_EFETIVA} BETWEEN %s AND %s
         AND {_EXPR_DT_BOLETO_EFETIVA} > CURRENT_DATE
-        AND NOT (
-            cd_empresa = 1 AND EXISTS (
-                SELECT 1 FROM fcp_faturas_descontadas fd
-                WHERE fd.nr_fat = vr_fcr_faturai.nr_fat AND fd.nr_parcela = vr_fcr_faturai.nr_parcela
-            )
-        )"""
+        AND {_FILTRO_SEM_DESCONTADAS}"""
     params: list = [dt_inicio, dt_fim, dt_inicio, dt_fim]
     if empresas:
         where += " AND cd_empresa = ANY(%s)"
@@ -653,12 +655,7 @@ def obter_boleto_detalhe(
         AND {_PRE_FILTRO_VENCIMENTO}
         AND {_EXPR_DT_BOLETO_EFETIVA} = %s
         AND {_EXPR_DT_BOLETO_EFETIVA} > CURRENT_DATE
-        AND NOT (
-            cd_empresa = 1 AND EXISTS (
-                SELECT 1 FROM fcp_faturas_descontadas fd
-                WHERE fd.nr_fat = vr_fcr_faturai.nr_fat AND fd.nr_parcela = vr_fcr_faturai.nr_parcela
-            )
-        )"""
+        AND {_FILTRO_SEM_DESCONTADAS}"""
     params: list = [dia, dia, dia]
     if cd_empresas:
         where += " AND cd_empresa = ANY(%s)"
@@ -1368,59 +1365,3 @@ def gravar_outras_entradas_projecao(linhas: Optional[List[dict]] = None):
     except Exception as e:
         print(f"[ERROR] Erro ao gravar outras entradas: {e}")
         raise HTTPException(status_code=500, detail=f"Erro ao salvar outras entradas: {str(e)}")
-
-
-@router.get("/api/fluxo-caixa/faturas-descontadas")
-def listar_faturas_descontadas():
-    _criar_tabelas_fluxo_caixa()
-    rows = execute_query("SELECT nr_fat, nr_parcela FROM fcp_faturas_descontadas ORDER BY nr_fat, nr_parcela") or []
-    return [{"nrFat": int(r["nr_fat"]), "nrParcela": int(r["nr_parcela"])} for r in rows]
-
-
-@router.post("/api/fluxo-caixa/faturas-descontadas")
-def gravar_faturas_descontadas(linhas: Optional[List[dict]] = None):
-    try:
-        _criar_tabelas_fluxo_caixa()
-        linhas = linhas or []
-        if not linhas:
-            return {"ok": True, "count": 0}
-        # Mesmo dedup de gravar_lojas_projecao (ver comentario la) - aqui a
-        # chave e (nr_fat, nr_parcela). Lista colada de uma planilha grande
-        # (ja visto: ~11500 linhas) frequentemente repete alguma fatura/
-        # parcela.
-        pares = {(linha["nrFat"], linha["nrParcela"]) for linha in linhas}
-        itens = list(pares)
-        for i in range(0, len(itens), TAMANHO_LOTE_INSERT):
-            lote = itens[i:i + TAMANHO_LOTE_INSERT]
-            valores_sql = ", ".join(["(%s, %s, NOW())"] * len(lote))
-            params: list = []
-            for nr_fat, nr_parcela in lote:
-                params.extend([nr_fat, nr_parcela])
-            execute_insert(
-                f"""INSERT INTO fcp_faturas_descontadas (nr_fat, nr_parcela, dt_atualizacao) VALUES {valores_sql}
-                    ON CONFLICT (nr_fat, nr_parcela) DO UPDATE SET dt_atualizacao = NOW()""",
-                tuple(params),
-            )
-        return {"ok": True, "count": len(itens)}
-    except Exception as e:
-        print(f"[ERROR] Erro ao gravar faturas descontadas: {e}")
-        raise HTTPException(status_code=500, detail=f"Erro ao salvar faturas descontadas: {str(e)}")
-
-
-@router.delete("/api/fluxo-caixa/faturas-descontadas")
-def remover_todas_faturas_descontadas():
-    _criar_tabelas_fluxo_caixa()
-    linhas = execute_query("SELECT COUNT(*)::int AS total FROM fcp_faturas_descontadas") or []
-    total = linhas[0]["total"] if linhas else 0
-    execute_insert("DELETE FROM fcp_faturas_descontadas", ())
-    return {"ok": True, "count": total}
-
-
-@router.delete("/api/fluxo-caixa/faturas-descontadas/{nr_fat}/{nr_parcela}")
-def remover_fatura_descontada(nr_fat: int, nr_parcela: int):
-    _criar_tabelas_fluxo_caixa()
-    execute_insert(
-        "DELETE FROM fcp_faturas_descontadas WHERE nr_fat = %s AND nr_parcela = %s",
-        (nr_fat, nr_parcela),
-    )
-    return {"ok": True}
