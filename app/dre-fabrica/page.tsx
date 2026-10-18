@@ -1518,7 +1518,20 @@ export default function DREPage() {
       const timeout = window.setTimeout(() => controller.abort(), 300000);
       const response = await fetch(url, { signal: controller.signal, cache: 'no-store' });
       window.clearTimeout(timeout);
-      const data = await response.json();
+      // Resposta que nao e JSON (ex.: 502/504 do servidor quando a consulta
+      // passa do tempo limite) virava um SyntaxError silencioso no catch
+      // abaixo - a visao sintetica "nao executava" sem mostrar nada.
+      const texto = await response.text();
+      let data: any;
+      try {
+        data = JSON.parse(texto);
+      } catch {
+        const motivo = response.status === 504 || response.status === 502 || response.status === 524
+          ? 'o servidor demorou demais para responder (tempo esgotado)'
+          : 'o servidor devolveu uma resposta inválida';
+        throw new Error(`Falha na consulta: ${motivo} — HTTP ${response.status}.`);
+      }
+      if (!response.ok && !data.error) data = { error: data.detail || `HTTP ${response.status}` };
       if (!data.error) cacheDreRef.current.set(chaveCache, data);
       return data;
     };
@@ -1665,9 +1678,13 @@ export default function DREPage() {
         setStatusCarregamento('A consulta demorou mais de 5 minutos e foi cancelada. Tente um periodo menor ou consulte novamente.');
         return;
       }
-      if (dadosDRE.length === 0) {
-        setStatusCarregamento('Falha ao conectar com o backend. Verifique se o servidor esta rodando.');
-      }
+      // Mostra SEMPRE - antes so aparecia com a tabela vazia, e ao trocar da
+      // Analitica (tabela ja preenchida) para a Sintetica a falha sumia.
+      setStatusCarregamento(
+        error instanceof Error && error.message.startsWith('Falha na consulta')
+          ? error.message
+          : 'Falha ao conectar com o backend. Verifique se o servidor esta rodando.'
+      );
     } finally {
       setLoading(false);
     }
