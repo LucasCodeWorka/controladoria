@@ -164,6 +164,7 @@ interface BoletoDetalheItem {
   nrParcela: number;
   dtVencimentoOriginal: string;
   valor: number;
+  banco: string;
 }
 
 type ColKey = 'previsao' | 'real' | 'pedidos' | 'cartao' | 'boleto' | 'cheque' | 'lojas' | 'outrasEntradas' | 'multimarcas';
@@ -2409,7 +2410,7 @@ export default function FluxoCaixaPage() {
       {/* Modal: Detalhe das faturas de Boleto de um dia (clique na celula) */}
       {boletoDetalheDia && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setBoletoDetalheDia(null)}>
-          <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white rounded-lg shadow-xl max-w-3xl w-full max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200">
               <h2 className="text-base font-semibold text-black">
                 Boletos — {boletoDetalheDia.split('-').reverse().join('/')}
@@ -2431,36 +2432,67 @@ export default function FluxoCaixaPage() {
                 <p className="text-sm text-black py-12 text-center">Nenhuma fatura encontrada para esse dia.</p>
               )}
               {boletoDetalheLista !== null && boletoDetalheLista.length > 0 && (
-                <table className="w-full text-sm">
-                  <thead className="sticky top-0 bg-gray-50 border-b border-gray-200">
-                    <tr>
-                      <th className="text-left px-5 py-2 font-medium text-black">Cliente</th>
-                      <th className="text-left px-3 py-2 font-medium text-black">Fatura/Parcela</th>
-                      <th className="text-right px-3 py-2 font-medium text-black">Vencimento original</th>
-                      <th className="text-right px-5 py-2 font-medium text-black">Valor</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {boletoDetalheLista.map((item, i) => (
-                      <tr key={`${item.nrFat}-${item.nrParcela}-${i}`} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                        <td className="px-5 py-1.5 text-black">{item.cliente}</td>
-                        <td className="px-3 py-1.5 text-black tabular-nums">
-                          {String(item.nrFat).padStart(6, '0')}/{String(item.nrParcela).padStart(3, '0')}
-                        </td>
-                        <td className="px-3 py-1.5 text-right text-black tabular-nums">{item.dtVencimentoOriginal.split('-').reverse().join('/')}</td>
-                        <td className="px-5 py-1.5 text-right font-semibold text-sky-700 tabular-nums">{fmtBRL(item.valor)}</td>
+                <>
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-gray-50 border-b border-gray-200">
+                      <tr>
+                        <th className="text-left px-5 py-2 font-medium text-black">Cliente</th>
+                        <th className="text-left px-3 py-2 font-medium text-black">Fatura/Parcela</th>
+                        <th className="text-left px-3 py-2 font-medium text-black">Banco</th>
+                        <th className="text-right px-3 py-2 font-medium text-black">Vencimento original</th>
+                        <th className="text-right px-5 py-2 font-medium text-black">Valor</th>
                       </tr>
-                    ))}
-                  </tbody>
-                  <tfoot>
-                    <tr className="font-bold bg-gray-200 border-t-2 border-gray-400">
-                      <td colSpan={3} className="px-5 py-2 text-right uppercase text-xs tracking-wide text-black">Total</td>
-                      <td className="px-5 py-2 text-right tabular-nums text-sky-700">
-                        {fmtBRL(boletoDetalheLista.reduce((acc, item) => acc + item.valor, 0))}
-                      </td>
-                    </tr>
-                  </tfoot>
-                </table>
+                    </thead>
+                    <tbody>
+                      {boletoDetalheLista.map((item, i) => (
+                        <tr key={`${item.nrFat}-${item.nrParcela}-${i}`} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                          <td className="px-5 py-1.5 text-black">{item.cliente}</td>
+                          <td className="px-3 py-1.5 text-black tabular-nums">
+                            {String(item.nrFat).padStart(6, '0')}/{String(item.nrParcela).padStart(3, '0')}
+                          </td>
+                          <td className="px-3 py-1.5 text-black whitespace-nowrap">{item.banco}</td>
+                          <td className="px-3 py-1.5 text-right text-black tabular-nums">{item.dtVencimentoOriginal.split('-').reverse().join('/')}</td>
+                          <td className="px-5 py-1.5 text-right font-semibold text-sky-700 tabular-nums">{fmtBRL(item.valor)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr className="font-bold bg-gray-200 border-t-2 border-gray-400">
+                        <td colSpan={4} className="px-5 py-2 text-right uppercase text-xs tracking-wide text-black">Total</td>
+                        <td className="px-5 py-2 text-right tabular-nums text-sky-700">
+                          {fmtBRL(boletoDetalheLista.reduce((acc, item) => acc + item.valor, 0))}
+                        </td>
+                      </tr>
+                    </tfoot>
+                  </table>
+
+                  {/* Resumo por banco - mesmo criterio do detalhe (nr_portador +
+                      fcr_fatcodbar.nr_ctapes), pra ver rapido quanto cai em cada
+                      conta de cobranca nesse dia. */}
+                  <div className="px-5 py-3 border-t-2 border-gray-300 bg-gray-50">
+                    <h3 className="text-xs font-semibold text-black uppercase tracking-wide mb-2">Resumo por banco</h3>
+                    <table className="w-full text-sm">
+                      <tbody>
+                        {Object.entries(
+                          boletoDetalheLista.reduce<Record<string, { valor: number; qtd: number }>>((acc, item) => {
+                            const atual = acc[item.banco] ?? { valor: 0, qtd: 0 };
+                            acc[item.banco] = { valor: atual.valor + item.valor, qtd: atual.qtd + 1 };
+                            return acc;
+                          }, {})
+                        )
+                          .sort(([, a], [, b]) => b.valor - a.valor)
+                          .map(([banco, { valor, qtd }]) => (
+                            <tr key={banco}>
+                              <td className="py-1 text-black">
+                                {banco} <span className="text-xs text-black">({qtd} {qtd === 1 ? 'fatura' : 'faturas'})</span>
+                              </td>
+                              <td className="py-1 text-right font-semibold text-sky-700 tabular-nums">{fmtBRL(valor)}</td>
+                            </tr>
+                          ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
               )}
             </div>
           </div>

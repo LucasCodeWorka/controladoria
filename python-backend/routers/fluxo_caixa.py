@@ -665,6 +665,33 @@ def _sql_boleto_diario(where: str) -> str:
     """
 
 
+# Qual banco cobra o boleto - regra confirmada pelo usuario, direto da
+# faturai (nr_portador) + fcr_fatcodbar (nr_ctapes), sem tabela de bancos:
+#   portador 001 = Banco do Brasil direto, a conta nao importa;
+#   portador 341 (Itau) tem 3 contas de cobranca diferentes, so a nr_ctapes
+#   desempata entre elas.
+_PORTADOR_BANCO_DO_BRASIL = 1
+_PORTADOR_ITAU = 341
+_CONTAS_ITAU = {
+    740907: "Itaú — Cta Garantida",
+    105036: "Itaú — Cta Simples",
+    16862: "Multiplike",
+}
+
+
+def _nome_banco_boleto(nr_portador, nr_ctapes) -> str:
+    if nr_portador == _PORTADOR_BANCO_DO_BRASIL:
+        return "Banco do Brasil"
+    if nr_portador == _PORTADOR_ITAU:
+        if nr_ctapes in _CONTAS_ITAU:
+            return _CONTAS_ITAU[nr_ctapes]
+        # Conta do Itau fora das 3 conhecidas - mostra o numero em vez de
+        # esconder, pra nao atribuir banco errado (achado na auditoria: ha
+        # poucos casos assim, nr_ctapes 10503 e 130001002).
+        return f"Itaú — conta {nr_ctapes}" if nr_ctapes else "Itaú — conta não identificada"
+    return f"Portador {nr_portador}"
+
+
 @router.get("/api/fluxo-caixa/boleto-detalhe")
 def obter_boleto_detalhe(
     dia: str = Query(..., description="Dia efetivo (YYYY-MM-DD), mesma data mostrada na coluna Boleto"),
@@ -689,13 +716,29 @@ def obter_boleto_detalhe(
         where += " AND cd_empresa = ANY(%s)"
         params.append(cd_empresas)
     sql = f"""
-        SELECT nm_cliente, nr_fat, nr_parcela, dt_vencimento::date AS dt_vencimento_original,
-               ROUND((vl_fatura - vl_pago)::numeric, 2) AS valor
+        SELECT cd_empresa, nm_cliente, nr_fat, nr_parcela, dt_vencimento::date AS dt_vencimento_original,
+               ROUND((vl_fatura - vl_pago)::numeric, 2) AS valor, nr_portador
         FROM vr_fcr_faturai
         {where}
         ORDER BY nm_cliente, nr_fat, nr_parcela
     """
     rows = execute_query(sql, tuple(params)) or []
+
+    # fcr_fatcodbar tem colunas com o MESMO nome das macros de filtro
+    # acima (cd_empresa/nr_fat/nr_parcela/tp_situacao/dt_vencimento) - juntar
+    # na mesma query geraria coluna ambigua. Busca a parte (nr_ctapes) numa
+    # segunda consulta, so pelas chaves que vieram, e junta em Python.
+    nr_ctapes_por_chave: dict = {}
+    if rows:
+        chaves = [(r["cd_empresa"], r["nr_fat"], r["nr_parcela"]) for r in rows]
+        sql_ctapes = """
+            SELECT cd_empresa, nr_fat, nr_parcela, nr_ctapes
+            FROM fcr_fatcodbar
+            WHERE (cd_empresa, nr_fat, nr_parcela) IN %s
+        """
+        for c in execute_query(sql_ctapes, (tuple(chaves),)) or []:
+            nr_ctapes_por_chave[(c["cd_empresa"], c["nr_fat"], c["nr_parcela"])] = c["nr_ctapes"]
+
     return [
         {
             "cliente": r["nm_cliente"],
@@ -703,6 +746,7 @@ def obter_boleto_detalhe(
             "nrParcela": r["nr_parcela"],
             "dtVencimentoOriginal": _dia_str(r["dt_vencimento_original"]),
             "valor": float(r["valor"]),
+            "banco": _nome_banco_boleto(r["nr_portador"], nr_ctapes_por_chave.get((r["cd_empresa"], r["nr_fat"], r["nr_parcela"]))),
         }
         for r in rows
     ]
