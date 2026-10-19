@@ -82,6 +82,8 @@ interface ContaBancaria {
   nrAgencia: string;
   nrConta: string;
   vlSaldo: number;
+  vlLimite: number;
+  vlDisponivel: number;
   dtPosicao: string;
   semDados?: boolean;
 }
@@ -89,6 +91,8 @@ interface ContaBancaria {
 interface SaldosBancarios {
   contas: ContaBancaria[];
   total: number;
+  totalLimite: number;
+  totalDisponivel: number;
 }
 
 interface SaidaFornecedor {
@@ -1711,6 +1715,35 @@ export default function FluxoCaixaPage() {
     };
   });
 
+  // Agregado mensal com os MESMOS toggles de coluna e ajustes de simulacao
+  // (Crescimento/Inflacao de Multimarcas e Lojas) da Visao Diaria/Resumo do
+  // Periodo - pedido explicito do usuario: o grafico "Projecao Mensal" tem
+  // que espelhar exatamente o que esta marcado na faixa de Simulacao, nao
+  // os valores crus que vem do backend em dados.meses.
+  const mesesEfetivos: MesFC[] = (() => {
+    const porMes: Record<string, MesFC> = {};
+    for (const l of linhasDiarias) {
+      const chave = l.dia.dia.slice(0, 7);
+      const acc = porMes[chave] ?? {
+        mes: chave, previsao: 0, real: 0, pedidos: 0, totalSaidas: 0,
+        cartao: 0, boleto: 0, cheque: 0, lojas: 0, outrasEntradas: 0, multimarcas: 0, qtd: 0,
+      };
+      acc.previsao += l.effPrev;
+      acc.real += l.effReal;
+      acc.pedidos += l.effPed;
+      acc.totalSaidas += l.effSaidas;
+      acc.cartao += l.effCart;
+      acc.boleto += l.effBol;
+      acc.cheque += l.effCheq;
+      acc.lojas += l.effLoj;
+      acc.outrasEntradas += l.effOutras;
+      acc.multimarcas += l.effMulti;
+      acc.qtd += l.dia.qtd;
+      porMes[chave] = acc;
+    }
+    return Object.values(porMes).sort((a, b) => a.mes.localeCompare(b.mes));
+  })();
+
   const totais = linhasDiarias.reduce((acc, l) => ({
     previsao: acc.previsao + l.effPrev,
     real: acc.real + l.effReal,
@@ -1952,7 +1985,9 @@ export default function FluxoCaixaPage() {
                       <th className="text-left px-4 py-2 font-semibold text-white bg-gray-500 border-b border-r border-gray-600">Agência</th>
                       <th className="text-left px-4 py-2 font-semibold text-white bg-gray-500 border-b border-r border-gray-600">Conta</th>
                       <th className="text-right px-4 py-2 font-semibold text-white bg-gray-500 border-b border-r border-gray-600">Posição em</th>
-                      <th className="text-right px-4 py-2 font-semibold text-white bg-gray-500 border-b border-gray-600">Saldo</th>
+                      <th className="text-right px-4 py-2 font-semibold text-white bg-gray-500 border-b border-r border-gray-600">Saldo</th>
+                      <th className="text-right px-4 py-2 font-semibold text-white bg-gray-500 border-b border-r border-gray-600" title="Limite de crédito contratado (ex.: cheque especial) - não entra no saldo usado pelo fluxo de caixa">Limite</th>
+                      <th className="text-right px-4 py-2 font-semibold text-white bg-gray-500 border-b border-gray-600">Disponível</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1968,7 +2003,9 @@ export default function FluxoCaixaPage() {
                         <td className={`px-4 py-2 text-right text-black tabular-nums border-r border-b border-gray-300 ${bgHover}`} title={c.semDados ? `Última posição: ${c.dtPosicao.split('-').reverse().join('/')}` : undefined}>
                           {c.semDados ? <span className="italic text-black">Sem dados</span> : c.dtPosicao.split('-').reverse().join('/')}
                         </td>
-                        <td className={`px-4 py-2 text-right font-semibold tabular-nums border-b border-gray-300 ${bgHover} ${c.vlSaldo >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(c.vlSaldo)}</td>
+                        <td className={`px-4 py-2 text-right font-semibold tabular-nums border-r border-b border-gray-300 ${bgHover} ${c.vlSaldo >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(c.vlSaldo)}</td>
+                        <td className={`px-4 py-2 text-right text-black tabular-nums border-r border-b border-gray-300 ${bgHover}`}>{c.vlLimite > 0 ? fmtBRL(c.vlLimite) : <span className="text-black">—</span>}</td>
+                        <td className={`px-4 py-2 text-right font-semibold tabular-nums border-b border-gray-300 ${bgHover} ${c.vlDisponivel >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(c.vlDisponivel)}</td>
                       </tr>
                       );
                     })}
@@ -1976,7 +2013,9 @@ export default function FluxoCaixaPage() {
                   <tfoot>
                     <tr className="font-bold bg-gray-400">
                       <td colSpan={4} className="px-4 py-2.5 text-right uppercase text-xs tracking-wide text-black border-t-2 border-r border-gray-400">Total</td>
-                      <td className={`px-4 py-2.5 text-right tabular-nums border-t-2 border-gray-400 ${(saldosBancarios?.total ?? 0) >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(saldosBancarios?.total ?? 0)}</td>
+                      <td className={`px-4 py-2.5 text-right tabular-nums border-t-2 border-r border-gray-400 ${(saldosBancarios?.total ?? 0) >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(saldosBancarios?.total ?? 0)}</td>
+                      <td className="px-4 py-2.5 text-right tabular-nums text-black border-t-2 border-r border-gray-400">{fmtBRL(saldosBancarios?.totalLimite ?? 0)}</td>
+                      <td className={`px-4 py-2.5 text-right tabular-nums border-t-2 border-gray-400 ${(saldosBancarios?.totalDisponivel ?? 0) >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(saldosBancarios?.totalDisponivel ?? 0)}</td>
                     </tr>
                   </tfoot>
                 </table>
@@ -1989,7 +2028,7 @@ export default function FluxoCaixaPage() {
           {/* Grafico mensal */}
           <div className="bg-white rounded-lg shadow-md p-4">
             <h2 className="text-sm font-semibold text-black uppercase tracking-wide mb-3">Projeção Mensal</h2>
-            <GraficoMensalFC meses={dados.meses} saldoBancario={dados.saldoBancario} />
+            <GraficoMensalFC meses={mesesEfetivos} saldoBancario={dados.saldoBancario} />
           </div>
 
           <GraficoFaturamentoUnificado />
