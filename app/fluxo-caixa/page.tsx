@@ -84,7 +84,10 @@ interface ContaBancaria {
   vlSaldo: number;
   vlLimite: number;
   vlDisponivel: number;
-  qtDiasChequeEspecial: number;
+  vlLimiteContratado: number;
+  qtDiasCarencia: number;
+  qtDiasUsados: number;
+  qtDiasRestantes: number;
   dtPosicao: string;
   semDados?: boolean;
 }
@@ -1988,6 +1991,7 @@ export default function FluxoCaixaPage() {
                       <th className="text-right px-4 py-2 font-semibold text-white bg-gray-500 border-b border-r border-gray-600">Posição em</th>
                       <th className="text-right px-4 py-2 font-semibold text-white bg-gray-500 border-b border-r border-gray-600">Saldo</th>
                       <th className="text-right px-4 py-2 font-semibold text-white bg-gray-500 border-b border-r border-gray-600" title="Limite de crédito contratado (ex.: cheque especial) - não entra no saldo usado pelo fluxo de caixa">Limite</th>
+                      <th className="text-center px-4 py-2 font-semibold text-white bg-gray-500 border-b border-r border-gray-600">Situação</th>
                       <th className="text-right px-4 py-2 font-semibold text-white bg-gray-500 border-b border-gray-600">Disponível</th>
                     </tr>
                   </thead>
@@ -2005,17 +2009,20 @@ export default function FluxoCaixaPage() {
                           {c.semDados ? <span className="italic text-black">Sem dados</span> : c.dtPosicao.split('-').reverse().join('/')}
                         </td>
                         <td className={`px-4 py-2 text-right font-semibold tabular-nums border-r border-b border-gray-300 ${bgHover} ${c.vlSaldo >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(c.vlSaldo)}</td>
-                        <td
-                          className={`px-4 py-2 text-right text-black tabular-nums border-r border-b border-gray-300 ${bgHover}`}
-                          title={
-                            c.vlLimite > 0
-                              ? `${c.qtDiasChequeEspecial} dia(s) disponível(is) de cheque especial`
-                              : c.qtDiasChequeEspecial === 0
-                                ? 'Sem limite de cheque especial disponível no período (0 dias)'
-                                : undefined
-                          }
-                        >
+                        <td className={`px-4 py-2 text-right text-black tabular-nums border-r border-b border-gray-300 ${bgHover}`}>
                           {c.vlLimite > 0 ? fmtBRL(c.vlLimite) : <span className="text-black">—</span>}
+                        </td>
+                        <td className={`px-4 py-2 text-center border-r border-b border-gray-300 ${bgHover}`}>
+                          {c.qtDiasCarencia > 0 ? (
+                            <span
+                              className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 whitespace-nowrap"
+                              title={`Franquia de ${c.qtDiasCarencia} dia(s) de cheque especial — ${c.qtDiasUsados} usado(s) na última posição`}
+                            >
+                              {c.qtDiasRestantes > 0 ? `Restam ${c.qtDiasRestantes} dia(s)` : '0 dias disponíveis'}
+                            </span>
+                          ) : (
+                            <span className="text-black">—</span>
+                          )}
                         </td>
                         <td className={`px-4 py-2 text-right font-semibold tabular-nums border-b border-gray-300 ${bgHover} ${c.vlDisponivel >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(c.vlDisponivel)}</td>
                       </tr>
@@ -2027,6 +2034,7 @@ export default function FluxoCaixaPage() {
                       <td colSpan={4} className="px-4 py-2.5 text-right uppercase text-xs tracking-wide text-black border-t-2 border-r border-gray-400">Total</td>
                       <td className={`px-4 py-2.5 text-right tabular-nums border-t-2 border-r border-gray-400 ${(saldosBancarios?.total ?? 0) >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(saldosBancarios?.total ?? 0)}</td>
                       <td className="px-4 py-2.5 text-right tabular-nums text-black border-t-2 border-r border-gray-400">{fmtBRL(saldosBancarios?.totalLimite ?? 0)}</td>
+                      <td className="border-t-2 border-r border-gray-400" />
                       <td className={`px-4 py-2.5 text-right tabular-nums border-t-2 border-gray-400 ${(saldosBancarios?.totalDisponivel ?? 0) >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(saldosBancarios?.totalDisponivel ?? 0)}</td>
                     </tr>
                   </tfoot>

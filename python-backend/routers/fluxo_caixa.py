@@ -250,7 +250,8 @@ _PRE_FILTRO_VENCIMENTO = (
 SQL_SALDOS_BANCARIOS = """
     SELECT DISTINCT ON (fdc.cd_conta_bancaria)
         fdc.cd_conta_bancaria, fcb.nm_banco, fcb.nr_agencia, fcb.nr_conta,
-        fdc.vl_saldo, fdc.vl_limite_total_credito, fdc.qt_dias_cheque_especial, fdc.dt_posicao
+        fdc.vl_saldo, fdc.vl_limite_total_credito, fdc.qt_dias_cheque_especial,
+        fcb.qt_dias_carencia, fdc.dt_posicao
     FROM fin_disponibilidade_caixa fdc
     JOIN fin_contas_bancarias fcb ON fcb.id = fdc.cd_conta_bancaria
     ORDER BY fdc.cd_conta_bancaria, fdc.dt_posicao DESC
@@ -263,14 +264,23 @@ def _obter_saldos_bancarios() -> dict:
     posicao de caixa atual (pedido explicito do usuario). Vale pra tabela,
     pro total e pro saldo inicial do fluxo, que usam todos este total.
 
-    vlLimite (vl_limite_total_credito) = limite de credito contratado na
-    conta (ex: cheque especial) - informativo na tabela, NAO entra no
-    saldo/total usado pelo resto do fluxo de caixa (que e so caixa real).
-    qt_dias_cheque_especial = quantos dias do periodo a conta ainda pode
-    usar o cheque especial - pode ser 0 mesmo com limite contratado > 0
-    (ex: Banco do Brasil, limite R$10mil mas 0 dias disponiveis - os dias
-    ja foram todos usados). Pedido explicito do usuario: nesse caso NAO
-    mostrar o limite como se estivesse disponivel."""
+    Cheque especial - DUAS colunas diferentes (confirmado pelo usuario com
+    uma consulta propria, apos eu ter invertido o sentido numa tentativa
+    anterior):
+      - fin_contas_bancarias.qt_dias_carencia = franquia TOTAL de dias de
+        cheque especial contratada pela conta (fixo por conta);
+      - fin_disponibilidade_caixa.qt_dias_cheque_especial = dias JA
+        USADOS dessa franquia na posicao mais recente (NAO e "dias
+        restantes" - e o contrario).
+    dias_restantes = GREATEST(carencia - usados, 0). vlLimiteContratado
+    (vl_limite_total_credito, cru) so fica "disponivel de verdade"
+    (vlLimite/vlDisponivel) quando ainda sobra pelo menos 1 dia de
+    franquia - senao, mesmo com limite contratado > 0, a conta ja estourou
+    os dias da franquia nesse periodo (ex.: Itau 10503-6: franquia 7 dias,
+    7 usados, 0 restantes - limite nao mostrado). Conta sem franquia
+    contratada (qt_dias_carencia = 0, ex.: Banco do Brasil) nao mostra a
+    situacao de dias (fica "-"), mesmo tendo um vl_limite_total_credito >
+    0 cadastrado."""
     hoje = datetime.now(ZoneInfo("America/Sao_Paulo")).date().isoformat()
     rows = execute_query(SQL_SALDOS_BANCARIOS) or []
     contas = []
@@ -278,12 +288,16 @@ def _obter_saldos_bancarios() -> dict:
         dt_posicao = _dia_str(r["dt_posicao"])
         sem_dados = dt_posicao != hoje
         vl_saldo = 0.0 if sem_dados else float(r["vl_saldo"])
-        qt_dias_cheque_especial = int(r["qt_dias_cheque_especial"] or 0)
-        vl_limite = float(r["vl_limite_total_credito"] or 0) if qt_dias_cheque_especial > 0 else 0.0
+        qt_dias_carencia = int(r["qt_dias_carencia"] or 0)
+        qt_dias_usados = int(r["qt_dias_cheque_especial"] or 0)
+        qt_dias_restantes = max(qt_dias_carencia - qt_dias_usados, 0)
+        vl_limite_contratado = float(r["vl_limite_total_credito"] or 0)
+        vl_limite = vl_limite_contratado if qt_dias_restantes > 0 else 0.0
         contas.append({
             "nmBanco": r["nm_banco"], "nrAgencia": r["nr_agencia"], "nrConta": r["nr_conta"],
             "vlSaldo": vl_saldo, "vlLimite": vl_limite, "vlDisponivel": vl_saldo + vl_limite,
-            "qtDiasChequeEspecial": qt_dias_cheque_especial,
+            "vlLimiteContratado": vl_limite_contratado,
+            "qtDiasCarencia": qt_dias_carencia, "qtDiasUsados": qt_dias_usados, "qtDiasRestantes": qt_dias_restantes,
             "dtPosicao": dt_posicao, "semDados": sem_dados,
         })
     total = sum(c["vlSaldo"] for c in contas)
