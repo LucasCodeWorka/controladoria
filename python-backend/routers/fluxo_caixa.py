@@ -250,7 +250,7 @@ _PRE_FILTRO_VENCIMENTO = (
 SQL_SALDOS_BANCARIOS = """
     SELECT DISTINCT ON (fdc.cd_conta_bancaria)
         fdc.cd_conta_bancaria, fcb.nm_banco, fcb.nr_agencia, fcb.nr_conta,
-        fdc.vl_saldo, fdc.vl_limite_total_credito, fdc.dt_posicao
+        fdc.vl_saldo, fdc.vl_limite_total_credito, fdc.qt_dias_cheque_especial, fdc.dt_posicao
     FROM fin_disponibilidade_caixa fdc
     JOIN fin_contas_bancarias fcb ON fcb.id = fdc.cd_conta_bancaria
     ORDER BY fdc.cd_conta_bancaria, fdc.dt_posicao DESC
@@ -265,7 +265,12 @@ def _obter_saldos_bancarios() -> dict:
 
     vlLimite (vl_limite_total_credito) = limite de credito contratado na
     conta (ex: cheque especial) - informativo na tabela, NAO entra no
-    saldo/total usado pelo resto do fluxo de caixa (que e so caixa real)."""
+    saldo/total usado pelo resto do fluxo de caixa (que e so caixa real).
+    qt_dias_cheque_especial = quantos dias do periodo a conta ainda pode
+    usar o cheque especial - pode ser 0 mesmo com limite contratado > 0
+    (ex: Banco do Brasil, limite R$10mil mas 0 dias disponiveis - os dias
+    ja foram todos usados). Pedido explicito do usuario: nesse caso NAO
+    mostrar o limite como se estivesse disponivel."""
     hoje = datetime.now(ZoneInfo("America/Sao_Paulo")).date().isoformat()
     rows = execute_query(SQL_SALDOS_BANCARIOS) or []
     contas = []
@@ -273,10 +278,12 @@ def _obter_saldos_bancarios() -> dict:
         dt_posicao = _dia_str(r["dt_posicao"])
         sem_dados = dt_posicao != hoje
         vl_saldo = 0.0 if sem_dados else float(r["vl_saldo"])
-        vl_limite = float(r["vl_limite_total_credito"] or 0)
+        qt_dias_cheque_especial = int(r["qt_dias_cheque_especial"] or 0)
+        vl_limite = float(r["vl_limite_total_credito"] or 0) if qt_dias_cheque_especial > 0 else 0.0
         contas.append({
             "nmBanco": r["nm_banco"], "nrAgencia": r["nr_agencia"], "nrConta": r["nr_conta"],
             "vlSaldo": vl_saldo, "vlLimite": vl_limite, "vlDisponivel": vl_saldo + vl_limite,
+            "qtDiasChequeEspecial": qt_dias_cheque_especial,
             "dtPosicao": dt_posicao, "semDados": sem_dados,
         })
     total = sum(c["vlSaldo"] for c in contas)

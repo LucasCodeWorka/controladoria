@@ -84,6 +84,7 @@ interface ContaBancaria {
   vlSaldo: number;
   vlLimite: number;
   vlDisponivel: number;
+  qtDiasChequeEspecial: number;
   dtPosicao: string;
   semDados?: boolean;
 }
@@ -2004,7 +2005,18 @@ export default function FluxoCaixaPage() {
                           {c.semDados ? <span className="italic text-black">Sem dados</span> : c.dtPosicao.split('-').reverse().join('/')}
                         </td>
                         <td className={`px-4 py-2 text-right font-semibold tabular-nums border-r border-b border-gray-300 ${bgHover} ${c.vlSaldo >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(c.vlSaldo)}</td>
-                        <td className={`px-4 py-2 text-right text-black tabular-nums border-r border-b border-gray-300 ${bgHover}`}>{c.vlLimite > 0 ? fmtBRL(c.vlLimite) : <span className="text-black">—</span>}</td>
+                        <td
+                          className={`px-4 py-2 text-right text-black tabular-nums border-r border-b border-gray-300 ${bgHover}`}
+                          title={
+                            c.vlLimite > 0
+                              ? `${c.qtDiasChequeEspecial} dia(s) disponível(is) de cheque especial`
+                              : c.qtDiasChequeEspecial === 0
+                                ? 'Sem limite de cheque especial disponível no período (0 dias)'
+                                : undefined
+                          }
+                        >
+                          {c.vlLimite > 0 ? fmtBRL(c.vlLimite) : <span className="text-black">—</span>}
+                        </td>
                         <td className={`px-4 py-2 text-right font-semibold tabular-nums border-b border-gray-300 ${bgHover} ${c.vlDisponivel >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(c.vlDisponivel)}</td>
                       </tr>
                       );
