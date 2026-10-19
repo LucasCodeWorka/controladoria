@@ -810,38 +810,53 @@ def _sql_outras_entradas_diario(dt_inicio: str, dt_fim: str) -> tuple:
     )
 
 
-# ── Entradas - multimarcas (ano anterior deslocado +1 ano) ────────────────
-def _sql_multimarcas_mensal(dt_inicio: str, dt_fim: str) -> tuple:
-    return (
-        """
-        SELECT to_char((dt_transacao::date + interval '1 year')::date, 'YYYY-MM') AS mes,
-            COUNT(*)::int AS qtd, ROUND(SUM(vl_transacao)::numeric, 2) AS valor
-        FROM vr_tra_transacao
+# ── Entradas - multimarcas (ano anterior deslocado 52 semanas) ────────────
+# Data = venda do ano passado + 364 dias (52 semanas) - pedido do usuario:
+# mantem o MESMO dia da semana (venda de segunda do ano passado vira segunda,
+# sexta vira sexta). Com "+1 ano" o dia da semana andava uma casa (sexta
+# virava sabado) e ~26% do valor caia em sab/dom, linhas que a Visao Diaria
+# esconde. O que ainda cair em sab/dom (venda de sabado do ano passado, ~8%)
+# ou feriado bancario em dia de semana vai pro proximo dia util bancario - a
+# empresa nao trabalha sabado nem feriado. (fn_fc_dt_cheque_efetiva NAO serve
+# aqui: ela so pula sab/dom, nao feriado em dia de semana.)
+_DIAS_DESLOCAMENTO_MULTIMARCAS = 364
+_EXPR_DT_MULTIMARCAS_EFETIVA = f"fn_fc_proximo_dia_util_bancario(dt_transacao::date + {_DIAS_DESLOCAMENTO_MULTIMARCAS})"
+# Pre-filtro na data original (o efetivo e no maximo alguns dias depois do
+# deslocado - mesma ideia do _PRE_FILTRO_VENCIMENTO).
+_WHERE_MULTIMARCAS = f"""
         WHERE cd_empresa = 1 AND tp_modalidade = '4' AND tp_operacao = 'S'
           AND cd_operacao IN (1, 52) AND tp_situacao = 4
-          AND dt_transacao::date BETWEEN (%s::date - interval '1 year')::date AND (%s::date - interval '1 year')::date
-          AND (dt_transacao::date + interval '1 year')::date > CURRENT_DATE
+          AND dt_transacao >= (%s::date - {_DIAS_DESLOCAMENTO_MULTIMARCAS + _FOLGA_DIAS_DT_EFETIVA})
+          AND dt_transacao < (%s::date - {_DIAS_DESLOCAMENTO_MULTIMARCAS - 1})
+          AND {_EXPR_DT_MULTIMARCAS_EFETIVA} BETWEEN %s AND %s
+          AND {_EXPR_DT_MULTIMARCAS_EFETIVA} > CURRENT_DATE"""
+
+
+def _sql_multimarcas_mensal(dt_inicio: str, dt_fim: str) -> tuple:
+    return (
+        f"""
+        SELECT to_char({_EXPR_DT_MULTIMARCAS_EFETIVA}, 'YYYY-MM') AS mes,
+            COUNT(*)::int AS qtd, ROUND(SUM(vl_transacao)::numeric, 2) AS valor
+        FROM vr_tra_transacao
+        {_WHERE_MULTIMARCAS}
         GROUP BY 1
         ORDER BY 1
         """,
-        (dt_inicio, dt_fim),
+        (dt_inicio, dt_fim, dt_inicio, dt_fim),
     )
 
 
 def _sql_multimarcas_diario(dt_inicio: str, dt_fim: str) -> tuple:
     return (
-        """
-        SELECT (dt_transacao::date + interval '1 year')::date AS dia,
+        f"""
+        SELECT {_EXPR_DT_MULTIMARCAS_EFETIVA}::date AS dia,
             COUNT(*)::int AS qtd, ROUND(SUM(vl_transacao)::numeric, 2) AS valor
         FROM vr_tra_transacao
-        WHERE cd_empresa = 1 AND tp_modalidade = '4' AND tp_operacao = 'S'
-          AND cd_operacao IN (1, 52) AND tp_situacao = 4
-          AND dt_transacao::date BETWEEN (%s::date - interval '1 year')::date AND (%s::date - interval '1 year')::date
-          AND (dt_transacao::date + interval '1 year')::date > CURRENT_DATE
+        {_WHERE_MULTIMARCAS}
         GROUP BY 1
         ORDER BY 1
         """,
-        (dt_inicio, dt_fim),
+        (dt_inicio, dt_fim, dt_inicio, dt_fim),
     )
 
 
@@ -1339,6 +1354,20 @@ def obter_outras_entradas_projecao(
         (dt_inicio, dt_fim),
     ) or []
     return [{"dia": _dia_str(r["dia"]), "valor": float(r["vl_outras_entradas"])} for r in rows]
+
+
+@router.delete("/api/fluxo-caixa/outras-entradas-projecao/{dia}")
+def remover_outra_entrada_projecao(dia: str):
+    """Remove um dia cadastrado em Outras Entradas - usado pela lista do modal
+    (pedido do usuario: ver o que esta cadastrado e tirar alguma linha pra
+    simular o fluxo sem ela)."""
+    try:
+        datetime.strptime(dia, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Data invalida: {dia}. Use AAAA-MM-DD.")
+    _criar_tabelas_fluxo_caixa()
+    execute_insert("DELETE FROM fcp_outras_entradas_projecao WHERE dt_dia = %s", (dia,))
+    return {"ok": True}
 
 
 @router.post("/api/fluxo-caixa/outras-entradas-projecao")

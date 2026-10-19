@@ -168,9 +168,8 @@ const COL_DEFS: { group: string; cols: { key: ColKey; label: string; color: stri
     { key: 'real', label: 'Real', color: '#991b1b' },
     { key: 'pedidos', label: 'Pedidos', color: '#dc2626' },
   ]},
-  // Multimarcas tirado temporariamente (pedido explicito do usuario) - nem
-  // aparece na tabela nem compoe o saldo. Cartao VOLTOU (pedido explicito):
-  // o backend ja desconta o cartao da coluna Lojas (meta), entao sem somar o
+  // Cartao e Multimarcas VOLTARAM (pedido explicito do usuario). Cartao: o
+  // backend ja desconta o cartao da coluna Lojas (meta), entao sem somar o
   // Cartao essa parte sumia das entradas.
   { group: 'Entradas', cols: [
     { key: 'outrasEntradas', label: 'Outras Entradas', color: '#7c3aed' },
@@ -178,6 +177,7 @@ const COL_DEFS: { group: string; cols: { key: ColKey; label: string; color: stri
     { key: 'cheque', label: 'Cheque', color: '#059669' },
     { key: 'lojas', label: 'Lojas', color: '#0891b2' },
     { key: 'cartao', label: 'Cartão', color: '#4d7c0f' },
+    { key: 'multimarcas', label: 'Multimarcas', color: '#9333ea' },
   ]},
 ];
 
@@ -274,6 +274,7 @@ function TooltipMes({ active, payload }: { active?: boolean; payload?: TooltipMe
       <LinhaTooltip rotulo="Cheque" valor={m.cheque} detalhe />
       <LinhaTooltip rotulo="Lojas" valor={m.lojas} detalhe />
       <LinhaTooltip rotulo="Cartão" valor={m.cartao} detalhe />
+      <LinhaTooltip rotulo="Multimarcas" valor={m.multimarcas} detalhe />
       <div className="pt-1" />
       <LinhaTooltip cor={COR_SAIDAS} rotulo="Saídas" valor={m.totalSaidas} forte />
       <LinhaTooltip rotulo="Real" valor={m.real} detalhe />
@@ -390,11 +391,10 @@ function GraficoMensalFC({ meses, saldoBancario }: { meses: MesFC[]; saldoBancar
   // Saldo acumulado parte do saldo bancario real (mesma base da coluna
   // "Saldo Acum." da tabela diaria) e vai somando o resultado (entradas -
   // saidas) de cada mes, em ordem - nao e o resultado isolado do mes.
-  // Multimarcas tirado temporariamente (pedido explicito do usuario) - nao
-  // conta nem aqui nem na tabela diaria. Cartao voltou (ver COL_DEFS).
+  // Cartao e Multimarcas compoem as entradas (ver COL_DEFS).
   let acumulado = saldoBancario;
   const dados: MesFCComSaldo[] = meses.map((m) => {
-    const totalEntradas = m.outrasEntradas + m.boleto + m.cheque + m.lojas + m.cartao;
+    const totalEntradas = m.outrasEntradas + m.boleto + m.cheque + m.lojas + m.cartao + m.multimarcas;
     acumulado += totalEntradas - m.totalSaidas;
     return { ...m, totalEntradas, saldoAcumulado: acumulado, saidasAbaixoZero: -m.totalSaidas };
   });
@@ -1295,6 +1295,16 @@ function CabecalhoFornecedores({ titulo, despesa, carregando, onLimpar }: {
   );
 }
 
+// Mesma regra do backend pra Outras Entradas (_EXPR_DT_OUTRAS_ENTRADAS_EFETIVA):
+// sabado/domingo entram no fluxo na terca seguinte.
+function diaEntradaOutras(iso: string): string {
+  const d = new Date(`${iso}T12:00:00`);
+  const somar = d.getDay() === 6 ? 3 : d.getDay() === 0 ? 2 : 0;
+  if (!somar) return iso;
+  d.setDate(d.getDate() + somar);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 export default function FluxoCaixaPage() {
   const [empresasDisponiveis, setEmpresasDisponiveis] = useState<EmpresaFC[]>([]);
   const [empresasSelecionadas, setEmpresasSelecionadas] = useState<Set<number>>(new Set());
@@ -1341,6 +1351,10 @@ export default function FluxoCaixaPage() {
   const [outrasEntradasPaste, setOutrasEntradasPaste] = useState('');
   const [outrasEntradasStatus, setOutrasEntradasStatus] = useState('');
   const [outrasEntradasSalvando, setOutrasEntradasSalvando] = useState(false);
+  // O que ja esta cadastrado (de hoje em diante) - pra conferir e remover
+  // alguma linha e simular o fluxo sem ela (pedido explicito do usuario).
+  const [outrasEntradasLista, setOutrasEntradasLista] = useState<{ dia: string; valor: number }[] | null>(null);
+  const [outrasEntradasRemovendo, setOutrasEntradasRemovendo] = useState<string | null>(null);
 
   const [boletoDetalheDia, setBoletoDetalheDia] = useState<string | null>(null);
   const [boletoDetalheLista, setBoletoDetalheLista] = useState<BoletoDetalheItem[] | null>(null);
@@ -1560,6 +1574,43 @@ export default function FluxoCaixaPage() {
     }
   }
 
+  async function outrasEntradasCarregarLista() {
+    setOutrasEntradasLista(null);
+    try {
+      const res = await fetch(`/api/fluxo-caixa/outras-entradas-projecao?dt_inicio=${isoHoje()}&dt_fim=2099-12-31`, { cache: 'no-store' });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || json.detail || 'Erro ao carregar');
+      setOutrasEntradasLista(json);
+    } catch (e) {
+      setOutrasEntradasStatus(`Erro ao carregar o que está cadastrado: ${e instanceof Error ? e.message : 'desconhecido'}`);
+      setOutrasEntradasLista([]);
+    }
+  }
+
+  function outrasEntradasAbrir() {
+    setOutrasEntradasModalAberto(true);
+    setOutrasEntradasStatus('');
+    outrasEntradasCarregarLista();
+  }
+
+  async function outrasEntradasRemover(dia: string, valor: number) {
+    const data = dia.split('-').reverse().join('/');
+    if (!confirm(`Remover a entrada de ${data} (${fmtBRL(valor)})? Para voltar, é só colar a linha de novo.`)) return;
+    setOutrasEntradasRemovendo(dia);
+    try {
+      const res = await fetch(`/api/fluxo-caixa/outras-entradas-projecao/${dia}`, { method: 'DELETE' });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || json.detail || 'Erro ao remover');
+      setOutrasEntradasStatus(`✓ Entrada de ${data} removida.`);
+      await outrasEntradasCarregarLista();
+      if (dados) buscar();
+    } catch (e) {
+      setOutrasEntradasStatus(`Erro: ${e instanceof Error ? e.message : 'desconhecido'}`);
+    } finally {
+      setOutrasEntradasRemovendo(null);
+    }
+  }
+
   async function outrasEntradasGravar() {
     const raw = outrasEntradasPaste.trim();
     if (!raw) { setOutrasEntradasStatus('Cole os dados primeiro.'); return; }
@@ -1594,11 +1645,9 @@ export default function FluxoCaixaPage() {
       if (!res.ok) throw new Error(json.error || json.detail || 'Erro ao salvar');
       setOutrasEntradasStatus(`✓ ${json.count} dia(s) salvos.`);
       setOutrasEntradasPaste('');
-      setTimeout(() => {
-        setOutrasEntradasModalAberto(false);
-        setOutrasEntradasStatus('');
-        buscar();
-      }, 900);
+      // Fica aberto mostrando a lista atualizada (antes fechava sozinho).
+      await outrasEntradasCarregarLista();
+      if (dados) buscar();
     } catch (e) {
       setOutrasEntradasStatus(`Erro: ${e instanceof Error ? e.message : 'desconhecido'}`);
     } finally {
@@ -1647,17 +1696,17 @@ export default function FluxoCaixaPage() {
     const effCheq = ev('cheque', dia.cheque);
     const effLoj = ev('lojas', adjLojas);
     const effCart = ev('cartao', dia.cartao);
+    const effMulti = ev('multimarcas', adjMulti);
 
     const effSaidas = effPrev + effReal + effPed;
-    // Multimarcas tirado temporariamente (pedido explicito do usuario).
-    // Cartao voltou: Lojas ja vem do backend sem o cartao, os dois juntos
-    // fecham com a meta de lojas.
-    const effEntradas = effOutras + effBol + effCheq + effLoj + effCart;
+    // Cartao: Lojas ja vem do backend sem o cartao, os dois juntos fecham com
+    // a meta de lojas. Multimarcas ja com os ajustes de crescimento/inflacao.
+    const effEntradas = effOutras + effBol + effCheq + effLoj + effCart + effMulti;
     const effSaldoDia = effEntradas - effSaidas;
     acumLocal += effSaldoDia;
 
     return {
-      dia, adjLojas, adjMulti, effPrev, effReal, effPed, effOutras, effBol, effCheq, effLoj, effCart,
+      dia, adjLojas, adjMulti, effPrev, effReal, effPed, effOutras, effBol, effCheq, effLoj, effCart, effMulti,
       effSaidas, effEntradas, effSaldoDia, saldoAcum: acumLocal,
     };
   });
@@ -1672,9 +1721,10 @@ export default function FluxoCaixaPage() {
     cheque: acc.cheque + l.effCheq,
     lojas: acc.lojas + l.effLoj,
     cartao: acc.cartao + l.effCart,
+    multimarcas: acc.multimarcas + l.effMulti,
     entradas: acc.entradas + l.effEntradas,
     qtd: acc.qtd + l.dia.qtd,
-  }), { previsao: 0, real: 0, pedidos: 0, saidas: 0, outrasEntradas: 0, boleto: 0, cheque: 0, lojas: 0, cartao: 0, entradas: 0, qtd: 0 });
+  }), { previsao: 0, real: 0, pedidos: 0, saidas: 0, outrasEntradas: 0, boleto: 0, cheque: 0, lojas: 0, cartao: 0, multimarcas: 0, entradas: 0, qtd: 0 });
 
   // Mesmos totais, mas sem o toggle de coluna - so pra exibir (riscado) quanto
   // uma coluna desligada valeria no Resumo do Periodo.
@@ -1687,7 +1737,8 @@ export default function FluxoCaixaPage() {
     cheque: acc.cheque + (l.dia.cheque || 0),
     lojas: acc.lojas + l.adjLojas,
     cartao: acc.cartao + (l.dia.cartao || 0),
-  }), { previsao: 0, real: 0, pedidos: 0, outrasEntradas: 0, boleto: 0, cheque: 0, lojas: 0, cartao: 0 });
+    multimarcas: acc.multimarcas + l.adjMulti,
+  }), { previsao: 0, real: 0, pedidos: 0, outrasEntradas: 0, boleto: 0, cheque: 0, lojas: 0, cartao: 0, multimarcas: 0 });
   const DIAS_SEMANA = ['DOM', 'SEG', 'TER', 'QUA', 'QUI', 'SEX', 'SÁB'];
   const hoje = isoHoje();
 
@@ -1951,7 +2002,7 @@ export default function FluxoCaixaPage() {
                 <button onClick={() => setLojasModalAberto(true)} className="flex items-center gap-1 text-xs font-medium bg-gray-200 hover:bg-gray-300 text-black rounded px-2 py-1 transition-colors">
                   <Settings className="w-3.5 h-3.5" /> Projeção Lojas
                 </button>
-                <button onClick={() => setOutrasEntradasModalAberto(true)} className="flex items-center gap-1 text-xs font-medium bg-gray-200 hover:bg-gray-300 text-black rounded px-2 py-1 transition-colors">
+                <button onClick={outrasEntradasAbrir} className="flex items-center gap-1 text-xs font-medium bg-gray-200 hover:bg-gray-300 text-black rounded px-2 py-1 transition-colors">
                   <Settings className="w-3.5 h-3.5" /> Outras Entradas
                 </button>
               </div>
@@ -2013,7 +2064,7 @@ export default function FluxoCaixaPage() {
                   <tr className="text-left">
                     <th rowSpan={2} className="px-3 py-2 min-w-[90px] align-middle font-medium text-white bg-gray-500 border-b-2 border-r-2 border-gray-600">Data</th>
                     <th colSpan={4} className="px-3 py-1.5 text-center text-xs font-semibold uppercase tracking-wide text-white bg-red-600 border-b border-red-700">Saídas</th>
-                    <th colSpan={6} className="px-3 py-1.5 text-center text-xs font-semibold uppercase tracking-wide text-white bg-green-600 border-b border-green-700 border-l-2 border-l-gray-300">Entradas</th>
+                    <th colSpan={7} className="px-3 py-1.5 text-center text-xs font-semibold uppercase tracking-wide text-white bg-green-600 border-b border-green-700 border-l-2 border-l-gray-300">Entradas</th>
                     <th rowSpan={2} className="px-3 py-2 text-right whitespace-nowrap align-middle font-medium text-white bg-blue-600 border-b-2 border-blue-700 border-r border-blue-700 border-l-2 border-l-gray-300">Saldo Dia</th>
                     <th rowSpan={2} className="px-3 py-2 text-right whitespace-nowrap align-middle font-medium text-white bg-blue-600 border-b-2 border-blue-700 border-r-2 border-blue-700">Saldo Acum.</th>
                     <th rowSpan={2} className="px-3 py-2 text-right align-middle font-medium text-white bg-gray-500 border-b-2 border-gray-600">Qtd</th>
@@ -2028,12 +2079,13 @@ export default function FluxoCaixaPage() {
                     <th className="px-3 py-1.5 text-right font-medium text-white/90 bg-green-500 border-b-2 border-green-300 border-r border-green-400">Cheque</th>
                     <th className="px-3 py-1.5 text-right font-medium text-white/90 bg-green-500 border-b-2 border-green-300 border-r border-green-400">Lojas</th>
                     <th className="px-3 py-1.5 text-right font-medium text-white/90 bg-green-500 border-b-2 border-green-300 border-r border-green-400">Cartão</th>
+                    <th className="px-3 py-1.5 text-right font-medium text-white/90 bg-green-500 border-b-2 border-green-300 border-r border-green-400">Multimarcas</th>
                     <th className="px-3 py-1.5 text-right font-semibold text-white bg-green-700 border-b-2 border-green-300 border-r-2 border-gray-300">Total</th>
                   </tr>
                 </thead>
                 <tbody>
                   {linhasDiariasVisiveis.length === 0 && (
-                    <tr><td colSpan={14} className="text-center text-black py-8">Sem dados no período selecionado</td></tr>
+                    <tr><td colSpan={15} className="text-center text-black py-8">Sem dados no período selecionado</td></tr>
                   )}
                   {linhasDiariasVisiveis.map((l, i) => {
                     const dt = new Date(`${l.dia.dia}T12:00:00`);
@@ -2069,6 +2121,7 @@ export default function FluxoCaixaPage() {
                         {celula('cheque', l.dia.cheque, '#059669', bgHover)}
                         {celula('lojas', l.adjLojas, '#0891b2', bgHover)}
                         {celula('cartao', l.dia.cartao, '#4d7c0f', bgHover)}
+                        {celula('multimarcas', l.adjMulti, '#9333ea', bgHover)}
                         <td className={`text-right px-3 py-2 tabular-nums font-bold text-green-800 border-r-2 border-b border-gray-300 ${bgHover}`}>
                           {l.effEntradas > 0 ? fmtBRL(l.effEntradas) : <span className="text-black">—</span>}
                         </td>
@@ -2090,6 +2143,7 @@ export default function FluxoCaixaPage() {
               { rotulo: 'Cheques', valor: totaisBrutos.cheque, ativa: colsAtivas.cheque },
               { rotulo: 'Lojas', valor: totaisBrutos.lojas, ativa: colsAtivas.lojas },
               { rotulo: 'Cartão', valor: totaisBrutos.cartao, ativa: colsAtivas.cartao },
+              { rotulo: 'Multimarcas', valor: totaisBrutos.multimarcas, ativa: colsAtivas.multimarcas },
             ]}
             saidas={[
               { rotulo: 'Previsão', valor: totaisBrutos.previsao, ativa: colsAtivas.previsao },
@@ -2213,20 +2267,70 @@ export default function FluxoCaixaPage() {
               <button onClick={() => setOutrasEntradasModalAberto(false)} className="text-black hover:text-black"><X className="w-5 h-5" /></button>
             </div>
             <div className="p-5">
+              <div className="flex items-baseline justify-between mb-2">
+                <h3 className="text-sm font-semibold text-black">Cadastradas (de hoje em diante)</h3>
+                {outrasEntradasLista && outrasEntradasLista.length > 0 && (
+                  <span className="text-xs text-black tabular-nums">
+                    {outrasEntradasLista.length} {outrasEntradasLista.length === 1 ? 'dia' : 'dias'} ·{' '}
+                    <strong>{fmtBRL(outrasEntradasLista.reduce((a, i) => a + i.valor, 0))}</strong>
+                  </span>
+                )}
+              </div>
+              <div className="border border-gray-200 rounded max-h-64 overflow-y-auto mb-5">
+                {outrasEntradasLista === null ? (
+                  <p className="flex items-center justify-center py-6 text-sm text-black">
+                    <Loader2 className="w-4 h-4 animate-spin mr-2" /> Carregando…
+                  </p>
+                ) : outrasEntradasLista.length === 0 ? (
+                  <p className="py-6 text-center text-sm text-black">Nenhuma entrada cadastrada de hoje em diante.</p>
+                ) : (
+                  <table className="w-full text-sm">
+                    <tbody>
+                      {outrasEntradasLista.map((item, i) => (
+                        <tr key={item.dia} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                          <td className="px-3 py-1.5 text-black tabular-nums whitespace-nowrap">
+                            {item.dia.split('-').reverse().join('/')}{' '}
+                            <span className="text-xs">({DIAS_SEMANA_CURTO[new Date(`${item.dia}T12:00:00`).getDay()]})</span>
+                            {diaEntradaOutras(item.dia) !== item.dia && (
+                              <span className="block text-xs text-violet-700">
+                                fim de semana: entra no fluxo na terça {diaEntradaOutras(item.dia).split('-').reverse().slice(0, 2).join('/')}
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-3 py-1.5 text-right font-semibold text-violet-700 tabular-nums whitespace-nowrap">{fmtBRL(item.valor)}</td>
+                          <td className="px-2 py-1 text-right w-px">
+                            <button
+                              type="button"
+                              onClick={() => outrasEntradasRemover(item.dia, item.valor)}
+                              disabled={outrasEntradasRemovendo !== null}
+                              className="inline-flex items-center gap-1 text-xs font-medium text-red-700 hover:bg-red-50 border border-red-200 rounded px-2 py-0.5 disabled:opacity-50"
+                              title="Remover esta entrada (para voltar, cole a linha de novo)"
+                            >
+                              {outrasEntradasRemovendo === item.dia ? <Loader2 className="w-3 h-3 animate-spin" /> : <X className="w-3 h-3" />}
+                              Remover
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+              <h3 className="text-sm font-semibold text-black mb-1">Adicionar ou atualizar</h3>
               <p className="text-sm text-black mb-3">
-                Cole os dados da planilha abaixo — uma linha por dia.<br />
+                Cole os dados da planilha abaixo — uma linha por dia (data já cadastrada é substituída).<br />
                 Formatos aceitos: <code>DD/MM/AAAA;valor</code> ou <code>DD/MM/AAAA[tab]valor</code> (tab do Excel)
               </p>
               <textarea
                 value={outrasEntradasPaste}
                 onChange={(e) => setOutrasEntradasPaste(e.target.value)}
-                rows={14}
+                rows={6}
                 placeholder={'20/10/2026;390000\n06/11/2026;3539445.01\n...'}
                 className="w-full box-border font-mono text-sm text-black p-2.5 border border-gray-300 rounded resize-vertical"
               />
               <div className="flex gap-2 mt-3 justify-end items-center">
                 <span className="flex-1 text-sm text-black">{outrasEntradasStatus}</span>
-                <button onClick={() => setOutrasEntradasModalAberto(false)} className="px-4 py-2 border border-gray-300 rounded text-sm text-black hover:bg-gray-50">Cancelar</button>
+                <button onClick={() => setOutrasEntradasModalAberto(false)} className="px-4 py-2 border border-gray-300 rounded text-sm text-black hover:bg-gray-50">Fechar</button>
                 <button onClick={outrasEntradasGravar} disabled={outrasEntradasSalvando} className="px-5 py-2 bg-green-600 hover:bg-green-700 text-white rounded text-sm font-semibold disabled:opacity-50 transition-colors">Salvar</button>
               </div>
             </div>
