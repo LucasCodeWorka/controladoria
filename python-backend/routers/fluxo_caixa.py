@@ -821,42 +821,54 @@ def _sql_outras_entradas_diario(dt_inicio: str, dt_fim: str) -> tuple:
 # aqui: ela so pula sab/dom, nao feriado em dia de semana.)
 _DIAS_DESLOCAMENTO_MULTIMARCAS = 364
 _EXPR_DT_MULTIMARCAS_EFETIVA = f"fn_fc_proximo_dia_util_bancario(dt_transacao::date + {_DIAS_DESLOCAMENTO_MULTIMARCAS})"
+# Venda (modalidade 4, saida) MENOS devolucao (modalidade 3, entrada) do dia -
+# liquido, igual ao que o usuario confere direto no sistema (conferido:
+# 20/10/2025 venda 199.642,42 - devol 2.004,93 = 197.637,49; 21/10/2025 venda
+# 290.675,72 - devol 6.475,17 = 284.200,55 - bateu exato nos dois dias). Sem
+# descontar devolucao o valor projetado ficava inflado, as vezes ~5% no dia.
+# cd_operacao NAO e mais restrito a (1, 52): o sistema que o usuario confere
+# nao aplica esse filtro (um registro de cd_operacao=58 do dia 21/10 ficava
+# de fora so por essa restricao, sem motivo de negocio identificado - se
+# algum cd_operacao precisar ser excluido de verdade, e so adicionar aqui).
 # Pre-filtro na data original (o efetivo e no maximo alguns dias depois do
 # deslocado - mesma ideia do _PRE_FILTRO_VENCIMENTO).
-_WHERE_MULTIMARCAS = f"""
-        WHERE cd_empresa = 1 AND tp_modalidade = '4' AND tp_operacao = 'S'
-          AND cd_operacao IN (1, 52) AND tp_situacao = 4
+_WHERE_MULTIMARCAS_BASE = f"""
+          AND cd_empresa = 1 AND tp_situacao = 4
           AND dt_transacao >= (%s::date - {_DIAS_DESLOCAMENTO_MULTIMARCAS + _FOLGA_DIAS_DT_EFETIVA})
           AND dt_transacao < (%s::date - {_DIAS_DESLOCAMENTO_MULTIMARCAS - 1})
           AND {_EXPR_DT_MULTIMARCAS_EFETIVA} BETWEEN %s AND %s
           AND {_EXPR_DT_MULTIMARCAS_EFETIVA} > CURRENT_DATE"""
+_SQL_MULTIMARCAS_LIQUIDO = f"""
+    SELECT {{coluna_agrupamento}} AS {{nome_coluna}}, SUM(valor)::numeric AS valor
+    FROM (
+        SELECT {_EXPR_DT_MULTIMARCAS_EFETIVA} AS dia_efetivo, SUM(vl_transacao) AS valor
+        FROM vr_tra_transacao
+        WHERE tp_modalidade = '4' AND tp_operacao = 'S'
+        {_WHERE_MULTIMARCAS_BASE}
+        GROUP BY 1
+        UNION ALL
+        SELECT {_EXPR_DT_MULTIMARCAS_EFETIVA} AS dia_efetivo, -SUM(vl_transacao) AS valor
+        FROM vr_tra_transacao
+        WHERE tp_modalidade = '3' AND tp_operacao = 'E'
+        {_WHERE_MULTIMARCAS_BASE}
+        GROUP BY 1
+    ) x
+    GROUP BY 1
+    ORDER BY 1
+"""
 
 
 def _sql_multimarcas_mensal(dt_inicio: str, dt_fim: str) -> tuple:
     return (
-        f"""
-        SELECT to_char({_EXPR_DT_MULTIMARCAS_EFETIVA}, 'YYYY-MM') AS mes,
-            COUNT(*)::int AS qtd, ROUND(SUM(vl_transacao)::numeric, 2) AS valor
-        FROM vr_tra_transacao
-        {_WHERE_MULTIMARCAS}
-        GROUP BY 1
-        ORDER BY 1
-        """,
-        (dt_inicio, dt_fim, dt_inicio, dt_fim),
+        _SQL_MULTIMARCAS_LIQUIDO.format(coluna_agrupamento="to_char(dia_efetivo, 'YYYY-MM')", nome_coluna="mes"),
+        (dt_inicio, dt_fim, dt_inicio, dt_fim, dt_inicio, dt_fim, dt_inicio, dt_fim),
     )
 
 
 def _sql_multimarcas_diario(dt_inicio: str, dt_fim: str) -> tuple:
     return (
-        f"""
-        SELECT {_EXPR_DT_MULTIMARCAS_EFETIVA}::date AS dia,
-            COUNT(*)::int AS qtd, ROUND(SUM(vl_transacao)::numeric, 2) AS valor
-        FROM vr_tra_transacao
-        {_WHERE_MULTIMARCAS}
-        GROUP BY 1
-        ORDER BY 1
-        """,
-        (dt_inicio, dt_fim, dt_inicio, dt_fim),
+        _SQL_MULTIMARCAS_LIQUIDO.format(coluna_agrupamento="dia_efetivo::date", nome_coluna="dia"),
+        (dt_inicio, dt_fim, dt_inicio, dt_fim, dt_inicio, dt_fim, dt_inicio, dt_fim),
     )
 
 
