@@ -2397,6 +2397,15 @@ export default function FluxoCaixaPage() {
         </div>
       )}
 
+      {saidaDetalhe && (
+        <ModalSaidasDetalhe
+          dia={saidaDetalhe.dia}
+          tipo={saidaDetalhe.tipo}
+          empresas={new URLSearchParams(consultaRef.current).get('empresas')}
+          onFechar={fecharSaidaDetalhe}
+        />
+      )}
+
       {/* Modal: Detalhe das faturas de Boleto de um dia (clique na celula) */}
       {boletoDetalheDia && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setBoletoDetalheDia(null)}>
