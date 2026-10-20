@@ -22,6 +22,7 @@ import {
 } from 'recharts';
 import type { LabelProps } from 'recharts';
 import { carregarFiltro, salvarFiltro } from '../utils/persistirFiltro';
+import { useAuth } from '../contexts/AuthContext';
 
 interface EmpresaFC {
   id: number;
@@ -47,6 +48,11 @@ interface MesFC {
   outrasEntradas: number;
   multimarcas: number;
   qtd: number;
+  // Pagamento do Uso da Garantia (simulacao) caido nesse mes - nao e uma
+  // despesa real (nao soma em nenhuma coluna do backend), so desconta do
+  // saldo acumulado do grafico mensal. Opcional pra nao quebrar o uso de
+  // MesFC pros dados crus do backend (dados.meses), que nunca tem esse campo.
+  ajusteGarantia?: number;
 }
 
 interface DiaFC {
@@ -289,6 +295,9 @@ function TooltipMes({ active, payload }: { active?: boolean; payload?: TooltipMe
       <LinhaTooltip rotulo="Real" valor={m.real} detalhe />
       <LinhaTooltip rotulo="Previsão" valor={m.previsao} detalhe />
       <LinhaTooltip rotulo="Pedidos" valor={m.pedidos} detalhe />
+      {!!m.ajusteGarantia && (
+        <LinhaTooltip rotulo="Pagamento uso da garantia (simulação)" valor={m.ajusteGarantia} detalhe />
+      )}
       <div className="border-t border-gray-100 mt-1.5 pt-1.5">
         <LinhaTooltip cor={COR_SALDO} rotulo="Saldo acumulado" valor={m.saldoAcumulado} forte />
       </div>
@@ -404,7 +413,9 @@ function GraficoMensalFC({ meses, saldoBancario }: { meses: MesFC[]; saldoBancar
   let acumulado = saldoBancario;
   const dados: MesFCComSaldo[] = meses.map((m) => {
     const totalEntradas = m.outrasEntradas + m.boleto + m.cheque + m.lojas + m.cartao + m.multimarcas;
-    acumulado += totalEntradas - m.totalSaidas;
+    // ajusteGarantia: pagamento simulado do Uso da Garantia caido nesse mes -
+    // nao e uma saida real, so desconta do saldo (ver mesesEfetivos).
+    acumulado += totalEntradas - m.totalSaidas - (m.ajusteGarantia || 0);
     return { ...m, totalEntradas, saldoAcumulado: acumulado, saidasAbaixoZero: -m.totalSaidas };
   });
   return (
@@ -1315,6 +1326,7 @@ function diaEntradaOutras(iso: string): string {
 }
 
 export default function FluxoCaixaPage() {
+  const { user } = useAuth();
   const [empresasDisponiveis, setEmpresasDisponiveis] = useState<EmpresaFC[]>([]);
   const [empresasSelecionadas, setEmpresasSelecionadas] = useState<Set<number>>(new Set());
   const [filtroEmpresasAberto, setFiltroEmpresasAberto] = useState(false);
@@ -1350,6 +1362,23 @@ export default function FluxoCaixaPage() {
   const [crescMulti, setCrescMulti] = useState(0);
   const [inflacaoMulti, setInflacaoMulti] = useState(0);
   const [crescLojas, setCrescLojas] = useState(0);
+  // Simulacao de uso da garantia/limite (cheque especial): valor que
+  // entraria em caixa hoje se a conta usasse o limite (soma no saldo
+  // inicial da projecao) + data em que esse emprestimo e pago de volta
+  // (lanca uma saida automatica nesse dia). COMPARTILHADA no servidor
+  // (fcp_simulacao_fluxo_caixa), nao no localStorage - pedido explicito do
+  // usuario: qualquer pessoa que abrir a tela, em qualquer computador, ve o
+  // mesmo valor/data que outra pessoa configurou.
+  const [usoGarantia, setUsoGarantia] = useState(0);
+  const [dtPagamentoGarantia, setDtPagamentoGarantia] = useState('');
+  const [garantiaInfo, setGarantiaInfo] = useState<{ usuario: string | null; dtAtualizacao: string | null } | null>(null);
+  const garantiaCarregadaRef = useRef(false);
+  // Guarda o que o servidor tinha quando a tela carregou - so grava de novo
+  // se o valor/data mudarem de fato. Sem isso, so ABRIR a tela ja disparava
+  // um POST (o GET seta usoGarantia/dtPagamentoGarantia, o que por si so
+  // dispara o efeito de salvar abaixo) e sobrescrevia "salvo por" com quem
+  // so estava olhando, nao quem alterou.
+  const garantiaServidorRef = useRef<{ usoGarantia: number; dtPagamentoGarantia: string }>({ usoGarantia: 0, dtPagamentoGarantia: '' });
 
   const [lojasModalAberto, setLojasModalAberto] = useState(false);
   const [lojasPaste, setLojasPaste] = useState('');
@@ -1418,6 +1447,26 @@ export default function FluxoCaixaPage() {
     if (salvo?.crescMulti !== undefined) setCrescMulti(salvo.crescMulti);
     if (salvo?.inflacaoMulti !== undefined) setInflacaoMulti(salvo.inflacaoMulti);
     if (salvo?.crescLojas !== undefined) setCrescLojas(salvo.crescLojas);
+
+    // Uso da Garantia - compartilhado no servidor (nao no localStorage, ver
+    // comentario do useState). garantiaCarregadaRef evita que o POST de
+    // salvamento (useEffect mais abaixo) dispare com o valor "0" inicial
+    // antes do GET responder.
+    fetch('/api/fluxo-caixa/simulacao', { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((json) => {
+        const valor = json.usoGarantia || 0;
+        const data = json.dtPagamentoGarantia || '';
+        setUsoGarantia(valor);
+        setDtPagamentoGarantia(data);
+        setGarantiaInfo({ usuario: json.usuario ?? null, dtAtualizacao: json.dtAtualizacao ?? null });
+        garantiaServidorRef.current = { usoGarantia: valor, dtPagamentoGarantia: data };
+        garantiaCarregadaRef.current = true;
+      })
+      .catch((e) => {
+        console.error('Erro ao buscar simulação (uso da garantia):', e);
+        garantiaCarregadaRef.current = true;
+      });
   }, []);
 
   function aplicarAtalhoPeriodo(atalho: typeof ATALHOS_PERIODO_FC[number]) {
@@ -1434,6 +1483,43 @@ export default function FluxoCaixaPage() {
       colsAtivas, crescMulti, inflacaoMulti, crescLojas,
     });
   }, [empresasSelecionadas, dtInicio, dtFim, ultimoAtalho, colsAtivas, crescMulti, inflacaoMulti, crescLojas]);
+
+  // Uso da Garantia - grava no servidor (debounced, pra nao mandar um POST a
+  // cada tecla digitada) assim que o usuario muda o valor ou a data. So
+  // depois que o GET inicial ja respondeu (garantiaCarregadaRef) E so se o
+  // valor/data realmente mudaram em relacao ao que o servidor tinha
+  // (garantiaServidorRef) - senao SO ABRIR a tela (o GET ja seta
+  // usoGarantia/dtPagamentoGarantia, que sao dependencias deste efeito)
+  // dispararia um POST e sobrescreveria "salvo por" com quem so estava
+  // olhando, nao quem alterou.
+  useEffect(() => {
+    if (!garantiaCarregadaRef.current) return;
+    if (
+      usoGarantia === garantiaServidorRef.current.usoGarantia &&
+      dtPagamentoGarantia === garantiaServidorRef.current.dtPagamentoGarantia
+    ) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      fetch('/api/fluxo-caixa/simulacao', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          usoGarantia,
+          dtPagamentoGarantia: dtPagamentoGarantia || null,
+          usuario: user?.name || user?.username || null,
+        }),
+      })
+        .then((r) => r.json())
+        .then(() => {
+          garantiaServidorRef.current = { usoGarantia, dtPagamentoGarantia };
+          setGarantiaInfo({ usuario: user?.name || user?.username || null, dtAtualizacao: new Date().toISOString() });
+        })
+        .catch((e) => console.error('Erro ao salvar simulação (uso da garantia):', e));
+    }, 800);
+    return () => window.clearTimeout(timer);
+  }, [usoGarantia, dtPagamentoGarantia, user]);
+
 
   async function buscar() {
     setLoading(true);
@@ -1535,6 +1621,8 @@ export default function FluxoCaixaPage() {
     setCrescMulti(0);
     setInflacaoMulti(0);
     setCrescLojas(0);
+    setUsoGarantia(0);
+    setDtPagamentoGarantia('');
   }
 
   async function lojasGravar() {
@@ -1692,7 +1780,8 @@ export default function FluxoCaixaPage() {
   // acumulado parte do saldo bancario real (posicao de caixa atual das
   // contas), nao de zero - pedido explicito do usuario.
   const ev = (key: ColKey, val: number) => (colsAtivas[key] ? val || 0 : 0);
-  let acumLocal = dados?.saldoBancario ?? 0;
+  const saldoInicialSimulado = (dados?.saldoBancario ?? 0) + usoGarantia;
+  let acumLocal = saldoInicialSimulado;
   const linhasDiarias = (dados?.dias || []).map((dia) => {
     const adjLojas = (dia.lojas || 0) * (1 + crescLojas / 100);
     const adjMulti = (dia.multimarcas || 0) * (1 + crescMulti / 100) * (1 + inflacaoMulti / 100);
@@ -1711,14 +1800,24 @@ export default function FluxoCaixaPage() {
     // Cartao: Lojas ja vem do backend sem o cartao, os dois juntos fecham com
     // a meta de lojas. Multimarcas ja com os ajustes de crescimento/inflacao.
     const effEntradas = effOutras + effBol + effCheq + effLoj + effCart + effMulti;
-    const effSaldoDia = effEntradas - effSaidas;
+    // Pagamento do Uso da Garantia: lancado SO no dia escolhido (nao entra
+    // em nenhuma coluna real - Prev./Real/Pedidos continuam mostrando so
+    // despesa de verdade), reduz o saldo acumulado dali pra frente.
+    const effGarantiaPagamento = usoGarantia > 0 && dtPagamentoGarantia === dia.dia ? usoGarantia : 0;
+    const effSaldoDia = effEntradas - effSaidas - effGarantiaPagamento;
     acumLocal += effSaldoDia;
 
     return {
       dia, adjLojas, adjMulti, effPrev, effReal, effPed, effOutras, effBol, effCheq, effLoj, effCart, effMulti,
-      effSaidas, effEntradas, effSaldoDia, saldoAcum: acumLocal,
+      effSaidas, effEntradas, effGarantiaPagamento, effSaldoDia, saldoAcum: acumLocal,
     };
   });
+
+  // Se a data de pagamento escolhida nao cai dentro do periodo carregado
+  // (dados?.dias), a saida nunca e lancada - avisa em vez de simular
+  // silenciosamente "pela metade" (so o uso, sem a devolucao).
+  const dtPagamentoGarantiaForaDoPeriodo =
+    usoGarantia > 0 && !!dtPagamentoGarantia && !linhasDiarias.some((l) => l.dia.dia === dtPagamentoGarantia);
 
   // Agregado mensal com os MESMOS toggles de coluna e ajustes de simulacao
   // (Crescimento/Inflacao de Multimarcas e Lojas) da Visao Diaria/Resumo do
@@ -1731,7 +1830,7 @@ export default function FluxoCaixaPage() {
       const chave = l.dia.dia.slice(0, 7);
       const acc = porMes[chave] ?? {
         mes: chave, previsao: 0, real: 0, pedidos: 0, totalSaidas: 0,
-        cartao: 0, boleto: 0, cheque: 0, lojas: 0, outrasEntradas: 0, multimarcas: 0, qtd: 0,
+        cartao: 0, boleto: 0, cheque: 0, lojas: 0, outrasEntradas: 0, multimarcas: 0, qtd: 0, ajusteGarantia: 0,
       };
       acc.previsao += l.effPrev;
       acc.real += l.effReal;
@@ -1744,6 +1843,7 @@ export default function FluxoCaixaPage() {
       acc.outrasEntradas += l.effOutras;
       acc.multimarcas += l.effMulti;
       acc.qtd += l.dia.qtd;
+      acc.ajusteGarantia = (acc.ajusteGarantia || 0) + l.effGarantiaPagamento;
       porMes[chave] = acc;
     }
     return Object.values(porMes).sort((a, b) => a.mes.localeCompare(b.mes));
@@ -1762,7 +1862,8 @@ export default function FluxoCaixaPage() {
     multimarcas: acc.multimarcas + l.effMulti,
     entradas: acc.entradas + l.effEntradas,
     qtd: acc.qtd + l.dia.qtd,
-  }), { previsao: 0, real: 0, pedidos: 0, saidas: 0, outrasEntradas: 0, boleto: 0, cheque: 0, lojas: 0, cartao: 0, multimarcas: 0, entradas: 0, qtd: 0 });
+    garantiaPagamento: acc.garantiaPagamento + l.effGarantiaPagamento,
+  }), { previsao: 0, real: 0, pedidos: 0, saidas: 0, outrasEntradas: 0, boleto: 0, cheque: 0, lojas: 0, cartao: 0, multimarcas: 0, entradas: 0, qtd: 0, garantiaPagamento: 0 });
 
   // Mesmos totais, mas sem o toggle de coluna - so pra exibir (riscado) quanto
   // uma coluna desligada valeria no Resumo do Periodo.
@@ -2049,7 +2150,7 @@ export default function FluxoCaixaPage() {
           {/* Grafico mensal */}
           <div className="bg-white rounded-lg shadow-md p-4">
             <h2 className="text-sm font-semibold text-black uppercase tracking-wide mb-3">Projeção Mensal</h2>
-            <GraficoMensalFC meses={mesesEfetivos} saldoBancario={dados.saldoBancario} />
+            <GraficoMensalFC meses={mesesEfetivos} saldoBancario={saldoInicialSimulado} />
           </div>
 
           <GraficoFaturamentoUnificado />
@@ -2069,7 +2170,8 @@ export default function FluxoCaixaPage() {
             </div>
 
             {/* Simulacao */}
-            <div className="flex items-center gap-4 flex-wrap px-4 py-2.5 border-b border-gray-200 bg-amber-50">
+            <div className="flex flex-col gap-1.5 px-4 py-2.5 border-b border-gray-200 bg-amber-50">
+            <div className="flex items-center gap-4 flex-wrap">
               <span className="text-xs font-bold text-black uppercase tracking-wide">Simulação</span>
               <label className="flex items-center gap-1.5 text-sm">
                 <span className="font-semibold text-purple-700">Multimarcas</span>
@@ -2089,9 +2191,49 @@ export default function FluxoCaixaPage() {
                 <input type="number" step={0.5} value={crescLojas} onChange={(e) => setCrescLojas(parseFloat(e.target.value) || 0)} className="w-16 px-1.5 py-1 border border-gray-300 rounded text-right text-sm text-black" />
                 <span className="text-black">%</span>
               </label>
+              <label
+                className="flex items-center gap-1.5 text-sm"
+                title="Valor que entraria no caixa hoje se a conta usasse o limite/garantia (cheque especial) - é um empréstimo. Soma no saldo inicial da projeção; preenchendo a Data de Pagamento, a devolução sai sozinha nesse dia."
+              >
+                <span className="font-semibold text-orange-700">Uso da Garantia</span>
+                <span className="text-black">R$</span>
+                <input
+                  type="number" step={100} value={usoGarantia}
+                  onChange={(e) => setUsoGarantia(parseFloat(e.target.value) || 0)}
+                  className="w-28 px-1.5 py-1 border border-gray-300 rounded text-right text-sm text-black"
+                />
+              </label>
+              <label
+                className="flex items-center gap-1.5 text-sm"
+                title="Data em que o empréstimo do Uso da Garantia é pago de volta - lança uma saída automática nesse dia na projeção."
+              >
+                <span className="font-semibold text-orange-700">Data de Pagamento</span>
+                <input
+                  type="date" value={dtPagamentoGarantia}
+                  onChange={(e) => setDtPagamentoGarantia(e.target.value)}
+                  className="px-1.5 py-1 border border-gray-300 rounded text-sm text-black"
+                />
+              </label>
               <button onClick={resetarAjustes} className="flex items-center gap-1 text-xs font-medium text-black border border-gray-300 rounded px-2 py-1 hover:bg-white transition-colors">
                 <RotateCcw className="w-3.5 h-3.5" /> Resetar
               </button>
+            </div>
+            {(garantiaInfo?.dtAtualizacao || dtPagamentoGarantiaForaDoPeriodo) && (
+              <div className="flex items-center gap-3 flex-wrap text-xs">
+                {garantiaInfo?.dtAtualizacao && (usoGarantia > 0 || dtPagamentoGarantia) && (
+                  <span className="text-black">
+                    Uso da Garantia salvo para todos{garantiaInfo.usuario ? ` por ${garantiaInfo.usuario}` : ''} em{' '}
+                    {new Date(garantiaInfo.dtAtualizacao).toLocaleString('pt-BR')}
+                  </span>
+                )}
+                {dtPagamentoGarantiaForaDoPeriodo && (
+                  <span className="text-red-700 font-medium">
+                    A Data de Pagamento ({dtPagamentoGarantia.split('-').reverse().join('/')}) está fora do período selecionado acima — a saída
+                    não aparece nesta consulta. Mude o período pra ver o efeito.
+                  </span>
+                )}
+              </div>
+            )}
             </div>
 
             {/* Toggles de coluna */}
@@ -2185,7 +2327,13 @@ export default function FluxoCaixaPage() {
                         <td className={`text-right px-3 py-2 tabular-nums font-bold text-green-800 border-r-2 border-b border-gray-300 ${bgHover}`}>
                           {l.effEntradas > 0 ? fmtBRL(l.effEntradas) : <span className="text-black">—</span>}
                         </td>
-                        <td className={`text-right px-3 py-2 tabular-nums font-bold border-r border-b border-gray-300 ${bgHover} ${l.effSaldoDia >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(l.effSaldoDia)}</td>
+                        <td
+                          className={`text-right px-3 py-2 tabular-nums font-bold border-r border-b border-gray-300 ${bgHover} ${l.effSaldoDia >= 0 ? 'text-green-700' : 'text-red-600'}`}
+                          title={l.effGarantiaPagamento > 0 ? `Inclui pagamento do Uso da Garantia (simulação): -${fmtBRL(l.effGarantiaPagamento)}` : undefined}
+                        >
+                          {fmtBRL(l.effSaldoDia)}
+                          {l.effGarantiaPagamento > 0 && <span className="ml-1 text-orange-700" title="Pagamento do Uso da Garantia">⚠</span>}
+                        </td>
                         <td className={`text-right px-3 py-2 tabular-nums font-bold border-r-2 border-b border-gray-300 ${bgHover} ${l.saldoAcum >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(l.saldoAcum)}</td>
                         <td className={`text-right px-3 py-2 tabular-nums text-black border-b border-gray-300 ${bgHover}`}>{fmtNum(l.dia.qtd)}</td>
                       </tr>
@@ -2209,10 +2357,13 @@ export default function FluxoCaixaPage() {
               { rotulo: 'Previsão', valor: totaisBrutos.previsao, ativa: colsAtivas.previsao },
               { rotulo: 'Real', valor: totaisBrutos.real, ativa: colsAtivas.real },
               { rotulo: 'Pedidos de compra', valor: totaisBrutos.pedidos, ativa: colsAtivas.pedidos },
+              ...(totais.garantiaPagamento > 0
+                ? [{ rotulo: 'Pagamento Uso Garantia', valor: totais.garantiaPagamento, ativa: true }]
+                : []),
             ]}
             totalEntradas={totais.entradas}
-            totalSaidas={totais.saidas}
-            saldoInicial={dados.saldoBancario}
+            totalSaidas={totais.saidas + totais.garantiaPagamento}
+            saldoInicial={saldoInicialSimulado}
             dtIni={dados.dias[0]?.dia ?? ''}
             dtFim={dados.dias[dados.dias.length - 1]?.dia ?? ''}
           />

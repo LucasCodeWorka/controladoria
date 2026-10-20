@@ -48,6 +48,16 @@ def _criar_tabelas_fluxo_caixa():
         )
     """, ())
     execute_insert("""
+        CREATE TABLE IF NOT EXISTS fcp_simulacao_fluxo_caixa (
+            id SMALLINT PRIMARY KEY DEFAULT 1,
+            vl_uso_garantia NUMERIC(16,2) NOT NULL DEFAULT 0,
+            dt_pagamento_garantia DATE,
+            usuario TEXT,
+            dt_atualizacao TIMESTAMP DEFAULT NOW(),
+            CONSTRAINT fcp_simulacao_fluxo_caixa_linha_unica CHECK (id = 1)
+        )
+    """, ())
+    execute_insert("""
         CREATE TABLE IF NOT EXISTS fcp_feriados_bancarios (
             dt_feriado DATE PRIMARY KEY,
             descr TEXT
@@ -1438,6 +1448,55 @@ def obter_outras_entradas_projecao(
         (dt_inicio, dt_fim),
     ) or []
     return [{"dia": _dia_str(r["dia"]), "valor": float(r["vl_outras_entradas"])} for r in rows]
+
+
+@router.get("/api/fluxo-caixa/simulacao")
+def obter_simulacao_fluxo_caixa():
+    """Simulacao compartilhada da tela (Uso da Garantia: valor que entraria
+    em caixa hoje + data em que esse emprestimo e pago de volta) - fica
+    salva no banco, nao no navegador, pra qualquer pessoa que abrir a tela
+    (em qualquer computador) ver o mesmo valor/data que outra pessoa
+    configurou (pedido explicito do usuario)."""
+    _criar_tabelas_fluxo_caixa()
+    rows = execute_query(
+        "SELECT vl_uso_garantia, dt_pagamento_garantia, usuario, dt_atualizacao FROM fcp_simulacao_fluxo_caixa WHERE id = 1"
+    ) or []
+    if not rows:
+        return {"usoGarantia": 0.0, "dtPagamentoGarantia": None, "usuario": None, "dtAtualizacao": None}
+    r = rows[0]
+    return {
+        "usoGarantia": float(r["vl_uso_garantia"] or 0),
+        "dtPagamentoGarantia": _dia_str(r["dt_pagamento_garantia"]) if r["dt_pagamento_garantia"] else None,
+        "usuario": r["usuario"],
+        "dtAtualizacao": r["dt_atualizacao"].isoformat() if r["dt_atualizacao"] else None,
+    }
+
+
+@router.post("/api/fluxo-caixa/simulacao")
+def salvar_simulacao_fluxo_caixa(dados: dict):
+    """Grava o 'Uso da Garantia' compartilhado. dados = {usoGarantia, dtPagamentoGarantia, usuario}."""
+    try:
+        valor = float(dados.get("usoGarantia") or 0)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="usoGarantia precisa ser numerico")
+    dt_pagamento = dados.get("dtPagamentoGarantia") or None
+    if dt_pagamento:
+        try:
+            datetime.strptime(dt_pagamento, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"dtPagamentoGarantia invalida: {dt_pagamento}. Use AAAA-MM-DD.")
+    usuario = (dados.get("usuario") or "").strip()[:100] or None
+    _criar_tabelas_fluxo_caixa()
+    execute_insert(
+        """INSERT INTO fcp_simulacao_fluxo_caixa (id, vl_uso_garantia, dt_pagamento_garantia, usuario, dt_atualizacao)
+           VALUES (1, %s, %s, %s, NOW())
+           ON CONFLICT (id) DO UPDATE SET
+               vl_uso_garantia = EXCLUDED.vl_uso_garantia,
+               dt_pagamento_garantia = EXCLUDED.dt_pagamento_garantia,
+               usuario = EXCLUDED.usuario, dt_atualizacao = NOW()""",
+        (valor, dt_pagamento, usuario),
+    )
+    return {"ok": True}
 
 
 @router.delete("/api/fluxo-caixa/outras-entradas-projecao/{dia}")
