@@ -32,7 +32,25 @@ _kpi_ts: float = 0.0
 TAMANHO_LOTE_INSERT = 500
 
 
+_tabelas_fluxo_caixa_lock = threading.Lock()
+_tabelas_fluxo_caixa_ok = False
+
+
 def _criar_tabelas_fluxo_caixa():
+    """Uma vez por processo, com trava: os CREATE OR REPLACE FUNCTION em
+    requisicoes paralelas (a tela dispara varias juntas) falhavam com
+    "tuple concurrently updated"."""
+    global _tabelas_fluxo_caixa_ok
+    if _tabelas_fluxo_caixa_ok:
+        return
+    with _tabelas_fluxo_caixa_lock:
+        if _tabelas_fluxo_caixa_ok:
+            return
+        _criar_tabelas_fluxo_caixa_ddl()
+        _tabelas_fluxo_caixa_ok = True
+
+
+def _criar_tabelas_fluxo_caixa_ddl():
     execute_insert("""
         CREATE TABLE IF NOT EXISTS fcp_lojas_projecao (
             dt_dia DATE PRIMARY KEY,
@@ -702,6 +720,64 @@ def _nome_banco_boleto(nr_portador, nr_ctapes) -> str:
     return f"Portador {nr_portador}"
 
 
+def _chave_fatura(r) -> tuple:
+    return (r["cd_empresa"], r["cd_cliente"], r["nr_fat"], r["nr_parcela"])
+
+
+def _nr_ctapes_por_fatura(rows) -> dict:
+    """Conta de cobranca (fcr_fatcodbar.nr_ctapes) de cada fatura, numa
+    consulta separada: fcr_fatcodbar tem colunas com o MESMO nome das macros
+    de filtro do boleto (cd_empresa/nr_fat/nr_parcela/tp_situacao/
+    dt_vencimento) - juntar na mesma query geraria coluna ambigua. Precisa
+    do cd_cliente: a PK e (cd_empresa, cd_cliente, nr_fat, nr_parcela,
+    nr_seqcod) e, sem ele, o banco nao usa o indice (2 mil faturas levavam
+    13s; com ele, <1s). Uma fatura pode ter mais de um codigo de barras
+    (nr_seqcod) - vale o mais recente."""
+    chaves = list({_chave_fatura(r) for r in rows})
+    if not chaves:
+        return {}
+    sql = """
+        SELECT DISTINCT ON (cb.cd_empresa, cb.cd_cliente, cb.nr_fat, cb.nr_parcela)
+               cb.cd_empresa, cb.cd_cliente, cb.nr_fat, cb.nr_parcela, cb.nr_ctapes
+        FROM unnest(%s::int[], %s::bigint[], %s::bigint[], %s::bigint[]) AS k(emp, cli, fat, par)
+        JOIN fcr_fatcodbar cb
+          ON cb.cd_empresa = k.emp AND cb.cd_cliente = k.cli AND cb.nr_fat = k.fat AND cb.nr_parcela = k.par
+        ORDER BY cb.cd_empresa, cb.cd_cliente, cb.nr_fat, cb.nr_parcela, cb.nr_seqcod DESC
+    """
+    params = tuple([c[i] for c in chaves] for i in range(4))
+    return {_chave_fatura(c): c["nr_ctapes"] for c in execute_query(sql, params) or []}
+
+
+@router.get("/api/fluxo-caixa/boleto-por-banco")
+def obter_boleto_por_banco(
+    dtInicio: str = Query(...),
+    dtFim: str = Query(...),
+    empresas: Optional[str] = Query(None),
+):
+    """Total da coluna Boleto no periodo inteiro, quebrado por banco de
+    cobranca - mesmo filtro (_filtros_boleto) e mesma regra de banco
+    (_nome_banco_boleto) do modal de detalhe do dia, entao a soma bate com
+    o total da coluna."""
+    _criar_tabelas_fluxo_caixa()
+    where, params = _filtros_boleto(dtInicio, dtFim, _parse_empresas(empresas))
+    rows = execute_query(
+        f"""SELECT cd_empresa, cd_cliente, nr_fat, nr_parcela, nr_portador,
+                   ROUND((vl_fatura - vl_pago)::numeric, 2) AS valor
+            FROM vr_fcr_faturai {where}""",
+        tuple(params),
+    ) or []
+    ctapes = _nr_ctapes_por_fatura(rows)
+    por_banco: dict = {}
+    for r in rows:
+        banco = _nome_banco_boleto(r["nr_portador"], ctapes.get(_chave_fatura(r)))
+        atual = por_banco.setdefault(banco, {"banco": banco, "valor": 0.0, "qtd": 0})
+        atual["valor"] += float(r["valor"])
+        atual["qtd"] += 1
+    for b in por_banco.values():
+        b["valor"] = round(b["valor"], 2)
+    return sorted(por_banco.values(), key=lambda b: -b["valor"])
+
+
 @router.get("/api/fluxo-caixa/boleto-detalhe")
 def obter_boleto_detalhe(
     dia: str = Query(..., description="Dia efetivo (YYYY-MM-DD), mesma data mostrada na coluna Boleto"),
@@ -726,7 +802,7 @@ def obter_boleto_detalhe(
         where += " AND cd_empresa = ANY(%s)"
         params.append(cd_empresas)
     sql = f"""
-        SELECT cd_empresa, nm_cliente, nr_fat, nr_parcela, dt_vencimento::date AS dt_vencimento_original,
+        SELECT cd_empresa, cd_cliente, nm_cliente, nr_fat, nr_parcela, dt_vencimento::date AS dt_vencimento_original,
                ROUND((vl_fatura - vl_pago)::numeric, 2) AS valor, nr_portador
         FROM vr_fcr_faturai
         {where}
@@ -734,20 +810,7 @@ def obter_boleto_detalhe(
     """
     rows = execute_query(sql, tuple(params)) or []
 
-    # fcr_fatcodbar tem colunas com o MESMO nome das macros de filtro
-    # acima (cd_empresa/nr_fat/nr_parcela/tp_situacao/dt_vencimento) - juntar
-    # na mesma query geraria coluna ambigua. Busca a parte (nr_ctapes) numa
-    # segunda consulta, so pelas chaves que vieram, e junta em Python.
-    nr_ctapes_por_chave: dict = {}
-    if rows:
-        chaves = [(r["cd_empresa"], r["nr_fat"], r["nr_parcela"]) for r in rows]
-        sql_ctapes = """
-            SELECT cd_empresa, nr_fat, nr_parcela, nr_ctapes
-            FROM fcr_fatcodbar
-            WHERE (cd_empresa, nr_fat, nr_parcela) IN %s
-        """
-        for c in execute_query(sql_ctapes, (tuple(chaves),)) or []:
-            nr_ctapes_por_chave[(c["cd_empresa"], c["nr_fat"], c["nr_parcela"])] = c["nr_ctapes"]
+    nr_ctapes_por_chave = _nr_ctapes_por_fatura(rows)
 
     return [
         {
@@ -756,7 +819,7 @@ def obter_boleto_detalhe(
             "nrParcela": r["nr_parcela"],
             "dtVencimentoOriginal": _dia_str(r["dt_vencimento_original"]),
             "valor": float(r["valor"]),
-            "banco": _nome_banco_boleto(r["nr_portador"], nr_ctapes_por_chave.get((r["cd_empresa"], r["nr_fat"], r["nr_parcela"]))),
+            "banco": _nome_banco_boleto(r["nr_portador"], nr_ctapes_por_chave.get(_chave_fatura(r))),
         }
         for r in rows
     ]

@@ -1341,6 +1341,9 @@ export default function FluxoCaixaPage() {
   const fecharSaidaDetalhe = useCallback(() => setSaidaDetalhe(null), []);
   const pedidoFornDespesaRef = useRef(0);
   const [saldosBancarios, setSaldosBancarios] = useState<SaldosBancarios | null>(null);
+  const [boletoPorBanco, setBoletoPorBanco] = useState<{ banco: string; valor: number; qtd: number }[] | null>(null);
+  const [boletoPorBancoErro, setBoletoPorBancoErro] = useState(false);
+  const pedidoBoletoPorBancoRef = useRef(0);
   const [sortKey, setSortKey] = useState<'nome' | 'valor'>('valor');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
 
@@ -1423,6 +1426,8 @@ export default function FluxoCaixaPage() {
   const [boletoDetalheDia, setBoletoDetalheDia] = useState<string | null>(null);
   const [boletoDetalheLista, setBoletoDetalheLista] = useState<BoletoDetalheItem[] | null>(null);
   const [boletoDetalheErro, setBoletoDetalheErro] = useState('');
+  const [boletoOrdCampo, setBoletoOrdCampo] = useState<'cliente' | 'fatura' | 'banco' | 'vencimento' | 'valor'>('cliente');
+  const [boletoOrdDir, setBoletoOrdDir] = useState<'asc' | 'desc'>('asc');
 
   // So volta a salvar o filtro depois que o salvo foi restaurado - senao a
   // restauracao dos toggles (sincrona) dispara o salvamento com as datas
@@ -1558,6 +1563,7 @@ export default function FluxoCaixaPage() {
       const qs = params.toString();
       consultaRef.current = qs;
       limparDespesaSel();
+      buscarBoletoPorBanco();
       const [respDados, respFornecedor, respDespesa, respSaldos] = await Promise.all([
         fetch(`/api/fluxo-caixa/dados?${qs}`, { cache: 'no-store' }),
         fetch(`/api/fluxo-caixa/saidas-por-fornecedor?${qs}`, { cache: 'no-store' }),
@@ -1578,6 +1584,36 @@ export default function FluxoCaixaPage() {
       setErro('Erro ao buscar os dados. Tente novamente.');
     } finally {
       setLoading(false);
+    }
+  }
+
+  // Fora do Promise.all principal: e mais lento (cruza com fcr_fatcodbar)
+  // e nao deve segurar a tabela se demorar ou falhar.
+  async function buscarBoletoPorBanco() {
+    const pedido = ++pedidoBoletoPorBancoRef.current;
+    setBoletoPorBanco(null);
+    setBoletoPorBancoErro(false);
+    try {
+      const params = new URLSearchParams({ dtInicio, dtFim });
+      if (empresasSelecionadas.size > 0 && empresasSelecionadas.size < empresasDisponiveis.length) {
+        params.set('empresas', Array.from(empresasSelecionadas).join(','));
+      }
+      const resp = await fetch(`/api/fluxo-caixa/boleto-por-banco?${params.toString()}`, { cache: 'no-store' });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const json = await resp.json();
+      if (pedido === pedidoBoletoPorBancoRef.current) setBoletoPorBanco(Array.isArray(json) ? json : []);
+    } catch (e) {
+      console.error('Erro ao buscar boletos por banco:', e);
+      if (pedido === pedidoBoletoPorBancoRef.current) setBoletoPorBancoErro(true);
+    }
+  }
+
+  function alternarOrdenacaoBoleto(campo: typeof boletoOrdCampo) {
+    if (boletoOrdCampo === campo) {
+      setBoletoOrdDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setBoletoOrdCampo(campo);
+      setBoletoOrdDir(campo === 'valor' ? 'desc' : 'asc');
     }
   }
 
@@ -1624,6 +1660,19 @@ export default function FluxoCaixaPage() {
     const mult = sortDir === 'asc' ? 1 : -1;
     if (sortKey === 'nome') return a.nome.localeCompare(b.nome) * mult;
     return (a.valor - b.valor) * mult;
+  });
+
+  const boletoDetalheListaOrdenada = boletoDetalheLista === null ? null : [...boletoDetalheLista].sort((a, b) => {
+    const mult = boletoOrdDir === 'asc' ? 1 : -1;
+    switch (boletoOrdCampo) {
+      case 'cliente': return a.cliente.localeCompare(b.cliente) * mult;
+      case 'banco': return a.banco.localeCompare(b.banco) * mult;
+      case 'vencimento': return a.dtVencimentoOriginal.localeCompare(b.dtVencimentoOriginal) * mult;
+      case 'valor': return (a.valor - b.valor) * mult;
+      case 'fatura':
+      default:
+        return ((a.nrFat - b.nrFat) || (a.nrParcela - b.nrParcela)) * mult;
+    }
   });
 
   // Nao busca sozinho ao carregar a tela - so quando o usuario clicar em
@@ -1789,6 +1838,8 @@ export default function FluxoCaixaPage() {
     setBoletoDetalheDia(dia);
     setBoletoDetalheLista(null);
     setBoletoDetalheErro('');
+    setBoletoOrdCampo('cliente');
+    setBoletoOrdDir('asc');
     try {
       const params = new URLSearchParams({ dia });
       if (empresasSelecionadas.size > 0 && empresasSelecionadas.size < empresasDisponiveis.length) {
@@ -2211,7 +2262,8 @@ export default function FluxoCaixaPage() {
             </div>
 
             {/* Simulacao */}
-            <div className="flex flex-col gap-1.5 px-4 py-2.5 border-b border-gray-200 bg-amber-50">
+            <div className="flex flex-wrap items-start gap-x-6 gap-y-2 px-4 py-2.5 border-b border-gray-200 bg-amber-50">
+            <div className="flex flex-col gap-1.5 min-w-0">
             <div className="flex items-center gap-4 flex-wrap">
               <span className="text-xs font-bold text-black uppercase tracking-wide">Simulação</span>
               <label className="flex items-center gap-1.5 text-sm">
@@ -2303,6 +2355,43 @@ export default function FluxoCaixaPage() {
                 )}
               </div>
             )}
+            </div>
+
+            {/* Boletos do periodo inteiro por banco de cobranca - mesmo
+                filtro de periodo/empresas da tabela, mesma regra de banco do
+                modal de detalhe do dia. */}
+            <div className="ml-auto bg-white border border-sky-200 rounded-lg px-3 py-2 min-w-[18rem] max-w-full">
+              <div className="flex items-baseline justify-between gap-4 mb-1.5">
+                <span className="text-xs font-semibold text-black">Boletos no período por banco</span>
+                {boletoPorBanco && boletoPorBanco.length > 0 && (
+                  <span className="text-xs text-black tabular-nums whitespace-nowrap">
+                    Total <span className="font-bold text-sky-700">{fmtBRL(boletoPorBanco.reduce((acc, b) => acc + b.valor, 0))}</span>
+                  </span>
+                )}
+              </div>
+              {boletoPorBancoErro ? (
+                <p className="text-xs text-red-700 flex items-center gap-1">
+                  <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" /> Não foi possível carregar. Clique em Aplicar de novo.
+                </p>
+              ) : boletoPorBanco === null ? (
+                <p className="text-xs text-black flex items-center gap-1.5">
+                  {loading || dados ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Carregando…</> : 'Clique em Aplicar para carregar.'}
+                </p>
+              ) : boletoPorBanco.length === 0 ? (
+                <p className="text-xs text-black">Nenhum boleto a receber no período.</p>
+              ) : (
+                <div className="flex flex-wrap gap-x-5 gap-y-1">
+                  {boletoPorBanco.map((b) => (
+                    <div key={b.banco} className="flex flex-col leading-tight" title={`${b.qtd} ${b.qtd === 1 ? 'fatura' : 'faturas'}`}>
+                      <span className="text-xs text-black whitespace-nowrap">{b.banco}</span>
+                      <span className="text-sm font-bold text-sky-700 tabular-nums whitespace-nowrap">
+                        {fmtBRL(b.valor)} <span className="text-[11px] font-normal text-black">({b.qtd})</span>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
             </div>
 
             {/* Toggles de coluna */}
@@ -2627,7 +2716,7 @@ export default function FluxoCaixaPage() {
       {/* Modal: Detalhe das faturas de Boleto de um dia (clique na celula) */}
       {boletoDetalheDia && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setBoletoDetalheDia(null)}>
-          <div className="bg-white rounded-lg shadow-xl max-w-3xl w-full max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white rounded-lg shadow-xl max-w-6xl w-full max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200">
               <h2 className="text-base font-semibold text-black">
                 Boletos — {boletoDetalheDia.split('-').reverse().join('/')}
@@ -2645,39 +2734,56 @@ export default function FluxoCaixaPage() {
                   <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" /> <span>{boletoDetalheErro}</span>
                 </div>
               )}
-              {boletoDetalheLista !== null && !boletoDetalheErro && boletoDetalheLista.length === 0 && (
+              {boletoDetalheListaOrdenada !== null && !boletoDetalheErro && boletoDetalheListaOrdenada.length === 0 && (
                 <p className="text-sm text-black py-12 text-center">Nenhuma fatura encontrada para esse dia.</p>
               )}
-              {boletoDetalheLista !== null && boletoDetalheLista.length > 0 && (
+              {boletoDetalheListaOrdenada !== null && boletoDetalheListaOrdenada.length > 0 && (
                 <>
                   <table className="w-full text-sm">
                     <thead className="sticky top-0 bg-gray-50 border-b border-gray-200">
                       <tr>
-                        <th className="text-left px-5 py-2 font-medium text-black">Cliente</th>
-                        <th className="text-left px-3 py-2 font-medium text-black">Fatura/Parcela</th>
-                        <th className="text-left px-3 py-2 font-medium text-black">Banco</th>
-                        <th className="text-right px-3 py-2 font-medium text-black">Vencimento original</th>
-                        <th className="text-right px-5 py-2 font-medium text-black">Valor</th>
+                        {(
+                          [
+                            { campo: 'cliente', label: 'Cliente', alinhamento: 'left' as const },
+                            { campo: 'fatura', label: 'Fatura/Parcela', alinhamento: 'left' as const },
+                            { campo: 'banco', label: 'Banco', alinhamento: 'left' as const },
+                            { campo: 'vencimento', label: 'Vencimento original', alinhamento: 'right' as const },
+                            { campo: 'valor', label: 'Valor', alinhamento: 'right' as const },
+                          ] as const
+                        ).map(({ campo, label, alinhamento }, idx) => (
+                          <th
+                            key={campo}
+                            onClick={() => alternarOrdenacaoBoleto(campo)}
+                            className={`${alinhamento === 'left' ? 'text-left' : 'text-right'} ${idx === 0 ? 'px-5' : idx === 4 ? 'px-5' : 'px-3'} py-2 font-medium text-black whitespace-nowrap cursor-pointer select-none hover:bg-gray-100`}
+                          >
+                            <span className={`inline-flex items-center gap-1 ${alinhamento === 'right' ? 'justify-end w-full' : ''}`}>
+                              {label}
+                              {boletoOrdCampo === campo
+                                ? (boletoOrdDir === 'asc' ? <ArrowUp className="w-3.5 h-3.5" /> : <ArrowDown className="w-3.5 h-3.5" />)
+                                : <ArrowUpDown className="w-3.5 h-3.5 text-gray-400" />}
+                            </span>
+                          </th>
+                        ))}
                       </tr>
                     </thead>
                     <tbody>
-                      {boletoDetalheLista.map((item, i) => (
+                      {boletoDetalheListaOrdenada.map((item, i) => (
                         <tr key={`${item.nrFat}-${item.nrParcela}-${i}`} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                          <td className="px-5 py-1.5 text-black">{item.cliente}</td>
-                          <td className="px-3 py-1.5 text-black tabular-nums">
+                          <td className="px-5 py-1.5 text-black whitespace-nowrap">{item.cliente}</td>
+                          <td className="px-3 py-1.5 text-black tabular-nums whitespace-nowrap">
                             {String(item.nrFat).padStart(6, '0')}/{String(item.nrParcela).padStart(3, '0')}
                           </td>
                           <td className="px-3 py-1.5 text-black whitespace-nowrap">{item.banco}</td>
-                          <td className="px-3 py-1.5 text-right text-black tabular-nums">{item.dtVencimentoOriginal.split('-').reverse().join('/')}</td>
-                          <td className="px-5 py-1.5 text-right font-semibold text-sky-700 tabular-nums">{fmtBRL(item.valor)}</td>
+                          <td className="px-3 py-1.5 text-right text-black tabular-nums whitespace-nowrap">{item.dtVencimentoOriginal.split('-').reverse().join('/')}</td>
+                          <td className="px-5 py-1.5 text-right font-semibold text-sky-700 tabular-nums whitespace-nowrap">{fmtBRL(item.valor)}</td>
                         </tr>
                       ))}
                     </tbody>
                     <tfoot>
                       <tr className="font-bold bg-gray-200 border-t-2 border-gray-400">
                         <td colSpan={4} className="px-5 py-2 text-right uppercase text-xs tracking-wide text-black">Total</td>
-                        <td className="px-5 py-2 text-right tabular-nums text-sky-700">
-                          {fmtBRL(boletoDetalheLista.reduce((acc, item) => acc + item.valor, 0))}
+                        <td className="px-5 py-2 text-right tabular-nums text-sky-700 whitespace-nowrap">
+                          {fmtBRL(boletoDetalheListaOrdenada.reduce((acc, item) => acc + item.valor, 0))}
                         </td>
                       </tr>
                     </tfoot>
@@ -2691,7 +2797,7 @@ export default function FluxoCaixaPage() {
                     <table className="w-full text-sm">
                       <tbody>
                         {Object.entries(
-                          boletoDetalheLista.reduce<Record<string, { valor: number; qtd: number }>>((acc, item) => {
+                          boletoDetalheListaOrdenada.reduce<Record<string, { valor: number; qtd: number }>>((acc, item) => {
                             const atual = acc[item.banco] ?? { valor: 0, qtd: 0 };
                             acc[item.banco] = { valor: atual.valor + item.valor, qtd: atual.qtd + 1 };
                             return acc;
