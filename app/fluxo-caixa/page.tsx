@@ -48,11 +48,6 @@ interface MesFC {
   outrasEntradas: number;
   multimarcas: number;
   qtd: number;
-  // Pagamento do Uso da Garantia (simulacao) caido nesse mes - nao e uma
-  // despesa real (nao soma em nenhuma coluna do backend), so desconta do
-  // saldo acumulado do grafico mensal. Opcional pra nao quebrar o uso de
-  // MesFC pros dados crus do backend (dados.meses), que nunca tem esse campo.
-  ajusteGarantia?: number;
 }
 
 interface DiaFC {
@@ -295,9 +290,6 @@ function TooltipMes({ active, payload }: { active?: boolean; payload?: TooltipMe
       <LinhaTooltip rotulo="Real" valor={m.real} detalhe />
       <LinhaTooltip rotulo="Previsão" valor={m.previsao} detalhe />
       <LinhaTooltip rotulo="Pedidos" valor={m.pedidos} detalhe />
-      {!!m.ajusteGarantia && (
-        <LinhaTooltip rotulo="Pagamento uso da garantia (simulação)" valor={m.ajusteGarantia} detalhe />
-      )}
       <div className="border-t border-gray-100 mt-1.5 pt-1.5">
         <LinhaTooltip cor={COR_SALDO} rotulo="Saldo acumulado" valor={m.saldoAcumulado} forte />
       </div>
@@ -413,9 +405,7 @@ function GraficoMensalFC({ meses, saldoBancario }: { meses: MesFC[]; saldoBancar
   let acumulado = saldoBancario;
   const dados: MesFCComSaldo[] = meses.map((m) => {
     const totalEntradas = m.outrasEntradas + m.boleto + m.cheque + m.lojas + m.cartao + m.multimarcas;
-    // ajusteGarantia: pagamento simulado do Uso da Garantia caido nesse mes -
-    // nao e uma saida real, so desconta do saldo (ver mesesEfetivos).
-    acumulado += totalEntradas - m.totalSaidas - (m.ajusteGarantia || 0);
+    acumulado += totalEntradas - m.totalSaidas;
     return { ...m, totalEntradas, saldoAcumulado: acumulado, saidasAbaixoZero: -m.totalSaidas };
   });
   return (
@@ -1820,13 +1810,21 @@ export default function FluxoCaixaPage() {
   // acumulado parte do saldo bancario real (posicao de caixa atual das
   // contas), nao de zero - pedido explicito do usuario.
   const ev = (key: ColKey, val: number) => (colsAtivas[key] ? val || 0 : 0);
-  const saldoInicialSimulado = (dados?.saldoBancario ?? 0) + usoGarantia;
+  // Uso da Garantia sozinho e so INFORMATIVO (o card) - nao mexe em nada
+  // aqui (pedido explicito do usuario: o saldo bancario real ja reflete o
+  // limite usado, somar de novo seria contar duas vezes). So influencia a
+  // projecao quando TAMBEM tem Data de Pagamento aplicada: nesse dia, o
+  // valor entra dentro da propria coluna Previsao, como se fosse mais uma
+  // conta a pagar normal - sem nenhum ajuste separado no saldo.
+  const saldoInicialSimulado = dados?.saldoBancario ?? 0;
   let acumLocal = saldoInicialSimulado;
   const linhasDiarias = (dados?.dias || []).map((dia) => {
     const adjLojas = (dia.lojas || 0) * (1 + crescLojas / 100);
     const adjMulti = (dia.multimarcas || 0) * (1 + crescMulti / 100) * (1 + inflacaoMulti / 100);
+    const ehDiaPagamentoGarantia = usoGarantia > 0 && dtPagamentoGarantia === dia.dia;
+    const previsaoComGarantia = (dia.previsao || 0) + (ehDiaPagamentoGarantia ? usoGarantia : 0);
 
-    const effPrev = ev('previsao', dia.previsao);
+    const effPrev = ev('previsao', previsaoComGarantia);
     const effReal = ev('real', dia.real);
     const effPed = ev('pedidos', dia.pedidos);
     const effOutras = ev('outrasEntradas', dia.outrasEntradas);
@@ -1840,16 +1838,13 @@ export default function FluxoCaixaPage() {
     // Cartao: Lojas ja vem do backend sem o cartao, os dois juntos fecham com
     // a meta de lojas. Multimarcas ja com os ajustes de crescimento/inflacao.
     const effEntradas = effOutras + effBol + effCheq + effLoj + effCart + effMulti;
-    // Pagamento do Uso da Garantia: lancado SO no dia escolhido (nao entra
-    // em nenhuma coluna real - Prev./Real/Pedidos continuam mostrando so
-    // despesa de verdade), reduz o saldo acumulado dali pra frente.
-    const effGarantiaPagamento = usoGarantia > 0 && dtPagamentoGarantia === dia.dia ? usoGarantia : 0;
-    const effSaldoDia = effEntradas - effSaidas - effGarantiaPagamento;
+    const effSaldoDia = effEntradas - effSaidas;
     acumLocal += effSaldoDia;
 
     return {
-      dia, adjLojas, adjMulti, effPrev, effReal, effPed, effOutras, effBol, effCheq, effLoj, effCart, effMulti,
-      effSaidas, effEntradas, effGarantiaPagamento, effSaldoDia, saldoAcum: acumLocal,
+      dia, adjLojas, adjMulti, previsaoComGarantia, ehDiaPagamentoGarantia,
+      effPrev, effReal, effPed, effOutras, effBol, effCheq, effLoj, effCart, effMulti,
+      effSaidas, effEntradas, effSaldoDia, saldoAcum: acumLocal,
     };
   });
 
@@ -1870,7 +1865,7 @@ export default function FluxoCaixaPage() {
       const chave = l.dia.dia.slice(0, 7);
       const acc = porMes[chave] ?? {
         mes: chave, previsao: 0, real: 0, pedidos: 0, totalSaidas: 0,
-        cartao: 0, boleto: 0, cheque: 0, lojas: 0, outrasEntradas: 0, multimarcas: 0, qtd: 0, ajusteGarantia: 0,
+        cartao: 0, boleto: 0, cheque: 0, lojas: 0, outrasEntradas: 0, multimarcas: 0, qtd: 0,
       };
       acc.previsao += l.effPrev;
       acc.real += l.effReal;
@@ -1883,7 +1878,6 @@ export default function FluxoCaixaPage() {
       acc.outrasEntradas += l.effOutras;
       acc.multimarcas += l.effMulti;
       acc.qtd += l.dia.qtd;
-      acc.ajusteGarantia = (acc.ajusteGarantia || 0) + l.effGarantiaPagamento;
       porMes[chave] = acc;
     }
     return Object.values(porMes).sort((a, b) => a.mes.localeCompare(b.mes));
@@ -1902,13 +1896,12 @@ export default function FluxoCaixaPage() {
     multimarcas: acc.multimarcas + l.effMulti,
     entradas: acc.entradas + l.effEntradas,
     qtd: acc.qtd + l.dia.qtd,
-    garantiaPagamento: acc.garantiaPagamento + l.effGarantiaPagamento,
-  }), { previsao: 0, real: 0, pedidos: 0, saidas: 0, outrasEntradas: 0, boleto: 0, cheque: 0, lojas: 0, cartao: 0, multimarcas: 0, entradas: 0, qtd: 0, garantiaPagamento: 0 });
+  }), { previsao: 0, real: 0, pedidos: 0, saidas: 0, outrasEntradas: 0, boleto: 0, cheque: 0, lojas: 0, cartao: 0, multimarcas: 0, entradas: 0, qtd: 0 });
 
   // Mesmos totais, mas sem o toggle de coluna - so pra exibir (riscado) quanto
   // uma coluna desligada valeria no Resumo do Periodo.
   const totaisBrutos = linhasDiarias.reduce((acc, l) => ({
-    previsao: acc.previsao + (l.dia.previsao || 0),
+    previsao: acc.previsao + l.previsaoComGarantia,
     real: acc.real + (l.dia.real || 0),
     pedidos: acc.pedidos + (l.dia.pedidos || 0),
     outrasEntradas: acc.outrasEntradas + (l.dia.outrasEntradas || 0),
@@ -1932,7 +1925,10 @@ export default function FluxoCaixaPage() {
     return dow !== 0 && dow !== 6;
   });
 
-  function celula(key: ColKey, rawVal: number, cor: string, bgLinha: string, extraClasse = '', onClick?: () => void, dica = 'Ver faturas') {
+  function celula(
+    key: ColKey, rawVal: number, cor: string, bgLinha: string, extraClasse = '', onClick?: () => void, dica = 'Ver faturas',
+    marcador?: { simbolo: string; dica: string },
+  ) {
     const ativa = colsAtivas[key];
     const v = rawVal || 0;
     const clicavel = ativa && v > 0 && !!onClick;
@@ -1944,6 +1940,11 @@ export default function FluxoCaixaPage() {
         title={clicavel ? dica : undefined}
       >
         {v > 0 ? <span style={!ativa ? { textDecoration: 'line-through' } : undefined}>{fmtBRL(v)}</span> : <span className="text-black">—</span>}
+        {marcador && (
+          <span className="ml-1 text-orange-700 no-underline" title={marcador.dica} onClick={(e) => e.stopPropagation()}>
+            {marcador.simbolo}
+          </span>
+        )}
       </td>
     );
   }
@@ -2242,7 +2243,7 @@ export default function FluxoCaixaPage() {
             <div className="flex items-center gap-3 flex-wrap">
               <label
                 className="flex items-center gap-1.5 text-sm"
-                title="Valor que entraria no caixa hoje se a conta usasse o limite/garantia (cheque especial) - é um empréstimo. Clique em Aplicar pra confirmar; soma no saldo inicial da projeção."
+                title="Apenas informativo - não afeta a projeção sozinho (o saldo bancário já reflete o limite usado). Clique em Aplicar pra guardar; preenchendo também a Data de Pagamento e aplicando de novo, o valor entra como uma conta a pagar na coluna Previsão, no dia escolhido."
               >
                 <span className="font-semibold text-orange-700">Uso da Garantia</span>
                 <span className="text-black">R$</span>
@@ -2255,7 +2256,10 @@ export default function FluxoCaixaPage() {
               </label>
               <button
                 onClick={aplicarUsoGarantia}
-                disabled={garantiaSalvando || usoGarantiaInput === usoGarantia}
+                disabled={
+                  garantiaSalvando ||
+                  (usoGarantiaInput === usoGarantia && dtPagamentoGarantia === garantiaServidorRef.current.dtPagamentoGarantia)
+                }
                 className="flex items-center gap-1 text-xs font-medium text-white bg-orange-600 hover:bg-orange-700 rounded px-3 py-1.5 disabled:opacity-50 transition-colors"
               >
                 {garantiaSalvando ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null} Aplicar
@@ -2268,7 +2272,7 @@ export default function FluxoCaixaPage() {
 
               <label
                 className={`flex items-center gap-1.5 text-sm ${usoGarantia <= 0 ? 'opacity-50' : ''}`}
-                title={usoGarantia <= 0 ? 'Aplique um valor de Uso da Garantia primeiro.' : 'Data em que o empréstimo é pago de volta - lança uma saída automática nesse dia na projeção.'}
+                title={usoGarantia <= 0 ? 'Aplique um valor de Uso da Garantia primeiro.' : 'Data em que a garantia é paga de volta - escolha a data e clique em Aplicar de novo para lançar o valor na coluna Previsão desse dia.'}
               >
                 <span className="font-semibold text-orange-700">Data de Pagamento</span>
                 <input
@@ -2377,7 +2381,13 @@ export default function FluxoCaixaPage() {
                           <span className="text-xs text-black ml-1.5">{dow}</span>
                           {isHoje && <span className="text-xs font-medium bg-sky-600 text-white rounded px-1.5 py-0.5 ml-1.5 align-middle">hoje</span>}
                         </td>
-                        {celula('previsao', l.dia.previsao, '#ef4444', bgHover, '', () => setSaidaDetalhe({ dia: l.dia.dia, tipo: 'previsao' }), 'Ver o que compõe esse valor')}
+                        {celula(
+                          'previsao', l.previsaoComGarantia, '#ef4444', bgHover, '',
+                          () => setSaidaDetalhe({ dia: l.dia.dia, tipo: 'previsao' }), 'Ver o que compõe esse valor',
+                          l.ehDiaPagamentoGarantia
+                            ? { simbolo: '⚠', dica: `Inclui ${fmtBRL(usoGarantia)} de Uso da Garantia (simulação) - não aparece no detalhe por não ser uma duplicata real.` }
+                            : undefined,
+                        )}
                         {celula('real', l.dia.real, '#991b1b', bgHover, '', () => setSaidaDetalhe({ dia: l.dia.dia, tipo: 'real' }), 'Ver o que compõe esse valor')}
                         {celula('pedidos', l.dia.pedidos, '#dc2626', bgHover, '', () => setSaidaDetalhe({ dia: l.dia.dia, tipo: 'pedidos' }), 'Ver os pedidos desse dia')}
                         <td className={`text-right px-3 py-2 tabular-nums font-bold text-red-800 border-r-2 border-b border-gray-300 ${bgHover}`}>
@@ -2392,13 +2402,7 @@ export default function FluxoCaixaPage() {
                         <td className={`text-right px-3 py-2 tabular-nums font-bold text-green-800 border-r-2 border-b border-gray-300 ${bgHover}`}>
                           {l.effEntradas > 0 ? fmtBRL(l.effEntradas) : <span className="text-black">—</span>}
                         </td>
-                        <td
-                          className={`text-right px-3 py-2 tabular-nums font-bold border-r border-b border-gray-300 ${bgHover} ${l.effSaldoDia >= 0 ? 'text-green-700' : 'text-red-600'}`}
-                          title={l.effGarantiaPagamento > 0 ? `Inclui pagamento do Uso da Garantia (simulação): -${fmtBRL(l.effGarantiaPagamento)}` : undefined}
-                        >
-                          {fmtBRL(l.effSaldoDia)}
-                          {l.effGarantiaPagamento > 0 && <span className="ml-1 text-orange-700" title="Pagamento do Uso da Garantia">⚠</span>}
-                        </td>
+                        <td className={`text-right px-3 py-2 tabular-nums font-bold border-r border-b border-gray-300 ${bgHover} ${l.effSaldoDia >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(l.effSaldoDia)}</td>
                         <td className={`text-right px-3 py-2 tabular-nums font-bold border-r-2 border-b border-gray-300 ${bgHover} ${l.saldoAcum >= 0 ? 'text-green-700' : 'text-red-600'}`}>{fmtBRL(l.saldoAcum)}</td>
                         <td className={`text-right px-3 py-2 tabular-nums text-black border-b border-gray-300 ${bgHover}`}>{fmtNum(l.dia.qtd)}</td>
                       </tr>
@@ -2422,12 +2426,9 @@ export default function FluxoCaixaPage() {
               { rotulo: 'Previsão', valor: totaisBrutos.previsao, ativa: colsAtivas.previsao },
               { rotulo: 'Real', valor: totaisBrutos.real, ativa: colsAtivas.real },
               { rotulo: 'Pedidos de compra', valor: totaisBrutos.pedidos, ativa: colsAtivas.pedidos },
-              ...(totais.garantiaPagamento > 0
-                ? [{ rotulo: 'Pagamento Uso Garantia', valor: totais.garantiaPagamento, ativa: true }]
-                : []),
             ]}
             totalEntradas={totais.entradas}
-            totalSaidas={totais.saidas + totais.garantiaPagamento}
+            totalSaidas={totais.saidas}
             saldoInicial={saldoInicialSimulado}
             dtIni={dados.dias[0]?.dia ?? ''}
             dtFim={dados.dias[dados.dias.length - 1]?.dia ?? ''}
