@@ -1369,16 +1369,52 @@ export default function FluxoCaixaPage() {
   // (fcp_simulacao_fluxo_caixa), nao no localStorage - pedido explicito do
   // usuario: qualquer pessoa que abrir a tela, em qualquer computador, ve o
   // mesmo valor/data que outra pessoa configurou.
+  // usoGarantiaInput = rascunho digitado (so afeta a projecao e o servidor
+  // quando o usuario clica em "Aplicar" - pedido explicito do usuario,
+  // substitui o auto-salvar a cada tecla de antes). usoGarantia = valor
+  // APLICADO (o que entra no calculo e aparece no card).
+  const [usoGarantiaInput, setUsoGarantiaInput] = useState(0);
   const [usoGarantia, setUsoGarantia] = useState(0);
   const [dtPagamentoGarantia, setDtPagamentoGarantia] = useState('');
   const [garantiaInfo, setGarantiaInfo] = useState<{ usuario: string | null; dtAtualizacao: string | null } | null>(null);
+  const [garantiaSalvando, setGarantiaSalvando] = useState(false);
+  const [garantiaErro, setGarantiaErro] = useState<string | null>(null);
   const garantiaCarregadaRef = useRef(false);
-  // Guarda o que o servidor tinha quando a tela carregou - so grava de novo
-  // se o valor/data mudarem de fato. Sem isso, so ABRIR a tela ja disparava
-  // um POST (o GET seta usoGarantia/dtPagamentoGarantia, o que por si so
-  // dispara o efeito de salvar abaixo) e sobrescrevia "salvo por" com quem
-  // so estava olhando, nao quem alterou.
+  // Guarda o que o servidor tinha quando a tela carregou/aplicou por ultimo -
+  // so a Data de Pagamento se auto-salva (debounced) comparando com isso;
+  // o valor so salva no clique do Aplicar.
   const garantiaServidorRef = useRef<{ usoGarantia: number; dtPagamentoGarantia: string }>({ usoGarantia: 0, dtPagamentoGarantia: '' });
+
+  async function salvarGarantiaNoServidor(valor: number, data: string) {
+    setGarantiaSalvando(true);
+    setGarantiaErro(null);
+    try {
+      const resp = await fetch('/api/fluxo-caixa/simulacao', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ usoGarantia: valor, dtPagamentoGarantia: data || null, usuario: user?.name || user?.username || null }),
+      });
+      // fetch() so rejeita em falha de rede - um erro HTTP (ex.: 500 do
+      // backend) resolve normalmente e passaria batido como sucesso sem
+      // essa checagem, mostrando "salvo" pro usuario sem ter salvo nada.
+      if (!resp.ok) {
+        const corpo = await resp.json().catch(() => null);
+        throw new Error(corpo?.error || corpo?.detail || `Erro HTTP ${resp.status}`);
+      }
+      garantiaServidorRef.current = { usoGarantia: valor, dtPagamentoGarantia: data };
+      setGarantiaInfo({ usuario: user?.name || user?.username || null, dtAtualizacao: new Date().toISOString() });
+    } catch (e) {
+      console.error('Erro ao salvar simulação (uso da garantia):', e);
+      setGarantiaErro(e instanceof Error ? e.message : 'Erro desconhecido ao salvar.');
+    } finally {
+      setGarantiaSalvando(false);
+    }
+  }
+
+  function aplicarUsoGarantia() {
+    setUsoGarantia(usoGarantiaInput);
+    salvarGarantiaNoServidor(usoGarantiaInput, dtPagamentoGarantia);
+  }
 
   const [lojasModalAberto, setLojasModalAberto] = useState(false);
   const [lojasPaste, setLojasPaste] = useState('');
@@ -1453,19 +1489,40 @@ export default function FluxoCaixaPage() {
     // salvamento (useEffect mais abaixo) dispare com o valor "0" inicial
     // antes do GET responder.
     fetch('/api/fluxo-caixa/simulacao', { cache: 'no-store' })
-      .then((r) => r.json())
+      .then((r) => {
+        // fetch() so rejeita em falha de rede - resposta de erro HTTP (ex.:
+        // 500 numa instabilidade passageira do servidor) resolve normal e,
+        // se nao checada, seria lida como JSON de erro e "usoGarantia"
+        // cairia em 0 por padrao - sobrescrevendo silenciosamente um valor
+        // configurado por outra pessoa.
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
       .then((json) => {
         const valor = json.usoGarantia || 0;
         const data = json.dtPagamentoGarantia || '';
+        setUsoGarantiaInput(valor);
         setUsoGarantia(valor);
         setDtPagamentoGarantia(data);
         setGarantiaInfo({ usuario: json.usuario ?? null, dtAtualizacao: json.dtAtualizacao ?? null });
         garantiaServidorRef.current = { usoGarantia: valor, dtPagamentoGarantia: data };
         garantiaCarregadaRef.current = true;
+        // Limpa um eventual erro de uma tentativa anterior que falhou (o
+        // React chama este efeito duas vezes em desenvolvimento - se a
+        // primeira falhou e so depois a segunda teve sucesso, o erro ficaria
+        // preso na tela mesmo com os dados certos ja carregados).
+        setGarantiaErro(null);
       })
       .catch((e) => {
         console.error('Erro ao buscar simulação (uso da garantia):', e);
-        garantiaCarregadaRef.current = true;
+        // So mostra o erro se AINDA nao tiver carregado com sucesso -
+        // evita que uma segunda tentativa que falhou por acaso (o React
+        // chama este efeito duas vezes em desenvolvimento) sobrescreva um
+        // valor ja carregado certo com uma mensagem de erro.
+        if (!garantiaCarregadaRef.current) {
+          setGarantiaErro('Não foi possível carregar o Uso da Garantia salvo. Recarregue a página antes de aplicar um novo valor.');
+          garantiaCarregadaRef.current = true;
+        }
       });
   }, []);
 
@@ -1484,41 +1541,20 @@ export default function FluxoCaixaPage() {
     });
   }, [empresasSelecionadas, dtInicio, dtFim, ultimoAtalho, colsAtivas, crescMulti, inflacaoMulti, crescLojas]);
 
-  // Uso da Garantia - grava no servidor (debounced, pra nao mandar um POST a
-  // cada tecla digitada) assim que o usuario muda o valor ou a data. So
-  // depois que o GET inicial ja respondeu (garantiaCarregadaRef) E so se o
-  // valor/data realmente mudaram em relacao ao que o servidor tinha
-  // (garantiaServidorRef) - senao SO ABRIR a tela (o GET ja seta
-  // usoGarantia/dtPagamentoGarantia, que sao dependencias deste efeito)
-  // dispararia um POST e sobrescreveria "salvo por" com quem so estava
-  // olhando, nao quem alterou.
+  // Data de Pagamento - se auto-salva (debounced), separada do valor: o
+  // valor (Uso da Garantia) so vai pro servidor quando o usuario clica em
+  // "Aplicar" (pedido explicito do usuario - ver aplicarUsoGarantia). So
+  // depois que o GET inicial ja respondeu (garantiaCarregadaRef) E so se a
+  // data mudou de verdade em relacao ao que o servidor tinha - senao SO
+  // ABRIR a tela (o GET ja seta dtPagamentoGarantia) dispararia um POST.
   useEffect(() => {
     if (!garantiaCarregadaRef.current) return;
-    if (
-      usoGarantia === garantiaServidorRef.current.usoGarantia &&
-      dtPagamentoGarantia === garantiaServidorRef.current.dtPagamentoGarantia
-    ) {
-      return;
-    }
+    if (dtPagamentoGarantia === garantiaServidorRef.current.dtPagamentoGarantia) return;
     const timer = window.setTimeout(() => {
-      fetch('/api/fluxo-caixa/simulacao', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          usoGarantia,
-          dtPagamentoGarantia: dtPagamentoGarantia || null,
-          usuario: user?.name || user?.username || null,
-        }),
-      })
-        .then((r) => r.json())
-        .then(() => {
-          garantiaServidorRef.current = { usoGarantia, dtPagamentoGarantia };
-          setGarantiaInfo({ usuario: user?.name || user?.username || null, dtAtualizacao: new Date().toISOString() });
-        })
-        .catch((e) => console.error('Erro ao salvar simulação (uso da garantia):', e));
+      salvarGarantiaNoServidor(usoGarantia, dtPagamentoGarantia);
     }, 800);
     return () => window.clearTimeout(timer);
-  }, [usoGarantia, dtPagamentoGarantia, user]);
+  }, [dtPagamentoGarantia, usoGarantia]);
 
 
   async function buscar() {
@@ -1621,8 +1657,12 @@ export default function FluxoCaixaPage() {
     setCrescMulti(0);
     setInflacaoMulti(0);
     setCrescLojas(0);
+    setUsoGarantiaInput(0);
     setUsoGarantia(0);
     setDtPagamentoGarantia('');
+    // Uso da Garantia e compartilhado no servidor - zera la tambem, senao
+    // reabrir a tela (ou outra pessoa abrindo) traria o valor antigo de volta.
+    if (garantiaCarregadaRef.current) salvarGarantiaNoServidor(0, '');
   }
 
   async function lojasGravar() {
@@ -2191,36 +2231,61 @@ export default function FluxoCaixaPage() {
                 <input type="number" step={0.5} value={crescLojas} onChange={(e) => setCrescLojas(parseFloat(e.target.value) || 0)} className="w-16 px-1.5 py-1 border border-gray-300 rounded text-right text-sm text-black" />
                 <span className="text-black">%</span>
               </label>
-              <label
-                className="flex items-center gap-1.5 text-sm"
-                title="Valor que entraria no caixa hoje se a conta usasse o limite/garantia (cheque especial) - é um empréstimo. Soma no saldo inicial da projeção; preenchendo a Data de Pagamento, a devolução sai sozinha nesse dia."
-              >
-                <span className="font-semibold text-orange-700">Uso da Garantia</span>
-                <span className="text-black">R$</span>
-                <input
-                  type="number" step={100} value={usoGarantia}
-                  onChange={(e) => setUsoGarantia(parseFloat(e.target.value) || 0)}
-                  className="w-28 px-1.5 py-1 border border-gray-300 rounded text-right text-sm text-black"
-                />
-              </label>
-              <label
-                className="flex items-center gap-1.5 text-sm"
-                title="Data em que o empréstimo do Uso da Garantia é pago de volta - lança uma saída automática nesse dia na projeção."
-              >
-                <span className="font-semibold text-orange-700">Data de Pagamento</span>
-                <input
-                  type="date" value={dtPagamentoGarantia}
-                  onChange={(e) => setDtPagamentoGarantia(e.target.value)}
-                  className="px-1.5 py-1 border border-gray-300 rounded text-sm text-black"
-                />
-              </label>
               <button onClick={resetarAjustes} className="flex items-center gap-1 text-xs font-medium text-black border border-gray-300 rounded px-2 py-1 hover:bg-white transition-colors">
                 <RotateCcw className="w-3.5 h-3.5" /> Resetar
               </button>
             </div>
-            {(garantiaInfo?.dtAtualizacao || dtPagamentoGarantiaForaDoPeriodo) && (
+
+            {/* Uso da Garantia - linha propria: valor + Aplicar, depois o card
+                com o que esta de fato aplicado e a Data de Pagamento do lado
+                (pedido explicito do usuario). */}
+            <div className="flex items-center gap-3 flex-wrap">
+              <label
+                className="flex items-center gap-1.5 text-sm"
+                title="Valor que entraria no caixa hoje se a conta usasse o limite/garantia (cheque especial) - é um empréstimo. Clique em Aplicar pra confirmar; soma no saldo inicial da projeção."
+              >
+                <span className="font-semibold text-orange-700">Uso da Garantia</span>
+                <span className="text-black">R$</span>
+                <input
+                  type="number" step={100} value={usoGarantiaInput}
+                  onChange={(e) => setUsoGarantiaInput(parseFloat(e.target.value) || 0)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') aplicarUsoGarantia(); }}
+                  className="w-28 px-1.5 py-1 border border-gray-300 rounded text-right text-sm text-black"
+                />
+              </label>
+              <button
+                onClick={aplicarUsoGarantia}
+                disabled={garantiaSalvando || usoGarantiaInput === usoGarantia}
+                className="flex items-center gap-1 text-xs font-medium text-white bg-orange-600 hover:bg-orange-700 rounded px-3 py-1.5 disabled:opacity-50 transition-colors"
+              >
+                {garantiaSalvando ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null} Aplicar
+              </button>
+
+              <div className="flex items-center gap-2 bg-white border border-orange-300 rounded-lg px-3 py-1.5" title="Valor aplicado agora - compartilhado com quem mais abrir esta tela.">
+                <span className="text-xs text-black">Garantia em uso</span>
+                <span className="text-base font-bold text-orange-700 tabular-nums whitespace-nowrap">{fmtBRL(usoGarantia)}</span>
+              </div>
+
+              <label
+                className={`flex items-center gap-1.5 text-sm ${usoGarantia <= 0 ? 'opacity-50' : ''}`}
+                title={usoGarantia <= 0 ? 'Aplique um valor de Uso da Garantia primeiro.' : 'Data em que o empréstimo é pago de volta - lança uma saída automática nesse dia na projeção.'}
+              >
+                <span className="font-semibold text-orange-700">Data de Pagamento</span>
+                <input
+                  type="date" value={dtPagamentoGarantia} disabled={usoGarantia <= 0}
+                  onChange={(e) => setDtPagamentoGarantia(e.target.value)}
+                  className="px-1.5 py-1 border border-gray-300 rounded text-sm text-black disabled:bg-gray-100"
+                />
+              </label>
+            </div>
+            {(garantiaInfo?.dtAtualizacao || dtPagamentoGarantiaForaDoPeriodo || garantiaErro) && (
               <div className="flex items-center gap-3 flex-wrap text-xs">
-                {garantiaInfo?.dtAtualizacao && (usoGarantia > 0 || dtPagamentoGarantia) && (
+                {garantiaErro && (
+                  <span className="text-red-700 font-medium flex items-center gap-1">
+                    <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" /> {garantiaErro}
+                  </span>
+                )}
+                {!garantiaErro && garantiaInfo?.dtAtualizacao && (usoGarantia > 0 || dtPagamentoGarantia) && (
                   <span className="text-black">
                     Uso da Garantia salvo para todos{garantiaInfo.usuario ? ` por ${garantiaInfo.usuario}` : ''} em{' '}
                     {new Date(garantiaInfo.dtAtualizacao).toLocaleString('pt-BR')}
