@@ -2855,7 +2855,7 @@ export default function FluxoCaixaPage() {
       {/* Modal: Detalhe das faturas de Boleto de um dia (clique na celula) */}
       {boletoDetalheDia && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setBoletoDetalheDia(null)}>
-          <div className="bg-white rounded-lg shadow-xl max-w-6xl w-full max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white rounded-lg shadow-xl max-w-[1400px] w-full max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200">
               <h2 className="text-base font-semibold text-black">
                 Boletos — {boletoDetalheDia.split('-').reverse().join('/')}
