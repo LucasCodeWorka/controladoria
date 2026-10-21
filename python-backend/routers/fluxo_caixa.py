@@ -348,6 +348,7 @@ SQL_KPI_VENCIDOS = """
         ROUND(SUM(vl_duplicata - vl_pago)::numeric, 2) AS valor
     FROM vr_fcp_duplicatai
     WHERE tp_situacao = 'N'
+      AND tp_estagio <> 90
       AND (vl_duplicata - vl_pago) > 0
       AND dt_vencimento < CURRENT_DATE
     GROUP BY 1
@@ -359,6 +360,7 @@ SQL_KPI_FUTUROS = """
         ROUND(SUM(vl_duplicata - vl_pago)::numeric, 2) AS valor
     FROM vr_fcp_duplicatai
     WHERE tp_situacao = 'N'
+      AND tp_estagio <> 90
       AND (vl_duplicata - vl_pago) > 0
       AND LEFT(TRIM(cd_componente), 3) != 'FCR'
       AND dt_vencimento BETWEEN CURRENT_DATE AND CURRENT_DATE + interval '12 months'
@@ -401,7 +403,10 @@ def _obter_kpis() -> dict:
 # caixa (regra 2) - tanto no filtro de periodo quanto no agrupamento abaixo,
 # via _EXPR_DT_SAIDA_EFETIVA. A data original de vencimento nunca e tocada.
 def _filtros_saidas(dt_inicio: str, dt_fim: str, empresas: list) -> tuple:
-    where = (f"WHERE tp_situacao = 'N' AND (vl_duplicata - vl_pago) > 0 AND {_PRE_FILTRO_VENCIMENTO} "
+    # tp_estagio 90 = liquidado: o sistema deixa saldo em vl_pago/vl_duplicata
+    # mesmo liquidada (10 mil duplicatas assim, ~R$ 9 mi) - conta como PAGA,
+    # pedido explicito do usuario.
+    where = (f"WHERE tp_situacao = 'N' AND tp_estagio <> 90 AND (vl_duplicata - vl_pago) > 0 AND {_PRE_FILTRO_VENCIMENTO} "
              f"AND {_EXPR_DT_SAIDA_EFETIVA} BETWEEN %s AND %s")
     params: list = [dt_inicio, dt_fim, dt_inicio, dt_fim]
     if empresas:
