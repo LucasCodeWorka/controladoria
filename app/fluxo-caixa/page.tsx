@@ -66,7 +66,19 @@ interface DiaFC {
   saldoAcum: number;
 }
 
+// Entradas com data efetiva HOJE - so pra conferencia, nunca entram no saldo.
+interface HojeInformativoFC {
+  dia: string;
+  cartao: number;
+  boleto: number;
+  cheque: number;
+  lojas: number;
+  outrasEntradas: number;
+  multimarcas: number;
+}
+
 interface DadosFC {
+  hojeInformativo?: HojeInformativoFC | null;
   vencidos: VencidoFC[];
   totalVencido: number;
   kpi30: number;
@@ -1990,6 +2002,23 @@ export default function FluxoCaixaPage() {
     return dow !== 0 && dow !== 6;
   });
 
+  // Celula esmaecida do dia de hoje: mostra a entrada so pra conferir, sem
+  // somar em saldo/total (pedido explicito do usuario). Clicavel como as outras.
+  function celulaInformativa(valor: number, cor: string, bgLinha: string, onClick?: () => void) {
+    const v = valor || 0;
+    const clicavel = v > 0 && !!onClick;
+    return (
+      <td
+        className={`text-right px-3 py-2 tabular-nums border-r border-b border-gray-300 ${bgLinha} ${clicavel ? 'cursor-pointer hover:underline' : ''}`}
+        style={{ color: cor, opacity: 0.45, fontWeight: 400, fontStyle: 'italic' }}
+        onClick={clicavel ? onClick : undefined}
+        title={v > 0 ? `Informativo - entra hoje, mas não conta no saldo do dia nem no acumulado${clicavel ? ' · clique para ver as faturas' : ''}` : undefined}
+      >
+        {v > 0 ? fmtBRL(v) : <span className="text-black">—</span>}
+      </td>
+    );
+  }
+
   function celula(
     key: ColKey, rawVal: number, cor: string, bgLinha: string, extraClasse = '', onClick?: () => void, dica = 'Ver faturas',
     marcador?: { simbolo: string; dica: string },
@@ -2502,12 +2531,25 @@ export default function FluxoCaixaPage() {
                         <td className={`text-right px-3 py-2 tabular-nums font-bold text-red-800 border-r-2 border-b border-gray-300 ${bgHover}`}>
                           {l.effSaidas > 0 ? fmtBRL(l.effSaidas) : <span className="text-black">—</span>}
                         </td>
-                        {celula('outrasEntradas', l.dia.outrasEntradas, '#7c3aed', bgHover)}
-                        {celula('boleto', l.dia.boleto, '#0284c7', bgHover, '', () => boletoDetalheAbrir(l.dia.dia))}
-                        {celula('cheque', l.dia.cheque, '#059669', bgHover)}
-                        {celula('lojas', l.adjLojas, '#0891b2', bgHover)}
-                        {celula('cartao', l.dia.cartao, '#4d7c0f', bgHover)}
-                        {celula('multimarcas', l.adjMulti, '#9333ea', bgHover)}
+                        {isHoje && dados?.hojeInformativo ? (
+                          <>
+                            {celulaInformativa(dados.hojeInformativo.outrasEntradas, '#7c3aed', bgHover)}
+                            {celulaInformativa(dados.hojeInformativo.boleto, '#0284c7', bgHover, () => boletoDetalheAbrir(l.dia.dia))}
+                            {celulaInformativa(dados.hojeInformativo.cheque, '#059669', bgHover)}
+                            {celulaInformativa(dados.hojeInformativo.lojas * (1 + crescLojas / 100), '#0891b2', bgHover)}
+                            {celulaInformativa(dados.hojeInformativo.cartao, '#4d7c0f', bgHover)}
+                            {celulaInformativa(dados.hojeInformativo.multimarcas * (1 + crescMulti / 100) * (1 + inflacaoMulti / 100), '#9333ea', bgHover)}
+                          </>
+                        ) : (
+                          <>
+                            {celula('outrasEntradas', l.dia.outrasEntradas, '#7c3aed', bgHover)}
+                            {celula('boleto', l.dia.boleto, '#0284c7', bgHover, '', () => boletoDetalheAbrir(l.dia.dia))}
+                            {celula('cheque', l.dia.cheque, '#059669', bgHover)}
+                            {celula('lojas', l.adjLojas, '#0891b2', bgHover)}
+                            {celula('cartao', l.dia.cartao, '#4d7c0f', bgHover)}
+                            {celula('multimarcas', l.adjMulti, '#9333ea', bgHover)}
+                          </>
+                        )}
                         <td className={`text-right px-3 py-2 tabular-nums font-bold text-green-800 border-r-2 border-b border-gray-300 ${bgHover}`}>
                           {l.effEntradas > 0 ? fmtBRL(l.effEntradas) : <span className="text-black">—</span>}
                         </td>

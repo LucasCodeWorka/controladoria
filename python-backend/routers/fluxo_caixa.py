@@ -836,7 +836,7 @@ def obter_boleto_detalhe(
         AND (vl_fatura - vl_pago) > 0
         AND {_PRE_FILTRO_VENCIMENTO}
         AND {_EXPR_DT_BOLETO_EFETIVA} = %s
-        AND {_EXPR_DT_BOLETO_EFETIVA} > CURRENT_DATE
+        AND {_EXPR_DT_BOLETO_EFETIVA} >= CURRENT_DATE
         AND {_FILTRO_SEM_DESCONTADAS}"""
     params: list = [dia, dia, dia]
     if cd_empresas:
@@ -1297,6 +1297,41 @@ def faturamento_ano():
         raise HTTPException(status_code=500, detail="Erro ao buscar faturamento do ano")
 
 
+def _entradas_hoje_informativo(hoje: date, cd_empresas: list) -> dict:
+    """Entradas cuja data efetiva e HOJE, so pra conferencia na tela - as
+    consultas normais so olham datas FUTURAS (> CURRENT_DATE), entao o dia de
+    hoje aparecia sempre zerado. Estes valores NAO entram em nenhum saldo
+    (nem do dia, nem acumulado, nem nos totais): o frontend so os exibe
+    esmaecidos. Mesmos filtros/regras de cada coluna, so trocando
+    '> CURRENT_DATE' por '= CURRENT_DATE'."""
+    d = hoje.isoformat()
+
+    def _hoje(sql: str) -> str:
+        return sql.replace("> CURRENT_DATE", "= CURRENT_DATE")
+
+    def _total(sql: str, params) -> float:
+        rows = execute_query(sql, tuple(params)) or []
+        return float(sum(float(r["valor"] or 0) for r in rows))
+
+    w_cartao, p_cartao = _filtros_cartao(d, d, cd_empresas)
+    w_boleto, p_boleto = _filtros_boleto(d, d, cd_empresas)
+    w_cheque, p_cheque = _filtros_cheque(d, d, cd_empresas)
+    sql_lojas, p_lojas = _sql_lojas_diario(d, d)
+    sql_outras, p_outras = _sql_outras_entradas_diario(d, d)
+    sql_multi, p_multi = _sql_multimarcas_diario(d, d)
+    cartao = _total(_hoje(_sql_cartao_diario(w_cartao)), p_cartao)
+    lojas_raw = _total(_hoje(sql_lojas), p_lojas)
+    return {
+        "dia": d,
+        "cartao": cartao,
+        "boleto": _total(_hoje(_sql_boleto_diario(w_boleto)), p_boleto),
+        "cheque": _total(_hoje(_sql_cheque_diario(w_cheque)), p_cheque),
+        "lojas": lojas_raw - cartao if lojas_raw > cartao else 0.0,
+        "outrasEntradas": _total(_hoje(sql_outras), p_outras),
+        "multimarcas": _total(_hoje(sql_multi), p_multi),
+    }
+
+
 @router.get("/api/fluxo-caixa/dados")
 def dados_fluxo_caixa(
     dt_inicio: Optional[str] = Query(None, description="Data inicial YYYY-MM-DD (default: hoje)"),
@@ -1427,8 +1462,22 @@ def dados_fluxo_caixa(
                 "qtd": agr["qtd"], "saldoAcum": acum,
             })
 
+        hoje_informativo = None
+        if date.fromisoformat(dt_inicio) <= hoje <= date.fromisoformat(dt_fim):
+            hoje_informativo = _entradas_hoje_informativo(hoje, cd_empresas)
+            if any(hoje_informativo[k] > 0 for k in ("cartao", "boleto", "cheque", "lojas", "outrasEntradas", "multimarcas")) \
+                    and hoje.isoformat() not in {x["dia"] for x in dias}:
+                # Garante a linha de hoje na tabela (zerada nas colunas reais).
+                dias.append({
+                    "dia": hoje.isoformat(), "previsao": 0.0, "real": 0.0, "pedidos": 0.0, "totalSaidas": 0.0,
+                    "cartao": 0.0, "boleto": 0.0, "cheque": 0.0, "lojas": 0.0, "outrasEntradas": 0.0,
+                    "multimarcas": 0.0, "qtd": 0, "saldoAcum": 0.0,
+                })
+                dias.sort(key=lambda x: x["dia"])
+
         return {"data": {
             **kpis, "meses": meses, "dias": dias, "saldoBancario": saldos_bancarios["total"],
+            "hojeInformativo": hoje_informativo,
             "geradoEm": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
         }}
     except HTTPException:
