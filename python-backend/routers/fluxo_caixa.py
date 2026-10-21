@@ -768,21 +768,53 @@ def obter_boleto_por_banco(
             FROM vr_fcr_faturai {where}""",
         tuple(params),
     ) or []
-    ctapes = _nr_ctapes_por_fatura(rows)
+    # Visao "vencimento puro": mesmo universo de faturas (boleto em aberto,
+    # sem descontadas), mas agrupado pelo MES DO VENCIMENTO e filtrado pelo
+    # periodo no proprio vencimento - sem deslocamento de D+1/fim de semana/
+    # feriado nem a regra de "so data futura". Opcional no modal; a visao
+    # padrao (data efetiva) continua igual.
+    where_venc = f"""WHERE tp_documento IN (1) AND tp_situacao = '1' AND nr_portador < 999
+        AND tp_cobranca <> 2
+        AND (vl_fatura - vl_pago) > 0
+        AND dt_vencimento::date BETWEEN %s AND %s
+        AND {_FILTRO_SEM_DESCONTADAS}"""
+    params_venc: list = [dtInicio, dtFim]
+    empresas_lista = _parse_empresas(empresas)
+    if empresas_lista:
+        where_venc += " AND cd_empresa = ANY(%s)"
+        params_venc.append(empresas_lista)
+    rows_venc = execute_query(
+        f"""SELECT cd_empresa, cd_cliente, nr_fat, nr_parcela, nr_portador,
+                   to_char(dt_vencimento::date, 'YYYY-MM') AS mes,
+                   ROUND((vl_fatura - vl_pago)::numeric, 2) AS valor
+            FROM vr_fcr_faturai {where_venc}""",
+        tuple(params_venc),
+    ) or []
+    ctapes = _nr_ctapes_por_fatura(rows + rows_venc)
     por_banco: dict = {}
-    for r in rows:
-        banco = _nome_banco_boleto(r["nr_portador"], ctapes.get(_chave_fatura(r)))
-        atual = por_banco.setdefault(banco, {"banco": banco, "valor": 0.0, "qtd": 0, "_meses": {}})
-        valor = float(r["valor"])
-        atual["valor"] += valor
-        atual["qtd"] += 1
-        mes = atual["_meses"].setdefault(r["mes"], {"mes": r["mes"], "valor": 0.0, "qtd": 0})
-        mes["valor"] += valor
-        mes["qtd"] += 1
+
+    def _acumular(lista, campo_meses, campo_valor, campo_qtd):
+        for r in lista:
+            banco = _nome_banco_boleto(r["nr_portador"], ctapes.get(_chave_fatura(r)))
+            atual = por_banco.setdefault(
+                banco,
+                {"banco": banco, "valor": 0.0, "qtd": 0, "valorVenc": 0.0, "qtdVenc": 0, "_meses": {}, "_mesesVenc": {}},
+            )
+            valor = float(r["valor"])
+            atual[campo_valor] += valor
+            atual[campo_qtd] += 1
+            mes = atual[campo_meses].setdefault(r["mes"], {"mes": r["mes"], "valor": 0.0, "qtd": 0})
+            mes["valor"] += valor
+            mes["qtd"] += 1
+
+    _acumular(rows, "_meses", "valor", "qtd")
+    _acumular(rows_venc, "_mesesVenc", "valorVenc", "qtdVenc")
     for b in por_banco.values():
         b["valor"] = round(b["valor"], 2)
+        b["valorVenc"] = round(b["valorVenc"], 2)
         b["meses"] = sorted(b.pop("_meses").values(), key=lambda m: m["mes"])
-        for m in b["meses"]:
+        b["mesesVenc"] = sorted(b.pop("_mesesVenc").values(), key=lambda m: m["mes"])
+        for m in b["meses"] + b["mesesVenc"]:
             m["valor"] = round(m["valor"], 2)
     return sorted(por_banco.values(), key=lambda b: -b["valor"])
 

@@ -164,6 +164,10 @@ interface BoletoBancoResumo {
   valor: number;
   qtd: number;
   meses: { mes: string; valor: number; qtd: number }[];
+  // Visao "vencimento puro" (mes do vencimento, sem regra de recebimento).
+  valorVenc: number;
+  qtdVenc: number;
+  mesesVenc: { mes: string; valor: number; qtd: number }[];
 }
 
 interface BoletoDetalheItem {
@@ -1350,6 +1354,8 @@ export default function FluxoCaixaPage() {
   const [saldosBancarios, setSaldosBancarios] = useState<SaldosBancarios | null>(null);
   const [boletoPorBanco, setBoletoPorBanco] = useState<BoletoBancoResumo[] | null>(null);
   const [boletoBancoModal, setBoletoBancoModal] = useState<string | null>(null);
+  // Modal por banco: 'recebimento' (padrao, com D+1/fim de semana/feriado) ou 'vencimento' (puro).
+  const [boletoBancoVisao, setBoletoBancoVisao] = useState<'recebimento' | 'vencimento'>('recebimento');
   const [boletoPorBancoErro, setBoletoPorBancoErro] = useState(false);
   const pedidoBoletoPorBancoRef = useRef(0);
   const [sortKey, setSortKey] = useState<'nome' | 'valor'>('valor');
@@ -2393,7 +2399,7 @@ export default function FluxoCaixaPage() {
                     <button
                       key={b.banco}
                       type="button"
-                      onClick={() => setBoletoBancoModal(b.banco)}
+                      onClick={() => { setBoletoBancoVisao('recebimento'); setBoletoBancoModal(b.banco); }}
                       className="flex flex-col items-start leading-tight text-left rounded-md px-2.5 py-1.5 hover:bg-sky-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 transition-colors"
                       title={`${b.qtd} ${b.qtd === 1 ? 'fatura' : 'faturas'} - clique para ver mês a mês`}
                     >
@@ -2730,6 +2736,10 @@ export default function FluxoCaixaPage() {
       {/* Modal: boletos de um banco, mes a mes (clique no card de banco acima da tabela) */}
       {boletoBancoModal && (() => {
         const resumo = boletoPorBanco?.find((b) => b.banco === boletoBancoModal);
+        const porVenc = boletoBancoVisao === 'vencimento';
+        const mesesModal = (porVenc ? resumo?.mesesVenc : resumo?.meses) ?? [];
+        const qtdModal = (porVenc ? resumo?.qtdVenc : resumo?.qtd) ?? 0;
+        const valorModal = (porVenc ? resumo?.valorVenc : resumo?.valor) ?? 0;
         const consulta = new URLSearchParams(consultaRef.current);
         const periodoIni = (consulta.get('dt_inicio') || dtInicio).split('-').reverse().join('/');
         const periodoFim = (consulta.get('dt_fim') || dtFim).split('-').reverse().join('/');
@@ -2742,11 +2752,23 @@ export default function FluxoCaixaPage() {
                   <p className="text-xs text-black">
                     Período {periodoIni} a {periodoFim}
                   </p>
+                  <div className="mt-2 inline-flex rounded-md border border-gray-300 overflow-hidden text-xs">
+                    {([['recebimento', 'Por recebimento'], ['vencimento', 'Por vencimento']] as const).map(([k, rot]) => (
+                      <button
+                        key={k}
+                        onClick={() => setBoletoBancoVisao(k)}
+                        title={k === 'vencimento' ? 'Soma pelo mês do vencimento, sem o deslocamento de D+1/fim de semana/feriado' : 'Mês em que o dinheiro cai (regra de recebimento do fluxo)'}
+                        className={`px-3 py-1 ${boletoBancoVisao === k ? 'bg-sky-600 text-white' : 'bg-white text-black hover:bg-gray-100'}`}
+                      >
+                        {rot}
+                      </button>
+                    ))}
+                  </div>
                 </div>
                 <button onClick={() => setBoletoBancoModal(null)} className="text-black hover:text-black"><X className="w-5 h-5" /></button>
               </div>
               <div className="overflow-y-auto flex-1">
-                {!resumo || resumo.meses.length === 0 ? (
+                {!resumo || mesesModal.length === 0 ? (
                   <p className="text-sm text-black py-12 text-center">Nenhum boleto desse banco no período.</p>
                 ) : (
                   <table className="w-full text-sm">
@@ -2758,7 +2780,7 @@ export default function FluxoCaixaPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {resumo.meses.map((m, i) => (
+                      {mesesModal.map((m, i) => (
                         <tr key={m.mes} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
                           <td className="px-5 py-2 text-black whitespace-nowrap">{MESES_EXTENSO[Number(m.mes.slice(5)) - 1]}/{m.mes.slice(0, 4)}</td>
                           <td className="px-3 py-2 text-right text-black tabular-nums">{m.qtd}</td>
@@ -2769,8 +2791,8 @@ export default function FluxoCaixaPage() {
                     <tfoot>
                       <tr className="font-bold bg-gray-200 border-t-2 border-gray-400">
                         <td className="px-5 py-2 text-right uppercase text-xs tracking-wide text-black">Total</td>
-                        <td className="px-3 py-2 text-right tabular-nums text-black">{resumo.qtd}</td>
-                        <td className="px-5 py-2 text-right tabular-nums text-sky-700 whitespace-nowrap">{fmtBRL(resumo.valor)}</td>
+                        <td className="px-3 py-2 text-right tabular-nums text-black">{qtdModal}</td>
+                        <td className="px-5 py-2 text-right tabular-nums text-sky-700 whitespace-nowrap">{fmtBRL(valorModal)}</td>
                       </tr>
                     </tfoot>
                   </table>
