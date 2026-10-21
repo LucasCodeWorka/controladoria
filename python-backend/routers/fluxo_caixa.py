@@ -775,13 +775,15 @@ def obter_boleto_por_banco(
     ) or []
     # Visao "vencimento puro": mesmo universo de faturas (boleto em aberto,
     # sem descontadas), mas agrupado pelo MES DO VENCIMENTO e filtrado pelo
-    # periodo no proprio vencimento - sem deslocamento de D+1/fim de semana/
-    # feriado nem a regra de "so data futura". Opcional no modal; a visao
+    # periodo no proprio vencimento, so de hoje em diante (vencidos ficam de fora,
+    # como na visao por recebimento) - sem deslocamento de D+1/fim de semana/
+    # feriado. Opcional no modal; a visao
     # padrao (data efetiva) continua igual.
     where_venc = f"""WHERE tp_documento IN (1) AND tp_situacao = '1' AND nr_portador < 999
         AND tp_cobranca <> 2
         AND (vl_fatura - vl_pago) > 0
         AND dt_vencimento::date BETWEEN %s AND %s
+        AND dt_vencimento::date >= CURRENT_DATE
         AND {_FILTRO_SEM_DESCONTADAS}"""
     params_venc: list = [dtInicio, dtFim]
     empresas_lista = _parse_empresas(empresas)
