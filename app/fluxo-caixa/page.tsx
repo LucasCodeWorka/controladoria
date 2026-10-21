@@ -159,6 +159,13 @@ function agruparMateriaPrima(despesas: SaidaDespesa[]): ItemRanking[] {
   return [linhaMp, ...outras].sort((a, b) => b.valor - a.valor);
 }
 
+interface BoletoBancoResumo {
+  banco: string;
+  valor: number;
+  qtd: number;
+  meses: { mes: string; valor: number; qtd: number }[];
+}
+
 interface BoletoDetalheItem {
   cliente: string;
   nrFat: number;
@@ -1341,7 +1348,8 @@ export default function FluxoCaixaPage() {
   const fecharSaidaDetalhe = useCallback(() => setSaidaDetalhe(null), []);
   const pedidoFornDespesaRef = useRef(0);
   const [saldosBancarios, setSaldosBancarios] = useState<SaldosBancarios | null>(null);
-  const [boletoPorBanco, setBoletoPorBanco] = useState<{ banco: string; valor: number; qtd: number }[] | null>(null);
+  const [boletoPorBanco, setBoletoPorBanco] = useState<BoletoBancoResumo[] | null>(null);
+  const [boletoBancoModal, setBoletoBancoModal] = useState<string | null>(null);
   const [boletoPorBancoErro, setBoletoPorBancoErro] = useState(false);
   const pedidoBoletoPorBancoRef = useRef(0);
   const [sortKey, setSortKey] = useState<'nome' | 'valor'>('valor');
@@ -2360,34 +2368,40 @@ export default function FluxoCaixaPage() {
             {/* Boletos do periodo inteiro por banco de cobranca - mesmo
                 filtro de periodo/empresas da tabela, mesma regra de banco do
                 modal de detalhe do dia. */}
-            <div className="ml-auto bg-white border border-sky-200 rounded-lg px-3 py-2 min-w-[18rem] max-w-full">
-              <div className="flex items-baseline justify-between gap-4 mb-1.5">
-                <span className="text-xs font-semibold text-black">Boletos no período por banco</span>
+            <div className="ml-auto bg-white border border-sky-200 rounded-lg px-4 py-3 min-w-[20rem] max-w-full">
+              <div className="flex items-baseline justify-between gap-6 mb-2">
+                <span className="text-sm font-semibold text-black">Boletos no período por banco</span>
                 {boletoPorBanco && boletoPorBanco.length > 0 && (
-                  <span className="text-xs text-black tabular-nums whitespace-nowrap">
-                    Total <span className="font-bold text-sky-700">{fmtBRL(boletoPorBanco.reduce((acc, b) => acc + b.valor, 0))}</span>
+                  <span className="text-sm text-black tabular-nums whitespace-nowrap">
+                    Total <span className="text-base font-bold text-sky-700">{fmtBRL(boletoPorBanco.reduce((acc, b) => acc + b.valor, 0))}</span>
                   </span>
                 )}
               </div>
               {boletoPorBancoErro ? (
-                <p className="text-xs text-red-700 flex items-center gap-1">
-                  <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" /> Não foi possível carregar. Clique em Aplicar de novo.
+                <p className="text-sm text-red-700 flex items-center gap-1">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0" /> Não foi possível carregar. Clique em Aplicar de novo.
                 </p>
               ) : boletoPorBanco === null ? (
-                <p className="text-xs text-black flex items-center gap-1.5">
-                  {loading || dados ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Carregando…</> : 'Clique em Aplicar para carregar.'}
+                <p className="text-sm text-black flex items-center gap-1.5">
+                  {loading || dados ? <><Loader2 className="w-4 h-4 animate-spin" /> Carregando…</> : 'Clique em Aplicar para carregar.'}
                 </p>
               ) : boletoPorBanco.length === 0 ? (
-                <p className="text-xs text-black">Nenhum boleto a receber no período.</p>
+                <p className="text-sm text-black">Nenhum boleto a receber no período.</p>
               ) : (
-                <div className="flex flex-wrap gap-x-5 gap-y-1">
+                <div className="flex flex-wrap gap-x-3 gap-y-2">
                   {boletoPorBanco.map((b) => (
-                    <div key={b.banco} className="flex flex-col leading-tight" title={`${b.qtd} ${b.qtd === 1 ? 'fatura' : 'faturas'}`}>
-                      <span className="text-xs text-black whitespace-nowrap">{b.banco}</span>
-                      <span className="text-sm font-bold text-sky-700 tabular-nums whitespace-nowrap">
-                        {fmtBRL(b.valor)} <span className="text-[11px] font-normal text-black">({b.qtd})</span>
+                    <button
+                      key={b.banco}
+                      type="button"
+                      onClick={() => setBoletoBancoModal(b.banco)}
+                      className="flex flex-col items-start leading-tight text-left rounded-md px-2.5 py-1.5 hover:bg-sky-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 transition-colors"
+                      title={`${b.qtd} ${b.qtd === 1 ? 'fatura' : 'faturas'} - clique para ver mês a mês`}
+                    >
+                      <span className="text-sm text-black whitespace-nowrap">{b.banco}</span>
+                      <span className="text-lg font-bold text-sky-700 tabular-nums whitespace-nowrap">
+                        {fmtBRL(b.valor)} <span className="text-xs font-normal text-black">({b.qtd})</span>
                       </span>
-                    </div>
+                    </button>
                   ))}
                 </div>
               )}
@@ -2712,6 +2726,60 @@ export default function FluxoCaixaPage() {
           onFechar={fecharSaidaDetalhe}
         />
       )}
+
+      {/* Modal: boletos de um banco, mes a mes (clique no card de banco acima da tabela) */}
+      {boletoBancoModal && (() => {
+        const resumo = boletoPorBanco?.find((b) => b.banco === boletoBancoModal);
+        const consulta = new URLSearchParams(consultaRef.current);
+        const periodoIni = (consulta.get('dt_inicio') || dtInicio).split('-').reverse().join('/');
+        const periodoFim = (consulta.get('dt_fim') || dtFim).split('-').reverse().join('/');
+        return (
+          <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setBoletoBancoModal(null)}>
+            <div className="bg-white rounded-lg shadow-xl max-w-lg w-full max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200">
+                <div>
+                  <h2 className="text-base font-semibold text-black">{boletoBancoModal} — boletos por mês</h2>
+                  <p className="text-xs text-black">
+                    Período {periodoIni} a {periodoFim}
+                  </p>
+                </div>
+                <button onClick={() => setBoletoBancoModal(null)} className="text-black hover:text-black"><X className="w-5 h-5" /></button>
+              </div>
+              <div className="overflow-y-auto flex-1">
+                {!resumo || resumo.meses.length === 0 ? (
+                  <p className="text-sm text-black py-12 text-center">Nenhum boleto desse banco no período.</p>
+                ) : (
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-gray-50 border-b border-gray-200">
+                      <tr>
+                        <th className="text-left px-5 py-2 font-medium text-black">Mês</th>
+                        <th className="text-right px-3 py-2 font-medium text-black">Faturas</th>
+                        <th className="text-right px-5 py-2 font-medium text-black">Valor</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {resumo.meses.map((m, i) => (
+                        <tr key={m.mes} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                          <td className="px-5 py-2 text-black whitespace-nowrap">{MESES_EXTENSO[Number(m.mes.slice(5)) - 1]}/{m.mes.slice(0, 4)}</td>
+                          <td className="px-3 py-2 text-right text-black tabular-nums">{m.qtd}</td>
+                          <td className="px-5 py-2 text-right font-semibold text-sky-700 tabular-nums whitespace-nowrap">{fmtBRL(m.valor)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr className="font-bold bg-gray-200 border-t-2 border-gray-400">
+                        <td className="px-5 py-2 text-right uppercase text-xs tracking-wide text-black">Total</td>
+                        <td className="px-3 py-2 text-right tabular-nums text-black">{resumo.qtd}</td>
+                        <td className="px-5 py-2 text-right tabular-nums text-sky-700 whitespace-nowrap">{fmtBRL(resumo.valor)}</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Modal: Detalhe das faturas de Boleto de um dia (clique na celula) */}
       {boletoDetalheDia && (

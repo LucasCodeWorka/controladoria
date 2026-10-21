@@ -755,13 +755,15 @@ def obter_boleto_por_banco(
     empresas: Optional[str] = Query(None),
 ):
     """Total da coluna Boleto no periodo inteiro, quebrado por banco de
-    cobranca - mesmo filtro (_filtros_boleto) e mesma regra de banco
-    (_nome_banco_boleto) do modal de detalhe do dia, entao a soma bate com
-    o total da coluna."""
+    cobranca (e, dentro de cada banco, por mes da data efetiva - mesmo mes
+    da coluna Boleto da visao mensal) - mesmo filtro (_filtros_boleto) e
+    mesma regra de banco (_nome_banco_boleto) do modal de detalhe do dia,
+    entao a soma bate com o total da coluna."""
     _criar_tabelas_fluxo_caixa()
     where, params = _filtros_boleto(dtInicio, dtFim, _parse_empresas(empresas))
     rows = execute_query(
         f"""SELECT cd_empresa, cd_cliente, nr_fat, nr_parcela, nr_portador,
+                   to_char({_EXPR_DT_BOLETO_EFETIVA}, 'YYYY-MM') AS mes,
                    ROUND((vl_fatura - vl_pago)::numeric, 2) AS valor
             FROM vr_fcr_faturai {where}""",
         tuple(params),
@@ -770,11 +772,18 @@ def obter_boleto_por_banco(
     por_banco: dict = {}
     for r in rows:
         banco = _nome_banco_boleto(r["nr_portador"], ctapes.get(_chave_fatura(r)))
-        atual = por_banco.setdefault(banco, {"banco": banco, "valor": 0.0, "qtd": 0})
-        atual["valor"] += float(r["valor"])
+        atual = por_banco.setdefault(banco, {"banco": banco, "valor": 0.0, "qtd": 0, "_meses": {}})
+        valor = float(r["valor"])
+        atual["valor"] += valor
         atual["qtd"] += 1
+        mes = atual["_meses"].setdefault(r["mes"], {"mes": r["mes"], "valor": 0.0, "qtd": 0})
+        mes["valor"] += valor
+        mes["qtd"] += 1
     for b in por_banco.values():
         b["valor"] = round(b["valor"], 2)
+        b["meses"] = sorted(b.pop("_meses").values(), key=lambda m: m["mes"])
+        for m in b["meses"]:
+            m["valor"] = round(m["valor"], 2)
     return sorted(por_banco.values(), key=lambda b: -b["valor"])
 
 
