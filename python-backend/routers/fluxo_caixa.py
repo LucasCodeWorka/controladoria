@@ -1353,34 +1353,41 @@ def dados_fluxo_caixa(
         cd_empresas = _parse_empresas(empresas)
 
         where_saidas, p_saidas = _filtros_saidas(dt_inicio, dt_fim, cd_empresas)
-        where_cartao, p_cartao = _filtros_cartao(dt_inicio, dt_fim, cd_empresas)
-        where_boleto, p_boleto = _filtros_boleto(dt_inicio, dt_fim, cd_empresas)
-        where_cheque, p_cheque = _filtros_cheque(dt_inicio, dt_fim, cd_empresas)
+        # Todas as ENTRADAS so valem de amanha em diante (data efetiva > hoje),
+        # entao num periodo no passado nao ha o que buscar - e a consulta de
+        # cartao/boleto varrendo meses de faturas so pra descartar tudo levava
+        # mais de 100s (erro ao pesquisar retroativo). Encurta o inicio pra
+        # amanha e pula as consultas se o periodo termina hoje ou antes.
+        dt_inicio_ent = max(dt_inicio, (hoje + timedelta(days=1)).isoformat())
+        ent_vazio = dt_inicio_ent > dt_fim
+        where_cartao, p_cartao = _filtros_cartao(dt_inicio_ent, dt_fim, cd_empresas)
+        where_boleto, p_boleto = _filtros_boleto(dt_inicio_ent, dt_fim, cd_empresas)
+        where_cheque, p_cheque = _filtros_cheque(dt_inicio_ent, dt_fim, cd_empresas)
         where_pedidos, p_pedidos = _filtros_pedidos(dt_inicio, dt_fim, cd_empresas)
-        sql_lojas_m, p_lojas_m = _sql_lojas_mensal(dt_inicio, dt_fim)
-        sql_lojas_d, p_lojas_d = _sql_lojas_diario(dt_inicio, dt_fim)
-        sql_outras_m, p_outras_m = _sql_outras_entradas_mensal(dt_inicio, dt_fim)
-        sql_outras_d, p_outras_d = _sql_outras_entradas_diario(dt_inicio, dt_fim)
-        sql_multi_m, p_multi_m = _sql_multimarcas_mensal(dt_inicio, dt_fim)
-        sql_multi_d, p_multi_d = _sql_multimarcas_diario(dt_inicio, dt_fim)
+        sql_lojas_m, p_lojas_m = _sql_lojas_mensal(dt_inicio_ent, dt_fim)
+        sql_lojas_d, p_lojas_d = _sql_lojas_diario(dt_inicio_ent, dt_fim)
+        sql_outras_m, p_outras_m = _sql_outras_entradas_mensal(dt_inicio_ent, dt_fim)
+        sql_outras_d, p_outras_d = _sql_outras_entradas_diario(dt_inicio_ent, dt_fim)
+        sql_multi_m, p_multi_m = _sql_multimarcas_mensal(dt_inicio_ent, dt_fim)
+        sql_multi_d, p_multi_d = _sql_multimarcas_diario(dt_inicio_ent, dt_fim)
 
         kpis = _obter_kpis()
         r_saidas_m = execute_query(_sql_saidas_mensal(where_saidas), tuple(p_saidas)) or []
         r_saidas_d = execute_query(_sql_saidas_diario(where_saidas), tuple(p_saidas)) or []
-        r_cartao_m = execute_query(_sql_cartao_mensal(where_cartao), tuple(p_cartao)) or []
-        r_cartao_d = execute_query(_sql_cartao_diario(where_cartao), tuple(p_cartao)) or []
-        r_boleto_m = execute_query(_sql_boleto_mensal(where_boleto), tuple(p_boleto)) or []
-        r_boleto_d = execute_query(_sql_boleto_diario(where_boleto), tuple(p_boleto)) or []
-        r_cheque_m = execute_query(_sql_cheque_mensal(where_cheque), tuple(p_cheque)) or []
-        r_cheque_d = execute_query(_sql_cheque_diario(where_cheque), tuple(p_cheque)) or []
+        r_cartao_m = [] if ent_vazio else execute_query(_sql_cartao_mensal(where_cartao), tuple(p_cartao)) or []
+        r_cartao_d = [] if ent_vazio else execute_query(_sql_cartao_diario(where_cartao), tuple(p_cartao)) or []
+        r_boleto_m = [] if ent_vazio else execute_query(_sql_boleto_mensal(where_boleto), tuple(p_boleto)) or []
+        r_boleto_d = [] if ent_vazio else execute_query(_sql_boleto_diario(where_boleto), tuple(p_boleto)) or []
+        r_cheque_m = [] if ent_vazio else execute_query(_sql_cheque_mensal(where_cheque), tuple(p_cheque)) or []
+        r_cheque_d = [] if ent_vazio else execute_query(_sql_cheque_diario(where_cheque), tuple(p_cheque)) or []
         r_pedidos_m = execute_query(_sql_pedidos_mensal(where_pedidos), tuple(p_pedidos)) or []
         r_pedidos_d = execute_query(_sql_pedidos_diario(where_pedidos), tuple(p_pedidos)) or []
-        r_lojas_m = execute_query(sql_lojas_m, p_lojas_m) or []
-        r_lojas_d = execute_query(sql_lojas_d, p_lojas_d) or []
-        r_outras_m = execute_query(sql_outras_m, p_outras_m) or []
-        r_outras_d = execute_query(sql_outras_d, p_outras_d) or []
-        r_multi_m = execute_query(sql_multi_m, p_multi_m) or []
-        r_multi_d = execute_query(sql_multi_d, p_multi_d) or []
+        r_lojas_m = [] if ent_vazio else execute_query(sql_lojas_m, p_lojas_m) or []
+        r_lojas_d = [] if ent_vazio else execute_query(sql_lojas_d, p_lojas_d) or []
+        r_outras_m = [] if ent_vazio else execute_query(sql_outras_m, p_outras_m) or []
+        r_outras_d = [] if ent_vazio else execute_query(sql_outras_d, p_outras_d) or []
+        r_multi_m = [] if ent_vazio else execute_query(sql_multi_m, p_multi_m) or []
+        r_multi_d = [] if ent_vazio else execute_query(sql_multi_d, p_multi_d) or []
 
         cartao_mes = {r["mes"]: float(r["valor"]) for r in r_cartao_m}
         cartao_dia = {_dia_str(r["dia"]): float(r["valor"]) for r in r_cartao_d}
