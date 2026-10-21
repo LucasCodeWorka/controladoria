@@ -13,6 +13,7 @@ export async function GET(request: NextRequest) {
     const params = new URLSearchParams();
     if (dia) params.set('dia', dia);
     if (empresas) params.set('empresas', empresas);
+    if (searchParams.get('incluirPagos')) params.set('incluirPagos', searchParams.get('incluirPagos')!);
 
     const response = await fetch(`${PYTHON_API_URL}/api/fluxo-caixa/boleto-detalhe?${params.toString()}`, {
       method: 'GET',

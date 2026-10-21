@@ -830,6 +830,7 @@ def obter_boleto_por_banco(
 def obter_boleto_detalhe(
     dia: str = Query(..., description="Dia efetivo (YYYY-MM-DD), mesma data mostrada na coluna Boleto"),
     empresas: Optional[str] = Query(None),
+    incluirPagos: bool = Query(False, description="So vale pra HOJE: traz tambem os ja pagos (valor = pago + em aberto)"),
 ):
     """Lista as faturas (boletos) individuais cuja data EFETIVA (ja com a
     regra de compensacao bancaria/feriado - ver fn_fc_dt_boleto_efetiva) cai
@@ -838,9 +839,13 @@ def obter_boleto_detalhe(
     celula clicada da Visao Diaria."""
     _criar_tabelas_fluxo_caixa()
     cd_empresas = _parse_empresas(empresas)
+    # Hoje + incluirPagos: sem o filtro de saldo > 0, pra mostrar tambem o que
+    # ja foi pago (conferencia do dia atual - ver _entradas_hoje_informativo).
+    so_hoje_com_pagos = incluirPagos and dia == date.today().isoformat()
+    filtro_saldo = "" if so_hoje_com_pagos else "AND (vl_fatura - vl_pago) > 0"
     where = f"""WHERE tp_documento IN (1) AND tp_situacao = '1' AND nr_portador < 999
         AND tp_cobranca <> 2
-        AND (vl_fatura - vl_pago) > 0
+        {filtro_saldo}
         AND {_PRE_FILTRO_VENCIMENTO}
         AND {_EXPR_DT_BOLETO_EFETIVA} = %s
         AND {_EXPR_DT_BOLETO_EFETIVA} >= CURRENT_DATE
@@ -851,7 +856,7 @@ def obter_boleto_detalhe(
         params.append(cd_empresas)
     sql = f"""
         SELECT cd_empresa, cd_cliente, nm_cliente, nr_fat, nr_parcela, dt_vencimento::date AS dt_vencimento_original,
-               ROUND((vl_fatura - vl_pago)::numeric, 2) AS valor, nr_portador
+               ROUND((vl_fatura - vl_pago)::numeric, 2) AS valor, ROUND(vl_pago::numeric, 2) AS pago, nr_portador
         FROM vr_fcr_faturai
         {where}
         ORDER BY nm_cliente, nr_fat, nr_parcela
@@ -867,6 +872,7 @@ def obter_boleto_detalhe(
             "nrParcela": r["nr_parcela"],
             "dtVencimentoOriginal": _dia_str(r["dt_vencimento_original"]),
             "valor": float(r["valor"]),
+            "pago": float(r["pago"]) if so_hoje_com_pagos else 0.0,
             "banco": _nome_banco_boleto(r["nr_portador"], nr_ctapes_por_chave.get(_chave_fatura(r))),
         }
         for r in rows
@@ -1328,10 +1334,31 @@ def _entradas_hoje_informativo(hoje: date, cd_empresas: list) -> dict:
     sql_multi, p_multi = _sql_multimarcas_diario(d, d)
     cartao = _total(_hoje(_sql_cartao_diario(w_cartao)), p_cartao)
     lojas_raw = _total(_hoje(sql_lojas), p_lojas)
+    # Boleto de HOJE: pago + em aberto (tudo cuja data efetiva e hoje, sem o
+    # filtro de saldo > 0), sem as ja descontadas - pedido explicito do
+    # usuario, so pra conferencia (nao entra em saldo nenhum).
+    where_b_hoje = f"""WHERE tp_documento IN (1) AND tp_situacao = '1' AND nr_portador < 999
+        AND tp_cobranca <> 2
+        AND {_PRE_FILTRO_VENCIMENTO}
+        AND {_EXPR_DT_BOLETO_EFETIVA} = %s
+        AND {_FILTRO_SEM_DESCONTADAS}"""
+    params_b_hoje: list = [d, d, d]
+    if cd_empresas:
+        where_b_hoje += " AND cd_empresa = ANY(%s)"
+        params_b_hoje.append(cd_empresas)
+    rb = execute_query(
+        f"SELECT COALESCE(SUM(vl_pago), 0) AS pago, COALESCE(SUM(vl_fatura - vl_pago), 0) AS aberto "
+        f"FROM vr_fcr_faturai {where_b_hoje}",
+        tuple(params_b_hoje),
+    ) or [{"pago": 0, "aberto": 0}]
+    boleto_pago = float(rb[0]["pago"] or 0)
+    boleto_aberto = float(rb[0]["aberto"] or 0)
     return {
         "dia": d,
         "cartao": cartao,
-        "boleto": _total(_hoje(_sql_boleto_diario(w_boleto)), p_boleto),
+        "boleto": boleto_pago + boleto_aberto,
+        "boletoPago": boleto_pago,
+        "boletoAberto": boleto_aberto,
         "cheque": _total(_hoje(_sql_cheque_diario(w_cheque)), p_cheque),
         "lojas": lojas_raw - cartao if lojas_raw > cartao else 0.0,
         "outrasEntradas": _total(_hoje(sql_outras), p_outras),

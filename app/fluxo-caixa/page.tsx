@@ -70,7 +70,9 @@ interface DiaFC {
 interface HojeInformativoFC {
   dia: string;
   cartao: number;
-  boleto: number;
+  boleto: number; // pago + em aberto
+  boletoPago?: number;
+  boletoAberto?: number;
   cheque: number;
   lojas: number;
   outrasEntradas: number;
@@ -187,7 +189,8 @@ interface BoletoDetalheItem {
   nrFat: number;
   nrParcela: number;
   dtVencimentoOriginal: string;
-  valor: number;
+  valor: number; // em aberto (vl_fatura - vl_pago)
+  pago?: number; // so preenchido no detalhe de HOJE (pago + em aberto)
   banco: string;
 }
 
@@ -1452,7 +1455,7 @@ export default function FluxoCaixaPage() {
   const [boletoDetalheDia, setBoletoDetalheDia] = useState<string | null>(null);
   const [boletoDetalheLista, setBoletoDetalheLista] = useState<BoletoDetalheItem[] | null>(null);
   const [boletoDetalheErro, setBoletoDetalheErro] = useState('');
-  const [boletoOrdCampo, setBoletoOrdCampo] = useState<'cliente' | 'fatura' | 'banco' | 'vencimento' | 'valor'>('cliente');
+  const [boletoOrdCampo, setBoletoOrdCampo] = useState<'cliente' | 'fatura' | 'banco' | 'vencimento' | 'valor' | 'pago' | 'total'>('cliente');
   const [boletoOrdDir, setBoletoOrdDir] = useState<'asc' | 'desc'>('asc');
 
   // So volta a salvar o filtro depois que o salvo foi restaurado - senao a
@@ -1695,6 +1698,8 @@ export default function FluxoCaixaPage() {
       case 'banco': return a.banco.localeCompare(b.banco) * mult;
       case 'vencimento': return a.dtVencimentoOriginal.localeCompare(b.dtVencimentoOriginal) * mult;
       case 'valor': return (a.valor - b.valor) * mult;
+      case 'pago': return ((a.pago ?? 0) - (b.pago ?? 0)) * mult;
+      case 'total': return ((a.valor + (a.pago ?? 0)) - (b.valor + (b.pago ?? 0))) * mult;
       case 'fatura':
       default:
         return ((a.nrFat - b.nrFat) || (a.nrParcela - b.nrParcela)) * mult;
@@ -1868,6 +1873,8 @@ export default function FluxoCaixaPage() {
     setBoletoOrdDir('asc');
     try {
       const params = new URLSearchParams({ dia });
+      // Hoje: traz tambem os pagos (pago + em aberto), so pra conferencia.
+      if (dia === isoHoje()) params.set('incluirPagos', '1');
       if (empresasSelecionadas.size > 0 && empresasSelecionadas.size < empresasDisponiveis.length) {
         params.set('empresas', Array.from(empresasSelecionadas).join(','));
       }
@@ -2004,7 +2011,7 @@ export default function FluxoCaixaPage() {
 
   // Celula esmaecida do dia de hoje: mostra a entrada so pra conferir, sem
   // somar em saldo/total (pedido explicito do usuario). Clicavel como as outras.
-  function celulaInformativa(valor: number, cor: string, bgLinha: string, onClick?: () => void) {
+  function celulaInformativa(valor: number, cor: string, bgLinha: string, onClick?: () => void, dicaExtra?: string) {
     const v = valor || 0;
     const clicavel = v > 0 && !!onClick;
     return (
@@ -2012,7 +2019,7 @@ export default function FluxoCaixaPage() {
         className={`text-right px-3 py-2 tabular-nums border-r border-b border-gray-300 ${bgLinha} ${clicavel ? 'cursor-pointer hover:underline' : ''}`}
         style={{ color: cor, opacity: 0.45, fontWeight: 400, fontStyle: 'italic' }}
         onClick={clicavel ? onClick : undefined}
-        title={v > 0 ? `Informativo - entra hoje, mas não conta no saldo do dia nem no acumulado${clicavel ? ' · clique para ver as faturas' : ''}` : undefined}
+        title={v > 0 ? `Informativo - não conta no saldo do dia nem no acumulado${dicaExtra ? ` · ${dicaExtra}` : ''}${clicavel ? ' · clique para ver as faturas' : ''}` : undefined}
       >
         {v > 0 ? fmtBRL(v) : <span className="text-black">—</span>}
       </td>
@@ -2534,7 +2541,7 @@ export default function FluxoCaixaPage() {
                         {isHoje && dados?.hojeInformativo ? (
                           <>
                             {celulaInformativa(dados.hojeInformativo.outrasEntradas, '#7c3aed', bgHover)}
-                            {celulaInformativa(dados.hojeInformativo.boleto, '#0284c7', bgHover, () => boletoDetalheAbrir(l.dia.dia))}
+                            {celulaInformativa(dados.hojeInformativo.boleto, '#0284c7', bgHover, () => boletoDetalheAbrir(l.dia.dia), `Pago ${fmtBRL(dados.hojeInformativo.boletoPago ?? 0)} + Em aberto ${fmtBRL(dados.hojeInformativo.boletoAberto ?? 0)}`)}
                             {celulaInformativa(dados.hojeInformativo.cheque, '#059669', bgHover)}
                             {celulaInformativa(dados.hojeInformativo.lojas * (1 + crescLojas / 100), '#0891b2', bgHover)}
                             {celulaInformativa(dados.hojeInformativo.cartao, '#4d7c0f', bgHover)}
@@ -2852,6 +2859,7 @@ export default function FluxoCaixaPage() {
             <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200">
               <h2 className="text-base font-semibold text-black">
                 Boletos — {boletoDetalheDia.split('-').reverse().join('/')}
+                {boletoDetalheDia === hoje && <span className="ml-2 text-xs font-normal text-black">pago + em aberto (informativo, fora do saldo)</span>}
               </h2>
               <button onClick={() => setBoletoDetalheDia(null)} className="text-black hover:text-black"><X className="w-5 h-5" /></button>
             </div>
@@ -2880,13 +2888,19 @@ export default function FluxoCaixaPage() {
                             { campo: 'fatura', label: 'Fatura/Parcela', alinhamento: 'left' as const },
                             { campo: 'banco', label: 'Banco', alinhamento: 'left' as const },
                             { campo: 'vencimento', label: 'Vencimento original', alinhamento: 'right' as const },
-                            { campo: 'valor', label: 'Valor', alinhamento: 'right' as const },
+                            ...(boletoDetalheDia === hoje
+                              ? [
+                                  { campo: 'pago', label: 'Pago', alinhamento: 'right' as const },
+                                  { campo: 'valor', label: 'Em aberto', alinhamento: 'right' as const },
+                                  { campo: 'total', label: 'Total', alinhamento: 'right' as const },
+                                ]
+                              : [{ campo: 'valor', label: 'Valor', alinhamento: 'right' as const }]),
                           ] as const
-                        ).map(({ campo, label, alinhamento }, idx) => (
+                        ).map(({ campo, label, alinhamento }, idx, arr) => (
                           <th
                             key={campo}
-                            onClick={() => alternarOrdenacaoBoleto(campo)}
-                            className={`${alinhamento === 'left' ? 'text-left' : 'text-right'} ${idx === 0 ? 'px-5' : idx === 4 ? 'px-5' : 'px-3'} py-2 font-medium text-black whitespace-nowrap cursor-pointer select-none hover:bg-gray-100`}
+                            onClick={() => alternarOrdenacaoBoleto(campo as typeof boletoOrdCampo)}
+                            className={`${alinhamento === 'left' ? 'text-left' : 'text-right'} ${idx === 0 ? 'px-5' : idx === arr.length - 1 ? 'px-5' : 'px-3'} py-2 font-medium text-black whitespace-nowrap cursor-pointer select-none hover:bg-gray-100`}
                           >
                             <span className={`inline-flex items-center gap-1 ${alinhamento === 'right' ? 'justify-end w-full' : ''}`}>
                               {label}
@@ -2907,16 +2921,32 @@ export default function FluxoCaixaPage() {
                           </td>
                           <td className="px-3 py-1.5 text-black whitespace-nowrap">{item.banco}</td>
                           <td className="px-3 py-1.5 text-right text-black tabular-nums whitespace-nowrap">{item.dtVencimentoOriginal.split('-').reverse().join('/')}</td>
-                          <td className="px-5 py-1.5 text-right font-semibold text-sky-700 tabular-nums whitespace-nowrap">{fmtBRL(item.valor)}</td>
+                          {boletoDetalheDia === hoje ? (
+                            <>
+                              <td className="px-3 py-1.5 text-right text-emerald-700 tabular-nums whitespace-nowrap">{(item.pago ?? 0) > 0 ? fmtBRL(item.pago ?? 0) : '—'}</td>
+                              <td className="px-3 py-1.5 text-right text-sky-700 tabular-nums whitespace-nowrap">{item.valor > 0 ? fmtBRL(item.valor) : '—'}</td>
+                              <td className="px-5 py-1.5 text-right font-semibold text-black tabular-nums whitespace-nowrap">{fmtBRL(item.valor + (item.pago ?? 0))}</td>
+                            </>
+                          ) : (
+                            <td className="px-5 py-1.5 text-right font-semibold text-sky-700 tabular-nums whitespace-nowrap">{fmtBRL(item.valor)}</td>
+                          )}
                         </tr>
                       ))}
                     </tbody>
                     <tfoot>
                       <tr className="font-bold bg-gray-200 border-t-2 border-gray-400">
                         <td colSpan={4} className="px-5 py-2 text-right uppercase text-xs tracking-wide text-black">Total</td>
-                        <td className="px-5 py-2 text-right tabular-nums text-sky-700 whitespace-nowrap">
-                          {fmtBRL(boletoDetalheListaOrdenada.reduce((acc, item) => acc + item.valor, 0))}
-                        </td>
+                        {boletoDetalheDia === hoje ? (
+                          <>
+                            <td className="px-3 py-2 text-right tabular-nums text-emerald-700 whitespace-nowrap">{fmtBRL(boletoDetalheListaOrdenada.reduce((acc, item) => acc + (item.pago ?? 0), 0))}</td>
+                            <td className="px-3 py-2 text-right tabular-nums text-sky-700 whitespace-nowrap">{fmtBRL(boletoDetalheListaOrdenada.reduce((acc, item) => acc + item.valor, 0))}</td>
+                            <td className="px-5 py-2 text-right tabular-nums text-black whitespace-nowrap">{fmtBRL(boletoDetalheListaOrdenada.reduce((acc, item) => acc + item.valor + (item.pago ?? 0), 0))}</td>
+                          </>
+                        ) : (
+                          <td className="px-5 py-2 text-right tabular-nums text-sky-700 whitespace-nowrap">
+                            {fmtBRL(boletoDetalheListaOrdenada.reduce((acc, item) => acc + item.valor, 0))}
+                          </td>
+                        )}
                       </tr>
                     </tfoot>
                   </table>
@@ -2929,19 +2959,27 @@ export default function FluxoCaixaPage() {
                     <table className="w-full text-sm">
                       <tbody>
                         {Object.entries(
-                          boletoDetalheListaOrdenada.reduce<Record<string, { valor: number; qtd: number }>>((acc, item) => {
-                            const atual = acc[item.banco] ?? { valor: 0, qtd: 0 };
-                            acc[item.banco] = { valor: atual.valor + item.valor, qtd: atual.qtd + 1 };
+                          boletoDetalheListaOrdenada.reduce<Record<string, { valor: number; pago: number; qtd: number }>>((acc, item) => {
+                            const atual = acc[item.banco] ?? { valor: 0, pago: 0, qtd: 0 };
+                            acc[item.banco] = { valor: atual.valor + item.valor, pago: atual.pago + (item.pago ?? 0), qtd: atual.qtd + 1 };
                             return acc;
                           }, {})
                         )
-                          .sort(([, a], [, b]) => b.valor - a.valor)
-                          .map(([banco, { valor, qtd }]) => (
+                          .sort(([, a], [, b]) => (b.valor + b.pago) - (a.valor + a.pago))
+                          .map(([banco, { valor, pago, qtd }]) => (
                             <tr key={banco}>
                               <td className="py-1 text-black">
                                 {banco} <span className="text-xs text-black">({qtd} {qtd === 1 ? 'fatura' : 'faturas'})</span>
                               </td>
-                              <td className="py-1 text-right font-semibold text-sky-700 tabular-nums">{fmtBRL(valor)}</td>
+                              {boletoDetalheDia === hoje ? (
+                                <>
+                                  <td className="py-1 text-right text-emerald-700 tabular-nums whitespace-nowrap">Pago {fmtBRL(pago)}</td>
+                                  <td className="py-1 pl-4 text-right text-sky-700 tabular-nums whitespace-nowrap">Em aberto {fmtBRL(valor)}</td>
+                                  <td className="py-1 pl-4 text-right font-semibold text-black tabular-nums whitespace-nowrap">{fmtBRL(valor + pago)}</td>
+                                </>
+                              ) : (
+                                <td className="py-1 text-right font-semibold text-sky-700 tabular-nums">{fmtBRL(valor)}</td>
+                              )}
                             </tr>
                           ))}
                       </tbody>
