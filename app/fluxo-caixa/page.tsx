@@ -23,6 +23,7 @@ import {
 import type { LabelProps } from 'recharts';
 import { carregarFiltro, salvarFiltro } from '../utils/persistirFiltro';
 import { useAuth } from '../contexts/AuthContext';
+import { useCenarios, BarraCenarios, PainelComparacao, ModalDiaCenario, marcadorDia } from './cenarios';
 
 interface EmpresaFC {
   id: number;
@@ -1363,6 +1364,8 @@ export default function FluxoCaixaPage() {
   const [fornecedoresDespesa, setFornecedoresDespesa] = useState<SaidaFornecedor[] | null>(null);
   const [carregandoFornDespesa, setCarregandoFornDespesa] = useState(false);
   const consultaRef = useRef('');
+  // Cenarios (foto das contas a pagar/pedidos em aberto + comparacao) - so informativo, fora do saldo.
+  const cenarios = useCenarios(() => consultaRef.current, user?.name || user?.username || null);
   const [saidaDetalhe, setSaidaDetalhe] = useState<{ dia: string; tipo: TipoSaidaDetalhe } | null>(null);
   const fecharSaidaDetalhe = useCallback(() => setSaidaDetalhe(null), []);
   const pedidoFornDespesaRef = useRef(0);
@@ -2301,7 +2304,8 @@ export default function FluxoCaixaPage() {
           <div className="bg-white rounded-lg shadow-md overflow-hidden">
             <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-gray-50">
               <h2 className="text-sm font-semibold text-black uppercase tracking-wide">Visão Diária</h2>
-              <div className="flex gap-2">
+              <div className="flex gap-2 items-center flex-wrap justify-end">
+                <BarraCenarios c={cenarios} podeSalvar={!!dados} />
                 <button onClick={() => setLojasModalAberto(true)} className="flex items-center gap-1 text-xs font-medium bg-gray-200 hover:bg-gray-300 text-black rounded px-2 py-1 transition-colors">
                   <Settings className="w-3.5 h-3.5" /> Projeção Lojas
                 </button>
@@ -2474,6 +2478,7 @@ export default function FluxoCaixaPage() {
               ))}
             </div>
 
+            <PainelComparacao c={cenarios} />
             <div className="overflow-x-auto max-h-[78vh] overflow-y-auto [transform:translateZ(0)]">
               <table className="w-full text-sm min-w-[1100px] border-separate [border-spacing:0]">
                 <thead className="sticky top-0 z-10">
@@ -2537,6 +2542,19 @@ export default function FluxoCaixaPage() {
                         {celula('pedidos', l.dia.pedidos, '#dc2626', bgHover, '', () => setSaidaDetalhe({ dia: l.dia.dia, tipo: 'pedidos' }), 'Ver os pedidos desse dia')}
                         <td className={`text-right px-3 py-2 tabular-nums font-bold text-red-800 border-r-2 border-b border-gray-300 ${bgHover}`}>
                           {l.effSaidas > 0 ? fmtBRL(l.effSaidas) : <span className="text-black">—</span>}
+                          {(() => {
+                            const m = marcadorDia(cenarios.comparacao, l.dia.dia);
+                            if (!m) return null;
+                            return (
+                              <button
+                                onClick={() => cenarios.setDiaDetalhe(l.dia.dia)}
+                                title={m.titulo}
+                                className={`ml-1 align-middle text-[11px] leading-none ${m.informativo ? 'text-gray-500' : m.variacao > 0 ? 'text-red-600' : 'text-green-600'}`}
+                              >
+                                ●
+                              </button>
+                            );
+                          })()}
                         </td>
                         {isHoje && dados?.hojeInformativo ? (
                           <>
@@ -2991,6 +3009,7 @@ export default function FluxoCaixaPage() {
           </div>
         </div>
       )}
+      <ModalDiaCenario c={cenarios} />
     </div>
   );
 }
