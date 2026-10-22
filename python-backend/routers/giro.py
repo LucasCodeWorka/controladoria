@@ -1853,10 +1853,35 @@ def _usa_regra_propria_campanha(familia: Optional[str], linha: Optional[str]) ->
     return False
 
 
-def _calcular_percentual_campanha(
+# Numeracao das regras de campanha - MESMA do frontend (app/giro/page.tsx,
+# identificarRegraCampanha) e do modal "Regras". Fonte da verdade da regra.
+REGRA_GIRO_MENOR_4 = 1
+REGRA_GIRO_4_A_6 = 2
+REGRA_GIRO_MAIOR_6 = 3
+REGRA_APOS_12_MESES = 4
+REGRA_APOS_24_MESES = 5
+REGRA_EXCECAO_30_FIXO = 6
+REGRA_KISS_ME_30 = 7
+REGRA_KISS_ME_0 = 8
+REGRA_SEM_MESES_FL = 9
+REGRA_SEM_GIRO = 10
+
+PERCENTUAL_POR_REGRA = {
+    REGRA_GIRO_MENOR_4: 0, REGRA_GIRO_4_A_6: 30, REGRA_GIRO_MAIOR_6: 50, REGRA_APOS_12_MESES: 60,
+    REGRA_APOS_24_MESES: 70, REGRA_EXCECAO_30_FIXO: 30, REGRA_KISS_ME_30: 30, REGRA_KISS_ME_0: 0,
+    REGRA_SEM_MESES_FL: 0, REGRA_SEM_GIRO: 0,
+}
+
+# Regras da "escadinha" por giro > 6 (3, 4 e 5): o percentual final deixa de
+# ser fixo (50/60/70) e passa a depender do desconto que o canal JA tem
+# (Promo Atac / Promo Var) - ver _percentual_campanha_canal.
+REGRAS_ESCADA_GIRO_ALTO = (REGRA_GIRO_MAIOR_6, REGRA_APOS_12_MESES, REGRA_APOS_24_MESES)
+
+
+def _identificar_regra_campanha(
     giro_total: Optional[float], meses_oportunidade: Optional[int], tem_promo_ativa: bool,
     familia: Optional[str] = None, tem_cor_sem_meses_fl: bool = False, linha: Optional[str] = None,
-) -> float:
+) -> int:
     # Regra exclusiva das familias KISS ME/KISS ME PLUS e das linhas
     # Confort/Free/Ideal/Basic Up/Basicos, e so quando a referencia e
     # MISTA (tem_cor_sem_meses_fl=True, ou seja, tem pelo menos uma cor
@@ -1868,24 +1893,69 @@ def _calcular_percentual_campanha(
     # batendo a familia/linha (pedido explicito do usuario).
     if _usa_regra_propria_campanha(familia, linha) and tem_cor_sem_meses_fl:
         if giro_total is not None and giro_total > 6 and meses_oportunidade is not None and meses_oportunidade > 24:
-            return 30
-        return 0
+            return REGRA_KISS_ME_30
+        return REGRA_KISS_ME_0
 
     if giro_total is None:
-        return 0
+        return REGRA_SEM_GIRO
     if meses_oportunidade is None or meses_oportunidade < 0:
-        return 0
+        return REGRA_SEM_MESES_FL
     if giro_total >= 6 and meses_oportunidade > 0 and not tem_promo_ativa:
-        return 30
+        return REGRA_EXCECAO_30_FIXO
     if giro_total > 6 and meses_oportunidade >= 24:
-        return 70
+        return REGRA_APOS_24_MESES
     if giro_total > 6 and meses_oportunidade >= 12:
-        return 60
+        return REGRA_APOS_12_MESES
     if giro_total > 6:
-        return 50
+        return REGRA_GIRO_MAIOR_6
     if giro_total >= 4:
-        return 30
-    return 0
+        return REGRA_GIRO_4_A_6
+    return REGRA_GIRO_MENOR_4
+
+
+def _calcular_percentual_campanha(
+    giro_total: Optional[float], meses_oportunidade: Optional[int], tem_promo_ativa: bool,
+    familia: Optional[str] = None, tem_cor_sem_meses_fl: bool = False, linha: Optional[str] = None,
+) -> float:
+    """Percentual BASE da regra (50/60/70 nas regras 3/4/5). O percentual
+    efetivo por canal, nessas 3 regras, vem de _percentual_campanha_canal."""
+    return PERCENTUAL_POR_REGRA[
+        _identificar_regra_campanha(giro_total, meses_oportunidade, tem_promo_ativa, familia, tem_cor_sem_meses_fl, linha)
+    ]
+
+
+def _desconto_atual_canal(preco_cadastro: Optional[float], promo_canal: Optional[dict]) -> float:
+    """Desconto (%) que o canal JA pratica = o mesmo percentual mostrado nas
+    colunas Promo Atac/Promo Var (preco cheio -> preco promocional). Sem
+    promocao ativa (ou sem preco cheio pra comparar) = 0%."""
+    if not promo_canal or promo_canal.get("precoPromo") is None:
+        return 0.0
+    cheio = _preco_cheio_canal(preco_cadastro, promo_canal)
+    if cheio is None:
+        return 0.0
+    return max(0.0, (cheio - promo_canal["precoPromo"]) / cheio * 100)
+
+
+def _percentual_campanha_canal(
+    regra: int, preco_cadastro: Optional[float], promo_canal: Optional[dict],
+) -> float:
+    """Percentual de campanha de UM canal (atacado ou varejo).
+
+    Regras 3/4/5 (giro > 6, escadinha por Meses FL): olha o desconto atual
+    do canal (pedido explicito do usuario):
+      0% a 10,99%  -> 30%
+      11% a 30%    -> 50%
+      fora dessas faixas (acima de 30%) -> segue a escadinha normal
+                      (50/60/70% da propria regra 3/4/5)
+    Todas as outras regras (1, 2, 6, 7, 8, 9, 10) seguem o percentual fixo
+    da propria regra."""
+    if regra in REGRAS_ESCADA_GIRO_ALTO:
+        atual = round(_desconto_atual_canal(preco_cadastro, promo_canal), 2)
+        if atual <= 10.99:
+            return 30
+        if atual <= 30:
+            return 50
+    return PERCENTUAL_POR_REGRA[regra]
 
 
 def _arredondar_preco_campanha(preco: float) -> float:
@@ -1991,8 +2061,11 @@ def _tem_oportunidade_desconto(
     canais: tuple = CANAIS_DESCONTO,
 ) -> bool:
     tem_promo = bool(promo.get("atacado") or promo.get("varejo"))
-    percentual = _calcular_percentual_campanha(giro_total, meses_oportunidade, tem_promo, familia, tem_cor_sem_meses_fl, linha)
-    if percentual <= 0:
+    regra = _identificar_regra_campanha(giro_total, meses_oportunidade, tem_promo, familia, tem_cor_sem_meses_fl, linha)
+    # Percentual por canal (nas regras 3/4/5 depende do desconto atual de cada canal).
+    pct_atacado = _percentual_campanha_canal(regra, preco_atacado, promo.get("atacado"))
+    pct_varejo = _percentual_campanha_canal(regra, preco_varejo, promo.get("varejo"))
+    if pct_atacado <= 0 and pct_varejo <= 0:
         return False
     # Atacado e Varejo avaliados SEPARADAMENTE: basta um dos dois ter ganho
     # real. Antes usava o MAIOR desconto entre os dois canais como
@@ -2001,8 +2074,8 @@ def _tem_oportunidade_desconto(
     # nenhuma, e a referencia inteira ficava de fora).
     # Com os flags separados da tela, so os canais marcados contam.
     return (
-        ("atacado" in canais and _ganho_desconto_canal(preco_atacado, promo.get("atacado"), percentual) > 0)
-        or ("varejo" in canais and _ganho_desconto_canal(preco_varejo, promo.get("varejo"), percentual) > 0)
+        ("atacado" in canais and _ganho_desconto_canal(preco_atacado, promo.get("atacado"), pct_atacado) > 0)
+        or ("varejo" in canais and _ganho_desconto_canal(preco_varejo, promo.get("varejo"), pct_varejo) > 0)
     )
 
 
@@ -2255,12 +2328,15 @@ def totais_desconto_giro(
                 # preco cheio, que contaria de novo um desconto ja praticado
                 # hoje. Sem promo ativa, a base e o preco cheio.
                 tem_promo_cor = bool(promo_cor.get("atacado") or promo_cor.get("varejo"))
-                percentual_cor = _calcular_percentual_campanha(cor_item["giroTotal"], meses_cor, tem_promo_cor, familia_item, tem_cor_sem_meses_fl_item, linha_item)
+                regra_cor = _identificar_regra_campanha(cor_item["giroTotal"], meses_cor, tem_promo_cor, familia_item, tem_cor_sem_meses_fl_item, linha_item)
+                # Percentual por canal (regras 3/4/5 dependem do desconto atual de cada canal).
+                pct_atacado_cor = _percentual_campanha_canal(regra_cor, preco_cor.get("precoAtacado"), promo_cor.get("atacado"))
+                pct_varejo_cor = _percentual_campanha_canal(regra_cor, preco_cor.get("precoVarejo"), promo_cor.get("varejo"))
                 total_desconto_atacado += estoque_maraponga_cor * _ganho_desconto_canal(
-                    preco_cor.get("precoAtacado"), promo_cor.get("atacado"), percentual_cor
+                    preco_cor.get("precoAtacado"), promo_cor.get("atacado"), pct_atacado_cor
                 )
                 total_desconto_varejo += estoque_resto_cor * _ganho_desconto_canal(
-                    preco_cor.get("precoVarejo"), promo_cor.get("varejo"), percentual_cor
+                    preco_cor.get("precoVarejo"), promo_cor.get("varejo"), pct_varejo_cor
                 )
                 # Caso oposto: cor ja esta em promocao MAIS AGRESSIVA que a
                 # sugestao da campanha - aplicar a campanha ali subiria o
@@ -2268,10 +2344,10 @@ def totais_desconto_giro(
                 # pra nao esconder esse "custo" dentro do card de ganho
                 # (pedido explicito do usuario).
                 total_acrescimo_atacado += estoque_maraponga_cor * _acrescimo_canal(
-                    preco_cor.get("precoAtacado"), promo_cor.get("atacado"), percentual_cor
+                    preco_cor.get("precoAtacado"), promo_cor.get("atacado"), pct_atacado_cor
                 )
                 total_acrescimo_varejo += estoque_resto_cor * _acrescimo_canal(
-                    preco_cor.get("precoVarejo"), promo_cor.get("varejo"), percentual_cor
+                    preco_cor.get("precoVarejo"), promo_cor.get("varejo"), pct_varejo_cor
                 )
 
         return {

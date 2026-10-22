@@ -435,6 +435,32 @@ function calcularPercentualCampanha(
   return PERCENTUAL_POR_REGRA[identificarRegraCampanha(giroTotal, mesesOportunidade, temPromoAtiva, familia, temCorSemMesesFL, linha)];
 }
 
+// Regras 3, 4 e 5 (giro > 6, escadinha por Meses FL): em vez de 50/60/70%
+// fixo, o percentual depende do desconto que o CANAL ja tem (colunas Promo
+// Atac / Promo Var; sem promo = 0%) - pedido explicito do usuario:
+//   0% a 10,99% -> 30%  |  11% a 30% -> 50%  |  fora dessas faixas (acima de
+//   30%) -> segue a escadinha normal (50/60/70% da propria regra 3/4/5).
+// Mesma conta do backend (_percentual_campanha_canal em giro.py).
+const REGRAS_ESCADA_GIRO_ALTO = new Set([REGRA_GIRO_MAIOR_6, REGRA_APOS_12_MESES, REGRA_APOS_24_MESES]);
+
+function descontoAtualCanal(precoCadastro: number | null, promo?: { precoPromo: number; precoAnterior: number | null } | null): number {
+  if (!promo) return 0;
+  const cheio = precoCheioCanal(precoCadastro, promo);
+  if (cheio === null) return 0;
+  return Math.max(0, ((cheio - promo.precoPromo) / cheio) * 100);
+}
+
+function percentualCampanhaCanal(
+  regra: number, precoCadastro: number | null, promo?: { precoPromo: number; precoAnterior: number | null } | null
+): number {
+  if (REGRAS_ESCADA_GIRO_ALTO.has(regra)) {
+    const atual = Math.round(descontoAtualCanal(precoCadastro, promo) * 100) / 100;
+    if (atual <= 10.99) return 30;
+    if (atual <= 30) return 50;
+  }
+  return PERCENTUAL_POR_REGRA[regra];
+}
+
 // Texto curto de cada regra, pro tooltip da celula Camp Atac/Camp Var -
 // mesma numeracao/descricao mostrada no modal "Regras".
 const DESCRICAO_REGRA_CAMPANHA: Record<number, string> = {
@@ -1421,24 +1447,28 @@ export default function GiroPage() {
       const cab = [
         'Referência', 'Produto', 'Cor', 'Meses FL', 'Giro', 'Fábrica', 'Atacado', 'Varejo', 'Promo Atac', 'Promo Var',
         'Camp Atac (%)', 'Camp Atac', 'Camp Var (%)', 'Camp Var', 'Regra aplicada', 'Descrição da regra',
+        'Desc. atual Atac (regras 3/4/5)', 'Desc. atual Var (regras 3/4/5)',
       ];
       const linhas: string[][] = [];
       for (const ref of referencias) {
         for (const item of coresPorRef[ref.referencia] ?? []) {
           const regra = identificarRegraCampanha(item.giroTotal, item.mesesOportunidade, temPromoAtiva(item), item.familia, item.temCorSemMesesFL, item.linha);
-          const pct = PERCENTUAL_POR_REGRA[regra];
           const promoAtac = item.promocoes?.find((p) => p.tipo === 'Atacado');
           const promoVar = item.promocoes?.find((p) => p.tipo === 'Varejo');
+          const pctAtac = percentualCampanhaCanal(regra, item.precoAtacado, promoAtac);
+          const pctVar = percentualCampanhaCanal(regra, item.precoVarejo, promoVar);
           const cheioAtac = precoCheioCanal(item.precoAtacado, promoAtac);
           const cheioVar = precoCheioCanal(item.precoVarejo, promoVar);
-          const campAtac = calcularPrecoCampanha(cheioAtac, pct);
-          const campVar = calcularPrecoCampanha(cheioVar, pct);
+          const campAtac = calcularPrecoCampanha(cheioAtac, pctAtac);
+          const campVar = calcularPrecoCampanha(cheioVar, pctVar);
           linhas.push([
             ref.referencia, ref.nome, item.cor ?? item.nome ?? '', num(item.mesesOportunidade), item.giroTotal === null ? '' : item.giroTotal.toFixed(2).replace('.', ','),
             preco(item.precoFabrica), preco(item.precoAtacado), preco(item.precoVarejo), preco(promoAtac?.precoPromo), preco(promoVar?.precoPromo),
-            String(pct), campAtac !== null ? preco(campAtac) : (pct > 0 && cheioAtac === null ? 'sem preço cheio' : ''),
-            String(pct), campVar !== null ? preco(campVar) : (pct > 0 && cheioVar === null ? 'sem preço cheio' : ''),
+            String(pctAtac), campAtac !== null ? preco(campAtac) : (pctAtac > 0 && cheioAtac === null ? 'sem preço cheio' : ''),
+            String(pctVar), campVar !== null ? preco(campVar) : (pctVar > 0 && cheioVar === null ? 'sem preço cheio' : ''),
             String(regra), DESCRICAO_REGRA_CAMPANHA[regra],
+            REGRAS_ESCADA_GIRO_ALTO.has(regra) ? `${descontoAtualCanal(item.precoAtacado, promoAtac).toFixed(2).replace('.', ',')}%` : '',
+            REGRAS_ESCADA_GIRO_ALTO.has(regra) ? `${descontoAtualCanal(item.precoVarejo, promoVar).toFixed(2).replace('.', ',')}%` : '',
           ]);
         }
       }
@@ -1698,20 +1728,27 @@ export default function GiroPage() {
           const cheioVarejo = precoCheioCanal(item.precoVarejo, promoVarejo);
           const pctPromoAtacado = promoAtacado ? variacaoPercentual(cheioAtacado, promoAtacado.precoPromo) : null;
           const pctPromoVarejo = promoVarejo ? variacaoPercentual(cheioVarejo, promoVarejo.precoPromo) : null;
-          const percentualCampanha = PERCENTUAL_POR_REGRA[regraCampanha];
-          const descricaoRegra = DESCRICAO_REGRA_CAMPANHA[regraCampanha];
-          const precoAtacadoCampanha = calcularPrecoCampanha(cheioAtacado, percentualCampanha);
-          const precoVarejoCampanha = calcularPrecoCampanha(cheioVarejo, percentualCampanha);
-          const precoAtacadoCampanhaReal = calcularPrecoCampanhaReal(cheioAtacado, percentualCampanha);
-          const precoVarejoCampanhaReal = calcularPrecoCampanhaReal(cheioVarejo, percentualCampanha);
-          const semCheioAtacado = percentualCampanha > 0 && cheioAtacado === null;
-          const semCheioVarejo = percentualCampanha > 0 && cheioVarejo === null;
+          const pctCampanhaAtacado = percentualCampanhaCanal(regraCampanha, item.precoAtacado, promoAtacado);
+          const pctCampanhaVarejo = percentualCampanhaCanal(regraCampanha, item.precoVarejo, promoVarejo);
+          const escadaPorDesconto = REGRAS_ESCADA_GIRO_ALTO.has(regraCampanha);
+          const descricaoRegraAtacado = escadaPorDesconto
+            ? `${DESCRICAO_REGRA_CAMPANHA[regraCampanha]}\nDesconto atual no atacado: ${descontoAtualCanal(item.precoAtacado, promoAtacado).toFixed(2).replace('.', ',')}% → campanha ${pctCampanhaAtacado}%`
+            : DESCRICAO_REGRA_CAMPANHA[regraCampanha];
+          const descricaoRegraVarejo = escadaPorDesconto
+            ? `${DESCRICAO_REGRA_CAMPANHA[regraCampanha]}\nDesconto atual no varejo: ${descontoAtualCanal(item.precoVarejo, promoVarejo).toFixed(2).replace('.', ',')}% → campanha ${pctCampanhaVarejo}%`
+            : DESCRICAO_REGRA_CAMPANHA[regraCampanha];
+          const precoAtacadoCampanha = calcularPrecoCampanha(cheioAtacado, pctCampanhaAtacado);
+          const precoVarejoCampanha = calcularPrecoCampanha(cheioVarejo, pctCampanhaVarejo);
+          const precoAtacadoCampanhaReal = calcularPrecoCampanhaReal(cheioAtacado, pctCampanhaAtacado);
+          const precoVarejoCampanhaReal = calcularPrecoCampanhaReal(cheioVarejo, pctCampanhaVarejo);
+          const semCheioAtacado = pctCampanhaAtacado > 0 && cheioAtacado === null;
+          const semCheioVarejo = pctCampanhaVarejo > 0 && cheioVarejo === null;
           const tooltipAtacado = precoAtacadoCampanhaReal !== null
-            ? `${descricaoRegra}\nPreço real (sem arredondamento): ${formatarPreco(precoAtacadoCampanhaReal)}`
-            : descricaoRegra;
+            ? `${descricaoRegraAtacado}\nPreço real (sem arredondamento): ${formatarPreco(precoAtacadoCampanhaReal)}`
+            : descricaoRegraAtacado;
           const tooltipVarejo = precoVarejoCampanhaReal !== null
-            ? `${descricaoRegra}\nPreço real (sem arredondamento): ${formatarPreco(precoVarejoCampanhaReal)}`
-            : descricaoRegra;
+            ? `${descricaoRegraVarejo}\nPreço real (sem arredondamento): ${formatarPreco(precoVarejoCampanhaReal)}`
+            : descricaoRegraVarejo;
           return (
             <>
               <td className="px-3 py-2 text-right text-amber-900 bg-amber-50/30 whitespace-nowrap">
@@ -1742,7 +1779,7 @@ export default function GiroPage() {
               >
                 {precoAtacadoCampanha !== null ? (
                   <>
-                    <div className="text-[10px] text-rose-500 leading-tight">-{percentualCampanha}%</div>
+                    <div className="text-[10px] text-rose-500 leading-tight">-{pctCampanhaAtacado}%</div>
                     {formatarPreco(precoAtacadoCampanha)}
                   </>
                 ) : semCheioAtacado ? (
@@ -1759,7 +1796,7 @@ export default function GiroPage() {
               >
                 {precoVarejoCampanha !== null ? (
                   <>
-                    <div className="text-[10px] text-rose-500 leading-tight">-{percentualCampanha}%</div>
+                    <div className="text-[10px] text-rose-500 leading-tight">-{pctCampanhaVarejo}%</div>
                     {formatarPreco(precoVarejoCampanha)}
                   </>
                 ) : semCheioVarejo ? (
@@ -2711,6 +2748,13 @@ export default function GiroPage() {
                         ))}
                       </tbody>
                     </table>
+                    <p className="text-xs text-black mt-2">
+                      <strong>Regras 3, 4 e 5 (giro {'>'} 6):</strong> o desconto final olha o <strong>desconto que o canal já tem</strong> (colunas
+                      Promo Atac / Promo Var; sem promoção = 0%), separadamente no Atacado e no Varejo: desconto atual
+                      de <strong>0% a 10,99% → 30%</strong>; de <strong>11% a 30% → 50%</strong>; <strong>fora dessas faixas
+                      (acima de 30%) segue a escadinha normal</strong> (50/60/70% da tabela acima). Vale também para
+                      Kiss Me/linhas especiais quando a referência não é mista (seguem a escadinha 3/4/5).
+                    </p>
                     <p className="text-xs text-black mt-2">
                       Quando o giro bate em mais de uma faixa junto com Meses FL, a faixa de Meses FL manda mais (ex:
                       giro {'>'} 6 com 12+ meses FL usa a regra 4, não a 3).
