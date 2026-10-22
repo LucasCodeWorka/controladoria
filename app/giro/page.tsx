@@ -911,6 +911,8 @@ export default function GiroPage() {
   // tabela - so visual, pra economizar espaco horizontal quando o usuario
   // ja sabe os valores e quer ver so Promo/Camp.
   const [mostrarPrecosCheios, setMostrarPrecosCheios] = useState(true);
+  // Progresso da exportacao CSV (todas as paginas, uma linha por referencia+cor).
+  const [exportandoCsv, setExportandoCsv] = useState<{ feito: number; total: number } | null>(null);
 
   // Detalhe por cor (expandir uma referencia pra ver o giro/preco/promo/
   // Meses FL de cada cor dela em vez de so a soma). Busca sob demanda, uma
@@ -1339,6 +1341,120 @@ export default function GiroPage() {
 
   function trocarPaginaMatriz(novaPagina: number) {
     buscarMatriz(mesReferencia, empresasParaMatriz(), novaPagina, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','), filtroDimensaoMatriz);
+  }
+
+  // Exporta CSV da matriz INTEIRA (todas as paginas do filtro atual), uma
+  // linha por referencia + cor, com a regra de campanha aplicada em cada uma
+  // (pedido explicito do usuario). Reusa os mesmos filtros/ordenacao da tela
+  // e as mesmas funcoes de regra/preco (identificarRegraCampanha,
+  // calcularPrecoCampanha...), entao o CSV nunca diverge do que a tabela
+  // mostra ao expandir a referencia.
+  async function exportarMatrizCsv() {
+    if (!matriz || exportandoCsv) return;
+    const mesRef = mesReferencia;
+    const empresasParam = empresasParaMatriz();
+    const statusParam = Array.from(statusSelecionados).join(',');
+    setExportandoCsv({ feito: 0, total: 0 });
+    try {
+      // 1) Todas as referencias do filtro (paginas de MATRIZ_POR_PAGINA).
+      const referencias: ItemMatrizGiro[] = [];
+      let totalPaginas = 1;
+      for (let pagina = 1; pagina <= totalPaginas; pagina++) {
+        const params = new URLSearchParams({
+          mesReferencia: mesRef, empresas: empresasParam, pagina: String(pagina), porPagina: String(MATRIZ_POR_PAGINA),
+          ordenarPor: matrizOrdenarPor, ordem: matrizOrdem,
+        });
+        const giroMinimoNum = Number(matrizGiroMinimo.trim().replace(',', '.'));
+        if (matrizGiroMinimo.trim() !== '' && !Number.isNaN(giroMinimoNum)) params.set('giroMinimo', String(giroMinimoNum));
+        if (filtroDimensaoMatriz) {
+          params.set('dimensaoFiltro', filtroDimensaoMatriz.dimensao);
+          params.set('categoriaFiltro', filtroDimensaoMatriz.categoria);
+        }
+        if (statusParam) params.set('status', statusParam);
+        if (canaisOportunidade) {
+          params.set('oportunidadeDesconto', 'true');
+          params.set('canaisDesconto', canaisOportunidade);
+        }
+        const mesesFLNum = Number(matrizMesesFLMinimo.trim());
+        if (matrizMesesFLMinimo.trim() !== '' && !Number.isNaN(mesesFLNum)) params.set('mesesFLMinimo', String(mesesFLNum));
+        aplicarFiltrosCategoriaParams(params);
+        const resp = await fetch(`/api/giro/matriz-produtos?${params.toString()}`, { cache: 'no-store' });
+        const data = await resp.json();
+        if (!resp.ok || data.error) throw new Error(data.detail || data.error || 'Erro ao buscar a matriz');
+        referencias.push(...(data.itens || []));
+        totalPaginas = data.totalPaginas || 1;
+      }
+      setExportandoCsv({ feito: 0, total: referencias.length });
+
+      // 2) Cores de cada referencia (mesmo endpoint/filtros do expandir), em
+      // paralelo limitado pra nao derrubar o backend.
+      const coresPorRef: Record<string, ItemMatrizGiro[]> = {};
+      let proximo = 0;
+      let feitos = 0;
+      const trabalhador = async () => {
+        while (proximo < referencias.length) {
+          const ref = referencias[proximo++];
+          const params = new URLSearchParams({ referencia: ref.referencia, mesReferencia: mesRef, empresas: empresasParam });
+          if (statusParam) params.set('status', statusParam);
+          const giroMinimoNum = Number(matrizGiroMinimo.trim().replace(',', '.'));
+          if (matrizGiroMinimo.trim() !== '' && !Number.isNaN(giroMinimoNum)) params.set('giroMinimo', String(giroMinimoNum));
+          const mesesFLNum = Number(matrizMesesFLMinimo.trim());
+          if (matrizMesesFLMinimo.trim() !== '' && !Number.isNaN(mesesFLNum)) params.set('mesesFLMinimo', String(mesesFLNum));
+          if (canaisOportunidade) {
+            params.set('oportunidadeDesconto', 'true');
+            params.set('canaisDesconto', canaisOportunidade);
+          }
+          const resp = await fetch(`/api/giro/matriz-produtos/cores?${params.toString()}`, { cache: 'no-store' });
+          const data = await resp.json();
+          if (!resp.ok || data.error) throw new Error(data.detail || data.error || `Erro ao buscar as cores de ${ref.referencia}`);
+          coresPorRef[ref.referencia] = data.itens || [];
+          feitos++;
+          setExportandoCsv({ feito: feitos, total: referencias.length });
+        }
+      };
+      await Promise.all(Array.from({ length: 5 }, () => trabalhador()));
+
+      // 3) Monta o CSV (separador ; e BOM, pra abrir direto no Excel pt-BR).
+      const num = (v: number | null | undefined) => (v === null || v === undefined ? '' : String(v).replace('.', ','));
+      const preco = (v: number | null | undefined) => (v === null || v === undefined ? '' : v.toFixed(2).replace('.', ','));
+      const esc = (v: string) => (/[;"\n\r]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
+      const cab = [
+        'Referência', 'Produto', 'Cor', 'Meses FL', 'Giro', 'Fábrica', 'Atacado', 'Varejo', 'Promo Atac', 'Promo Var',
+        'Camp Atac (%)', 'Camp Atac', 'Camp Var (%)', 'Camp Var', 'Regra aplicada', 'Descrição da regra',
+      ];
+      const linhas: string[][] = [];
+      for (const ref of referencias) {
+        for (const item of coresPorRef[ref.referencia] ?? []) {
+          const regra = identificarRegraCampanha(item.giroTotal, item.mesesOportunidade, temPromoAtiva(item), item.familia, item.temCorSemMesesFL, item.linha);
+          const pct = PERCENTUAL_POR_REGRA[regra];
+          const promoAtac = item.promocoes?.find((p) => p.tipo === 'Atacado');
+          const promoVar = item.promocoes?.find((p) => p.tipo === 'Varejo');
+          const cheioAtac = precoCheioCanal(item.precoAtacado, promoAtac);
+          const cheioVar = precoCheioCanal(item.precoVarejo, promoVar);
+          const campAtac = calcularPrecoCampanha(cheioAtac, pct);
+          const campVar = calcularPrecoCampanha(cheioVar, pct);
+          linhas.push([
+            ref.referencia, ref.nome, item.cor ?? item.nome ?? '', num(item.mesesOportunidade), item.giroTotal === null ? '' : item.giroTotal.toFixed(2).replace('.', ','),
+            preco(item.precoFabrica), preco(item.precoAtacado), preco(item.precoVarejo), preco(promoAtac?.precoPromo), preco(promoVar?.precoPromo),
+            String(pct), campAtac !== null ? preco(campAtac) : (pct > 0 && cheioAtac === null ? 'sem preço cheio' : ''),
+            String(pct), campVar !== null ? preco(campVar) : (pct > 0 && cheioVar === null ? 'sem preço cheio' : ''),
+            String(regra), DESCRICAO_REGRA_CAMPANHA[regra],
+          ]);
+        }
+      }
+      const csv = '\uFEFF' + [cab, ...linhas].map((l) => l.map(esc).join(';')).join('\r\n');
+      const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `giro-referencia-cor-${mesRef}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error('Erro ao exportar CSV do giro:', e);
+      setErro(`Erro ao exportar o CSV: ${e instanceof Error ? e.message : 'erro desconhecido'}`);
+    } finally {
+      setExportandoCsv(null);
+    }
   }
 
   // Clicar numa coluna ja ordenada inverte o sentido; numa coluna nova,
@@ -2278,6 +2394,17 @@ export default function GiroPage() {
               </div>
               {matriz && (
                 <div className="flex items-center gap-2 text-sm shrink-0">
+                  <button
+                    onClick={exportarMatrizCsv}
+                    disabled={exportandoCsv !== null || matrizCarregando}
+                    title="Baixa um CSV com TODAS as páginas do filtro atual, uma linha por referência + cor, com a regra de campanha aplicada"
+                    className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-md disabled:opacity-60 transition-colors inline-flex items-center gap-1.5"
+                  >
+                    {exportandoCsv ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+                    {exportandoCsv
+                      ? (exportandoCsv.total > 0 ? `Exportando ${exportandoCsv.feito}/${exportandoCsv.total}…` : 'Buscando referências…')
+                      : 'Baixar CSV'}
+                  </button>
                   <button
                     onClick={() => trocarPaginaMatriz(matrizPagina - 1)}
                     disabled={matrizCarregando || matrizPagina <= 1}
