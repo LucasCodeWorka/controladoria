@@ -1372,13 +1372,14 @@ def matriz_produtos_giro(
             precos_cor = _obter_precos_produtos(cd_produtos_cor)
             promocoes_cor = _obter_promocoes_produtos(cd_produtos_cor, cd_empresas)
             hoje_filtro_cor = date.today()
+            fallback_cheio = _fallback_preco_cheio_por_referencia(dados_completos, precos_cor, promocoes_cor)
 
             dados_completos = [
                 i for i in dados_completos
                 if _cores_no_filtro(
                     i, precos_cor, promocoes_cor, primeiras_por_cor, hoje_filtro_cor,
                     giroMinimo, mesesFLMinimo, oportunidadeDesconto, mista_dict.get(i["referencia"]),
-                    _parse_canais_desconto(canaisDesconto),
+                    _parse_canais_desconto(canaisDesconto), fallback_cheio.get(i["referencia"]),
                 )
             ]
 
@@ -1466,6 +1467,7 @@ def matriz_produtos_giro(
         precos = _obter_precos_produtos([i["cdProdutoPreco"] for i in itens_pagina])
         promocoes = _obter_promocoes_produtos([i["cdProdutoPreco"] for i in itens_pagina], cd_empresas)
         primeiras_oportunidades = _obter_primeira_oportunidade([i["referencia"] for i in itens_pagina], status_filtro, mes_ref, cd_empresas)
+        fallback_cheio_pagina = _fallback_preco_cheio_por_referencia(itens_pagina, precos, promocoes)
         # Pro "temCorSemMesesFL" (regra especial KISS ME/KISS ME PLUS so se
         # aplica em referencia mista) - se algum filtro de giro/Meses FL/
         # oportunidade ja buscou isso pra base INTEIRA la em cima, reusa;
@@ -1504,6 +1506,8 @@ def matriz_produtos_giro(
                 "familia": (item.get("categorias") or {}).get("familia"),
                 "linha": (item.get("categorias") or {}).get("linha"),
                 "temCorSemMesesFL": mista_dict.get(item["referencia"], False),
+                "precoCheioFallbackAtacado": (fallback_cheio_pagina.get(item["referencia"]) or {}).get("atacado"),
+                "precoCheioFallbackVarejo": (fallback_cheio_pagina.get(item["referencia"]) or {}).get("varejo"),
             })
 
         return {
@@ -1575,6 +1579,14 @@ def matriz_produtos_giro_por_cor(
         else:
             tem_cor_sem_meses_fl = any(primeiras_oportunidades.get(c["cor"]) is None for c in dados_cor)
 
+        # Preco cheio de reserva (maior preco do canal entre as cores da
+        # referencia) pras cores sem preco cheio proprio - mesmo criterio do
+        # filtro e dos cards (pedido explicito do usuario).
+        fallback_ref = _fallback_preco_cheio_por_referencia(
+            [{"referencia": referencia, "porCor": dados_cor}], precos,
+            promocoes,
+        ).get(referencia) or {}
+
         itens_resposta = []
         for item in sorted(dados_cor, key=lambda i: i["cor"]):
             preco = precos.get(item["cdProdutoPreco"]) or {"precoFabrica": None, "precoAtacado": None, "precoVarejo": None}
@@ -1587,7 +1599,7 @@ def matriz_produtos_giro_por_cor(
             if not _cor_bate_filtros(
                 item["giroTotal"], meses_oportunidade, preco, promo,
                 giroMinimo, mesesFLMinimo, oportunidadeDesconto, item.get("familia"), tem_cor_sem_meses_fl,
-                item.get("linha"), _parse_canais_desconto(canaisDesconto),
+                item.get("linha"), _parse_canais_desconto(canaisDesconto), fallback_ref,
             ):
                 continue
 
@@ -1610,6 +1622,8 @@ def matriz_produtos_giro_por_cor(
                 "familia": item.get("familia"),
                 "linha": item.get("linha"),
                 "temCorSemMesesFL": tem_cor_sem_meses_fl,
+                "precoCheioFallbackAtacado": fallback_ref.get("atacado"),
+                "precoCheioFallbackVarejo": fallback_ref.get("varejo"),
             })
 
         return {"itens": itens_resposta, "referencia": referencia, "mesReferencia": mes_ref}
@@ -1924,20 +1938,20 @@ def _calcular_percentual_campanha(
     ]
 
 
-def _desconto_atual_canal(preco_cadastro: Optional[float], promo_canal: Optional[dict]) -> float:
+def _desconto_atual_canal(preco_cadastro: Optional[float], promo_canal: Optional[dict], fallback: Optional[float] = None) -> float:
     """Desconto (%) que o canal JA pratica = o mesmo percentual mostrado nas
     colunas Promo Atac/Promo Var (preco cheio -> preco promocional). Sem
     promocao ativa (ou sem preco cheio pra comparar) = 0%."""
     if not promo_canal or promo_canal.get("precoPromo") is None:
         return 0.0
-    cheio = _preco_cheio_canal(preco_cadastro, promo_canal)
+    cheio = _preco_cheio_canal(preco_cadastro, promo_canal, fallback)
     if cheio is None:
         return 0.0
     return max(0.0, (cheio - promo_canal["precoPromo"]) / cheio * 100)
 
 
 def _percentual_campanha_canal(
-    regra: int, preco_cadastro: Optional[float], promo_canal: Optional[dict],
+    regra: int, preco_cadastro: Optional[float], promo_canal: Optional[dict], fallback: Optional[float] = None,
 ) -> float:
     """Percentual de campanha de UM canal (atacado ou varejo).
 
@@ -1950,7 +1964,7 @@ def _percentual_campanha_canal(
     Todas as outras regras (1, 2, 6, 7, 8, 9, 10) seguem o percentual fixo
     da propria regra."""
     if regra in REGRAS_ESCADA_GIRO_ALTO:
-        atual = round(_desconto_atual_canal(preco_cadastro, promo_canal), 2)
+        atual = round(_desconto_atual_canal(preco_cadastro, promo_canal, fallback), 2)
         if atual <= 10.99:
             return 30
         if atual <= 30:
@@ -1978,7 +1992,7 @@ def _variacao_percentual(preco_base: Optional[float], preco: Optional[float]) ->
     return ((preco - preco_base) / preco_base) * 100
 
 
-def _preco_cheio_canal(preco_cadastro: Optional[float], promo_canal: Optional[dict]) -> Optional[float]:
+def _preco_cheio_canal(preco_cadastro: Optional[float], promo_canal: Optional[dict], fallback: Optional[float] = None) -> Optional[float]:
     """Preco cheio que serve de base pra campanha num canal: o preco de
     cadastro, se for > 0; senao o "preco anterior" gravado na promocao ativa
     daquele canal (o preco de antes da promo), se for > 0; senao nenhum.
@@ -1990,10 +2004,15 @@ def _preco_cheio_canal(preco_cadastro: Optional[float], promo_canal: Optional[di
     anterior = (promo_canal or {}).get("precoAnterior")
     if anterior is not None and anterior > 0:
         return anterior
+    # Sem preco cheio proprio (cadastro zerado e sem "preco anterior"): usa o
+    # MAIOR preco do canal entre as outras cores da mesma referencia (pedido
+    # explicito do usuario) - ver _fallback_preco_cheio_por_referencia.
+    if fallback is not None and fallback > 0:
+        return fallback
     return None
 
 
-def _ganho_desconto_canal(preco_cheio: Optional[float], promo_canal: Optional[dict], percentual: float) -> float:
+def _ganho_desconto_canal(preco_cheio: Optional[float], promo_canal: Optional[dict], percentual: float, fallback: Optional[float] = None) -> float:
     """Quanto, em R$ por peca, o preco sugerido melhora o que o canal
     (atacado OU varejo) pratica hoje. Zero = nao ha ganho nenhum.
 
@@ -2005,7 +2024,7 @@ def _ganho_desconto_canal(preco_cheio: Optional[float], promo_canal: Optional[di
     sugerido (50%) sendo maior que o praticado (48,5%). Essa e exatamente
     a conta que os cards usam pro valor do desconto, entao filtro e valor
     nunca discordam (pedido explicito do usuario)."""
-    preco_cheio = _preco_cheio_canal(preco_cheio, promo_canal)
+    preco_cheio = _preco_cheio_canal(preco_cheio, promo_canal, fallback)
     if preco_cheio is None:
         return 0.0
     preco_campanha = _calcular_preco_campanha(preco_cheio, percentual)
@@ -2017,7 +2036,7 @@ def _ganho_desconto_canal(preco_cheio: Optional[float], promo_canal: Optional[di
     return max(0.0, base - preco_campanha)
 
 
-def _acrescimo_canal(preco_cheio: Optional[float], promo_canal: Optional[dict], percentual: float) -> float:
+def _acrescimo_canal(preco_cheio: Optional[float], promo_canal: Optional[dict], percentual: float, fallback: Optional[float] = None) -> float:
     """O oposto de _ganho_desconto_canal: quanto, em R$ por peca, o preco
     sugerido PIORA (aumenta) o que o canal pratica hoje. So acontece quando
     ja existe promocao ativa MAIS AGRESSIVA que a sugestao da campanha (sem
@@ -2033,7 +2052,7 @@ def _acrescimo_canal(preco_cheio: Optional[float], promo_canal: Optional[dict], 
     cedo com 0, e o que faz esse card capturar o caso real: cor que esta
     com desconto hoje mas deixaria de ter desconto nenhum (pedido
     explicito do usuario - esse caso estava saindo do card antes)."""
-    preco_cheio = _preco_cheio_canal(preco_cheio, promo_canal)
+    preco_cheio = _preco_cheio_canal(preco_cheio, promo_canal, fallback)
     if preco_cheio is None or not promo_canal:
         return 0.0
     base = promo_canal["precoPromo"]
@@ -2058,13 +2077,14 @@ def _parse_canais_desconto(canais: Optional[str]) -> tuple:
 def _tem_oportunidade_desconto(
     giro_total, meses_oportunidade, promo: dict, preco_atacado, preco_varejo,
     familia: Optional[str] = None, tem_cor_sem_meses_fl: bool = False, linha: Optional[str] = None,
-    canais: tuple = CANAIS_DESCONTO,
+    canais: tuple = CANAIS_DESCONTO, fallback: Optional[dict] = None,
 ) -> bool:
+    fb = fallback or {}
     tem_promo = bool(promo.get("atacado") or promo.get("varejo"))
     regra = _identificar_regra_campanha(giro_total, meses_oportunidade, tem_promo, familia, tem_cor_sem_meses_fl, linha)
     # Percentual por canal (nas regras 3/4/5 depende do desconto atual de cada canal).
-    pct_atacado = _percentual_campanha_canal(regra, preco_atacado, promo.get("atacado"))
-    pct_varejo = _percentual_campanha_canal(regra, preco_varejo, promo.get("varejo"))
+    pct_atacado = _percentual_campanha_canal(regra, preco_atacado, promo.get("atacado"), fb.get("atacado"))
+    pct_varejo = _percentual_campanha_canal(regra, preco_varejo, promo.get("varejo"), fb.get("varejo"))
     if pct_atacado <= 0 and pct_varejo <= 0:
         return False
     # Atacado e Varejo avaliados SEPARADAMENTE: basta um dos dois ter ganho
@@ -2074,8 +2094,8 @@ def _tem_oportunidade_desconto(
     # nenhuma, e a referencia inteira ficava de fora).
     # Com os flags separados da tela, so os canais marcados contam.
     return (
-        ("atacado" in canais and _ganho_desconto_canal(preco_atacado, promo.get("atacado"), pct_atacado) > 0)
-        or ("varejo" in canais and _ganho_desconto_canal(preco_varejo, promo.get("varejo"), pct_varejo) > 0)
+        ("atacado" in canais and _ganho_desconto_canal(preco_atacado, promo.get("atacado"), pct_atacado, fb.get("atacado")) > 0)
+        or ("varejo" in canais and _ganho_desconto_canal(preco_varejo, promo.get("varejo"), pct_varejo, fb.get("varejo")) > 0)
     )
 
 
@@ -2083,7 +2103,7 @@ def _cor_bate_filtros(
     giro_cor: Optional[float], meses_cor: Optional[int], preco_cor: dict, promo_cor: dict,
     giro_minimo: Optional[float] = None, meses_fl_minimo: Optional[int] = None,
     oportunidade_desconto: bool = False, familia: Optional[str] = None, tem_cor_sem_meses_fl: bool = False,
-    linha: Optional[str] = None, canais: tuple = CANAIS_DESCONTO,
+    linha: Optional[str] = None, canais: tuple = CANAIS_DESCONTO, fallback: Optional[dict] = None,
 ) -> bool:
     """Se UMA cor, sozinha, bate em TODOS os filtros ativos da tela ao mesmo
     tempo. O "ao mesmo tempo" e o ponto: avaliar cada filtro de forma
@@ -2099,7 +2119,7 @@ def _cor_bate_filtros(
         return False
     if oportunidade_desconto and not _tem_oportunidade_desconto(
         giro_cor, meses_cor, promo_cor, preco_cor.get("precoAtacado"), preco_cor.get("precoVarejo"), familia, tem_cor_sem_meses_fl, linha,
-        canais,
+        canais, fallback,
     ):
         return False
     return True
@@ -2177,11 +2197,44 @@ def _mista_por_referencia(
     return resultado
 
 
+def _fallback_preco_cheio_por_referencia(itens: list, precos_cor: dict, promocoes_cor: dict) -> dict:
+    """{referencia: {"atacado": maior preco, "varejo": maior preco}} - preco
+    cheio de reserva, pras cores que ficaram SEM preco cheio num canal
+    (cadastro zerado e sem "preco anterior" de promocao): usa o MAIOR preco
+    daquele canal entre as outras cores da MESMA referencia (pedido
+    explicito do usuario). So busca o preco de todas as cores das
+    referencias que realmente tem alguma cor sem preco cheio (o resto da
+    base nao precisa - e o preco fica em cache por cd_produto)."""
+    precisam = {}
+    for item in itens:
+        for cor_item in item.get("porCor") or []:
+            preco = precos_cor.get(cor_item["cdProdutoPreco"])
+            if preco is None:
+                continue
+            promo = promocoes_cor.get(cor_item["cdProdutoPreco"]) or {}
+            if (
+                _preco_cheio_canal(preco.get("precoAtacado"), promo.get("atacado")) is None
+                or _preco_cheio_canal(preco.get("precoVarejo"), promo.get("varejo")) is None
+            ):
+                precisam[item["referencia"]] = item
+                break
+    if not precisam:
+        return {}
+    todos = _obter_precos_produtos([c["cdProdutoPreco"] for it in precisam.values() for c in it["porCor"]])
+    resultado = {}
+    for ref, it in precisam.items():
+        precos = [todos.get(c["cdProdutoPreco"]) for c in it["porCor"]]
+        maior_atac = max([(p or {}).get("precoAtacado") or 0 for p in precos], default=0)
+        maior_var = max([(p or {}).get("precoVarejo") or 0 for p in precos], default=0)
+        resultado[ref] = {"atacado": maior_atac or None, "varejo": maior_var or None}
+    return resultado
+
+
 def _cores_no_filtro(
     item: dict, precos_cor: dict, promocoes_cor: dict, primeiras_por_cor: dict, hoje,
     giro_minimo: Optional[float] = None, meses_fl_minimo: Optional[int] = None,
     oportunidade_desconto: bool = False, tem_cor_sem_meses_fl: Optional[bool] = None,
-    canais: tuple = CANAIS_DESCONTO,
+    canais: tuple = CANAIS_DESCONTO, fallback: Optional[dict] = None,
 ) -> list:
     """Cores da referencia que batem em todos os filtros ativos. Lista vazia
     = a referencia inteira fica de fora. Sem nenhum filtro ativo, devolve
@@ -2204,7 +2257,7 @@ def _cores_no_filtro(
             meses_cor = (hoje.year - dt_primeira_cor.year) * 12 + (hoje.month - dt_primeira_cor.month)
         if _cor_bate_filtros(
             cor_item["giroTotal"], meses_cor, preco_cor, promo_cor,
-            giro_minimo, meses_fl_minimo, oportunidade_desconto, familia, tem_cor_sem_meses_fl, linha, canais,
+            giro_minimo, meses_fl_minimo, oportunidade_desconto, familia, tem_cor_sem_meses_fl, linha, canais, fallback,
         ):
             cores_ok.append(cor_item)
     return cores_ok
@@ -2280,12 +2333,13 @@ def totais_desconto_giro(
         precos_cor = _obter_precos_produtos(cd_produtos_cor)
         promocoes_cor = _obter_promocoes_produtos(cd_produtos_cor, cd_empresas)
 
+        fallback_cheio = _fallback_preco_cheio_por_referencia(dados_completos, precos_cor, promocoes_cor)
         cores_por_referencia = {}
         for item in dados_completos:
             cores_ok = _cores_no_filtro(
                 item, precos_cor, promocoes_cor, primeiras_por_cor, hoje,
                 giroMinimo, mesesFLMinimo, oportunidadeDesconto, mista_dict.get(item["referencia"]),
-                _parse_canais_desconto(canaisDesconto),
+                _parse_canais_desconto(canaisDesconto), fallback_cheio.get(item["referencia"]),
             )
             if cores_ok:
                 cores_por_referencia[item["referencia"]] = cores_ok
@@ -2330,13 +2384,14 @@ def totais_desconto_giro(
                 tem_promo_cor = bool(promo_cor.get("atacado") or promo_cor.get("varejo"))
                 regra_cor = _identificar_regra_campanha(cor_item["giroTotal"], meses_cor, tem_promo_cor, familia_item, tem_cor_sem_meses_fl_item, linha_item)
                 # Percentual por canal (regras 3/4/5 dependem do desconto atual de cada canal).
-                pct_atacado_cor = _percentual_campanha_canal(regra_cor, preco_cor.get("precoAtacado"), promo_cor.get("atacado"))
-                pct_varejo_cor = _percentual_campanha_canal(regra_cor, preco_cor.get("precoVarejo"), promo_cor.get("varejo"))
+                fb_ref = fallback_cheio.get(item["referencia"]) or {}
+                pct_atacado_cor = _percentual_campanha_canal(regra_cor, preco_cor.get("precoAtacado"), promo_cor.get("atacado"), fb_ref.get("atacado"))
+                pct_varejo_cor = _percentual_campanha_canal(regra_cor, preco_cor.get("precoVarejo"), promo_cor.get("varejo"), fb_ref.get("varejo"))
                 total_desconto_atacado += estoque_maraponga_cor * _ganho_desconto_canal(
-                    preco_cor.get("precoAtacado"), promo_cor.get("atacado"), pct_atacado_cor
+                    preco_cor.get("precoAtacado"), promo_cor.get("atacado"), pct_atacado_cor, fb_ref.get("atacado")
                 )
                 total_desconto_varejo += estoque_resto_cor * _ganho_desconto_canal(
-                    preco_cor.get("precoVarejo"), promo_cor.get("varejo"), pct_varejo_cor
+                    preco_cor.get("precoVarejo"), promo_cor.get("varejo"), pct_varejo_cor, fb_ref.get("varejo")
                 )
                 # Caso oposto: cor ja esta em promocao MAIS AGRESSIVA que a
                 # sugestao da campanha - aplicar a campanha ali subiria o
@@ -2344,10 +2399,10 @@ def totais_desconto_giro(
                 # pra nao esconder esse "custo" dentro do card de ganho
                 # (pedido explicito do usuario).
                 total_acrescimo_atacado += estoque_maraponga_cor * _acrescimo_canal(
-                    preco_cor.get("precoAtacado"), promo_cor.get("atacado"), pct_atacado_cor
+                    preco_cor.get("precoAtacado"), promo_cor.get("atacado"), pct_atacado_cor, fb_ref.get("atacado")
                 )
                 total_acrescimo_varejo += estoque_resto_cor * _acrescimo_canal(
-                    preco_cor.get("precoVarejo"), promo_cor.get("varejo"), pct_varejo_cor
+                    preco_cor.get("precoVarejo"), promo_cor.get("varejo"), pct_varejo_cor, fb_ref.get("varejo")
                 )
 
         return {

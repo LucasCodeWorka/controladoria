@@ -117,6 +117,10 @@ interface ItemMatrizGiro {
   familia?: string | null;
   linha?: string | null;
   temCorSemMesesFL?: boolean;
+  // Preco cheio de reserva: maior preco do canal entre as cores da referencia,
+  // usado quando a cor nao tem preco cheio proprio (pedido do usuario).
+  precoCheioFallbackAtacado?: number | null;
+  precoCheioFallbackVarejo?: number | null;
 }
 
 interface MatrizGiro {
@@ -443,18 +447,18 @@ function calcularPercentualCampanha(
 // Mesma conta do backend (_percentual_campanha_canal em giro.py).
 const REGRAS_ESCADA_GIRO_ALTO = new Set([REGRA_GIRO_MAIOR_6, REGRA_APOS_12_MESES, REGRA_APOS_24_MESES]);
 
-function descontoAtualCanal(precoCadastro: number | null, promo?: { precoPromo: number; precoAnterior: number | null } | null): number {
+function descontoAtualCanal(precoCadastro: number | null, promo?: { precoPromo: number; precoAnterior: number | null } | null, fallback?: number | null): number {
   if (!promo) return 0;
-  const cheio = precoCheioCanal(precoCadastro, promo);
+  const cheio = precoCheioCanal(precoCadastro, promo, fallback);
   if (cheio === null) return 0;
   return Math.max(0, ((cheio - promo.precoPromo) / cheio) * 100);
 }
 
 function percentualCampanhaCanal(
-  regra: number, precoCadastro: number | null, promo?: { precoPromo: number; precoAnterior: number | null } | null
+  regra: number, precoCadastro: number | null, promo?: { precoPromo: number; precoAnterior: number | null } | null, fallback?: number | null
 ): number {
   if (REGRAS_ESCADA_GIRO_ALTO.has(regra)) {
-    const atual = Math.round(descontoAtualCanal(precoCadastro, promo) * 100) / 100;
+    const atual = Math.round(descontoAtualCanal(precoCadastro, promo, fallback) * 100) / 100;
     if (atual <= 10.99) return 30;
     if (atual <= 30) return 50;
   }
@@ -563,9 +567,11 @@ function calcularPrecoCampanhaReal(precoBase: number | null, percentual: number)
 // cadastro se > 0; senao o "preco anterior" da promocao ativa do canal, se
 // > 0; senao nenhum (canal fica "sem preço cheio" - nao gera campanha). Preco
 // zerado no cadastro gerava "Camp R$ 0,00" e um ganho falso no filtro.
-function precoCheioCanal(precoCadastro: number | null, promo?: { precoAnterior: number | null } | null): number | null {
+function precoCheioCanal(precoCadastro: number | null, promo?: { precoAnterior: number | null } | null, fallback?: number | null): number | null {
   if (precoCadastro !== null && precoCadastro > 0) return precoCadastro;
   if (promo?.precoAnterior != null && promo.precoAnterior > 0) return promo.precoAnterior;
+  // Sem preco cheio proprio: maior preco do canal entre as outras cores da referencia.
+  if (fallback != null && fallback > 0) return fallback;
   return null;
 }
 
@@ -1455,10 +1461,10 @@ export default function GiroPage() {
           const regra = identificarRegraCampanha(item.giroTotal, item.mesesOportunidade, temPromoAtiva(item), item.familia, item.temCorSemMesesFL, item.linha);
           const promoAtac = item.promocoes?.find((p) => p.tipo === 'Atacado');
           const promoVar = item.promocoes?.find((p) => p.tipo === 'Varejo');
-          const pctAtac = percentualCampanhaCanal(regra, item.precoAtacado, promoAtac);
-          const pctVar = percentualCampanhaCanal(regra, item.precoVarejo, promoVar);
-          const cheioAtac = precoCheioCanal(item.precoAtacado, promoAtac);
-          const cheioVar = precoCheioCanal(item.precoVarejo, promoVar);
+          const pctAtac = percentualCampanhaCanal(regra, item.precoAtacado, promoAtac, item.precoCheioFallbackAtacado);
+          const pctVar = percentualCampanhaCanal(regra, item.precoVarejo, promoVar, item.precoCheioFallbackVarejo);
+          const cheioAtac = precoCheioCanal(item.precoAtacado, promoAtac, item.precoCheioFallbackAtacado);
+          const cheioVar = precoCheioCanal(item.precoVarejo, promoVar, item.precoCheioFallbackVarejo);
           const campAtac = calcularPrecoCampanha(cheioAtac, pctAtac);
           const campVar = calcularPrecoCampanha(cheioVar, pctVar);
           linhas.push([
@@ -1467,8 +1473,8 @@ export default function GiroPage() {
             String(pctAtac), campAtac !== null ? preco(campAtac) : (pctAtac > 0 && cheioAtac === null ? 'sem preço cheio' : ''),
             String(pctVar), campVar !== null ? preco(campVar) : (pctVar > 0 && cheioVar === null ? 'sem preço cheio' : ''),
             String(regra), DESCRICAO_REGRA_CAMPANHA[regra],
-            REGRAS_ESCADA_GIRO_ALTO.has(regra) ? `${descontoAtualCanal(item.precoAtacado, promoAtac).toFixed(2).replace('.', ',')}%` : '',
-            REGRAS_ESCADA_GIRO_ALTO.has(regra) ? `${descontoAtualCanal(item.precoVarejo, promoVar).toFixed(2).replace('.', ',')}%` : '',
+            REGRAS_ESCADA_GIRO_ALTO.has(regra) ? `${descontoAtualCanal(item.precoAtacado, promoAtac, item.precoCheioFallbackAtacado).toFixed(2).replace('.', ',')}%` : '',
+            REGRAS_ESCADA_GIRO_ALTO.has(regra) ? `${descontoAtualCanal(item.precoVarejo, promoVar, item.precoCheioFallbackVarejo).toFixed(2).replace('.', ',')}%` : '',
           ]);
         }
       }
@@ -1724,19 +1730,24 @@ export default function GiroPage() {
         {(() => {
           const promoAtacado = item.promocoes?.find((p) => p.tipo === 'Atacado');
           const promoVarejo = item.promocoes?.find((p) => p.tipo === 'Varejo');
-          const cheioAtacado = precoCheioCanal(item.precoAtacado, promoAtacado);
-          const cheioVarejo = precoCheioCanal(item.precoVarejo, promoVarejo);
+          const cheioAtacado = precoCheioCanal(item.precoAtacado, promoAtacado, item.precoCheioFallbackAtacado);
+          const cheioVarejo = precoCheioCanal(item.precoVarejo, promoVarejo, item.precoCheioFallbackVarejo);
           const pctPromoAtacado = promoAtacado ? variacaoPercentual(cheioAtacado, promoAtacado.precoPromo) : null;
           const pctPromoVarejo = promoVarejo ? variacaoPercentual(cheioVarejo, promoVarejo.precoPromo) : null;
-          const pctCampanhaAtacado = percentualCampanhaCanal(regraCampanha, item.precoAtacado, promoAtacado);
-          const pctCampanhaVarejo = percentualCampanhaCanal(regraCampanha, item.precoVarejo, promoVarejo);
+          const pctCampanhaAtacado = percentualCampanhaCanal(regraCampanha, item.precoAtacado, promoAtacado, item.precoCheioFallbackAtacado);
+          const pctCampanhaVarejo = percentualCampanhaCanal(regraCampanha, item.precoVarejo, promoVarejo, item.precoCheioFallbackVarejo);
           const escadaPorDesconto = REGRAS_ESCADA_GIRO_ALTO.has(regraCampanha);
+          // Preco cheio vindo de outra cor (a cor nao tem preco proprio): avisa no tooltip.
+          const usaFallbackAtacado = !(item.precoAtacado !== null && item.precoAtacado > 0) && !((promoAtacado?.precoAnterior ?? 0) > 0) && cheioAtacado !== null;
+          const usaFallbackVarejo = !(item.precoVarejo !== null && item.precoVarejo > 0) && !((promoVarejo?.precoAnterior ?? 0) > 0) && cheioVarejo !== null;
+          const avisoFallbackAtacado = usaFallbackAtacado ? `\nSem preço próprio: usando o maior preço de atacado da referência (${formatarPreco(cheioAtacado)})` : '';
+          const avisoFallbackVarejo = usaFallbackVarejo ? `\nSem preço próprio: usando o maior preço de varejo da referência (${formatarPreco(cheioVarejo)})` : '';
           const descricaoRegraAtacado = escadaPorDesconto
-            ? `${DESCRICAO_REGRA_CAMPANHA[regraCampanha]}\nDesconto atual no atacado: ${descontoAtualCanal(item.precoAtacado, promoAtacado).toFixed(2).replace('.', ',')}% → campanha ${pctCampanhaAtacado}%`
-            : DESCRICAO_REGRA_CAMPANHA[regraCampanha];
+            ? `${DESCRICAO_REGRA_CAMPANHA[regraCampanha]}\nDesconto atual no atacado: ${descontoAtualCanal(item.precoAtacado, promoAtacado, item.precoCheioFallbackAtacado).toFixed(2).replace('.', ',')}% → campanha ${pctCampanhaAtacado}%${avisoFallbackAtacado}`
+            : `${DESCRICAO_REGRA_CAMPANHA[regraCampanha]}${avisoFallbackAtacado}`;
           const descricaoRegraVarejo = escadaPorDesconto
-            ? `${DESCRICAO_REGRA_CAMPANHA[regraCampanha]}\nDesconto atual no varejo: ${descontoAtualCanal(item.precoVarejo, promoVarejo).toFixed(2).replace('.', ',')}% → campanha ${pctCampanhaVarejo}%`
-            : DESCRICAO_REGRA_CAMPANHA[regraCampanha];
+            ? `${DESCRICAO_REGRA_CAMPANHA[regraCampanha]}\nDesconto atual no varejo: ${descontoAtualCanal(item.precoVarejo, promoVarejo, item.precoCheioFallbackVarejo).toFixed(2).replace('.', ',')}% → campanha ${pctCampanhaVarejo}%${avisoFallbackVarejo}`
+            : `${DESCRICAO_REGRA_CAMPANHA[regraCampanha]}${avisoFallbackVarejo}`;
           const precoAtacadoCampanha = calcularPrecoCampanha(cheioAtacado, pctCampanhaAtacado);
           const precoVarejoCampanha = calcularPrecoCampanha(cheioVarejo, pctCampanhaVarejo);
           const precoAtacadoCampanhaReal = calcularPrecoCampanhaReal(cheioAtacado, pctCampanhaAtacado);
