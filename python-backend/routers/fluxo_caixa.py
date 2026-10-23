@@ -345,11 +345,11 @@ SQL_KPI_VENCIDOS = """
     SELECT
         LEFT(TRIM(cd_componente), 3) AS prefixo,
         COUNT(*)::int AS qtd,
-        ROUND(SUM(vl_duplicata - vl_pago)::numeric, 2) AS valor
+        ROUND(SUM(vl_duplicata - vl_pago - COALESCE(vl_desconto, 0))::numeric, 2) AS valor
     FROM vr_fcp_duplicatai
     WHERE tp_situacao = 'N'
       AND tp_estagio <> 90
-      AND (vl_duplicata - vl_pago) > 0
+      AND (vl_duplicata - vl_pago - COALESCE(vl_desconto, 0)) > 0.005
       AND dt_vencimento < CURRENT_DATE
     GROUP BY 1
 """
@@ -357,11 +357,11 @@ SQL_KPI_VENCIDOS = """
 SQL_KPI_FUTUROS = """
     SELECT
         to_char(dt_vencimento, 'YYYY-MM') AS mes,
-        ROUND(SUM(vl_duplicata - vl_pago)::numeric, 2) AS valor
+        ROUND(SUM(vl_duplicata - vl_pago - COALESCE(vl_desconto, 0))::numeric, 2) AS valor
     FROM vr_fcp_duplicatai
     WHERE tp_situacao = 'N'
       AND tp_estagio <> 90
-      AND (vl_duplicata - vl_pago) > 0
+      AND (vl_duplicata - vl_pago - COALESCE(vl_desconto, 0)) > 0.005
       AND LEFT(TRIM(cd_componente), 3) != 'FCR'
       AND dt_vencimento BETWEEN CURRENT_DATE AND CURRENT_DATE + interval '12 months'
     GROUP BY 1
@@ -403,10 +403,13 @@ def _obter_kpis() -> dict:
 # caixa (regra 2) - tanto no filtro de periodo quanto no agrupamento abaixo,
 # via _EXPR_DT_SAIDA_EFETIVA. A data original de vencimento nunca e tocada.
 def _filtros_saidas(dt_inicio: str, dt_fim: str, empresas: list) -> tuple:
+    # Saldo = duplicata - pago - DESCONTO concedido: duplicata quitada com desconto
+    # (ex.: 216,58 = 198,73 pago + 17,85 de desconto) tem estagio 10 e dt_liq, e sem
+    # descontar vl_desconto aparecia como R$ 17,85 "em aberto" (pedido do usuario).
     # tp_estagio 90 = liquidado: o sistema deixa saldo em vl_pago/vl_duplicata
     # mesmo liquidada (10 mil duplicatas assim, ~R$ 9 mi) - conta como PAGA,
     # pedido explicito do usuario.
-    where = (f"WHERE tp_situacao = 'N' AND tp_estagio <> 90 AND (vl_duplicata - vl_pago) > 0 AND {_PRE_FILTRO_VENCIMENTO} "
+    where = (f"WHERE tp_situacao = 'N' AND tp_estagio <> 90 AND (vl_duplicata - vl_pago - COALESCE(vl_desconto, 0)) > 0.005 AND {_PRE_FILTRO_VENCIMENTO} "
              f"AND {_EXPR_DT_SAIDA_EFETIVA} BETWEEN %s AND %s")
     params: list = [dt_inicio, dt_fim, dt_inicio, dt_fim]
     if empresas:
@@ -418,7 +421,7 @@ def _filtros_saidas(dt_inicio: str, dt_fim: str, empresas: list) -> tuple:
 def _sql_saidas_mensal(where: str) -> str:
     return f"""
         SELECT to_char({_EXPR_DT_SAIDA_EFETIVA}, 'YYYY-MM') AS mes, tp_previsaoreal,
-            COUNT(*)::int AS qtd, ROUND(SUM(vl_duplicata - vl_pago)::numeric, 2) AS valor
+            COUNT(*)::int AS qtd, ROUND(SUM(vl_duplicata - vl_pago - COALESCE(vl_desconto, 0))::numeric, 2) AS valor
         FROM vr_fcp_duplicatai
         {where}
         GROUP BY 1, 2
@@ -429,7 +432,7 @@ def _sql_saidas_mensal(where: str) -> str:
 def _sql_saidas_diario(where: str) -> str:
     return f"""
         SELECT {_EXPR_DT_SAIDA_EFETIVA}::date AS dia, tp_previsaoreal,
-            COUNT(*)::int AS qtd, ROUND(SUM(vl_duplicata - vl_pago)::numeric, 2) AS valor
+            COUNT(*)::int AS qtd, ROUND(SUM(vl_duplicata - vl_pago - COALESCE(vl_desconto, 0))::numeric, 2) AS valor
         FROM vr_fcp_duplicatai
         {where}
         GROUP BY 1, 2
@@ -446,7 +449,7 @@ def _sql_saidas_por_fornecedor(where: str) -> str:
             CASE WHEN p.nm_fantasia IS NULL OR TRIM(p.nm_fantasia) = '' OR p.nm_fantasia ~ '^\\*+$'
                  THEN COALESCE(p.nm_pessoa, pf.nm_pessoa, 'Fornecedor ' || d.cd_fornecedor::text)
                  ELSE p.nm_fantasia END AS nome,
-            ROUND(SUM(d.vl_duplicata - d.vl_pago)::numeric, 2) AS valor,
+            ROUND(SUM(d.vl_duplicata - d.vl_pago - COALESCE(d.vl_desconto, 0))::numeric, 2) AS valor,
             COUNT(*)::int AS qtd
         FROM vr_fcp_duplicatai d
         LEFT JOIN vr_pes_pessoa p ON p.cd_pessoa = d.cd_fornecedor
@@ -467,7 +470,7 @@ def _sql_saidas_por_fornecedor_despesa(where: str) -> str:
             CASE WHEN p.nm_fantasia IS NULL OR TRIM(p.nm_fantasia) = '' OR p.nm_fantasia ~ '^\\*+$'
                  THEN COALESCE(p.nm_pessoa, pf.nm_pessoa, 'Fornecedor ' || d.cd_fornecedor::text)
                  ELSE p.nm_fantasia END AS nome,
-            ROUND(SUM(d.vl_rateio * (d.vl_duplicata - d.vl_pago) / NULLIF(d.vl_duplicata, 0))::numeric, 2) AS valor,
+            ROUND(SUM(d.vl_rateio * (d.vl_duplicata - d.vl_pago - COALESCE(d.vl_desconto, 0)) / NULLIF(d.vl_duplicata, 0))::numeric, 2) AS valor,
             COUNT(*)::int AS qtd
         FROM vr_fcp_despduplicatai d
         LEFT JOIN vr_pes_pessoa p ON p.cd_pessoa = d.cd_fornecedor
@@ -492,7 +495,7 @@ def _sql_saidas_por_fornecedor_despesa(where: str) -> str:
 def _sql_saidas_por_despesa(where: str) -> str:
     return f"""
         SELECT d.cd_despesaitem, i.ds_despesaitem AS nome, c.conta_dfc,
-            ROUND(SUM(d.vl_rateio * (d.vl_duplicata - d.vl_pago) / NULLIF(d.vl_duplicata, 0))::numeric, 2) AS valor,
+            ROUND(SUM(d.vl_rateio * (d.vl_duplicata - d.vl_pago - COALESCE(d.vl_desconto, 0)) / NULLIF(d.vl_duplicata, 0))::numeric, 2) AS valor,
             COUNT(*)::int AS qtd
         FROM vr_fcp_despduplicatai d
         JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
@@ -904,7 +907,7 @@ def obter_saidas_detalhe(
                 SELECT {_NOME_FORNECEDOR} AS fornecedor,
                     d.cd_empresa, d.nr_duplicata, d.nr_parcela,
                     d.dt_vencimento::date AS dt_vencimento_original,
-                    ROUND((d.vl_duplicata - d.vl_pago)::numeric, 2) AS valor,
+                    ROUND((d.vl_duplicata - d.vl_pago - COALESCE(d.vl_desconto, 0))::numeric, 2) AS valor,
                     (SELECT string_agg(DISTINCT i.ds_despesaitem, ', ')
                        FROM vr_fcp_despduplicatai r
                        JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = r.cd_despesaitem

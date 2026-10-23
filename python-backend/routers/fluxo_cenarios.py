@@ -108,7 +108,7 @@ def salvar_cenario(dados: dict):
                     (cenario_id, tipo, cd_empresa, cd_fornecedor, nr_documento, nr_parcela, dt_efetiva, dt_original, valor, previsao_real, fornecedor)
                 SELECT %s, 'duplicata', d.cd_empresa, d.cd_fornecedor, d.nr_duplicata, d.nr_parcela,
                     {_EXPR_DT_SAIDA_EFETIVA}::date, d.dt_vencimento::date,
-                    ROUND((d.vl_duplicata - d.vl_pago)::numeric, 2), COALESCE(d.tp_previsaoreal, 0),
+                    ROUND((d.vl_duplicata - d.vl_pago - COALESCE(d.vl_desconto, 0))::numeric, 2), COALESCE(d.tp_previsaoreal, 0),
                     {_NOME_FORNECEDOR}
                 FROM vr_fcp_duplicatai d
                 LEFT JOIN vr_pes_pessoa p ON p.cd_pessoa = d.cd_fornecedor
@@ -200,10 +200,10 @@ def _situacao_duplicata(r) -> tuple:
     sit = r["tp_situacao"]
     est = r["tp_estagio"]
     total = float(r["vl_duplicata"] or 0)
-    saldo = round(total - float(r["vl_pago"] or 0), 2)
+    saldo = round(total - float(r["vl_pago"] or 0) - float(r.get("vl_desconto") or 0), 2)
     if sit == "C" and est != 90:
         return "cancelada", 0.0, total
-    if est == 90 or saldo <= 0:
+    if est == 90 or saldo <= 0.005:
         return "paga", 0.0, total
     if sit == "N":
         return "aberta", saldo, total
@@ -243,7 +243,7 @@ def _comparar_duplicatas(cen: dict, snap: list) -> tuple:
         params.append(cd_empresas)
     atuais_rows = execute_query(f"""
         SELECT cd_empresa, cd_fornecedor, nr_duplicata, nr_parcela, tp_situacao, tp_estagio,
-               vl_duplicata, vl_pago, dt_vencimento::date AS dt_orig,
+               vl_duplicata, vl_pago, vl_desconto, dt_vencimento::date AS dt_orig,
                {_EXPR_DT_SAIDA_EFETIVA}::date AS dia, dt_inclusao
         FROM vr_fcp_duplicatai
         WHERE {_PRE_FILTRO_VENCIMENTO} AND {_EXPR_DT_SAIDA_EFETIVA} BETWEEN %s AND %s{filtro_emp}
@@ -258,7 +258,7 @@ def _comparar_duplicatas(cen: dict, snap: list) -> tuple:
     if fora:
         rows = execute_query("""
             SELECT d.cd_empresa, d.cd_fornecedor, d.nr_duplicata, d.nr_parcela, d.tp_situacao, d.tp_estagio,
-                   d.vl_duplicata, d.vl_pago, d.dt_vencimento::date AS dt_orig,
+                   d.vl_duplicata, d.vl_pago, d.vl_desconto, d.dt_vencimento::date AS dt_orig,
                    d.dt_vencimento::date AS dia, d.dt_inclusao
             FROM unnest(%s::bigint[], %s::bigint[], %s::bigint[], %s::bigint[]) AS k(emp, forn, doc, parc)
             JOIN vr_fcp_duplicatai d ON d.cd_empresa = k.emp AND d.cd_fornecedor = k.forn
