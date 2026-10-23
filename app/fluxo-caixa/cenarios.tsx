@@ -6,7 +6,8 @@
 // dia nem no acumulado - a tela normal do fluxo nao muda sem um cenario escolhido.
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { Loader2, X, Camera, RefreshCw, Trash2 } from 'lucide-react';
+import { Loader2, X, Camera, RefreshCw, Trash2, ChevronDown, ChevronRight, BarChart3 } from 'lucide-react';
+import { Bar, BarChart, CartesianGrid, Cell, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
 export interface CenarioResumo {
   id: number;
@@ -299,7 +300,7 @@ function somar(bloco: Record<string, DiaBloco>, campo: 'cenario' | 'atual' | 'ab
   return Object.values(bloco).reduce((s, d) => s + d[campo], 0);
 }
 
-function CartaoResumo({ titulo, bloco, rotulos }: { titulo: string; bloco: Record<string, DiaBloco>; rotulos: Record<string, string> }) {
+function CartaoResumo({ titulo, bloco, rotulos, onGrafico }: { titulo: string; bloco: Record<string, DiaBloco>; rotulos: Record<string, string>; onGrafico: () => void }) {
   const cats = somarCategorias(bloco);
   const variacao = somar(bloco, 'variacao');
   const ordem = Object.keys(rotulos).filter((k) => cats[k]);
@@ -309,7 +310,16 @@ function CartaoResumo({ titulo, bloco, rotulos }: { titulo: string; bloco: Recor
       <div className="grid grid-cols-3 gap-2 text-xs mb-2">
         <div><div className="text-black">Cenário</div><div className="text-sm font-bold text-black tabular-nums">{fmt(somar(bloco, 'cenario'))}</div></div>
         <div><div className="text-black">Agora{somar(bloco, 'pago') > 0 ? ' (aberto + pago)' : ''}</div><div className="text-sm font-bold text-black tabular-nums">{fmt(somar(bloco, 'atual'))}</div></div>
-        <div><div className="text-black">Variação</div><div className={`text-sm font-bold tabular-nums ${variacao > 0.005 ? 'text-red-700' : variacao < -0.005 ? 'text-green-700' : 'text-black'}`}>{fmtSinal(variacao)}</div></div>
+        <div>
+          <div className="text-black">Variação</div>
+          <button
+            onClick={onGrafico}
+            title="Ver gráfico da variação por mês e por semana"
+            className={`text-sm font-bold tabular-nums underline decoration-dotted underline-offset-2 hover:opacity-70 inline-flex items-center gap-1 ${variacao > 0.005 ? 'text-red-700' : variacao < -0.005 ? 'text-green-700' : 'text-black'}`}
+          >
+            {fmtSinal(variacao)} <BarChart3 className="w-3.5 h-3.5" />
+          </button>
+        </div>
       </div>
       {ordem.length === 0 ? (
         <p className="text-xs text-black">Nada mudou desde a foto.</p>
@@ -334,8 +344,125 @@ function CartaoResumo({ titulo, bloco, rotulos }: { titulo: string; bloco: Recor
   );
 }
 
+// ── Grafico da variacao por mes / semana (abre clicando na Variacao do resumo) ──
+function segundaDaSemana(dia: string): string {
+  const d = new Date(`${dia}T12:00:00`);
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+interface PontoGrafico { chave: string; rotulo: string; cenario: number; atual: number; pago: number; variacao: number }
+
+function agregarVariacao(bloco: Record<string, DiaBloco>, modo: 'mensal' | 'semanal'): PontoGrafico[] {
+  const acc: Record<string, PontoGrafico> = {};
+  Object.entries(bloco).forEach(([dia, v]) => {
+    const chave = modo === 'mensal' ? dia.slice(0, 7) : segundaDaSemana(dia);
+    const rotulo = modo === 'mensal'
+      ? `${chave.slice(5)}/${chave.slice(2, 4)}`
+      : `${chave.slice(8)}/${chave.slice(5, 7)}`;
+    const a = acc[chave] ?? { chave, rotulo, cenario: 0, atual: 0, pago: 0, variacao: 0 };
+    a.cenario += v.cenario;
+    a.atual += v.atual;
+    a.pago += v.pago;
+    a.variacao += v.variacao;
+    acc[chave] = a;
+  });
+  return Object.values(acc).sort((x, y) => x.chave.localeCompare(y.chave));
+}
+
+function ModalGraficoVariacao({ titulo, bloco, onFechar }: { titulo: string; bloco: Record<string, DiaBloco>; onFechar: () => void }) {
+  const [modo, setModo] = useState<'mensal' | 'semanal'>('mensal');
+  const dados = agregarVariacao(bloco, modo);
+  const total = dados.reduce((s, d) => s + d.variacao, 0);
+  const compacto = (v: number) => `${v < 0 ? '−' : ''}${Math.abs(v) >= 1_000_000 ? `${(Math.abs(v) / 1_000_000).toFixed(1)} mi` : Math.abs(v) >= 1000 ? `${Math.round(Math.abs(v) / 1000)} mil` : Math.abs(v).toFixed(0)}`;
+  return (
+    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={onFechar}>
+      <div className="bg-white rounded-lg shadow-xl w-full max-w-5xl max-h-[88vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200 gap-3 flex-wrap">
+          <div>
+            <h2 className="text-base font-semibold text-black">Variação desde a foto — {titulo}</h2>
+            <p className="text-xs text-black">
+              Total no período: <strong className={total > 0.005 ? 'text-red-700' : total < -0.005 ? 'text-green-700' : 'text-black'}>{fmtSinal(total)}</strong>
+              {' '}· <span className="text-red-700">vermelho</span> = saídas aumentaram, <span className="text-green-700">verde</span> = diminuíram. Informativo.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="inline-flex rounded-md border border-gray-300 overflow-hidden text-xs">
+              {(['mensal', 'semanal'] as const).map((m) => (
+                <button key={m} onClick={() => setModo(m)} className={`px-3 py-1 ${modo === m ? 'bg-sky-600 text-white' : 'bg-white text-black hover:bg-gray-100'}`}>
+                  {m === 'mensal' ? 'Por mês' : 'Por semana'}
+                </button>
+              ))}
+            </div>
+            <button onClick={onFechar} className="text-black"><X className="w-5 h-5" /></button>
+          </div>
+        </div>
+        <div className="p-4 flex-1 min-h-0 overflow-y-auto">
+          {dados.length === 0 ? (
+            <p className="text-sm text-black py-12 text-center">Sem variação no período.</p>
+          ) : (
+            <>
+              <div className="h-80">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={dados} margin={{ top: 16, right: 16, left: 8, bottom: 8 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                    <XAxis dataKey="rotulo" tick={{ fontSize: 11, fill: '#000' }} interval={0} angle={modo === 'semanal' && dados.length > 14 ? -45 : 0} textAnchor={modo === 'semanal' && dados.length > 14 ? 'end' : 'middle'} height={modo === 'semanal' && dados.length > 14 ? 50 : 30} />
+                    <YAxis tickFormatter={compacto} tick={{ fontSize: 11, fill: '#000' }} width={64} />
+                    <ReferenceLine y={0} stroke="#6b7280" />
+                    <Tooltip
+                      cursor={{ fill: '#f3f4f6' }}
+                      content={({ active, payload }) => {
+                        if (!active || !payload?.length) return null;
+                        const p = payload[0].payload as PontoGrafico;
+                        return (
+                          <div className="bg-white border border-gray-200 rounded-md shadow-md px-3 py-2 text-xs text-black">
+                            <div className="font-semibold mb-1">{modo === 'mensal' ? `Mês ${p.rotulo}` : `Semana de ${p.rotulo} (seg)`}</div>
+                            <div>Cenário: {fmt(p.cenario)}</div>
+                            <div>Agora: {fmt(p.atual)}{p.pago > 0 ? ` (pago ${fmt(p.pago)})` : ''}</div>
+                            <div className={`font-bold ${p.variacao > 0.005 ? 'text-red-700' : p.variacao < -0.005 ? 'text-green-700' : ''}`}>Variação: {fmtSinal(p.variacao)}</div>
+                          </div>
+                        );
+                      }}
+                    />
+                    <Bar dataKey="variacao" radius={[3, 3, 0, 0]}>
+                      {dados.map((d) => <Cell key={d.chave} fill={d.variacao > 0.005 ? '#dc2626' : d.variacao < -0.005 ? '#16a34a' : '#9ca3af'} />)}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+              <table className="w-full text-xs mt-3">
+                <thead className="bg-gray-50 border-b border-gray-200">
+                  <tr>
+                    <th className="text-left px-3 py-1.5 font-medium text-black">{modo === 'mensal' ? 'Mês' : 'Semana (início segunda)'}</th>
+                    <th className="text-right px-3 py-1.5 font-medium text-black">Cenário</th>
+                    <th className="text-right px-3 py-1.5 font-medium text-black">Agora</th>
+                    <th className="text-right px-3 py-1.5 font-medium text-black">Variação</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {dados.map((d, i) => (
+                    <tr key={d.chave} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                      <td className="px-3 py-1 text-black tabular-nums">{d.rotulo}</td>
+                      <td className="px-3 py-1 text-right text-black tabular-nums">{fmt(d.cenario)}</td>
+                      <td className="px-3 py-1 text-right text-black tabular-nums">{fmt(d.atual)}</td>
+                      <td className={`px-3 py-1 text-right tabular-nums font-semibold ${d.variacao > 0.005 ? 'text-red-700' : d.variacao < -0.005 ? 'text-green-700' : 'text-black'}`}>{fmtSinal(d.variacao)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Painel de resumo (so aparece com um cenario escolhido) ──
 export function PainelComparacao({ c }: { c: CenariosState }) {
+  // Lista de dias sempre compacta - so abre se a pessoa quiser.
+  const [diasAberto, setDiasAberto] = useState(false);
+  const [graficoBloco, setGraficoBloco] = useState<'duplicatas' | 'pedidos' | null>(null);
   if (c.selecionadoId === null) return null;
   const comp = c.comparacao;
   const dias = comp
@@ -362,12 +489,27 @@ export function PainelComparacao({ c }: { c: CenariosState }) {
             </button>
           </div>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-            <CartaoResumo titulo="Contas a pagar (duplicatas)" bloco={comp.duplicatas} rotulos={ROTULO_DUP} />
-            <CartaoResumo titulo="Pedidos de compra" bloco={comp.pedidos} rotulos={ROTULO_PED} />
+            <CartaoResumo titulo="Contas a pagar (duplicatas)" bloco={comp.duplicatas} rotulos={ROTULO_DUP} onGrafico={() => setGraficoBloco('duplicatas')} />
+            <CartaoResumo titulo="Pedidos de compra" bloco={comp.pedidos} rotulos={ROTULO_PED} onGrafico={() => setGraficoBloco('pedidos')} />
           </div>
+          {graficoBloco && (
+            <ModalGraficoVariacao
+              titulo={graficoBloco === 'duplicatas' ? 'Contas a pagar' : 'Pedidos de compra'}
+              bloco={graficoBloco === 'duplicatas' ? comp.duplicatas : comp.pedidos}
+              onFechar={() => setGraficoBloco(null)}
+            />
+          )}
           {dias.length > 0 && (
             <div className="border border-gray-200 rounded-lg bg-white overflow-hidden">
-              <div className="max-h-56 overflow-y-auto">
+              <button
+                onClick={() => setDiasAberto((v) => !v)}
+                className="w-full flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-black hover:bg-gray-50 text-left"
+              >
+                {diasAberto ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                Dias que mudaram ({dias.length}) {diasAberto ? '' : '— clique para ver'}
+              </button>
+              {diasAberto && (
+              <div className="max-h-56 overflow-y-auto border-t border-gray-200">
                 <table className="w-full text-xs">
                   <thead className="sticky top-0 bg-gray-50 border-b border-gray-200">
                     <tr>
@@ -395,6 +537,7 @@ export function PainelComparacao({ c }: { c: CenariosState }) {
                   </tbody>
                 </table>
               </div>
+              )}
             </div>
           )}
         </>
