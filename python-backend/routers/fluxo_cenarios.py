@@ -363,7 +363,47 @@ def _comparar_duplicatas(cen: dict, snap: list) -> tuple:
         for k, r, cat, dia_r, saldo, total, estado in novos:
             item(cat, k, {"fornecedor": nomes.get(k[1]) or f"Fornecedor {k[1]}"}, r, None, dia_r, 0.0, total, saldo, round(total - saldo, 2), estado)
 
+    _anexar_despesas(itens)
     return dias, itens
+
+
+def _anexar_despesas(itens: list):
+    """Divide a variacao (valorAtual - valorCenario) de cada duplicata que
+    mudou entre as despesas do rateio (vr_fcp_despduplicatai), na proporcao do
+    rateio de agora - pro grafico "por despesa". Duplicata sem rateio vai pra
+    "Sem despesa". Nao altera os valores, so acrescenta item["despesas"]."""
+    alvo = [i for i in itens if abs(i["valorAtual"] - i["valorCenario"]) >= 0.005 and i.get("cdFornecedor") is not None]
+    rateios: dict = {}
+    if alvo:
+        chaves = []
+        for i in alvo:
+            doc, parc = i["documento"].split("/")
+            chaves.append((i["empresa"], i["cdFornecedor"], int(doc), int(parc)))
+        chaves = list(dict.fromkeys(chaves))
+        rows = execute_query("""
+            SELECT r.cd_empresa, r.cd_fornecedor, r.nr_duplicata, r.nr_parcela, i.ds_despesaitem AS despesa, SUM(r.vl_rateio) AS vl
+            FROM unnest(%s::bigint[], %s::bigint[], %s::bigint[], %s::bigint[]) AS k(emp, forn, doc, parc)
+            JOIN vr_fcp_despduplicatai r ON r.cd_empresa = k.emp AND r.cd_fornecedor = k.forn
+                 AND r.nr_duplicata = k.doc AND r.nr_parcela = k.parc
+            JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = r.cd_despesaitem
+            GROUP BY 1, 2, 3, 4, 5
+        """, tuple([c[n] for c in chaves] for n in range(4))) or []
+        for r in rows:
+            rateios.setdefault((r["cd_empresa"], r["cd_fornecedor"], r["nr_duplicata"], r["nr_parcela"]), []).append(
+                (r["despesa"], float(r["vl"] or 0))
+            )
+    for i in itens:
+        delta = i["valorAtual"] - i["valorCenario"]
+        if abs(delta) < 0.005:
+            i["despesas"] = []
+            continue
+        doc, parc = i["documento"].split("/")
+        partes = rateios.get((i["empresa"], i["cdFornecedor"], int(doc), int(parc))) or []
+        soma = sum(v for _, v in partes)
+        if not partes or soma <= 0:
+            i["despesas"] = [{"despesa": "Sem despesa", "valor": round(delta, 2)}]
+        else:
+            i["despesas"] = [{"despesa": nome, "valor": round(delta * v / soma, 2)} for nome, v in partes]
 
 
 def _comparar_pedidos(cen: dict, snap: list) -> tuple:

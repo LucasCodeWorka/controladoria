@@ -37,6 +37,8 @@ interface ItemComp {
   categoria: string;
   documento: string;
   empresa: number;
+  cdFornecedor?: number | null;
+  despesas?: { despesa: string; valor: number }[];
   fornecedor: string | null;
   diaCenario: string | null;
   diaAtual: string | null;
@@ -380,14 +382,50 @@ function rotuloCompacto(v: number): string {
   return `${sinal}${a.toLocaleString('pt-BR', { maximumFractionDigits: 0 })}`;
 }
 
-function ModalGraficoVariacao({ titulo, bloco, onFechar }: { titulo: string; bloco: Record<string, DiaBloco>; onFechar: () => void }) {
-  const [modo, setModo] = useState<'mensal' | 'semanal'>('mensal');
-  const dados = agregarVariacao(bloco, modo);
-  const total = dados.reduce((s, d) => s + d.variacao, 0);
+type ModoGrafico = 'mensal' | 'semanal' | 'fornecedor' | 'despesa';
+const TOP_GRUPOS = 15;
+
+interface GrupoVariacao { chave: string; nome: string; variacao: number; qtd: number; itens: ItemComp[] }
+
+// Agrupa a variacao dos itens que mudaram por fornecedor ou por despesa.
+function agruparItens(itens: ItemComp[], dim: 'fornecedor' | 'despesa'): GrupoVariacao[] {
+  const acc: Record<string, GrupoVariacao> = {};
+  const somar = (nome: string, valor: number, item: ItemComp) => {
+    const g = acc[nome] ?? { chave: nome, nome, variacao: 0, qtd: 0, itens: [] };
+    g.variacao += valor;
+    if (!g.itens.includes(item)) { g.itens.push(item); g.qtd += 1; }
+    acc[nome] = g;
+  };
+  itens.forEach((i) => {
+    const delta = i.valorAtual - i.valorCenario;
+    if (Math.abs(delta) < 0.005) return;
+    if (dim === 'fornecedor') somar(i.fornecedor || 'Sem fornecedor', delta, i);
+    else (i.despesas?.length ? i.despesas : [{ despesa: 'Sem despesa', valor: delta }]).forEach((d) => somar(d.despesa, d.valor, i));
+  });
+  return Object.values(acc).sort((x, y) => Math.abs(y.variacao) - Math.abs(x.variacao));
+}
+
+function ModalGraficoVariacao({ titulo, bloco, itens, tipo, onFechar }: {
+  titulo: string; bloco: Record<string, DiaBloco>; itens: ItemComp[]; tipo: 'duplicata' | 'pedido'; onFechar: () => void;
+}) {
+  const [modo, setModo] = useState<ModoGrafico>('mensal');
+  const [grupoSel, setGrupoSel] = useState<string | null>(null);
+  const porTempo = modo === 'mensal' || modo === 'semanal';
+  const dados = porTempo ? agregarVariacao(bloco, modo) : [];
+  const grupos = !porTempo ? agruparItens(itens.filter((i) => i.tipo === tipo), modo) : [];
+  const total = porTempo ? dados.reduce((s, d) => s + d.variacao, 0) : grupos.reduce((s, g) => s + g.variacao, 0);
   const compacto = (v: number) => `${v < 0 ? '−' : ''}${Math.abs(v) >= 1_000_000 ? `${(Math.abs(v) / 1_000_000).toFixed(1)} mi` : Math.abs(v) >= 1000 ? `${Math.round(Math.abs(v) / 1000)} mil` : Math.abs(v).toFixed(0)}`;
+  const cor = (v: number) => (v > 0.005 ? '#dc2626' : v < -0.005 ? '#16a34a' : '#9ca3af');
+  const corTexto = (v: number) => (v > 0.005 ? '#b91c1c' : v < -0.005 ? '#15803d' : '#374151');
+  const topo = grupos.slice(0, TOP_GRUPOS);
+  const selecionado = grupoSel ? grupos.find((g) => g.chave === grupoSel) ?? null : null;
+  const opcoes: { k: ModoGrafico; rot: string; off?: boolean }[] = [
+    { k: 'mensal', rot: 'Por mês' }, { k: 'semanal', rot: 'Por semana' },
+    { k: 'fornecedor', rot: 'Por fornecedor' }, { k: 'despesa', rot: 'Por despesa', off: tipo === 'pedido' },
+  ];
   return (
     <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={onFechar}>
-      <div className="bg-white rounded-lg shadow-xl w-full max-w-5xl max-h-[88vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+      <div className="bg-white rounded-lg shadow-xl w-full max-w-5xl max-h-[90vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200 gap-3 flex-wrap">
           <div>
             <h2 className="text-base font-semibold text-black">Variação desde a foto — {titulo}</h2>
@@ -398,9 +436,15 @@ function ModalGraficoVariacao({ titulo, bloco, onFechar }: { titulo: string; blo
           </div>
           <div className="flex items-center gap-2">
             <div className="inline-flex rounded-md border border-gray-300 overflow-hidden text-xs">
-              {(['mensal', 'semanal'] as const).map((m) => (
-                <button key={m} onClick={() => setModo(m)} className={`px-3 py-1 ${modo === m ? 'bg-sky-600 text-white' : 'bg-white text-black hover:bg-gray-100'}`}>
-                  {m === 'mensal' ? 'Por mês' : 'Por semana'}
+              {opcoes.map((o) => (
+                <button
+                  key={o.k}
+                  onClick={() => { if (!o.off) { setModo(o.k); setGrupoSel(null); } }}
+                  disabled={o.off}
+                  title={o.off ? 'Pedidos de compra não têm despesa no cadastro' : undefined}
+                  className={`px-3 py-1 ${modo === o.k ? 'bg-sky-600 text-white' : 'bg-white text-black hover:bg-gray-100'} ${o.off ? 'opacity-40 cursor-not-allowed' : ''}`}
+                >
+                  {o.rot}
                 </button>
               ))}
             </div>
@@ -408,9 +452,10 @@ function ModalGraficoVariacao({ titulo, bloco, onFechar }: { titulo: string; blo
           </div>
         </div>
         <div className="p-4 flex-1 min-h-0 overflow-y-auto">
-          {dados.length === 0 ? (
-            <p className="text-sm text-black py-12 text-center">Sem variação no período.</p>
-          ) : (
+          {porTempo && dados.length === 0 && <p className="text-sm text-black py-12 text-center">Sem variação no período.</p>}
+          {!porTempo && grupos.length === 0 && <p className="text-sm text-black py-12 text-center">Nada mudou desde a foto.</p>}
+
+          {porTempo && dados.length > 0 && (
             <>
               <div className="h-80">
                 <ResponsiveContainer width="100%" height="100%">
@@ -435,17 +480,17 @@ function ModalGraficoVariacao({ titulo, bloco, onFechar }: { titulo: string; blo
                       }}
                     />
                     <Bar dataKey="variacao" radius={[3, 3, 0, 0]}>
-                      {dados.map((d) => <Cell key={d.chave} fill={d.variacao > 0.005 ? '#dc2626' : d.variacao < -0.005 ? '#16a34a' : '#9ca3af'} />)}
+                      {dados.map((d) => <Cell key={d.chave} fill={cor(d.variacao)} />)}
                       {/* Rotulo com o valor em cada barra (mensal: valor completo; semanal com muitas barras: compacto). */}
                       <LabelList
                         dataKey="variacao"
                         content={(props: { x?: number | string; y?: number | string; width?: number | string; height?: number | string; value?: unknown }) => {
                           const x = Number(props.x ?? 0), y = Number(props.y ?? 0), w = Number(props.width ?? 0), h = Number(props.height ?? 0);
                           const v = Number(props.value ?? 0);
-                          const topo = Math.min(y, y + h), base = Math.max(y, y + h);
+                          const t = Math.min(y, y + h), base = Math.max(y, y + h);
                           const texto = modo === 'semanal' && dados.length > 8 ? rotuloCompacto(v) : fmtSinal(v);
                           return (
-                            <text x={x + w / 2} y={v >= 0 ? topo - 6 : base + 14} textAnchor="middle" fontSize={modo === 'semanal' ? 10 : 12} fontWeight={600} fill={v > 0.005 ? '#b91c1c' : v < -0.005 ? '#15803d' : '#374151'}>
+                            <text x={x + w / 2} y={v >= 0 ? t - 6 : base + 14} textAnchor="middle" fontSize={modo === 'semanal' ? 10 : 12} fontWeight={600} fill={corTexto(v)}>
                               {texto}
                             </text>
                           );
@@ -475,6 +520,117 @@ function ModalGraficoVariacao({ titulo, bloco, onFechar }: { titulo: string; blo
                   ))}
                 </tbody>
               </table>
+            </>
+          )}
+
+          {!porTempo && grupos.length > 0 && (
+            <>
+              <p className="text-xs text-black mb-1">
+                {grupos.length > TOP_GRUPOS ? `Os ${TOP_GRUPOS} maiores (por valor absoluto) de ${grupos.length} — tabela completa abaixo. ` : ''}
+                Clique numa barra ou linha para ver os itens.
+                {modo === 'despesa' ? ' Variação dividida entre as despesas pelo rateio de agora.' : ''}
+              </p>
+              <div style={{ height: Math.max(180, topo.length * 30 + 40) }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={topo} layout="vertical" margin={{ top: 8, right: 110, left: 8, bottom: 8 }}>
+                    <CartesianGrid strokeDasharray="3 3" horizontal={false} />
+                    <XAxis type="number" tickFormatter={compacto} tick={{ fontSize: 11, fill: '#000' }} />
+                    <YAxis type="category" dataKey="nome" width={220} tick={{ fontSize: 11, fill: '#000' }} tickFormatter={(v: string) => (v.length > 32 ? `${v.slice(0, 31)}…` : v)} interval={0} />
+                    <ReferenceLine x={0} stroke="#6b7280" />
+                    <Tooltip
+                      cursor={{ fill: '#f3f4f6' }}
+                      content={({ active, payload }) => {
+                        if (!active || !payload?.length) return null;
+                        const g = payload[0].payload as GrupoVariacao;
+                        return (
+                          <div className="bg-white border border-gray-200 rounded-md shadow-md px-3 py-2 text-xs text-black max-w-xs">
+                            <div className="font-semibold mb-1">{g.nome}</div>
+                            <div>{g.qtd} {g.qtd === 1 ? 'item mudou' : 'itens mudaram'}</div>
+                            <div className={`font-bold ${g.variacao > 0.005 ? 'text-red-700' : g.variacao < -0.005 ? 'text-green-700' : ''}`}>Variação: {fmtSinal(g.variacao)}</div>
+                          </div>
+                        );
+                      }}
+                    />
+                    <Bar dataKey="variacao" radius={[0, 3, 3, 0]} cursor="pointer" onClick={(d: { payload?: GrupoVariacao }) => d?.payload && setGrupoSel(d.payload.chave)}>
+                      {topo.map((g) => <Cell key={g.chave} fill={cor(g.variacao)} opacity={grupoSel && grupoSel !== g.chave ? 0.45 : 1} />)}
+                      <LabelList
+                        dataKey="variacao"
+                        content={(props: { x?: number | string; y?: number | string; width?: number | string; height?: number | string; value?: unknown }) => {
+                          const x = Number(props.x ?? 0), y = Number(props.y ?? 0), w = Number(props.width ?? 0), h = Number(props.height ?? 0);
+                          const v = Number(props.value ?? 0);
+                          const esq = Math.min(x, x + w), dir = Math.max(x, x + w);
+                          return (
+                            <text x={v >= 0 ? dir + 6 : esq - 6} y={y + h / 2 + 4} textAnchor={v >= 0 ? 'start' : 'end'} fontSize={11} fontWeight={600} fill={corTexto(v)}>
+                              {fmtSinal(v)}
+                            </text>
+                          );
+                        }}
+                      />
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+              <table className="w-full text-xs mt-3">
+                <thead className="bg-gray-50 border-b border-gray-200">
+                  <tr>
+                    <th className="text-left px-3 py-1.5 font-medium text-black">{modo === 'fornecedor' ? 'Fornecedor' : 'Despesa'}</th>
+                    <th className="text-right px-3 py-1.5 font-medium text-black">Itens</th>
+                    <th className="text-right px-3 py-1.5 font-medium text-black">Variação</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {grupos.map((g, i) => (
+                    <tr key={g.chave} onClick={() => setGrupoSel(g.chave === grupoSel ? null : g.chave)} className={`cursor-pointer hover:bg-rose-50 ${g.chave === grupoSel ? 'bg-sky-50' : i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}`}>
+                      <td className="px-3 py-1 text-black">{g.nome}</td>
+                      <td className="px-3 py-1 text-right text-black tabular-nums">{g.qtd}</td>
+                      <td className={`px-3 py-1 text-right tabular-nums font-semibold ${g.variacao > 0.005 ? 'text-red-700' : g.variacao < -0.005 ? 'text-green-700' : 'text-black'}`}>{fmtSinal(g.variacao)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {selecionado && (
+                <div className="mt-3 border border-sky-200 rounded-lg overflow-hidden">
+                  <div className="flex items-center justify-between px-3 py-2 bg-sky-50 text-xs font-semibold text-black">
+                    <span>Itens de “{selecionado.nome}” ({selecionado.qtd})</span>
+                    <button onClick={() => setGrupoSel(null)} className="text-black"><X className="w-4 h-4" /></button>
+                  </div>
+                  <div className="max-h-60 overflow-y-auto">
+                    <table className="w-full text-xs">
+                      <thead className="bg-gray-50 border-b border-gray-200 sticky top-0">
+                        <tr>
+                          <th className="text-left px-3 py-1.5 font-medium text-black">O que aconteceu</th>
+                          <th className="text-left px-3 py-1.5 font-medium text-black">Documento</th>
+                          <th className="text-left px-3 py-1.5 font-medium text-black">Fornecedor</th>
+                          <th className="text-right px-3 py-1.5 font-medium text-black">Dia foto</th>
+                          <th className="text-right px-3 py-1.5 font-medium text-black">Dia agora</th>
+                          <th className="text-right px-3 py-1.5 font-medium text-black">Na foto</th>
+                          <th className="text-right px-3 py-1.5 font-medium text-black">Agora</th>
+                          <th className="text-right px-3 py-1.5 font-medium text-black">Variação</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {selecionado.itens.map((i, idx) => {
+                          const v = modo === 'despesa'
+                            ? (i.despesas?.find((d) => d.despesa === selecionado.nome)?.valor ?? i.valorAtual - i.valorCenario)
+                            : i.valorAtual - i.valorCenario;
+                          return (
+                            <tr key={`${i.documento}-${idx}`} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                              <td className="px-3 py-1 whitespace-nowrap"><span className={`px-1.5 py-0.5 rounded text-[11px] font-semibold ${COR_ITEM[i.categoria] ?? 'bg-gray-100 text-black'}`}>{ROTULO_ITEM[i.categoria] ?? i.categoria}</span></td>
+                              <td className="px-3 py-1 text-black tabular-nums whitespace-nowrap">{i.documento}</td>
+                              <td className="px-3 py-1 text-black">{i.fornecedor ?? '—'}</td>
+                              <td className="px-3 py-1 text-right text-black tabular-nums whitespace-nowrap">{dataBR(i.diaCenario)}</td>
+                              <td className="px-3 py-1 text-right text-black tabular-nums whitespace-nowrap">{dataBR(i.diaAtual)}</td>
+                              <td className="px-3 py-1 text-right text-black tabular-nums whitespace-nowrap">{fmt(i.valorCenario)}</td>
+                              <td className="px-3 py-1 text-right text-black tabular-nums whitespace-nowrap">{fmt(i.valorAtual)}</td>
+                              <td className={`px-3 py-1 text-right tabular-nums font-semibold whitespace-nowrap ${v > 0.005 ? 'text-red-700' : v < -0.005 ? 'text-green-700' : 'text-black'}`}>{fmtSinal(v)}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
             </>
           )}
         </div>
@@ -521,6 +677,8 @@ export function PainelComparacao({ c }: { c: CenariosState }) {
             <ModalGraficoVariacao
               titulo={graficoBloco === 'duplicatas' ? 'Contas a pagar' : 'Pedidos de compra'}
               bloco={graficoBloco === 'duplicatas' ? comp.duplicatas : comp.pedidos}
+              itens={comp.itens}
+              tipo={graficoBloco === 'duplicatas' ? 'duplicata' : 'pedido'}
               onFechar={() => setGraficoBloco(null)}
             />
           )}
