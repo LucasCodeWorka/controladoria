@@ -7,7 +7,7 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { Loader2, X, Camera, RefreshCw, Trash2, ChevronDown, ChevronRight, BarChart3 } from 'lucide-react';
-import { Bar, BarChart, CartesianGrid, Cell, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Bar, BarChart, CartesianGrid, Cell, LabelList, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
 export interface CenarioResumo {
   id: number;
@@ -370,6 +370,16 @@ function agregarVariacao(bloco: Record<string, DiaBloco>, modo: 'mensal' | 'sema
   return Object.values(acc).sort((x, y) => x.chave.localeCompare(y.chave));
 }
 
+// Rotulo curto pra barras apertadas: +6,3 mil / −1,2 mi / +850.
+function rotuloCompacto(v: number): string {
+  const sinal = v > 0.005 ? '+' : v < -0.005 ? '−' : '';
+  const a = Math.abs(v);
+  const n = (x: number) => x.toLocaleString('pt-BR', { maximumFractionDigits: 1 });
+  if (a >= 1_000_000) return `${sinal}${n(a / 1_000_000)} mi`;
+  if (a >= 1000) return `${sinal}${n(a / 1000)} mil`;
+  return `${sinal}${a.toLocaleString('pt-BR', { maximumFractionDigits: 0 })}`;
+}
+
 function ModalGraficoVariacao({ titulo, bloco, onFechar }: { titulo: string; bloco: Record<string, DiaBloco>; onFechar: () => void }) {
   const [modo, setModo] = useState<'mensal' | 'semanal'>('mensal');
   const dados = agregarVariacao(bloco, modo);
@@ -404,7 +414,7 @@ function ModalGraficoVariacao({ titulo, bloco, onFechar }: { titulo: string; blo
             <>
               <div className="h-80">
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={dados} margin={{ top: 16, right: 16, left: 8, bottom: 8 }}>
+                  <BarChart data={dados} margin={{ top: 28, right: 16, left: 8, bottom: 20 }}>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} />
                     <XAxis dataKey="rotulo" tick={{ fontSize: 11, fill: '#000' }} interval={0} angle={modo === 'semanal' && dados.length > 14 ? -45 : 0} textAnchor={modo === 'semanal' && dados.length > 14 ? 'end' : 'middle'} height={modo === 'semanal' && dados.length > 14 ? 50 : 30} />
                     <YAxis tickFormatter={compacto} tick={{ fontSize: 11, fill: '#000' }} width={64} />
@@ -426,6 +436,21 @@ function ModalGraficoVariacao({ titulo, bloco, onFechar }: { titulo: string; blo
                     />
                     <Bar dataKey="variacao" radius={[3, 3, 0, 0]}>
                       {dados.map((d) => <Cell key={d.chave} fill={d.variacao > 0.005 ? '#dc2626' : d.variacao < -0.005 ? '#16a34a' : '#9ca3af'} />)}
+                      {/* Rotulo com o valor em cada barra (mensal: valor completo; semanal com muitas barras: compacto). */}
+                      <LabelList
+                        dataKey="variacao"
+                        content={(props: { x?: number | string; y?: number | string; width?: number | string; height?: number | string; value?: unknown }) => {
+                          const x = Number(props.x ?? 0), y = Number(props.y ?? 0), w = Number(props.width ?? 0), h = Number(props.height ?? 0);
+                          const v = Number(props.value ?? 0);
+                          const topo = Math.min(y, y + h), base = Math.max(y, y + h);
+                          const texto = modo === 'semanal' && dados.length > 8 ? rotuloCompacto(v) : fmtSinal(v);
+                          return (
+                            <text x={x + w / 2} y={v >= 0 ? topo - 6 : base + 14} textAnchor="middle" fontSize={modo === 'semanal' ? 10 : 12} fontWeight={600} fill={v > 0.005 ? '#b91c1c' : v < -0.005 ? '#15803d' : '#374151'}>
+                              {texto}
+                            </text>
+                          );
+                        }}
+                      />
                     </Bar>
                   </BarChart>
                 </ResponsiveContainer>
