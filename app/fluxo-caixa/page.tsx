@@ -187,6 +187,7 @@ interface BoletoBancoResumo {
 
 interface CarteiraGrupo { pedidos: number; linhas: number; qtPendente: number; vlPendente: number }
 interface CarteiraPedidos { andamento: CarteiraGrupo; bloqueado: CarteiraGrupo }
+interface CarteiraLote { lote: string | null; descricao: string | null; dtFim: string | null; pedidos: number; qtPendente: number; vlPendente: number }
 
 interface BoletoDetalheItem {
   cliente: string;
@@ -1376,6 +1377,8 @@ export default function FluxoCaixaPage() {
   const [boletoPorBanco, setBoletoPorBanco] = useState<BoletoBancoResumo[] | null>(null);
   // Carteira de pedidos de venda (andamento x bloqueado) - retrato de hoje, fora do saldo.
   const [carteira, setCarteira] = useState<CarteiraPedidos | null>(null);
+  // Modal da carteira agrupada por lote (clique no card).
+  const [carteiraLotes, setCarteiraLotes] = useState<{ grupo: 'andamento' | 'bloqueado'; titulo: string; itens: CarteiraLote[] | null; erro: string | null } | null>(null);
   const [boletoBancoModal, setBoletoBancoModal] = useState<string | null>(null);
   // Modal por banco: 'recebimento' (padrao, com D+1/fim de semana/feriado) ou 'vencimento' (puro).
   const [boletoBancoVisao, setBoletoBancoVisao] = useState<'recebimento' | 'vencimento'>('recebimento');
@@ -1628,6 +1631,18 @@ export default function FluxoCaixaPage() {
   // Fora do Promise.all principal: e mais lento (cruza com fcr_fatcodbar)
   // e nao deve segurar a tabela se demorar ou falhar.
   // Carteira de pedidos: consulta leve e independente - nao segura a tabela se falhar.
+  async function abrirCarteiraLotes(grupo: 'andamento' | 'bloqueado', titulo: string) {
+    setCarteiraLotes({ grupo, titulo, itens: null, erro: null });
+    try {
+      const resp = await fetch(`/api/fluxo-caixa/carteira-pedidos/lotes?grupo=${grupo}`, { cache: 'no-store' });
+      const json = await resp.json();
+      if (!resp.ok) throw new Error(json.detail || json.error || 'Erro ao buscar os lotes');
+      setCarteiraLotes({ grupo, titulo, itens: json, erro: null });
+    } catch (e) {
+      setCarteiraLotes({ grupo, titulo, itens: [], erro: e instanceof Error ? e.message : 'Erro desconhecido' });
+    }
+  }
+
   async function buscarCarteira() {
     try {
       const resp = await fetch('/api/fluxo-caixa/carteira-pedidos', { cache: 'no-store' });
@@ -2241,7 +2256,12 @@ export default function FluxoCaixaPage() {
                 { chave: 'andamento' as const, titulo: 'Pedidos em carteira — em andamento', dica: 'Valor pendente dos itens dos pedidos com situação 1, 3, 7 e 8', Icone: PackageOpen },
                 { chave: 'bloqueado' as const, titulo: 'Pedidos em carteira — bloqueados', dica: 'Valor pendente dos itens dos pedidos com situação 5', Icone: Lock },
               ]).map(({ chave, titulo, dica, Icone }) => (
-                <div key={chave} className="bg-white rounded-lg shadow-md p-4 border-l-4 border-red-500" title={dica}>
+                <div
+                  key={chave}
+                  className="bg-white rounded-lg shadow-md p-4 border-l-4 border-red-500 cursor-pointer hover:bg-rose-50 transition-colors"
+                  title={`${dica} — clique para ver por lote`}
+                  onClick={() => abrirCarteiraLotes(chave, titulo)}
+                >
                   <div className="flex items-center gap-2 text-black text-xs font-medium">
                     <Icone className="w-4 h-4 text-red-600" /> {titulo}
                   </div>
@@ -3048,6 +3068,74 @@ export default function FluxoCaixaPage() {
           </div>
         </div>
       )}
+      {/* Modal: carteira de pedidos agrupada por lote (clique num card da carteira) */}
+      {carteiraLotes && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setCarteiraLotes(null)}>
+          <div className="bg-white rounded-lg shadow-xl max-w-5xl w-full max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200">
+              <div>
+                <h2 className="text-base font-semibold text-black">{carteiraLotes.titulo} — por lote</h2>
+                <p className="text-xs text-black">Valor pendente (vl_pendente) dos itens, agrupado por lote (cd_lote). Sem o representante 32098.</p>
+              </div>
+              <button onClick={() => setCarteiraLotes(null)} className="text-black"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="overflow-y-auto flex-1">
+              {carteiraLotes.itens === null && (
+                <div className="flex items-center justify-center py-12 text-black"><Loader2 className="w-5 h-5 animate-spin mr-2" /> Carregando…</div>
+              )}
+              {carteiraLotes.erro && (
+                <div className="flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-md mx-5 mt-4 px-3 py-2">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" /> <span>{carteiraLotes.erro}</span>
+                </div>
+              )}
+              {carteiraLotes.itens !== null && !carteiraLotes.erro && carteiraLotes.itens.length === 0 && (
+                <p className="text-sm text-black py-12 text-center">Nenhum item pendente nesse grupo.</p>
+              )}
+              {carteiraLotes.itens !== null && carteiraLotes.itens.length > 0 && (
+                <table className="w-full text-sm">
+                  <thead className="sticky top-0 bg-gray-50 border-b border-gray-200">
+                    <tr>
+                      <th className="text-left px-5 py-2 font-medium text-black">Lote</th>
+                      <th className="text-left px-3 py-2 font-medium text-black">Descrição</th>
+                      <th className="text-right px-3 py-2 font-medium text-black">Faturamento até</th>
+                      <th className="text-right px-3 py-2 font-medium text-black">Pedidos</th>
+                      <th className="text-right px-3 py-2 font-medium text-black">Peças</th>
+                      <th className="text-right px-5 py-2 font-medium text-black">Valor pendente</th>
+                      <th className="text-right px-3 py-2 font-medium text-black">%</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(() => {
+                      const totalValor = carteiraLotes.itens.reduce((a, l) => a + l.vlPendente, 0);
+                      return carteiraLotes.itens.map((l, i) => (
+                        <tr key={`${l.lote ?? 'sem'}-${i}`} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                          <td className="px-5 py-1.5 text-black tabular-nums whitespace-nowrap font-medium">{l.lote ?? <span className="italic">Sem lote</span>}</td>
+                          <td className="px-3 py-1.5 text-black">{l.descricao ?? '—'}</td>
+                          <td className="px-3 py-1.5 text-right text-black tabular-nums whitespace-nowrap">{l.dtFim ? l.dtFim.split('-').reverse().join('/') : '—'}</td>
+                          <td className="px-3 py-1.5 text-right text-black tabular-nums">{fmtNum(l.pedidos)}</td>
+                          <td className="px-3 py-1.5 text-right text-black tabular-nums">{fmtNum(l.qtPendente)}</td>
+                          <td className="px-5 py-1.5 text-right font-semibold text-red-700 tabular-nums whitespace-nowrap">{fmtBRL(l.vlPendente)}</td>
+                          <td className="px-3 py-1.5 text-right text-black tabular-nums">{totalValor > 0 ? `${((l.vlPendente / totalValor) * 100).toFixed(1).replace('.', ',')}%` : '—'}</td>
+                        </tr>
+                      ));
+                    })()}
+                  </tbody>
+                  <tfoot>
+                    <tr className="font-bold bg-gray-200 border-t-2 border-gray-400">
+                      <td colSpan={3} className="px-5 py-2 text-right uppercase text-xs tracking-wide text-black">Total ({carteiraLotes.itens.length} {carteiraLotes.itens.length === 1 ? 'lote' : 'lotes'})</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-black">—</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-black">{fmtNum(carteiraLotes.itens.reduce((a, l) => a + l.qtPendente, 0))}</td>
+                      <td className="px-5 py-2 text-right tabular-nums text-red-700 whitespace-nowrap">{fmtBRL(carteiraLotes.itens.reduce((a, l) => a + l.vlPendente, 0))}</td>
+                      <td className="px-3 py-2" />
+                    </tr>
+                  </tfoot>
+                </table>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       <ModalDiaCenario c={cenarios} />
     </div>
   );

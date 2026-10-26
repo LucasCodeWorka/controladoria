@@ -1078,6 +1078,12 @@ def _sql_multimarcas_diario(dt_inicio: str, dt_fim: str) -> tuple:
 # Olha a quantidade/valor PENDENTE dos itens (vr_ped_pedidoi): em andamento =
 # tp_situacao 1, 3, 7, 8; bloqueado = tp_situacao 5 (pedido explicito do
 # usuario). E um retrato da carteira de HOJE (nao depende do periodo do fluxo).
+# Exclui o representante 32098 (Lojas Liebe).
+# Representante 32098 (LOJAS LIEBE - reposicao das proprias lojas, nao venda a
+# terceiros) fica FORA da carteira - pedido explicito do usuario.
+_REPRESENTANTE_FORA_CARTEIRA = 32098
+
+
 @router.get("/api/fluxo-caixa/carteira-pedidos")
 def obter_carteira_pedidos():
     try:
@@ -1089,8 +1095,9 @@ def obter_carteira_pedidos():
                    COALESCE(SUM(vl_pendente), 0) AS vl_pendente
             FROM vr_ped_pedidoi
             WHERE qt_pendente > 0 AND tp_situacao IN (1, 3, 5, 7, 8)
+              AND cd_representant IS DISTINCT FROM %s
             GROUP BY 1
-        """) or []
+        """, (_REPRESENTANTE_FORA_CARTEIRA,)) or []
         base = {"pedidos": 0, "linhas": 0, "qtPendente": 0.0, "vlPendente": 0.0}
         res = {"andamento": dict(base), "bloqueado": dict(base)}
         for r in rows:
@@ -1102,6 +1109,50 @@ def obter_carteira_pedidos():
     except Exception as e:
         print(f"[ERROR] Erro ao buscar carteira de pedidos: {e}")
         raise HTTPException(status_code=500, detail="Erro ao buscar a carteira de pedidos")
+
+
+@router.get("/api/fluxo-caixa/carteira-pedidos/lotes")
+def obter_carteira_pedidos_por_lote(grupo: str = Query(..., description="andamento | bloqueado")):
+    """O que compoe um dos cards da carteira, agrupado por lote (cd_lote do
+    item) - mesmos filtros do card (situacao, qt_pendente > 0, sem o
+    representante 32098), entao a soma bate com o valor do card."""
+    if grupo == "andamento":
+        situacoes = [1, 3, 7, 8]
+    elif grupo == "bloqueado":
+        situacoes = [5]
+    else:
+        raise HTTPException(status_code=400, detail="grupo deve ser andamento ou bloqueado")
+    try:
+        rows = execute_query("""
+            SELECT i.cd_lote,
+                   COUNT(DISTINCT (i.cd_empresa, i.cd_pedido))::int AS pedidos,
+                   COALESCE(SUM(i.qt_pendente), 0) AS qt_pendente,
+                   COALESCE(SUM(i.vl_pendente), 0) AS vl_pendente,
+                   MAX(l.ds_lote) AS ds_lote,
+                   MAX(l.dt_fm)::date AS dt_fm
+            FROM vr_ped_pedidoi i
+            LEFT JOIN vr_ped_lote l ON l.cd_lote = i.cd_lote
+            WHERE i.qt_pendente > 0 AND i.tp_situacao = ANY(%s)
+              AND i.cd_representant IS DISTINCT FROM %s
+            GROUP BY i.cd_lote
+            ORDER BY vl_pendente DESC
+        """, (situacoes, _REPRESENTANTE_FORA_CARTEIRA)) or []
+        return [
+            {
+                "lote": r["cd_lote"] if r["cd_lote"] not in (None, "") else None,
+                "descricao": r["ds_lote"],
+                "dtFim": _dia_str(r["dt_fm"]) if r["dt_fm"] else None,
+                "pedidos": r["pedidos"],
+                "qtPendente": float(r["qt_pendente"] or 0),
+                "vlPendente": float(r["vl_pendente"] or 0),
+            }
+            for r in rows
+        ]
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[ERROR] Erro ao buscar carteira de pedidos por lote: {e}")
+        raise HTTPException(status_code=500, detail="Erro ao buscar a carteira por lote")
 
 
 @router.get("/api/fluxo-caixa/empresas")
