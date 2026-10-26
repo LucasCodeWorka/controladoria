@@ -2273,14 +2273,14 @@ export default function FluxoCaixaPage() {
               ]).map(({ chave, titulo, dica, Icone }) => (
                 <div
                   key={chave}
-                  className="bg-white rounded-lg shadow-md p-4 border-l-4 border-red-500 cursor-pointer hover:bg-rose-50 transition-colors"
+                  className="bg-white rounded-lg shadow-md p-4 border-l-4 border-blue-500 cursor-pointer hover:bg-blue-50 transition-colors"
                   title={`${dica} — clique para ver por lote`}
                   onClick={() => abrirCarteiraLotes(chave, titulo)}
                 >
                   <div className="flex items-center gap-2 text-black text-xs font-medium">
-                    <Icone className="w-4 h-4 text-red-600" /> {titulo}
+                    <Icone className="w-4 h-4 text-blue-600" /> {titulo}
                   </div>
-                  <p className="text-2xl font-bold tabular-nums mt-1.5 text-red-700">{fmtBRL(carteira[chave].vlPendente)}</p>
+                  <p className="text-2xl font-bold tabular-nums mt-1.5 text-blue-700">{fmtBRL(carteira[chave].vlPendente)}</p>
                   <p className="text-xs text-black mt-1 tabular-nums">
                     {fmtNum(carteira[chave].qtPendente)} peças · {fmtNum(carteira[chave].pedidos)} {carteira[chave].pedidos === 1 ? 'pedido' : 'pedidos'}
                   </p>
@@ -3156,7 +3156,7 @@ export default function FluxoCaixaPage() {
                           <td className="px-3 py-1.5 text-right text-black tabular-nums whitespace-nowrap">{l.dtFim ? l.dtFim.split('-').reverse().join('/') : '—'}</td>
                           <td className="px-3 py-1.5 text-right text-black tabular-nums">{fmtNum(l.pedidos)}</td>
                           <td className="px-3 py-1.5 text-right text-black tabular-nums">{fmtNum(l.qtPendente)}</td>
-                          <td className="px-5 py-1.5 text-right font-semibold text-red-700 tabular-nums whitespace-nowrap">{fmtBRL(l.vlPendente)}</td>
+                          <td className="px-5 py-1.5 text-right font-semibold text-blue-700 tabular-nums whitespace-nowrap">{fmtBRL(l.vlPendente)}</td>
                           <td className="px-3 py-1.5 text-right text-black tabular-nums">{totalValor > 0 ? `${((l.vlPendente / totalValor) * 100).toFixed(1).replace('.', ',')}%` : '—'}</td>
                         </tr>
                       ));
@@ -3167,7 +3167,7 @@ export default function FluxoCaixaPage() {
                       <td colSpan={3} className="px-5 py-2 text-right uppercase text-xs tracking-wide text-black">Total ({carteiraLotes.itens.length} {carteiraLotes.itens.length === 1 ? 'lote' : 'lotes'})</td>
                       <td className="px-3 py-2 text-right tabular-nums text-black">—</td>
                       <td className="px-3 py-2 text-right tabular-nums text-black">{fmtNum(carteiraLotes.itens.reduce((a, l) => a + l.qtPendente, 0))}</td>
-                      <td className="px-5 py-2 text-right tabular-nums text-red-700 whitespace-nowrap">{fmtBRL(carteiraLotes.itens.reduce((a, l) => a + l.vlPendente, 0))}</td>
+                      <td className="px-5 py-2 text-right tabular-nums text-blue-700 whitespace-nowrap">{fmtBRL(carteiraLotes.itens.reduce((a, l) => a + l.vlPendente, 0))}</td>
                       <td className="px-3 py-2" />
                     </tr>
                   </tfoot>
