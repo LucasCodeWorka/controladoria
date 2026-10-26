@@ -1074,6 +1074,36 @@ def _sql_multimarcas_diario(dt_inicio: str, dt_fim: str) -> tuple:
     )
 
 
+# ── Carteira de pedidos (vendas) - pedidos em andamento x bloqueados ──────
+# Olha a quantidade/valor PENDENTE dos itens (vr_ped_pedidoi): em andamento =
+# tp_situacao 1, 3, 7, 8; bloqueado = tp_situacao 5 (pedido explicito do
+# usuario). E um retrato da carteira de HOJE (nao depende do periodo do fluxo).
+@router.get("/api/fluxo-caixa/carteira-pedidos")
+def obter_carteira_pedidos():
+    try:
+        rows = execute_query("""
+            SELECT CASE WHEN tp_situacao IN (1, 3, 7, 8) THEN 'andamento' ELSE 'bloqueado' END AS grupo,
+                   COUNT(DISTINCT (cd_empresa, cd_pedido))::int AS pedidos,
+                   COUNT(*)::int AS linhas,
+                   COALESCE(SUM(qt_pendente), 0) AS qt_pendente,
+                   COALESCE(SUM(vl_pendente), 0) AS vl_pendente
+            FROM vr_ped_pedidoi
+            WHERE qt_pendente > 0 AND tp_situacao IN (1, 3, 5, 7, 8)
+            GROUP BY 1
+        """) or []
+        base = {"pedidos": 0, "linhas": 0, "qtPendente": 0.0, "vlPendente": 0.0}
+        res = {"andamento": dict(base), "bloqueado": dict(base)}
+        for r in rows:
+            res[r["grupo"]] = {
+                "pedidos": r["pedidos"], "linhas": r["linhas"],
+                "qtPendente": float(r["qt_pendente"] or 0), "vlPendente": float(r["vl_pendente"] or 0),
+            }
+        return res
+    except Exception as e:
+        print(f"[ERROR] Erro ao buscar carteira de pedidos: {e}")
+        raise HTTPException(status_code=500, detail="Erro ao buscar a carteira de pedidos")
+
+
 @router.get("/api/fluxo-caixa/empresas")
 def listar_empresas_fluxo_caixa():
     _criar_tabelas_fluxo_caixa()

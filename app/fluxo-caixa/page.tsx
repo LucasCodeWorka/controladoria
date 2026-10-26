@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Banknote, ChevronDown, Loader2, Settings, X, RotateCcw,
   ArrowUp, ArrowDown, ArrowUpDown, Landmark,
-  Wallet, TrendingUp, TrendingDown, AlertCircle, CalendarRange,
+  Wallet, TrendingUp, TrendingDown, AlertCircle, CalendarRange, PackageOpen, Lock,
 } from 'lucide-react';
 import {
   Bar,
@@ -184,6 +184,9 @@ interface BoletoBancoResumo {
   qtdVenc: number;
   mesesVenc: { mes: string; valor: number; qtd: number }[];
 }
+
+interface CarteiraGrupo { pedidos: number; linhas: number; qtPendente: number; vlPendente: number }
+interface CarteiraPedidos { andamento: CarteiraGrupo; bloqueado: CarteiraGrupo }
 
 interface BoletoDetalheItem {
   cliente: string;
@@ -1371,6 +1374,8 @@ export default function FluxoCaixaPage() {
   const pedidoFornDespesaRef = useRef(0);
   const [saldosBancarios, setSaldosBancarios] = useState<SaldosBancarios | null>(null);
   const [boletoPorBanco, setBoletoPorBanco] = useState<BoletoBancoResumo[] | null>(null);
+  // Carteira de pedidos de venda (andamento x bloqueado) - retrato de hoje, fora do saldo.
+  const [carteira, setCarteira] = useState<CarteiraPedidos | null>(null);
   const [boletoBancoModal, setBoletoBancoModal] = useState<string | null>(null);
   // Modal por banco: 'recebimento' (padrao, com D+1/fim de semana/feriado) ou 'vencimento' (puro).
   const [boletoBancoVisao, setBoletoBancoVisao] = useState<'recebimento' | 'vencimento'>('recebimento');
@@ -1596,6 +1601,7 @@ export default function FluxoCaixaPage() {
       consultaRef.current = qs;
       limparDespesaSel();
       buscarBoletoPorBanco();
+      buscarCarteira();
       const [respDados, respFornecedor, respDespesa, respSaldos] = await Promise.all([
         fetch(`/api/fluxo-caixa/dados?${qs}`, { cache: 'no-store' }),
         fetch(`/api/fluxo-caixa/saidas-por-fornecedor?${qs}`, { cache: 'no-store' }),
@@ -1621,6 +1627,18 @@ export default function FluxoCaixaPage() {
 
   // Fora do Promise.all principal: e mais lento (cruza com fcr_fatcodbar)
   // e nao deve segurar a tabela se demorar ou falhar.
+  // Carteira de pedidos: consulta leve e independente - nao segura a tabela se falhar.
+  async function buscarCarteira() {
+    try {
+      const resp = await fetch('/api/fluxo-caixa/carteira-pedidos', { cache: 'no-store' });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      setCarteira(await resp.json());
+    } catch (e) {
+      console.error('Erro ao buscar carteira de pedidos:', e);
+      setCarteira(null);
+    }
+  }
+
   async function buscarBoletoPorBanco() {
     const pedido = ++pedidoBoletoPorBancoRef.current;
     setBoletoPorBanco(null);
@@ -2214,6 +2232,27 @@ export default function FluxoCaixaPage() {
               );
             })()}
           </div>
+
+          {/* Carteira de pedidos de venda: em andamento (situacao 1, 3, 7, 8) e bloqueados
+              (situacao 5), pela quantidade pendente dos itens. Retrato de hoje, so informativo. */}
+          {carteira && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {([
+                { chave: 'andamento' as const, titulo: 'Pedidos em carteira — em andamento', dica: 'Valor pendente dos itens dos pedidos com situação 1, 3, 7 e 8', Icone: PackageOpen },
+                { chave: 'bloqueado' as const, titulo: 'Pedidos em carteira — bloqueados', dica: 'Valor pendente dos itens dos pedidos com situação 5', Icone: Lock },
+              ]).map(({ chave, titulo, dica, Icone }) => (
+                <div key={chave} className="bg-white rounded-lg shadow-md p-4 border-l-4 border-red-500" title={dica}>
+                  <div className="flex items-center gap-2 text-black text-xs font-medium">
+                    <Icone className="w-4 h-4 text-red-600" /> {titulo}
+                  </div>
+                  <p className="text-2xl font-bold tabular-nums mt-1.5 text-red-700">{fmtBRL(carteira[chave].vlPendente)}</p>
+                  <p className="text-xs text-black mt-1 tabular-nums">
+                    {fmtNum(carteira[chave].qtPendente)} peças · {fmtNum(carteira[chave].pedidos)} {carteira[chave].pedidos === 1 ? 'pedido' : 'pedidos'}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
 
           <PontosAtencaoCaixa linhas={linhasDiariasVisiveis} totalSaidas={totais.saidas} />
 
