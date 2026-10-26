@@ -1378,6 +1378,9 @@ export default function FluxoCaixaPage() {
   // Carteira de pedidos de venda (andamento x bloqueado) - retrato de hoje, fora do saldo.
   const [carteira, setCarteira] = useState<CarteiraPedidos | null>(null);
   // Modal da carteira agrupada por lote (clique no card).
+  // Ordenacao das colunas do modal por lote (padrao: maior valor primeiro).
+  const [carteiraOrdCampo, setCarteiraOrdCampo] = useState<'lote' | 'descricao' | 'dtFim' | 'pedidos' | 'qtPendente' | 'vlPendente'>('vlPendente');
+  const [carteiraOrdDir, setCarteiraOrdDir] = useState<'asc' | 'desc'>('desc');
   const [carteiraLotes, setCarteiraLotes] = useState<{ grupo: 'andamento' | 'bloqueado'; titulo: string; itens: CarteiraLote[] | null; erro: string | null } | null>(null);
   const [boletoBancoModal, setBoletoBancoModal] = useState<string | null>(null);
   // Modal por banco: 'recebimento' (padrao, com D+1/fim de semana/feriado) ou 'vencimento' (puro).
@@ -1631,7 +1634,19 @@ export default function FluxoCaixaPage() {
   // Fora do Promise.all principal: e mais lento (cruza com fcr_fatcodbar)
   // e nao deve segurar a tabela se demorar ou falhar.
   // Carteira de pedidos: consulta leve e independente - nao segura a tabela se falhar.
+  function alternarOrdenacaoCarteira(campo: typeof carteiraOrdCampo) {
+    if (carteiraOrdCampo === campo) {
+      setCarteiraOrdDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setCarteiraOrdCampo(campo);
+      // Texto/data comecam crescente; numeros, do maior pro menor.
+      setCarteiraOrdDir(campo === 'lote' || campo === 'descricao' || campo === 'dtFim' ? 'asc' : 'desc');
+    }
+  }
+
   async function abrirCarteiraLotes(grupo: 'andamento' | 'bloqueado', titulo: string) {
+    setCarteiraOrdCampo('vlPendente');
+    setCarteiraOrdDir('desc');
     setCarteiraLotes({ grupo, titulo, itens: null, erro: null });
     try {
       const resp = await fetch(`/api/fluxo-caixa/carteira-pedidos/lotes?grupo=${grupo}`, { cache: 'no-store' });
@@ -3095,19 +3110,46 @@ export default function FluxoCaixaPage() {
                 <table className="w-full text-sm">
                   <thead className="sticky top-0 bg-gray-50 border-b border-gray-200">
                     <tr>
-                      <th className="text-left px-5 py-2 font-medium text-black">Lote</th>
-                      <th className="text-left px-3 py-2 font-medium text-black">Descrição</th>
-                      <th className="text-right px-3 py-2 font-medium text-black">Faturamento até</th>
-                      <th className="text-right px-3 py-2 font-medium text-black">Pedidos</th>
-                      <th className="text-right px-3 py-2 font-medium text-black">Peças</th>
-                      <th className="text-right px-5 py-2 font-medium text-black">Valor pendente</th>
-                      <th className="text-right px-3 py-2 font-medium text-black">%</th>
+                      {([
+                        { campo: 'lote', rot: 'Lote', alin: 'left', pad: 'px-5' },
+                        { campo: 'descricao', rot: 'Descrição', alin: 'left', pad: 'px-3' },
+                        { campo: 'dtFim', rot: 'Faturamento até', alin: 'right', pad: 'px-3' },
+                        { campo: 'pedidos', rot: 'Pedidos', alin: 'right', pad: 'px-3' },
+                        { campo: 'qtPendente', rot: 'Peças', alin: 'right', pad: 'px-3' },
+                        { campo: 'vlPendente', rot: 'Valor pendente', alin: 'right', pad: 'px-5' },
+                        { campo: 'vlPendente', rot: '%', alin: 'right', pad: 'px-3' },
+                      ] as { campo: typeof carteiraOrdCampo; rot: string; alin: 'left' | 'right'; pad: string }[]).map((c, idx) => (
+                        <th
+                          key={`${c.campo}-${idx}`}
+                          onClick={() => alternarOrdenacaoCarteira(c.campo)}
+                          title="Clique para ordenar"
+                          className={`${c.alin === 'left' ? 'text-left' : 'text-right'} ${c.pad} py-2 font-medium text-black whitespace-nowrap cursor-pointer select-none hover:bg-gray-100`}
+                        >
+                          <span className={`inline-flex items-center gap-1 ${c.alin === 'right' ? 'justify-end w-full' : ''}`}>
+                            {c.rot}
+                            {carteiraOrdCampo === c.campo
+                              ? (carteiraOrdDir === 'asc' ? <ArrowUp className="w-3.5 h-3.5" /> : <ArrowDown className="w-3.5 h-3.5" />)
+                              : <ArrowUpDown className="w-3.5 h-3.5 text-gray-400" />}
+                          </span>
+                        </th>
+                      ))}
                     </tr>
                   </thead>
                   <tbody>
                     {(() => {
                       const totalValor = carteiraLotes.itens.reduce((a, l) => a + l.vlPendente, 0);
-                      return carteiraLotes.itens.map((l, i) => (
+                      const mult = carteiraOrdDir === 'asc' ? 1 : -1;
+                      const ordenados = [...carteiraLotes.itens].sort((a, b) => {
+                        switch (carteiraOrdCampo) {
+                          case 'lote': return (a.lote ?? '').localeCompare(b.lote ?? '', 'pt-BR', { numeric: true }) * mult;
+                          case 'descricao': return (a.descricao ?? '').localeCompare(b.descricao ?? '', 'pt-BR') * mult;
+                          case 'dtFim': return (a.dtFim ?? '').localeCompare(b.dtFim ?? '') * mult;
+                          case 'pedidos': return (a.pedidos - b.pedidos) * mult;
+                          case 'qtPendente': return (a.qtPendente - b.qtPendente) * mult;
+                          default: return (a.vlPendente - b.vlPendente) * mult;
+                        }
+                      });
+                      return ordenados.map((l, i) => (
                         <tr key={`${l.lote ?? 'sem'}-${i}`} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
                           <td className="px-5 py-1.5 text-black tabular-nums whitespace-nowrap font-medium">{l.lote ?? <span className="italic">Sem lote</span>}</td>
                           <td className="px-3 py-1.5 text-black">{l.descricao ?? '—'}</td>
