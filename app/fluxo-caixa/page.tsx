@@ -3075,7 +3075,7 @@ export default function FluxoCaixaPage() {
             <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200">
               <div>
                 <h2 className="text-base font-semibold text-black">{carteiraLotes.titulo} — por lote</h2>
-                <p className="text-xs text-black">Valor pendente (vl_pendente) dos itens, agrupado por lote (cd_lote). Sem o representante 32098.</p>
+                <p className="text-xs text-black">Valor pendente (vl_pendente) dos itens da empresa 001, agrupado por lote (cd_lote). Sem o representante 32098.</p>
               </div>
               <button onClick={() => setCarteiraLotes(null)} className="text-black"><X className="w-5 h-5" /></button>
             </div>
