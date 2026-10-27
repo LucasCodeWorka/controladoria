@@ -1506,6 +1506,10 @@ def matriz_produtos_giro(
                 "familia": (item.get("categorias") or {}).get("familia"),
                 "linha": (item.get("categorias") or {}).get("linha"),
                 "temCorSemMesesFL": mista_dict.get(item["referencia"], False),
+                "giroRegra": item["giroTotal"],
+                "mesesRegra": _contexto_regra_referencia(item["giroTotal"], [
+                    _meses_desde(primeiras_por_cor.get((item["referencia"], c["cor"])), hoje) for c in item["porCor"]
+                ])[1],
                 "precoCheioFallbackAtacado": (fallback_cheio_pagina.get(item["referencia"]) or {}).get("atacado"),
                 "precoCheioFallbackVarejo": (fallback_cheio_pagina.get(item["referencia"]) or {}).get("varejo"),
             })
@@ -1574,7 +1578,7 @@ def matriz_produtos_giro_por_cor(
         # filtro de status ativo).
         familia_referencia = dados_cor[0].get("familia") if dados_cor else None
         linha_referencia = dados_cor[0].get("linha") if dados_cor else None
-        if status_filtro and _usa_regra_propria_campanha(familia_referencia, linha_referencia):
+        if status_filtro:
             tem_cor_sem_meses_fl = bool(_referencias_mistas([referencia], mes_ref, cd_empresas))
         else:
             tem_cor_sem_meses_fl = any(primeiras_oportunidades.get(c["cor"]) is None for c in dados_cor)
@@ -1587,6 +1591,10 @@ def matriz_produtos_giro_por_cor(
             promocoes,
         ).get(referencia) or {}
 
+        meses_cores_ref = [_meses_desde(primeiras_oportunidades.get(c["cor"]), hoje) for c in dados_cor]
+        giro_regra_ref, meses_regra_ref = _contexto_regra_referencia(
+            _giro(sum(c["estoqueTotal"] for c in dados_cor), sum(c["vendaTotal"] for c in dados_cor)), meses_cores_ref
+        )
         itens_resposta = []
         for item in sorted(dados_cor, key=lambda i: i["cor"]):
             preco = precos.get(item["cdProdutoPreco"]) or {"precoFabrica": None, "precoAtacado": None, "precoVarejo": None}
@@ -1600,6 +1608,7 @@ def matriz_produtos_giro_por_cor(
                 item["giroTotal"], meses_oportunidade, preco, promo,
                 giroMinimo, mesesFLMinimo, oportunidadeDesconto, item.get("familia"), tem_cor_sem_meses_fl,
                 item.get("linha"), _parse_canais_desconto(canaisDesconto), fallback_ref,
+                (giro_regra_ref, meses_regra_ref),
             ):
                 continue
 
@@ -1622,6 +1631,8 @@ def matriz_produtos_giro_por_cor(
                 "familia": item.get("familia"),
                 "linha": item.get("linha"),
                 "temCorSemMesesFL": tem_cor_sem_meses_fl,
+                "giroRegra": giro_regra_ref,
+                "mesesRegra": meses_regra_ref,
                 "precoCheioFallbackAtacado": fallback_ref.get("atacado"),
                 "precoCheioFallbackVarejo": fallback_ref.get("varejo"),
             })
@@ -1896,8 +1907,8 @@ def _identificar_regra_campanha(
     giro_total: Optional[float], meses_oportunidade: Optional[int], tem_promo_ativa: bool,
     familia: Optional[str] = None, tem_cor_sem_meses_fl: bool = False, linha: Optional[str] = None,
 ) -> int:
-    # Regra exclusiva das familias KISS ME/KISS ME PLUS e das linhas
-    # Confort/Free/Ideal/Basic Up/Basicos, e so quando a referencia e
+    # Regra de referencia MISTA, valida pra TODAS as familias/linhas (pedido
+    # explicito do usuario): vale quando a referencia e
     # MISTA (tem_cor_sem_meses_fl=True, ou seja, tem pelo menos uma cor
     # ainda em linha / sem Meses FL convivendo com cores que ja viraram
     # oportunidade): 30% so quando Meses FL > 24 E giro > 6 - fora isso,
@@ -1905,7 +1916,7 @@ def _identificar_regra_campanha(
     # Meses FL>0). Se a referencia INTEIRA ja virou oportunidade (toda cor
     # com Meses FL), nao e mais "mista" - usa a escada normal, mesmo
     # batendo a familia/linha (pedido explicito do usuario).
-    if _usa_regra_propria_campanha(familia, linha) and tem_cor_sem_meses_fl:
+    if tem_cor_sem_meses_fl:
         if giro_total is not None and giro_total > 6 and meses_oportunidade is not None and meses_oportunidade > 24:
             return REGRA_KISS_ME_30
         return REGRA_KISS_ME_0
@@ -2074,11 +2085,23 @@ def _parse_canais_desconto(canais: Optional[str]) -> tuple:
     return escolhidos or CANAIS_DESCONTO
 
 
+def _contexto_regra_referencia(giro_referencia, meses_cores: list) -> tuple:
+    """(giro, Meses FL) que decidem a regra de uma referencia NAO mista (todas
+    as cores ja com Meses FL): giro da referencia inteira e o MENOR Meses FL
+    entre as cores (pedido explicito do usuario) - todas as cores caem na
+    mesma regra. Na referencia mista continua valendo o giro/Meses FL de
+    cada cor (regras 7/8)."""
+    validos = [m for m in meses_cores if m is not None]
+    return giro_referencia, (min(validos) if validos else None)
+
+
 def _tem_oportunidade_desconto(
     giro_total, meses_oportunidade, promo: dict, preco_atacado, preco_varejo,
     familia: Optional[str] = None, tem_cor_sem_meses_fl: bool = False, linha: Optional[str] = None,
-    canais: tuple = CANAIS_DESCONTO, fallback: Optional[dict] = None,
+    canais: tuple = CANAIS_DESCONTO, fallback: Optional[dict] = None, ctx_referencia: Optional[tuple] = None,
 ) -> bool:
+    if ctx_referencia is not None and not tem_cor_sem_meses_fl:
+        giro_total, meses_oportunidade = ctx_referencia
     fb = fallback or {}
     tem_promo = bool(promo.get("atacado") or promo.get("varejo"))
     regra = _identificar_regra_campanha(giro_total, meses_oportunidade, tem_promo, familia, tem_cor_sem_meses_fl, linha)
@@ -2104,6 +2127,7 @@ def _cor_bate_filtros(
     giro_minimo: Optional[float] = None, meses_fl_minimo: Optional[int] = None,
     oportunidade_desconto: bool = False, familia: Optional[str] = None, tem_cor_sem_meses_fl: bool = False,
     linha: Optional[str] = None, canais: tuple = CANAIS_DESCONTO, fallback: Optional[dict] = None,
+    ctx_referencia: Optional[tuple] = None,
 ) -> bool:
     """Se UMA cor, sozinha, bate em TODOS os filtros ativos da tela ao mesmo
     tempo. O "ao mesmo tempo" e o ponto: avaliar cada filtro de forma
@@ -2119,7 +2143,7 @@ def _cor_bate_filtros(
         return False
     if oportunidade_desconto and not _tem_oportunidade_desconto(
         giro_cor, meses_cor, promo_cor, preco_cor.get("precoAtacado"), preco_cor.get("precoVarejo"), familia, tem_cor_sem_meses_fl, linha,
-        canais, fallback,
+        canais, fallback, ctx_referencia,
     ):
         return False
     return True
@@ -2186,10 +2210,7 @@ def _mista_por_referencia(
     esse flag) entram na reconsulta, em lote."""
     resultado = {item["referencia"]: _referencia_tem_cor_sem_meses_fl(item, primeiras_por_cor) for item in dados}
     if status_filtro:
-        referencias_regra_propria = [
-            item["referencia"] for item in dados
-            if _usa_regra_propria_campanha((item.get("categorias") or {}).get("familia"), (item.get("categorias") or {}).get("linha"))
-        ]
+        referencias_regra_propria = [item["referencia"] for item in dados]
         if referencias_regra_propria:
             mistas_reais = _referencias_mistas(referencias_regra_propria, mes_referencia, cd_empresas)
             for ref in referencias_regra_propria:
@@ -2230,6 +2251,12 @@ def _fallback_preco_cheio_por_referencia(itens: list, precos_cor: dict, promocoe
     return resultado
 
 
+def _meses_desde(dt, hoje) -> Optional[int]:
+    if not dt:
+        return None
+    return (hoje.year - dt.year) * 12 + (hoje.month - dt.month)
+
+
 def _cores_no_filtro(
     item: dict, precos_cor: dict, promocoes_cor: dict, primeiras_por_cor: dict, hoje,
     giro_minimo: Optional[float] = None, meses_fl_minimo: Optional[int] = None,
@@ -2248,6 +2275,9 @@ def _cores_no_filtro(
     if tem_cor_sem_meses_fl is None:
         tem_cor_sem_meses_fl = _referencia_tem_cor_sem_meses_fl(item, primeiras_por_cor)
     cores_ok = []
+    ctx_referencia = _contexto_regra_referencia(item["giroTotal"], [
+        _meses_desde(primeiras_por_cor.get((item["referencia"], c["cor"])), hoje) for c in item["porCor"]
+    ])
     for cor_item in item["porCor"]:
         preco_cor = precos_cor.get(cor_item["cdProdutoPreco"]) or {"precoAtacado": None, "precoVarejo": None}
         promo_cor = promocoes_cor.get(cor_item["cdProdutoPreco"]) or {"fabrica": None, "atacado": None, "varejo": None}
@@ -2258,6 +2288,7 @@ def _cores_no_filtro(
         if _cor_bate_filtros(
             cor_item["giroTotal"], meses_cor, preco_cor, promo_cor,
             giro_minimo, meses_fl_minimo, oportunidade_desconto, familia, tem_cor_sem_meses_fl, linha, canais, fallback,
+            ctx_referencia,
         ):
             cores_ok.append(cor_item)
     return cores_ok
@@ -2355,6 +2386,9 @@ def totais_desconto_giro(
             familia_item = (item.get("categorias") or {}).get("familia")
             linha_item = (item.get("categorias") or {}).get("linha")
             tem_cor_sem_meses_fl_item = mista_dict.get(item["referencia"], False)
+            ctx_ref_item = _contexto_regra_referencia(item["giroTotal"], [
+                _meses_desde(primeiras_por_cor.get((item["referencia"], c["cor"])), hoje) for c in item["porCor"]
+            ])
             for cor_item in cores_por_referencia[item["referencia"]]:
                 preco_cor = precos_cor.get(cor_item["cdProdutoPreco"]) or {"precoAtacado": None, "precoVarejo": None}
                 promo_cor = promocoes_cor.get(cor_item["cdProdutoPreco"]) or {"fabrica": None, "atacado": None, "varejo": None}
@@ -2382,7 +2416,8 @@ def totais_desconto_giro(
                 # preco cheio, que contaria de novo um desconto ja praticado
                 # hoje. Sem promo ativa, a base e o preco cheio.
                 tem_promo_cor = bool(promo_cor.get("atacado") or promo_cor.get("varejo"))
-                regra_cor = _identificar_regra_campanha(cor_item["giroTotal"], meses_cor, tem_promo_cor, familia_item, tem_cor_sem_meses_fl_item, linha_item)
+                giro_regra, meses_regra = (cor_item["giroTotal"], meses_cor) if tem_cor_sem_meses_fl_item else ctx_ref_item
+                regra_cor = _identificar_regra_campanha(giro_regra, meses_regra, tem_promo_cor, familia_item, tem_cor_sem_meses_fl_item, linha_item)
                 # Percentual por canal (regras 3/4/5 dependem do desconto atual de cada canal).
                 fb_ref = fallback_cheio.get(item["referencia"]) or {}
                 pct_atacado_cor = _percentual_campanha_canal(regra_cor, preco_cor.get("precoAtacado"), promo_cor.get("atacado"), fb_ref.get("atacado"))

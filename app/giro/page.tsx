@@ -117,6 +117,10 @@ interface ItemMatrizGiro {
   familia?: string | null;
   linha?: string | null;
   temCorSemMesesFL?: boolean;
+  // Giro e Meses FL que decidem a regra quando a referencia NAO e mista:
+  // giro da referencia inteira e MENOR Meses FL entre as cores.
+  giroRegra?: number | null;
+  mesesRegra?: number | null;
   // Preco cheio de reserva: maior preco do canal entre as cores da referencia,
   // usado quando a cor nao tem preco cheio proprio (pedido do usuario).
   precoCheioFallbackAtacado?: number | null;
@@ -411,7 +415,7 @@ function identificarRegraCampanha(
   // excecao do giro>=6 com Meses FL>0). Se a referencia INTEIRA ja virou
   // oportunidade (toda cor com Meses FL), usa a escada normal mesmo
   // batendo a familia/linha.
-  if (usaRegraPropriaCampanha(familia, linha) && temCorSemMesesFL) {
+  if (temCorSemMesesFL) {
     if (giroTotal !== null && giroTotal > 6 && mesesOportunidade !== null && mesesOportunidade !== undefined && mesesOportunidade > 24) {
       return REGRA_KISS_ME_30;
     }
@@ -426,6 +430,16 @@ function identificarRegraCampanha(
   if (giroTotal > 6) return REGRA_GIRO_MAIOR_6;
   if (giroTotal >= 4) return REGRA_GIRO_4_A_6;
   return REGRA_GIRO_MENOR_4;
+}
+
+// Regra do item (referencia ou cor): referencia mista usa o giro/Meses FL da
+// propria linha (regras 7/8); NAO mista usa o giro da referencia inteira e o
+// menor Meses FL entre as cores - todas as cores caem na mesma regra.
+function regraDoItem(item: ItemMatrizGiro): number {
+  const mista = !!item.temCorSemMesesFL;
+  const giro = !mista && item.giroRegra !== undefined ? item.giroRegra : item.giroTotal;
+  const meses = !mista && item.mesesRegra !== undefined ? item.mesesRegra : item.mesesOportunidade;
+  return identificarRegraCampanha(giro, meses, temPromoAtiva(item), item.familia, item.temCorSemMesesFL, item.linha);
 }
 
 function calcularPercentualCampanha(
@@ -474,8 +488,8 @@ const DESCRICAO_REGRA_CAMPANHA: Record<number, string> = {
   [REGRA_APOS_12_MESES]: 'Regra 4: Após 12 meses como FL e giro > 6 → 60%',
   [REGRA_APOS_24_MESES]: 'Regra 5: Após 24 meses como FL e giro > 6 → 70%',
   [REGRA_EXCECAO_30_FIXO]: 'Regra 6 (exceção): Giro ≥ 6, Meses FL > 0, sem promoção ativa → 30% fixo',
-  [REGRA_KISS_ME_30]: 'Regra 7 (exceção KISS ME/KISS ME PLUS e linhas Confort/Free/Ideal/Basic Up/Basicos, mista): Giro > 6 e Meses FL > 24 → 30%',
-  [REGRA_KISS_ME_0]: 'Regra 8 (exceção KISS ME/KISS ME PLUS e linhas Confort/Free/Ideal/Basic Up/Basicos, mista): fora da condição da regra 7 → 0%',
+  [REGRA_KISS_ME_30]: 'Regra 7 (exceção referência mista): Giro > 6 e Meses FL > 24 → 30%',
+  [REGRA_KISS_ME_0]: 'Regra 8 (exceção referência mista): fora da condição da regra 7 → 0%',
   [REGRA_SEM_MESES_FL]: 'Regra 9: sem Meses FL (nunca virou oportunidade) → sem sugestão',
   [REGRA_SEM_GIRO]: 'Regra 10: sem giro (sem estoque e sem venda) → sem sugestão',
 };
@@ -1458,7 +1472,7 @@ export default function GiroPage() {
       const linhas: string[][] = [];
       for (const ref of referencias) {
         for (const item of coresPorRef[ref.referencia] ?? []) {
-          const regra = identificarRegraCampanha(item.giroTotal, item.mesesOportunidade, temPromoAtiva(item), item.familia, item.temCorSemMesesFL, item.linha);
+          const regra = regraDoItem(item);
           const promoAtac = item.promocoes?.find((p) => p.tipo === 'Atacado');
           const promoVar = item.promocoes?.find((p) => p.tipo === 'Varejo');
           const pctAtac = percentualCampanhaCanal(regra, item.precoAtacado, promoAtac, item.precoCheioFallbackAtacado);
@@ -1641,7 +1655,7 @@ export default function GiroPage() {
   // detalhe daquela cor). O resto das colunas (Meses FL, precos, promo,
   // campanha, lojas, totais) e igual nos dois niveis.
   function linhaMatriz(item: ItemMatrizGiro, key: string, idx: number, nivel: number): React.ReactNode {
-    const regraCampanha = identificarRegraCampanha(item.giroTotal, item.mesesOportunidade, temPromoAtiva(item), item.familia, item.temCorSemMesesFL, item.linha);
+    const regraCampanha = regraDoItem(item);
     return (
       <tr key={key} className={`${nivel === 1 ? 'bg-gray-50/70' : idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'} hover:bg-rose-50 transition-colors`}>
         <td
@@ -2763,8 +2777,14 @@ export default function GiroPage() {
                       <strong>Regras 3, 4 e 5 (giro {'>'} 6):</strong> o desconto final olha o <strong>desconto que o canal já tem</strong> (colunas
                       Promo Atac / Promo Var; sem promoção = 0%), separadamente no Atacado e no Varejo: desconto atual
                       de <strong>0% a 10,99% → 30%</strong>; de <strong>11% a 30% → 50%</strong>; <strong>fora dessas faixas
-                      (acima de 30%) segue a escadinha normal</strong> (50/60/70% da tabela acima). Vale também para
-                      Kiss Me/linhas especiais quando a referência não é mista (seguem a escadinha 3/4/5).
+                      (acima de 30%) segue a escadinha normal</strong> (50/60/70% da tabela acima). Vale para
+                      referências não mistas (referência mista cai nas regras 7/8).
+                    </p>
+                    <p className="text-xs text-black mt-2">
+                      <strong>Referência não mista (todas as cores com Meses FL):</strong> a regra é decidida pelo{' '}
+                      <strong>giro da referência inteira</strong> e pelo <strong>menor Meses FL entre as cores</strong>, e
+                      todas as cores caem na mesma regra. O percentual final das regras 3/4/5 continua olhando o
+                      desconto atual de cada cor/canal, e a regra {REGRA_EXCECAO_30_FIXO} continua olhando se a cor tem promoção ativa.
                     </p>
                     <p className="text-xs text-black mt-2">
                       Quando o giro bate em mais de uma faixa junto com Meses FL, a faixa de Meses FL manda mais (ex:
@@ -2777,14 +2797,13 @@ export default function GiroPage() {
                       exceção, segue a escada normal.
                     </p>
                     <p className="text-xs text-black mt-2">
-                      <strong>Regras {REGRA_KISS_ME_30} e {REGRA_KISS_ME_0} (exceção — famílias KISS ME e KISS ME
-                      PLUS, ou linhas Confort, Free, Ideal, Basic Up e Básicos):</strong> só valem quando a
+                      <strong>Regras {REGRA_KISS_ME_30} e {REGRA_KISS_ME_0} (exceção — qualquer família/linha):</strong> só valem quando a
                       referência é <strong>mista</strong> (tem pelo menos uma cor ainda em linha, sem Meses FL,
                       convivendo com cor(es) já em oportunidade). Nesse caso, substituem a escada acima inteira
                       (não se combinam com ela nem com a regra {REGRA_EXCECAO_30_FIXO}): regra {REGRA_KISS_ME_30} —
                       Giro {'>'} 6 e Meses FL {' > '}24 → 30%; regra {REGRA_KISS_ME_0} — fora dessa condição → 0%
                       (sem sugestão de desconto). Se a referência inteira já virou oportunidade (toda cor com
-                      Meses FL), não é mais mista — segue a escada normal mesmo sendo dessa família/linha.
+                      Meses FL), não é mais mista — segue a escada normal.
                     </p>
                     <p className="text-xs text-black mt-2">
                       <strong>Regra {REGRA_SEM_MESES_FL}:</strong> sem Meses FL preenchido (referência nunca virou
