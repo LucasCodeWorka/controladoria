@@ -2425,7 +2425,10 @@ def totais_desconto_giro(
         total_desconto_atacado = 0.0
         total_desconto_varejo = 0.0
         # Mesmo desconto sugerido, separado entre referencias mistas e nao mistas.
-        desconto_por_grupo = {"mistas": {"atacado": 0.0, "varejo": 0.0}, "naoMistas": {"atacado": 0.0, "varejo": 0.0}}
+        desconto_por_grupo = {
+            "mistas": {"atacado": 0.0, "varejo": 0.0, "estoqueAtacado": 0.0, "estoqueVarejo": 0.0},
+            "naoMistas": {"atacado": 0.0, "varejo": 0.0, "estoqueAtacado": 0.0, "estoqueVarejo": 0.0},
+        }
         total_acrescimo_atacado = 0.0
         total_acrescimo_varejo = 0.0
         hoje = date.today()
@@ -2503,17 +2506,24 @@ def totais_desconto_giro(
                 # Percentual por canal (regras 3/4/5 dependem do desconto atual de cada canal).
                 pct_atacado_cor = _percentual_campanha_canal(regra_cor, preco_cor.get("precoAtacado"), promo_cor.get("atacado"), fb_ref.get("atacado"), desc_ref_atac)
                 pct_varejo_cor = _percentual_campanha_canal(regra_cor, preco_cor.get("precoVarejo"), promo_cor.get("varejo"), fb_ref.get("varejo"), desc_ref_var)
-                desconto_atacado_cor = estoque_maraponga_cor * _ganho_desconto_canal(
+                ganho_atacado_cor = _ganho_desconto_canal(
                     preco_cor.get("precoAtacado"), promo_cor.get("atacado"), pct_atacado_cor, fb_ref.get("atacado")
                 )
-                desconto_varejo_cor = estoque_resto_cor * _ganho_desconto_canal(
+                ganho_varejo_cor = _ganho_desconto_canal(
                     preco_cor.get("precoVarejo"), promo_cor.get("varejo"), pct_varejo_cor, fb_ref.get("varejo")
                 )
+                desconto_atacado_cor = estoque_maraponga_cor * ganho_atacado_cor
+                desconto_varejo_cor = estoque_resto_cor * ganho_varejo_cor
                 total_desconto_atacado += desconto_atacado_cor
                 total_desconto_varejo += desconto_varejo_cor
                 grupo_desconto = desconto_por_grupo["mistas" if tem_cor_sem_meses_fl_item else "naoMistas"]
                 grupo_desconto["atacado"] += desconto_atacado_cor
                 grupo_desconto["varejo"] += desconto_varejo_cor
+                # Estoque so das cores que tem desconto (ganho > 0) no canal.
+                if ganho_atacado_cor > 0:
+                    grupo_desconto["estoqueAtacado"] += estoque_maraponga_cor
+                if ganho_varejo_cor > 0:
+                    grupo_desconto["estoqueVarejo"] += estoque_resto_cor
                 # Caso oposto: cor ja esta em promocao MAIS AGRESSIVA que a
                 # sugestao da campanha - aplicar a campanha ali subiria o
                 # preco (diminuiria o desconto). Mostrado em cards separados
@@ -2536,6 +2546,10 @@ def totais_desconto_giro(
             "totalDescontoVarejoMistas": desconto_por_grupo["mistas"]["varejo"],
             "totalDescontoAtacadoNaoMistas": desconto_por_grupo["naoMistas"]["atacado"],
             "totalDescontoVarejoNaoMistas": desconto_por_grupo["naoMistas"]["varejo"],
+            "totalEstoqueAtacadoMistas": desconto_por_grupo["mistas"]["estoqueAtacado"],
+            "totalEstoqueVarejoMistas": desconto_por_grupo["mistas"]["estoqueVarejo"],
+            "totalEstoqueAtacadoNaoMistas": desconto_por_grupo["naoMistas"]["estoqueAtacado"],
+            "totalEstoqueVarejoNaoMistas": desconto_por_grupo["naoMistas"]["estoqueVarejo"],
             "totalAcrescimoAtacado": total_acrescimo_atacado,
             "totalAcrescimoVarejo": total_acrescimo_varejo,
             "totalReferencias": total_referencias,

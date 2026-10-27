@@ -555,6 +555,10 @@ interface TotaisDescontoGiro {
   totalDescontoVarejoMistas?: number;
   totalDescontoAtacadoNaoMistas?: number;
   totalDescontoVarejoNaoMistas?: number;
+  totalEstoqueAtacadoMistas?: number;
+  totalEstoqueVarejoMistas?: number;
+  totalEstoqueAtacadoNaoMistas?: number;
+  totalEstoqueVarejoNaoMistas?: number;
   totalReferenciasNaoMistas?: number;
   mesReferencia: string;
 }
@@ -2375,10 +2379,10 @@ export default function GiroPage() {
                 </p>
                 <div className="mt-1 space-y-1.5">
                   {([
-                    ['Mistas', totaisDescontoGiro?.totalReferenciasMistas, totaisDescontoGiro?.totalDescontoAtacadoMistas, totaisDescontoGiro?.totalDescontoVarejoMistas, 'text-amber-700'],
-                    ['Não mistas', totaisDescontoGiro?.totalReferenciasNaoMistas, totaisDescontoGiro?.totalDescontoAtacadoNaoMistas, totaisDescontoGiro?.totalDescontoVarejoNaoMistas, 'text-black'],
-                  ] as [string, number | undefined, number | undefined, number | undefined, string][]).map(([rotulo, qtd, descAtac, descVar, cor]) => (
-                    <div key={rotulo} className="flex items-baseline gap-4">
+                    ['Mistas', totaisDescontoGiro?.totalReferenciasMistas, totaisDescontoGiro?.totalDescontoAtacadoMistas, totaisDescontoGiro?.totalDescontoVarejoMistas, totaisDescontoGiro?.totalEstoqueAtacadoMistas, totaisDescontoGiro?.totalEstoqueVarejoMistas, 'text-amber-700'],
+                    ['Não mistas', totaisDescontoGiro?.totalReferenciasNaoMistas, totaisDescontoGiro?.totalDescontoAtacadoNaoMistas, totaisDescontoGiro?.totalDescontoVarejoNaoMistas, totaisDescontoGiro?.totalEstoqueAtacadoNaoMistas, totaisDescontoGiro?.totalEstoqueVarejoNaoMistas, 'text-black'],
+                  ] as [string, number | undefined, number | undefined, number | undefined, number | undefined, number | undefined, string][]).map(([rotulo, qtd, descAtac, descVar, estAtac, estVar, cor]) => (
+                    <div key={rotulo} className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
                       <div className="w-24">
                         <p className="text-[10px] text-black uppercase tracking-wide">{rotulo}</p>
                         <p className={`text-xl font-bold ${cor}`}>{totaisDescontoCarregando ? '...' : formatarQtd(qtd ?? 0)}</p>
@@ -2390,6 +2394,14 @@ export default function GiroPage() {
                       <div>
                         <p className="text-[10px] text-black uppercase tracking-wide">Desconto Varejo</p>
                         <p className="text-sm font-bold text-rose-700">{totaisDescontoCarregando ? '...' : formatarPreco(descVar ?? 0)}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-black uppercase tracking-wide">Estoque c/ desconto Atacado</p>
+                        <p className="text-sm font-bold text-black">{totaisDescontoCarregando ? '...' : `${formatarQtd(estAtac ?? 0)} un.`}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-black uppercase tracking-wide">Estoque c/ desconto Varejo</p>
+                        <p className="text-sm font-bold text-black">{totaisDescontoCarregando ? '...' : `${formatarQtd(estVar ?? 0)} un.`}</p>
                       </div>
                     </div>
                   ))}
