@@ -1479,6 +1479,12 @@ def matriz_produtos_giro(
             )
         if mista_dict is None:
             mista_dict = _mista_por_referencia(itens_pagina, primeiras_por_cor, mes_ref, cd_empresas, status_filtro)
+        # Preco/promo de TODAS as cores das referencias da pagina - a regra da
+        # referencia nao mista (desconto atual maximo, promo em alguma cor) olha
+        # todas as cores.
+        cds_cores_pagina = [c["cdProdutoPreco"] for i in itens_pagina for c in i["porCor"]]
+        precos_cores_pagina = _obter_precos_produtos(cds_cores_pagina)
+        promocoes_cores_pagina = _obter_promocoes_produtos(cds_cores_pagina, cd_empresas)
         hoje = date.today()
         itens_resposta = []
         for item in itens_pagina:
@@ -1488,6 +1494,9 @@ def matriz_produtos_giro(
             meses_oportunidade = None
             if dt_primeira_oportunidade:
                 meses_oportunidade = (hoje.year - dt_primeira_oportunidade.year) * 12 + (hoje.month - dt_primeira_oportunidade.month)
+            ctx_ref = _ctx_referencia_do_item(
+                item, primeiras_por_cor, hoje, precos_cores_pagina, promocoes_cores_pagina, fallback_cheio_pagina.get(item["referencia"]),
+            )
             itens_resposta.append({
                 "referencia": item["referencia"],
                 "nome": item["nome"],
@@ -1506,10 +1515,11 @@ def matriz_produtos_giro(
                 "familia": (item.get("categorias") or {}).get("familia"),
                 "linha": (item.get("categorias") or {}).get("linha"),
                 "temCorSemMesesFL": mista_dict.get(item["referencia"], False),
-                "giroRegra": item["giroTotal"],
-                "mesesRegra": _contexto_regra_referencia(item["giroTotal"], [
-                    _meses_desde(primeiras_por_cor.get((item["referencia"], c["cor"])), hoje) for c in item["porCor"]
-                ])[1],
+                "giroRegra": ctx_ref["giro"],
+                "mesesRegra": ctx_ref["meses"],
+                "temPromoRegra": ctx_ref["tem_promo"],
+                "descontoAtualRegraAtacado": ctx_ref["desc_atacado"],
+                "descontoAtualRegraVarejo": ctx_ref["desc_varejo"],
                 "precoCheioFallbackAtacado": (fallback_cheio_pagina.get(item["referencia"]) or {}).get("atacado"),
                 "precoCheioFallbackVarejo": (fallback_cheio_pagina.get(item["referencia"]) or {}).get("varejo"),
             })
@@ -1591,9 +1601,11 @@ def matriz_produtos_giro_por_cor(
             promocoes,
         ).get(referencia) or {}
 
-        meses_cores_ref = [_meses_desde(primeiras_oportunidades.get(c["cor"]), hoje) for c in dados_cor]
-        giro_regra_ref, meses_regra_ref = _contexto_regra_referencia(
-            _giro(sum(c["estoqueTotal"] for c in dados_cor), sum(c["vendaTotal"] for c in dados_cor)), meses_cores_ref
+        ctx_ref = _contexto_regra_referencia(
+            _giro(sum(c["estoqueTotal"] for c in dados_cor), sum(c["vendaTotal"] for c in dados_cor)),
+            [_meses_desde(primeiras_oportunidades.get(c["cor"]), hoje) for c in dados_cor],
+            [(precos.get(c["cdProdutoPreco"]), promocoes.get(c["cdProdutoPreco"])) for c in dados_cor],
+            fallback_ref,
         )
         itens_resposta = []
         for item in sorted(dados_cor, key=lambda i: i["cor"]):
@@ -1608,7 +1620,7 @@ def matriz_produtos_giro_por_cor(
                 item["giroTotal"], meses_oportunidade, preco, promo,
                 giroMinimo, mesesFLMinimo, oportunidadeDesconto, item.get("familia"), tem_cor_sem_meses_fl,
                 item.get("linha"), _parse_canais_desconto(canaisDesconto), fallback_ref,
-                (giro_regra_ref, meses_regra_ref),
+                ctx_ref,
             ):
                 continue
 
@@ -1631,8 +1643,11 @@ def matriz_produtos_giro_por_cor(
                 "familia": item.get("familia"),
                 "linha": item.get("linha"),
                 "temCorSemMesesFL": tem_cor_sem_meses_fl,
-                "giroRegra": giro_regra_ref,
-                "mesesRegra": meses_regra_ref,
+                "giroRegra": ctx_ref["giro"],
+                "mesesRegra": ctx_ref["meses"],
+                "temPromoRegra": ctx_ref["tem_promo"],
+                "descontoAtualRegraAtacado": ctx_ref["desc_atacado"],
+                "descontoAtualRegraVarejo": ctx_ref["desc_varejo"],
                 "precoCheioFallbackAtacado": fallback_ref.get("atacado"),
                 "precoCheioFallbackVarejo": fallback_ref.get("varejo"),
             })
@@ -1963,6 +1978,7 @@ def _desconto_atual_canal(preco_cadastro: Optional[float], promo_canal: Optional
 
 def _percentual_campanha_canal(
     regra: int, preco_cadastro: Optional[float], promo_canal: Optional[dict], fallback: Optional[float] = None,
+    desconto_referencia: Optional[float] = None,
 ) -> float:
     """Percentual de campanha de UM canal (atacado ou varejo).
 
@@ -1975,7 +1991,12 @@ def _percentual_campanha_canal(
     Todas as outras regras (1, 2, 6, 7, 8, 9, 10) seguem o percentual fixo
     da propria regra."""
     if regra in REGRAS_ESCADA_GIRO_ALTO:
-        atual = round(_desconto_atual_canal(preco_cadastro, promo_canal, fallback), 2)
+        # desconto_referencia: referencia NAO mista - um desconto atual so pra
+        # referencia inteira (o maior entre as cores), pra todas as cores
+        # terem o mesmo percentual.
+        atual = round(
+            desconto_referencia if desconto_referencia is not None else _desconto_atual_canal(preco_cadastro, promo_canal, fallback), 2
+        )
         if atual <= 10.99:
             return 30
         if atual <= 30:
@@ -2085,29 +2106,57 @@ def _parse_canais_desconto(canais: Optional[str]) -> tuple:
     return escolhidos or CANAIS_DESCONTO
 
 
-def _contexto_regra_referencia(giro_referencia, meses_cores: list) -> tuple:
-    """(giro, Meses FL) que decidem a regra de uma referencia NAO mista (todas
-    as cores ja com Meses FL): giro da referencia inteira e o MENOR Meses FL
-    entre as cores (pedido explicito do usuario) - todas as cores caem na
-    mesma regra. Na referencia mista continua valendo o giro/Meses FL de
-    cada cor (regras 7/8)."""
+def _contexto_regra_referencia(giro_referencia, meses_cores: list, cores_preco_promo: list, fallback: Optional[dict] = None) -> dict:
+    """O que decide a regra de uma referencia NAO mista (todas as cores ja com
+    Meses FL), igual pra todas as cores (pedido explicito do usuario):
+      - giro da referencia inteira;
+      - MENOR Meses FL entre as cores;
+      - tem_promo: alguma cor da referencia com promocao Atacado/Varejo ativa
+        (regra 6);
+      - desconto atual por canal = o MAIOR entre as cores (regras 3/4/5).
+    cores_preco_promo: [(preco, promo)] de cada cor. Na referencia mista
+    continua valendo o giro/Meses FL de cada cor (regras 7/8)."""
+    fb = fallback or {}
     validos = [m for m in meses_cores if m is not None]
-    return giro_referencia, (min(validos) if validos else None)
+    return {
+        "giro": giro_referencia,
+        "meses": min(validos) if validos else None,
+        "tem_promo": any(bool((promo or {}).get("atacado") or (promo or {}).get("varejo")) for _, promo in cores_preco_promo),
+        "desc_atacado": max(
+            (_desconto_atual_canal((preco or {}).get("precoAtacado"), (promo or {}).get("atacado"), fb.get("atacado")) for preco, promo in cores_preco_promo),
+            default=0.0,
+        ),
+        "desc_varejo": max(
+            (_desconto_atual_canal((preco or {}).get("precoVarejo"), (promo or {}).get("varejo"), fb.get("varejo")) for preco, promo in cores_preco_promo),
+            default=0.0,
+        ),
+    }
+
+
+def _ctx_referencia_do_item(item: dict, primeiras_por_cor: dict, hoje, precos_cor: dict, promocoes_cor: dict, fallback: Optional[dict]) -> dict:
+    return _contexto_regra_referencia(
+        item["giroTotal"],
+        [_meses_desde(primeiras_por_cor.get((item["referencia"], c["cor"])), hoje) for c in item["porCor"]],
+        [(precos_cor.get(c["cdProdutoPreco"]), promocoes_cor.get(c["cdProdutoPreco"])) for c in item["porCor"]],
+        fallback,
+    )
 
 
 def _tem_oportunidade_desconto(
     giro_total, meses_oportunidade, promo: dict, preco_atacado, preco_varejo,
     familia: Optional[str] = None, tem_cor_sem_meses_fl: bool = False, linha: Optional[str] = None,
-    canais: tuple = CANAIS_DESCONTO, fallback: Optional[dict] = None, ctx_referencia: Optional[tuple] = None,
+    canais: tuple = CANAIS_DESCONTO, fallback: Optional[dict] = None, ctx_referencia: Optional[dict] = None,
 ) -> bool:
-    if ctx_referencia is not None and not tem_cor_sem_meses_fl:
-        giro_total, meses_oportunidade = ctx_referencia
     fb = fallback or {}
     tem_promo = bool(promo.get("atacado") or promo.get("varejo"))
+    desc_ref_atacado = desc_ref_varejo = None
+    if ctx_referencia is not None and not tem_cor_sem_meses_fl:
+        giro_total, meses_oportunidade, tem_promo = ctx_referencia["giro"], ctx_referencia["meses"], ctx_referencia["tem_promo"]
+        desc_ref_atacado, desc_ref_varejo = ctx_referencia["desc_atacado"], ctx_referencia["desc_varejo"]
     regra = _identificar_regra_campanha(giro_total, meses_oportunidade, tem_promo, familia, tem_cor_sem_meses_fl, linha)
     # Percentual por canal (nas regras 3/4/5 depende do desconto atual de cada canal).
-    pct_atacado = _percentual_campanha_canal(regra, preco_atacado, promo.get("atacado"), fb.get("atacado"))
-    pct_varejo = _percentual_campanha_canal(regra, preco_varejo, promo.get("varejo"), fb.get("varejo"))
+    pct_atacado = _percentual_campanha_canal(regra, preco_atacado, promo.get("atacado"), fb.get("atacado"), desc_ref_atacado)
+    pct_varejo = _percentual_campanha_canal(regra, preco_varejo, promo.get("varejo"), fb.get("varejo"), desc_ref_varejo)
     if pct_atacado <= 0 and pct_varejo <= 0:
         return False
     # Atacado e Varejo avaliados SEPARADAMENTE: basta um dos dois ter ganho
@@ -2127,7 +2176,7 @@ def _cor_bate_filtros(
     giro_minimo: Optional[float] = None, meses_fl_minimo: Optional[int] = None,
     oportunidade_desconto: bool = False, familia: Optional[str] = None, tem_cor_sem_meses_fl: bool = False,
     linha: Optional[str] = None, canais: tuple = CANAIS_DESCONTO, fallback: Optional[dict] = None,
-    ctx_referencia: Optional[tuple] = None,
+    ctx_referencia: Optional[dict] = None,
 ) -> bool:
     """Se UMA cor, sozinha, bate em TODOS os filtros ativos da tela ao mesmo
     tempo. O "ao mesmo tempo" e o ponto: avaliar cada filtro de forma
@@ -2275,9 +2324,7 @@ def _cores_no_filtro(
     if tem_cor_sem_meses_fl is None:
         tem_cor_sem_meses_fl = _referencia_tem_cor_sem_meses_fl(item, primeiras_por_cor)
     cores_ok = []
-    ctx_referencia = _contexto_regra_referencia(item["giroTotal"], [
-        _meses_desde(primeiras_por_cor.get((item["referencia"], c["cor"])), hoje) for c in item["porCor"]
-    ])
+    ctx_referencia = _ctx_referencia_do_item(item, primeiras_por_cor, hoje, precos_cor, promocoes_cor, fallback)
     for cor_item in item["porCor"]:
         preco_cor = precos_cor.get(cor_item["cdProdutoPreco"]) or {"precoAtacado": None, "precoVarejo": None}
         promo_cor = promocoes_cor.get(cor_item["cdProdutoPreco"]) or {"fabrica": None, "atacado": None, "varejo": None}
@@ -2386,9 +2433,8 @@ def totais_desconto_giro(
             familia_item = (item.get("categorias") or {}).get("familia")
             linha_item = (item.get("categorias") or {}).get("linha")
             tem_cor_sem_meses_fl_item = mista_dict.get(item["referencia"], False)
-            ctx_ref_item = _contexto_regra_referencia(item["giroTotal"], [
-                _meses_desde(primeiras_por_cor.get((item["referencia"], c["cor"])), hoje) for c in item["porCor"]
-            ])
+            fb_ref = fallback_cheio.get(item["referencia"]) or {}
+            ctx_ref_item = _ctx_referencia_do_item(item, primeiras_por_cor, hoje, precos_cor, promocoes_cor, fb_ref)
             for cor_item in cores_por_referencia[item["referencia"]]:
                 preco_cor = precos_cor.get(cor_item["cdProdutoPreco"]) or {"precoAtacado": None, "precoVarejo": None}
                 promo_cor = promocoes_cor.get(cor_item["cdProdutoPreco"]) or {"fabrica": None, "atacado": None, "varejo": None}
@@ -2416,12 +2462,15 @@ def totais_desconto_giro(
                 # preco cheio, que contaria de novo um desconto ja praticado
                 # hoje. Sem promo ativa, a base e o preco cheio.
                 tem_promo_cor = bool(promo_cor.get("atacado") or promo_cor.get("varejo"))
-                giro_regra, meses_regra = (cor_item["giroTotal"], meses_cor) if tem_cor_sem_meses_fl_item else ctx_ref_item
+                desc_ref_atac = desc_ref_var = None
+                giro_regra, meses_regra = cor_item["giroTotal"], meses_cor
+                if not tem_cor_sem_meses_fl_item:
+                    giro_regra, meses_regra, tem_promo_cor = ctx_ref_item["giro"], ctx_ref_item["meses"], ctx_ref_item["tem_promo"]
+                    desc_ref_atac, desc_ref_var = ctx_ref_item["desc_atacado"], ctx_ref_item["desc_varejo"]
                 regra_cor = _identificar_regra_campanha(giro_regra, meses_regra, tem_promo_cor, familia_item, tem_cor_sem_meses_fl_item, linha_item)
                 # Percentual por canal (regras 3/4/5 dependem do desconto atual de cada canal).
-                fb_ref = fallback_cheio.get(item["referencia"]) or {}
-                pct_atacado_cor = _percentual_campanha_canal(regra_cor, preco_cor.get("precoAtacado"), promo_cor.get("atacado"), fb_ref.get("atacado"))
-                pct_varejo_cor = _percentual_campanha_canal(regra_cor, preco_cor.get("precoVarejo"), promo_cor.get("varejo"), fb_ref.get("varejo"))
+                pct_atacado_cor = _percentual_campanha_canal(regra_cor, preco_cor.get("precoAtacado"), promo_cor.get("atacado"), fb_ref.get("atacado"), desc_ref_atac)
+                pct_varejo_cor = _percentual_campanha_canal(regra_cor, preco_cor.get("precoVarejo"), promo_cor.get("varejo"), fb_ref.get("varejo"), desc_ref_var)
                 total_desconto_atacado += estoque_maraponga_cor * _ganho_desconto_canal(
                     preco_cor.get("precoAtacado"), promo_cor.get("atacado"), pct_atacado_cor, fb_ref.get("atacado")
                 )
