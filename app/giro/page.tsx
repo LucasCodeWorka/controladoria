@@ -551,6 +551,10 @@ interface TotaisDescontoGiro {
   totalAcrescimoVarejo: number;
   totalReferencias: number;
   totalReferenciasMistas?: number;
+  totalDescontoAtacadoMistas?: number;
+  totalDescontoVarejoMistas?: number;
+  totalDescontoAtacadoNaoMistas?: number;
+  totalDescontoVarejoNaoMistas?: number;
   totalReferenciasNaoMistas?: number;
   mesReferencia: string;
 }
@@ -2369,19 +2373,26 @@ export default function GiroPage() {
                 <p className="text-xs font-medium text-black uppercase tracking-wide" title="Mista: tem produto em linha/nova coleção junto com oportunidade (regras 7/8). Não mista: decidida pelo giro da referência inteira e pelo menor Meses FL.">
                   Referências mistas x não mistas (filtro inteiro)
                 </p>
-                <div className="flex items-center gap-6 mt-1">
-                  <div>
-                    <p className="text-[10px] text-black uppercase tracking-wide">Mistas</p>
-                    <p className="text-xl font-bold text-amber-700">
-                      {totaisDescontoCarregando ? '...' : formatarQtd(totaisDescontoGiro?.totalReferenciasMistas ?? 0)}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-[10px] text-black uppercase tracking-wide">Não mistas</p>
-                    <p className="text-xl font-bold text-black">
-                      {totaisDescontoCarregando ? '...' : formatarQtd(totaisDescontoGiro?.totalReferenciasNaoMistas ?? 0)}
-                    </p>
-                  </div>
+                <div className="mt-1 space-y-1.5">
+                  {([
+                    ['Mistas', totaisDescontoGiro?.totalReferenciasMistas, totaisDescontoGiro?.totalDescontoAtacadoMistas, totaisDescontoGiro?.totalDescontoVarejoMistas, 'text-amber-700'],
+                    ['Não mistas', totaisDescontoGiro?.totalReferenciasNaoMistas, totaisDescontoGiro?.totalDescontoAtacadoNaoMistas, totaisDescontoGiro?.totalDescontoVarejoNaoMistas, 'text-black'],
+                  ] as [string, number | undefined, number | undefined, number | undefined, string][]).map(([rotulo, qtd, descAtac, descVar, cor]) => (
+                    <div key={rotulo} className="flex items-baseline gap-4">
+                      <div className="w-24">
+                        <p className="text-[10px] text-black uppercase tracking-wide">{rotulo}</p>
+                        <p className={`text-xl font-bold ${cor}`}>{totaisDescontoCarregando ? '...' : formatarQtd(qtd ?? 0)}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-black uppercase tracking-wide">Desconto Atacado</p>
+                        <p className="text-sm font-bold text-rose-700">{totaisDescontoCarregando ? '...' : formatarPreco(descAtac ?? 0)}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-black uppercase tracking-wide">Desconto Varejo</p>
+                        <p className="text-sm font-bold text-rose-700">{totaisDescontoCarregando ? '...' : formatarPreco(descVar ?? 0)}</p>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
             </div>

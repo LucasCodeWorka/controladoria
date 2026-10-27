@@ -30,6 +30,7 @@ from typing import Optional
 from datetime import date, datetime, timedelta
 import math
 import asyncio
+import threading
 from database import execute_query, execute_insert
 from routers.cmv_detalhado import EMPRESAS_CMV_DETALHADO, _nome_empresa_cmv, _eh_fabrica
 
@@ -405,6 +406,7 @@ def _calcular_giro(mes_referencia: str, cd_empresas: list) -> dict:
         )
 
     _cache_matriz_referencia.clear()
+    _cache_referencias_mistas.clear()
     return _montar_resposta(mes_referencia, cd_empresas)
 
 
@@ -419,6 +421,23 @@ TOP_N_PRODUTOS_GIRO = 10
 # isso, depois e instantaneo. Limpo em _calcular_giro (dado novo invalida o
 # cache).
 _cache_matriz_referencia: dict = {}
+
+# Trava por chave de cache ("single-flight"): sem ela, varias requisicoes com
+# o cache frio (ex: logo depois de um deploy, a tela de Giro dispara matriz,
+# totais, cores... juntas) rodavam a MESMA consulta pesada ao mesmo tempo,
+# cada uma segurando uma conexao - estourava o pool (10) com "connection pool
+# exhausted". Com a trava, so a primeira consulta; as outras esperam e leem
+# do cache.
+_travas_cache: dict = {}
+_travas_cache_guarda = threading.Lock()
+
+
+def _trava_da_chave(chave) -> threading.Lock:
+    with _travas_cache_guarda:
+        trava = _travas_cache.get(chave)
+        if trava is None:
+            trava = _travas_cache[chave] = threading.Lock()
+        return trava
 
 
 def _eh_variante_preco_desconsiderada(status: Optional[str], familia: Optional[str]) -> bool:
@@ -452,6 +471,13 @@ def _nome_base_referencia(produto: Optional[str], ds_cor: Optional[str], ds_tama
 def _obter_matriz_agregada(mes_referencia: str, cd_empresas: list, status_filtro: Optional[list] = None) -> list:
     chave = (mes_referencia, tuple(sorted(cd_empresas)), tuple(sorted(status_filtro)) if status_filtro else ())
     if chave in _cache_matriz_referencia:
+        return _cache_matriz_referencia[chave]
+    with _trava_da_chave(("matriz", chave)):
+        return _calcular_matriz_agregada(mes_referencia, cd_empresas, status_filtro, chave)
+
+
+def _calcular_matriz_agregada(mes_referencia: str, cd_empresas: list, status_filtro: Optional[list], chave: tuple) -> list:
+    if chave in _cache_matriz_referencia:  # outra requisicao terminou enquanto esperava a trava
         return _cache_matriz_referencia[chave]
 
     placeholders = ",".join(["%s"] * len(cd_empresas))
@@ -2231,24 +2257,34 @@ def _referencias_mistas(referencias: list, mes_referencia: str, cd_empresas: lis
     nao o que o filtro de status esta escondendo agora."""
     if not referencias:
         return set()
-    placeholders_emp = ",".join(["%s"] * len(cd_empresas))
-    # Lista grande (base inteira): sem IN gigante, intersecta em memoria.
-    filtro_ref, params_ref = "", ()
-    if len(referencias) <= 500:
-        filtro_ref = f" AND p.referencia IN ({','.join(['%s'] * len(referencias))})"
-        params_ref = tuple(referencias)
-    rows = execute_query(f"""
-        SELECT p.referencia
-        FROM mv_prd_referencia_produto p
-        JOIN giro_produto_snapshot g ON g.cd_produto = p.cd_produto
-        WHERE (p.status = ANY(%s) OR p.status ILIKE 'OPORTUNIDADE%%'){filtro_ref}
-          AND g.mes_referencia = %s AND g.cd_empresa IN ({placeholders_emp})
-          AND (g.estoque_atual > 0 OR g.venda_media_3m > 0)
-        GROUP BY p.referencia
-        HAVING bool_or(p.status = ANY(%s)) AND bool_or(p.status ILIKE 'OPORTUNIDADE%%')
-    """, (list(STATUS_REFERENCIA_MISTA), *params_ref, mes_referencia, *cd_empresas, list(STATUS_REFERENCIA_MISTA))) or []
-    mistas = {r["referencia"] for r in rows}
-    return mistas if not filtro_ref else mistas & set(referencias)
+    return _todas_referencias_mistas(mes_referencia, tuple(sorted(cd_empresas))) & set(referencias)
+
+
+_cache_referencias_mistas: dict = {}
+
+
+def _todas_referencias_mistas(mes_referencia: str, cd_empresas: tuple) -> set:
+    """Todas as referencias mistas do mes/lojas - uma consulta so, cacheada e
+    com trava (nao roda em paralelo, nao segura varias conexoes do pool)."""
+    chave = (mes_referencia, cd_empresas)
+    if chave in _cache_referencias_mistas:
+        return _cache_referencias_mistas[chave]
+    with _trava_da_chave(("mistas", chave)):
+        if chave in _cache_referencias_mistas:
+            return _cache_referencias_mistas[chave]
+        placeholders_emp = ",".join(["%s"] * len(cd_empresas))
+        rows = execute_query(f"""
+            SELECT p.referencia
+            FROM mv_prd_referencia_produto p
+            JOIN giro_produto_snapshot g ON g.cd_produto = p.cd_produto
+            WHERE (p.status = ANY(%s) OR p.status ILIKE 'OPORTUNIDADE%%')
+              AND g.mes_referencia = %s AND g.cd_empresa IN ({placeholders_emp})
+              AND (g.estoque_atual > 0 OR g.venda_media_3m > 0)
+            GROUP BY p.referencia
+            HAVING bool_or(p.status = ANY(%s)) AND bool_or(p.status ILIKE 'OPORTUNIDADE%%')
+        """, (list(STATUS_REFERENCIA_MISTA), mes_referencia, *cd_empresas, list(STATUS_REFERENCIA_MISTA))) or []
+        _cache_referencias_mistas[chave] = {r["referencia"] for r in rows}
+        return _cache_referencias_mistas[chave]
 
 
 def _mista_por_referencia(
@@ -2388,6 +2424,8 @@ def totais_desconto_giro(
         total_estoque_varejo = 0.0
         total_desconto_atacado = 0.0
         total_desconto_varejo = 0.0
+        # Mesmo desconto sugerido, separado entre referencias mistas e nao mistas.
+        desconto_por_grupo = {"mistas": {"atacado": 0.0, "varejo": 0.0}, "naoMistas": {"atacado": 0.0, "varejo": 0.0}}
         total_acrescimo_atacado = 0.0
         total_acrescimo_varejo = 0.0
         hoje = date.today()
@@ -2465,12 +2503,17 @@ def totais_desconto_giro(
                 # Percentual por canal (regras 3/4/5 dependem do desconto atual de cada canal).
                 pct_atacado_cor = _percentual_campanha_canal(regra_cor, preco_cor.get("precoAtacado"), promo_cor.get("atacado"), fb_ref.get("atacado"), desc_ref_atac)
                 pct_varejo_cor = _percentual_campanha_canal(regra_cor, preco_cor.get("precoVarejo"), promo_cor.get("varejo"), fb_ref.get("varejo"), desc_ref_var)
-                total_desconto_atacado += estoque_maraponga_cor * _ganho_desconto_canal(
+                desconto_atacado_cor = estoque_maraponga_cor * _ganho_desconto_canal(
                     preco_cor.get("precoAtacado"), promo_cor.get("atacado"), pct_atacado_cor, fb_ref.get("atacado")
                 )
-                total_desconto_varejo += estoque_resto_cor * _ganho_desconto_canal(
+                desconto_varejo_cor = estoque_resto_cor * _ganho_desconto_canal(
                     preco_cor.get("precoVarejo"), promo_cor.get("varejo"), pct_varejo_cor, fb_ref.get("varejo")
                 )
+                total_desconto_atacado += desconto_atacado_cor
+                total_desconto_varejo += desconto_varejo_cor
+                grupo_desconto = desconto_por_grupo["mistas" if tem_cor_sem_meses_fl_item else "naoMistas"]
+                grupo_desconto["atacado"] += desconto_atacado_cor
+                grupo_desconto["varejo"] += desconto_varejo_cor
                 # Caso oposto: cor ja esta em promocao MAIS AGRESSIVA que a
                 # sugestao da campanha - aplicar a campanha ali subiria o
                 # preco (diminuiria o desconto). Mostrado em cards separados
@@ -2489,6 +2532,10 @@ def totais_desconto_giro(
             "totalEstoqueVarejo": total_estoque_varejo,
             "totalDescontoAtacado": total_desconto_atacado,
             "totalDescontoVarejo": total_desconto_varejo,
+            "totalDescontoAtacadoMistas": desconto_por_grupo["mistas"]["atacado"],
+            "totalDescontoVarejoMistas": desconto_por_grupo["mistas"]["varejo"],
+            "totalDescontoAtacadoNaoMistas": desconto_por_grupo["naoMistas"]["atacado"],
+            "totalDescontoVarejoNaoMistas": desconto_por_grupo["naoMistas"]["varejo"],
             "totalAcrescimoAtacado": total_acrescimo_atacado,
             "totalAcrescimoVarejo": total_acrescimo_varejo,
             "totalReferencias": total_referencias,
