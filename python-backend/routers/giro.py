@@ -1588,10 +1588,7 @@ def matriz_produtos_giro_por_cor(
         # filtro de status ativo).
         familia_referencia = dados_cor[0].get("familia") if dados_cor else None
         linha_referencia = dados_cor[0].get("linha") if dados_cor else None
-        if status_filtro:
-            tem_cor_sem_meses_fl = bool(_referencias_mistas([referencia], mes_ref, cd_empresas))
-        else:
-            tem_cor_sem_meses_fl = any(primeiras_oportunidades.get(c["cor"]) is None for c in dados_cor)
+        tem_cor_sem_meses_fl = bool(_referencias_mistas([referencia], mes_ref, cd_empresas))
 
         # Preco cheio de reserva (maior preco do canal entre as cores da
         # referencia) pras cores sem preco cheio proprio - mesmo criterio do
@@ -2220,51 +2217,47 @@ def _referencia_tem_cor_sem_meses_fl(item: dict, primeiras_por_cor: dict) -> boo
     )
 
 
+STATUS_REFERENCIA_MISTA = ("EM LINHA",)
+
+
 def _referencias_mistas(referencias: list, mes_referencia: str, cd_empresas: list) -> set:
-    """De uma lista de referencias, quais tem pelo menos uma cor "em linha"
-    (status atual NAO oportunidade) com estoque ou venda nas lojas/mes
-    filtrados - SEMPRE ignora qualquer filtro de status da tela (a cor em
-    linha so entra aqui se a query IGNORAR o status filtrado, senao nunca
-    apareceria). Usado so pra corrigir a mista-ness das familias KISS ME/
-    KISS ME PLUS quando ha filtro de status ativo - escopado as poucas
-    referencias que realmente precisam (pedido explicito do usuario: o
-    contexto pra essa decisao e a referencia INTEIRA, nao o que o filtro
-    de status da tela esta escondendo agora), bem mais barato que
-    reconsultar a base inteira sem filtro de status."""
+    """De uma lista de referencias, quais sao MISTAS: tem pelo menos um
+    produto com status EM LINHA (somente esse - STATUS_REFERENCIA_MISTA)
+    JUNTO com produto em OPORTUNIDADE, ambos com estoque ou venda nas lojas/mes filtrados (pedido
+    explicito do usuario - outros status, como LEVE DEFEITO, nao contam).
+    SEMPRE ignora qualquer
+    filtro de status da tela: o contexto da decisao e a referencia INTEIRA,
+    nao o que o filtro de status esta escondendo agora."""
     if not referencias:
         return set()
-    placeholders = ",".join(["%s"] * len(referencias))
     placeholders_emp = ",".join(["%s"] * len(cd_empresas))
+    # Lista grande (base inteira): sem IN gigante, intersecta em memoria.
+    filtro_ref, params_ref = "", ()
+    if len(referencias) <= 500:
+        filtro_ref = f" AND p.referencia IN ({','.join(['%s'] * len(referencias))})"
+        params_ref = tuple(referencias)
     rows = execute_query(f"""
-        SELECT DISTINCT p.referencia
+        SELECT p.referencia
         FROM mv_prd_referencia_produto p
         JOIN giro_produto_snapshot g ON g.cd_produto = p.cd_produto
-        WHERE p.referencia IN ({placeholders})
+        WHERE (p.status = ANY(%s) OR p.status ILIKE 'OPORTUNIDADE%%'){filtro_ref}
           AND g.mes_referencia = %s AND g.cd_empresa IN ({placeholders_emp})
           AND (g.estoque_atual > 0 OR g.venda_media_3m > 0)
-          AND p.status NOT ILIKE 'OPORTUNIDADE%%'
-    """, (*referencias, mes_referencia, *cd_empresas)) or []
-    return {r["referencia"] for r in rows}
+        GROUP BY p.referencia
+        HAVING bool_or(p.status = ANY(%s)) AND bool_or(p.status ILIKE 'OPORTUNIDADE%%')
+    """, (list(STATUS_REFERENCIA_MISTA), *params_ref, mes_referencia, *cd_empresas, list(STATUS_REFERENCIA_MISTA))) or []
+    mistas = {r["referencia"] for r in rows}
+    return mistas if not filtro_ref else mistas & set(referencias)
 
 
 def _mista_por_referencia(
     dados: list, primeiras_por_cor: dict, mes_referencia: str, cd_empresas: list, status_filtro: Optional[list],
 ) -> dict:
-    """{referencia: bool} se e mista (_referencia_tem_cor_sem_meses_fl) -
-    corrigido pras familias/linhas com regra propria (KISS ME/KISS ME
-    PLUS/Confort/Free/Ideal/Basic Up/Basicos) quando ha filtro de status
-    ativo (ver _referencias_mistas). So reconsulta quando realmente
-    precisa: sem filtro de status, os dados ja vieram certos; com filtro
-    de status, so as referencias com regra propria (unica regra que usa
-    esse flag) entram na reconsulta, em lote."""
-    resultado = {item["referencia"]: _referencia_tem_cor_sem_meses_fl(item, primeiras_por_cor) for item in dados}
-    if status_filtro:
-        referencias_regra_propria = [item["referencia"] for item in dados]
-        if referencias_regra_propria:
-            mistas_reais = _referencias_mistas(referencias_regra_propria, mes_referencia, cd_empresas)
-            for ref in referencias_regra_propria:
-                resultado[ref] = ref in mistas_reais
-    return resultado
+    """{referencia: bool} se e mista (ver _referencias_mistas) - sempre pelo
+    status dos produtos da referencia inteira, com ou sem filtro de status
+    na tela."""
+    mistas = _referencias_mistas([item["referencia"] for item in dados], mes_referencia, cd_empresas)
+    return {item["referencia"]: item["referencia"] in mistas for item in dados}
 
 
 def _fallback_preco_cheio_por_referencia(itens: list, precos_cor: dict, promocoes_cor: dict) -> dict:

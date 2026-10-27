@@ -2799,7 +2799,7 @@ export default function GiroPage() {
                       referências não mistas (referência mista cai nas regras 7/8).
                     </p>
                     <p className="text-xs text-black mt-2">
-                      <strong>Referência não mista (todas as cores com Meses FL):</strong> a regra é decidida pelo{' '}
+                      <strong>Referência não mista:</strong> a regra é decidida pelo{' '}
                       <strong>giro da referência inteira</strong> e pelo <strong>menor Meses FL entre as cores</strong>, e
                       todas as cores caem na mesma regra e recebem o mesmo percentual. Nas regras 3/4/5 o desconto atual
                       considerado é o <strong>maior entre as cores</strong> (por canal), e a regra {REGRA_EXCECAO_30_FIXO} só vale se
@@ -2817,12 +2817,12 @@ export default function GiroPage() {
                     </p>
                     <p className="text-xs text-black mt-2">
                       <strong>Regras {REGRA_KISS_ME_30} e {REGRA_KISS_ME_0} (exceção — qualquer família/linha):</strong> só valem quando a
-                      referência é <strong>mista</strong> (tem pelo menos uma cor ainda em linha, sem Meses FL,
-                      convivendo com cor(es) já em oportunidade). Nesse caso, substituem a escada acima inteira
+                      referência é <strong>mista</strong>: tem produto com status <strong>EM LINHA</strong> (somente esse; com estoque
+                      ou venda) junto com produto em <strong>oportunidade</strong>. Outros status (ex: LEVE DEFEITO,
+                      NOVA COLECAO, EM LINHA NAO COMPRAR MP) não tornam a referência mista. Nesse caso, substituem a escada acima inteira
                       (não se combinam com ela nem com a regra {REGRA_EXCECAO_30_FIXO}): regra {REGRA_KISS_ME_30} —
                       Giro {'>'} 6 e Meses FL {' > '}24 → 30%; regra {REGRA_KISS_ME_0} — fora dessa condição → 0%
-                      (sem sugestão de desconto). Se a referência inteira já virou oportunidade (toda cor com
-                      Meses FL), não é mais mista — segue a escada normal.
+                      (sem sugestão de desconto). Sem produto nesses status em linha, a referência não é mista — segue a escada normal.
                     </p>
                     <p className="text-xs text-black mt-2">
                       <strong>Regra {REGRA_SEM_MESES_FL}:</strong> sem Meses FL preenchido (referência nunca virou
