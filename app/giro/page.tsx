@@ -973,6 +973,10 @@ export default function GiroPage() {
   // '' (nenhum), 'atacado', 'varejo' ou 'atacado,varejo'. A cor entra se
   // tiver ganho em pelo menos um dos canais marcados.
   const [canaisOportunidade, setCanaisOportunidade] = useState('');
+  // Filtro "Mistas" / "Não mistas" ('' = todas, 'mistas' ou 'naoMistas') - o ref
+  // espelha o estado pra buscarMatriz ler o valor novo no mesmo clique.
+  const [tipoReferencia, setTipoReferencia] = useState('');
+  const tipoReferenciaRef = useRef('');
 
   // Totais pros 2 cards acima da tabela (Estoque total e Valor do desconto
   // sugerido) - diferente do filtro acima (que so enxerga a pagina atual da
@@ -1125,6 +1129,7 @@ export default function GiroPage() {
     if (gruposSelecionados.size > 0) params.set('grupo', Array.from(gruposSelecionados).join(','));
     if (colecoesSelecionadas.size > 0) params.set('colecao', Array.from(colecoesSelecionadas).join(','));
     if (referenciaBuscaFiltro.trim()) params.set('referenciaBusca', referenciaBuscaFiltro.trim());
+    if (tipoReferenciaRef.current) params.set('tipoReferencia', tipoReferenciaRef.current);
   }
 
   async function buscarMatriz(
@@ -2502,6 +2507,23 @@ export default function GiroPage() {
                     }}
                   />
                   {canal === 'atacado' ? 'Atacado' : 'Varejo'}
+                </label>
+              ))}
+              <span className="text-sm text-black ml-2">Referências:</span>
+              {([['mistas', 'Mistas'], ['naoMistas', 'Não mistas']] as const).map(([valor, rotulo]) => (
+                <label key={valor} className="flex items-center gap-1.5 text-sm text-black cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={tipoReferencia === valor}
+                    disabled={matrizCarregando}
+                    onChange={(e) => {
+                      const novoValor = e.target.checked ? valor : '';
+                      tipoReferenciaRef.current = novoValor;
+                      setTipoReferencia(novoValor);
+                      buscarMatriz(mesReferencia, empresasParaMatriz(), 1, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','), filtroDimensaoMatriz, canaisOportunidade);
+                    }}
+                  />
+                  {rotulo}
                 </label>
               ))}
               {canaisOportunidade && matriz && (

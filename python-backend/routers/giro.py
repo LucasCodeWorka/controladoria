@@ -1047,6 +1047,15 @@ def _aplicar_filtros_categoria(
     return dados_completos
 
 
+def _filtrar_tipo_referencia(dados: list, tipo: Optional[str], mes_referencia: str, cd_empresas: list) -> list:
+    """Filtro 'Mistas' / 'Nao mistas' da tela (ver _referencias_mistas)."""
+    if tipo not in ("mistas", "naoMistas"):
+        return dados
+    mistas = _referencias_mistas([i["referencia"] for i in dados], mes_referencia, cd_empresas)
+    quer_mista = tipo == "mistas"
+    return [i for i in dados if (i["referencia"] in mistas) == quer_mista]
+
+
 def _top_produtos_giro(mes_referencia: str, cd_empresas: list, status_filtro: Optional[list] = None) -> dict:
     """Top 10 melhor e pior giro por produto, somando estoque/venda das
     empresas selecionadas que ja tem giro_produto_snapshot pro mes pedido.
@@ -1325,6 +1334,7 @@ def matriz_produtos_giro(
     linha: Optional[str] = Query(None, description="Lista de linha separadas por virgula (default: todas) - filtro independente do dimensaoFiltro"),
     familia: Optional[str] = Query(None, description="Lista de familia separadas por virgula (default: todas)"),
     grupo: Optional[str] = Query(None, description="Lista de grupo separados por virgula (default: todos)"),
+    tipoReferencia: Optional[str] = Query(None, description="'mistas' ou 'naoMistas' (default: todas)"),
     colecao: Optional[str] = Query(None, description="Lista de colecao separadas por virgula (default: todas)"),
     referenciaBusca: Optional[str] = Query(None, description="Busca por referencia (contains, case-insensitive)"),
     mesesFLMinimo: Optional[int] = Query(None, description="So retorna referencias com Meses FL maior que esse valor (referencias sem Meses FL ficam de fora) - filtra a base INTEIRA antes de paginar")
@@ -1379,6 +1389,7 @@ def matriz_produtos_giro(
         dados_completos = _aplicar_filtros_categoria(
             dados_completos, linha_filtro, familia_filtro, grupo_filtro, colecao_filtro, referenciaBusca
         )
+        dados_completos = _filtrar_tipo_referencia(dados_completos, tipoReferencia, mes_ref, cd_empresas)
 
         # Giro / Meses FL / "pode ganhar ou aumentar desconto" sao avaliados
         # JUNTOS e POR COR: a referencia so entra se tiver pelo menos UMA cor
@@ -2384,6 +2395,7 @@ def totais_desconto_giro(
     linha: Optional[str] = Query(None, description="Mesmo filtro de linha da tabela"),
     familia: Optional[str] = Query(None, description="Mesmo filtro de familia da tabela"),
     grupo: Optional[str] = Query(None, description="Mesmo filtro de grupo da tabela"),
+    tipoReferencia: Optional[str] = Query(None, description="Mesmo filtro mistas/naoMistas da tabela"),
     colecao: Optional[str] = Query(None, description="Mesmo filtro de colecao da tabela"),
     referenciaBusca: Optional[str] = Query(None, description="Mesma busca por referencia da tabela"),
     mesesFLMinimo: Optional[int] = Query(None, description="Mesmo filtro 'Meses FL maior que' da tabela")
@@ -2418,6 +2430,7 @@ def totais_desconto_giro(
         dados_completos = _aplicar_filtros_categoria(
             dados_completos, linha_filtro, familia_filtro, grupo_filtro, colecao_filtro, referenciaBusca
         )
+        dados_completos = _filtrar_tipo_referencia(dados_completos, tipoReferencia, mes_ref, cd_empresas)
 
         total_estoque = 0.0
         total_estoque_atacado = 0.0

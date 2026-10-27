@@ -21,6 +21,7 @@ export async function GET(request: NextRequest) {
     const colecao = searchParams.get('colecao');
     const referenciaBusca = searchParams.get('referenciaBusca');
     const mesesFLMinimo = searchParams.get('mesesFLMinimo');
+    const tipoReferencia = searchParams.get('tipoReferencia');
     const params = new URLSearchParams();
     if (mesReferencia) params.set('mesReferencia', mesReferencia);
     if (empresas) params.set('empresas', empresas);
@@ -36,6 +37,7 @@ export async function GET(request: NextRequest) {
     if (colecao) params.set('colecao', colecao);
     if (referenciaBusca) params.set('referenciaBusca', referenciaBusca);
     if (mesesFLMinimo) params.set('mesesFLMinimo', mesesFLMinimo);
+    if (tipoReferencia) params.set('tipoReferencia', tipoReferencia);
 
     const response = await fetch(`${PYTHON_API_URL}/api/giro/totais-desconto?${params.toString()}`, {
       method: 'GET',
