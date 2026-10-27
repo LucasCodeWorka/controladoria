@@ -1683,6 +1683,15 @@ export default function GiroPage() {
           onMouseLeave={nivel === 0 ? esconderFotoRef : undefined}
         >
           {nivel === 0 ? (
+            <div>
+              <span
+                className={`inline-block mb-0.5 px-1 py-0.5 text-[9px] font-medium rounded cursor-help ${item.temCorSemMesesFL ? 'bg-amber-100 text-amber-800' : 'bg-gray-100 text-gray-600'}`}
+                title={item.temCorSemMesesFL
+                  ? 'Referência MISTA: tem produto em linha/nova coleção junto com oportunidade (regras 7/8)'
+                  : 'Referência NÃO mista: decidida pelo giro da referência inteira e pelo menor Meses FL entre as cores'}
+              >
+                {item.temCorSemMesesFL ? 'Mista' : 'Não mista'}
+              </span>
             <div className="flex items-center gap-1.5">
               <button onClick={() => toggleExpandirCores(item.referencia)} className="text-black/50 hover:text-rose-700" title="Ver detalhe por cor">
                 {coresExpandidas.has(item.referencia) ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
@@ -1696,6 +1705,7 @@ export default function GiroPage() {
                   LD
                 </span>
               )}
+            </div>
             </div>
           ) : (
             <span className="text-black/40 pl-4">↳</span>
