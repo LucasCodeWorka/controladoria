@@ -2817,9 +2817,9 @@ export default function GiroPage() {
                     </p>
                     <p className="text-xs text-black mt-2">
                       <strong>Regras {REGRA_KISS_ME_30} e {REGRA_KISS_ME_0} (exceção — qualquer família/linha):</strong> só valem quando a
-                      referência é <strong>mista</strong>: tem produto com status <strong>EM LINHA</strong> (somente esse; com estoque
-                      ou venda) junto com produto em <strong>oportunidade</strong>. Outros status (ex: LEVE DEFEITO,
-                      NOVA COLECAO, EM LINHA NAO COMPRAR MP) não tornam a referência mista. Nesse caso, substituem a escada acima inteira
+                      referência é <strong>mista</strong>: tem produto com status <strong>EM LINHA, EM LINHA NAO COMPRAR MP,
+                      EM LINHA NAO PRODUZ ou NOVA COLECAO</strong> (com estoque ou venda) junto com produto em
+                      <strong>oportunidade</strong>. Outros status (ex: LEVE DEFEITO) não tornam a referência mista. Nesse caso, substituem a escada acima inteira
                       (não se combinam com ela nem com a regra {REGRA_EXCECAO_30_FIXO}): regra {REGRA_KISS_ME_30} —
                       Giro {'>'} 6 e Meses FL {' > '}24 → 30%; regra {REGRA_KISS_ME_0} — fora dessa condição → 0%
                       (sem sugestão de desconto). Sem produto nesses status em linha, a referência não é mista — segue a escada normal.

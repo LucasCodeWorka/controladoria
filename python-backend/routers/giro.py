@@ -2217,13 +2217,14 @@ def _referencia_tem_cor_sem_meses_fl(item: dict, primeiras_por_cor: dict) -> boo
     )
 
 
-STATUS_REFERENCIA_MISTA = ("EM LINHA",)
+STATUS_REFERENCIA_MISTA = ("EM LINHA", "EM LINHA NAO COMPRAR MP", "EM LINHA NAO PRODUZ", "NOVA COLECAO")
 
 
 def _referencias_mistas(referencias: list, mes_referencia: str, cd_empresas: list) -> set:
     """De uma lista de referencias, quais sao MISTAS: tem pelo menos um
-    produto com status EM LINHA (somente esse - STATUS_REFERENCIA_MISTA)
-    JUNTO com produto em OPORTUNIDADE, ambos com estoque ou venda nas lojas/mes filtrados (pedido
+    produto com status EM LINHA / EM LINHA NAO COMPRAR MP / EM LINHA NAO
+    PRODUZ / NOVA COLECAO (STATUS_REFERENCIA_MISTA) JUNTO com produto em
+    OPORTUNIDADE, ambos com estoque ou venda nas lojas/mes filtrados (pedido
     explicito do usuario - outros status, como LEVE DEFEITO, nao contam).
     SEMPRE ignora qualquer
     filtro de status da tela: o contexto da decisao e a referencia INTEIRA,
