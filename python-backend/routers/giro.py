@@ -2492,6 +2492,8 @@ def totais_desconto_giro(
             "totalAcrescimoAtacado": total_acrescimo_atacado,
             "totalAcrescimoVarejo": total_acrescimo_varejo,
             "totalReferencias": total_referencias,
+            "totalReferenciasMistas": sum(1 for i in dados_incluidos if mista_dict.get(i["referencia"], False)),
+            "totalReferenciasNaoMistas": sum(1 for i in dados_incluidos if not mista_dict.get(i["referencia"], False)),
             "mesReferencia": mes_ref,
         }
     except HTTPException:

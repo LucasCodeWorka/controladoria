@@ -550,6 +550,8 @@ interface TotaisDescontoGiro {
   totalAcrescimoAtacado: number;
   totalAcrescimoVarejo: number;
   totalReferencias: number;
+  totalReferenciasMistas?: number;
+  totalReferenciasNaoMistas?: number;
   mesReferencia: string;
 }
 
@@ -2359,6 +2361,25 @@ export default function GiroPage() {
                               ? totaisDescontoGiro.totalAcrescimoVarejo / totaisDescontoGiro.totalEstoqueVarejo
                               : 0
                           )}
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <div className="bg-white rounded-lg shadow-lg p-4">
+                <p className="text-xs font-medium text-black uppercase tracking-wide" title="Mista: tem produto em linha/nova coleção junto com oportunidade (regras 7/8). Não mista: decidida pelo giro da referência inteira e pelo menor Meses FL.">
+                  Referências mistas x não mistas (filtro inteiro)
+                </p>
+                <div className="flex items-center gap-6 mt-1">
+                  <div>
+                    <p className="text-[10px] text-black uppercase tracking-wide">Mistas</p>
+                    <p className="text-xl font-bold text-amber-700">
+                      {totaisDescontoCarregando ? '...' : formatarQtd(totaisDescontoGiro?.totalReferenciasMistas ?? 0)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-black uppercase tracking-wide">Não mistas</p>
+                    <p className="text-xl font-bold text-black">
+                      {totaisDescontoCarregando ? '...' : formatarQtd(totaisDescontoGiro?.totalReferenciasNaoMistas ?? 0)}
                     </p>
                   </div>
                 </div>
