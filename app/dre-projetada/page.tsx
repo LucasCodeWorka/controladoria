@@ -139,6 +139,11 @@ export default function DreProjetadaPage() {
 
   const corTexto = (v: number) => (v < 0 ? 'text-red-600' : '');
 
+  const fimProjecao = (() => {
+    const [a, m] = inicio.split('-').map(Number);
+    const d = new Date(a, m - 1 + 12, 0);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  })();
   const lojasSelecionadas = filtro.includes(',') || lojas.some((l) => l.valor === filtro) ? filtro.split(',') : [];
   const filtroLabel =
     filtro === 'consolidado' ? 'CONSOLIDADO (TODAS)'
@@ -233,12 +238,20 @@ export default function DreProjetadaPage() {
         </div>
         <div className="flex flex-wrap gap-3 items-center">
           <input
-            type="month"
-            value={inicio}
-            onChange={(e) => e.target.value && setInicio(e.target.value)}
+            type="date"
+            value={`${inicio}-01`}
+            onChange={(e) => e.target.value && setInicio(e.target.value.slice(0, 7))}
+            title="A projeção sempre começa no dia 1 do mês escolhido"
             className="px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-primary"
           />
-          <span className="text-gray-500">+ 12 meses</span>
+          <span className="text-gray-500">ate</span>
+          <input
+            type="date"
+            value={fimProjecao}
+            readOnly
+            title="12 meses a partir do primeiro mês"
+            className="px-3 py-2 text-sm border border-gray-300 rounded-md bg-gray-50 text-gray-700 cursor-default"
+          />
           <span className="text-gray-500 ml-2">Inflação (% a.a.)</span>
           <input
             value={inflacaoTxt}
@@ -288,6 +301,11 @@ export default function DreProjetadaPage() {
                 <h2 className="text-xl font-bold text-gray-800">Projeção de Resultado - {filtroLabel}</h2>
                 <p className="text-sm text-gray-600 mt-1">
                   Período: {periodos[0]?.label} a {periodos[periodos.length - 1]?.label} · Cenário {CENARIOS.find((c) => c.chave === cenario)?.titulo}
+                </p>
+                <p className="text-xs text-gray-600 mt-1 flex items-center gap-2">
+                  <span className="px-1.5 py-0.5 text-[10px] rounded bg-slate-200 text-slate-700">Fixa</span> ano anterior + inflação
+                  <span className="px-1.5 py-0.5 text-[10px] rounded bg-amber-100 text-amber-800">Variável</span> mesmo % sobre a receita
+                  <span className="text-gray-400">(etiquetas no último nível da conta)</span>
                 </p>
               </div>
               <div className="flex items-center gap-3">
