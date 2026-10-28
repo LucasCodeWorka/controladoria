@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import dre_cache
 from database import close_all_connections
 
-from routers import health, indicadores, dre, classificacao, analise_executiva, cmv_detalhado, giro, estoque_tempo, foto, analisador_dre, balanco_patrimonial, fluxo_caixa, fluxo_cenarios
+from routers import health, indicadores, dre, classificacao, analise_executiva, cmv_detalhado, giro, estoque_tempo, foto, analisador_dre, balanco_patrimonial, fluxo_caixa, fluxo_cenarios, dre_projetada
 from routers.giro import loop_recalculo_automatico_giro
 
 app = FastAPI(
@@ -54,6 +54,7 @@ app.include_router(analisador_dre.router)
 app.include_router(balanco_patrimonial.router)
 app.include_router(fluxo_caixa.router)
 app.include_router(fluxo_cenarios.router)
+app.include_router(dre_projetada.router)
 
 
 @app.on_event("startup")

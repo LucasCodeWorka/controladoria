@@ -22,6 +22,7 @@ import {
   Sparkles,
   Scale,
   Banknote,
+  TrendingUp,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -43,6 +44,11 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
       name: 'DRE',
       href: '/dre-fabrica',
       icon: Factory,
+    },
+    {
+      name: 'DRE Projetada',
+      href: '/dre-projetada',
+      icon: TrendingUp,
     },
     {
       name: 'DFC',
