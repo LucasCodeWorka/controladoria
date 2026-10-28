@@ -7,8 +7,8 @@ dre_cache - mesma consulta e mesmo cache da tela de DRE). Cada conta folha vira:
   - variavel (% da receita): percentual sobre a receita bruta do mes-base,
     aplicado na receita projetada do mes;
   - fixa: realizado do mes-base x (1 + inflacao).
-A classificacao fixa/variavel fica na tabela dre_projetada_classificacao
-(o que nao foi classificado cai no padrao de _tipo_padrao).
+A classificacao fixa/variavel e a da tela de DRE (plano_contas_dre_tipo_custo);
+o que nao foi classificado cai no padrao de _tipo_padrao.
 
 Cenarios prontos (inflacao = IPCA 12 meses do BCB, editavel na tela):
   pessimista: igual ao ano anterior (receita +0%, fixas +0%)
@@ -23,7 +23,7 @@ import time
 import urllib.request
 
 import dre_cache
-from database import execute_query, execute_insert
+from database import execute_query
 from routers import dre as dre_mod
 
 router = APIRouter()
@@ -53,29 +53,33 @@ def _ipca_12m() -> dict:
 
 def _tipo_padrao(codigo: str) -> str:
     """Classificacao inicial: receita (01), deducoes/impostos (02), custos
-    diretos (04) e comissoes/comercial de representantes (08.10) variam com a
-    receita; o resto e fixo."""
+    diretos (04) variam com a receita; o resto e fixo."""
     if codigo.startswith("01"):
         return "receita"
-    if codigo.startswith(("02", "04", "08.10")):
+    if codigo.startswith(("02", "04")):
         return "variavel"
     return "fixa"
 
 
-def _criar_tabela():
-    execute_insert("""
-        CREATE TABLE IF NOT EXISTS dre_projetada_classificacao (
-            conta TEXT PRIMARY KEY,
-            tipo TEXT NOT NULL,
-            dt_atualizacao TIMESTAMP DEFAULT NOW()
-        )
-    """)
-
-
 def _classificacoes() -> dict:
-    _criar_tabela()
-    rows = execute_query("SELECT conta, tipo FROM dre_projetada_classificacao") or []
-    return {r["conta"]: r["tipo"] for r in rows}
+    """Fixo/variavel ja definido na tela de DRE (plano_contas_dre_tipo_custo,
+    por grupo - ex: 08.01 fixo, 08.05 variavel)."""
+    try:
+        rows = execute_query("SELECT codigo, tipo FROM plano_contas_dre_tipo_custo") or []
+    except Exception as e:
+        print(f"[DRE-PROJETADA] Classificacao fixo/variavel indisponivel: {e}")
+        rows = []
+    return {r["codigo"]: ("variavel" if r["tipo"] == "variavel" else "fixa") for r in rows}
+
+
+def _tipo_da_conta(codigo: str, classif: dict) -> str:
+    """A propria conta ou o grupo mais proximo classificado; senao o padrao."""
+    partes = codigo.split(".")
+    for n in range(len(partes), 0, -1):
+        tipo = classif.get(".".join(partes[:n]))
+        if tipo:
+            return tipo
+    return _tipo_padrao(codigo)
 
 
 def _soma_meses(ano: int, mes: int, n: int):
@@ -85,7 +89,7 @@ def _soma_meses(ano: int, mes: int, n: int):
 
 @router.get("/api/dre-projetada")
 def dre_projetada(
-    inicio: Optional[str] = Query(None, description="Primeiro mes projetado YYYY-MM (default: mes atual)"),
+    inicio: Optional[str] = Query(None, description="Primeiro mes projetado YYYY-MM (default: proximo mes)"),
     cenario: str = Query("realista", description="pessimista | realista | otimista | personalizado"),
     inflacao: Optional[float] = Query(None, description="% de inflacao aplicada as contas fixas (default: IPCA 12m)"),
     crescimentoReceita: Optional[float] = Query(None, description="% de crescimento da receita (so no cenario personalizado)"),
@@ -94,7 +98,7 @@ def dre_projetada(
 ):
     try:
         hoje = date.today()
-        ano, mes = (int(x) for x in inicio.split("-")) if inicio else (hoje.year, hoje.month)
+        ano, mes = (int(x) for x in inicio.split("-")) if inicio else _soma_meses(hoje.year, hoje.month, 1)
         if not 1 <= mes <= 12:
             raise HTTPException(status_code=400, detail="inicio deve ser YYYY-MM")
         ipca = _ipca_12m()
@@ -145,7 +149,7 @@ def dre_projetada(
         projetado = {}
         tipos = {}
         for c in folhas:
-            tipo = classif.get(c) or _tipo_padrao(c)
+            tipo = _tipo_da_conta(c, classif) if not c.startswith('01') else 'receita'
             tipos[c] = tipo
             linha = {"total": 0.0}
             for pj, pb in zip(proj, base):
@@ -193,22 +197,3 @@ def dre_projetada(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Erro ao montar a DRE projetada: {str(e)}")
-
-
-@router.post("/api/dre-projetada/classificacao")
-def salvar_classificacao(data: dict):
-    conta = str(data.get("conta") or "").strip()
-    tipo = str(data.get("tipo") or "").strip()
-    if not conta or tipo not in ("fixa", "variavel"):
-        raise HTTPException(status_code=400, detail="conta e tipo (fixa | variavel) obrigatorios")
-    try:
-        _criar_tabela()
-        execute_insert(
-            """INSERT INTO dre_projetada_classificacao (conta, tipo, dt_atualizacao) VALUES (%s, %s, NOW())
-               ON CONFLICT (conta) DO UPDATE SET tipo = EXCLUDED.tipo, dt_atualizacao = NOW()""",
-            (conta, tipo),
-        )
-        return {"ok": True}
-    except Exception as e:
-        print(f"[ERROR] Erro ao salvar classificacao da DRE projetada: {e}")
-        raise HTTPException(status_code=500, detail="Erro ao salvar a classificação")
