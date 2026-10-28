@@ -49,6 +49,8 @@ export default function DreProjetadaPage() {
   const [inicio, setInicio] = useState(mesAtualISO());
   const [inflacaoTxt, setInflacaoTxt] = useState('');
   const [crescimentoTxt, setCrescimentoTxt] = useState('');
+  const [filtro, setFiltro] = useState('consolidado');
+  const [lojas, setLojas] = useState<{ valor: string; label: string }[]>([]);
   const [dados, setDados] = useState<RespostaProjecao | null>(null);
   const [carregando, setCarregando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
@@ -58,7 +60,7 @@ export default function DreProjetadaPage() {
     setCarregando(true);
     setErro(null);
     try {
-      const params = new URLSearchParams({ inicio, cenario });
+      const params = new URLSearchParams({ inicio, cenario, filtro });
       const infl = Number(inflacaoTxt.replace(',', '.'));
       if (inflacaoTxt.trim() !== '' && !Number.isNaN(infl)) params.set('inflacao', String(infl));
       const cresc = Number(crescimentoTxt.replace(',', '.'));
@@ -73,9 +75,16 @@ export default function DreProjetadaPage() {
     } finally {
       setCarregando(false);
     }
-  }, [inicio, cenario, inflacaoTxt, crescimentoTxt]);
+  }, [inicio, cenario, filtro, inflacaoTxt, crescimentoTxt]);
 
   useEffect(() => { buscar(); }, [buscar]);
+
+  useEffect(() => {
+    fetch('/api/dre/centros-custo', { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((d) => setLojas((d.opcoes || []).filter((o: { tipo: string }) => o.tipo === 'loja')))
+      .catch((e) => console.error('Erro ao buscar centros de custo:', e));
+  }, []);
 
   async function trocarTipo(conta: string, tipo: 'fixa' | 'variavel') {
     await fetch('/api/dre-projetada/classificacao', {
@@ -117,11 +126,18 @@ export default function DreProjetadaPage() {
         <div>
           <h1 className="text-xl font-bold flex items-center gap-2"><TrendingUp className="w-5 h-5" /> DRE Projetada — próximos 12 meses</h1>
           <p className="text-xs">
-            Base: mesmo mês do ano anterior ({p ? `${p.baseInicio.split('-').reverse().join('/')} a ${p.baseFim.split('-').reverse().join('/')}` : '…'}), consolidado.
+            Base: mesmo mês do ano anterior ({p ? `${p.baseInicio.split('-').reverse().join('/')} a ${p.baseFim.split('-').reverse().join('/')}` : '…'}).
             Receita por crescimento %; despesas variáveis mantêm o % sobre a receita; despesas fixas sobem pela inflação.
           </p>
         </div>
         <div className="flex items-end gap-3">
+          <label className="text-xs">Empresa
+            <select value={filtro} onChange={(e) => setFiltro(e.target.value)} className="block border border-gray-300 rounded px-2 py-1 text-sm bg-white">
+              <option value="consolidado">Consolidado (todas)</option>
+              <option value="fabrica">Fábrica</option>
+              {lojas.map((l) => <option key={l.valor} value={l.valor}>{l.label}</option>)}
+            </select>
+          </label>
           <label className="text-xs">Primeiro mês
             <input type="month" value={inicio} onChange={(e) => e.target.value && setInicio(e.target.value)} className="block border border-gray-300 rounded px-2 py-1 text-sm" />
           </label>
