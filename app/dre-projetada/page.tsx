@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ChevronDown, ChevronRight, Loader2, RefreshCw, TrendingUp } from 'lucide-react';
+import { Calendar, ChevronDown, ChevronRight, Filter, RefreshCw, TrendingUp } from 'lucide-react';
 import { formatarValor } from '../utils/formatters';
 import { PLANO_CONTAS_DRE_FABRICA, type ContaDRE } from '../dre-fabrica/planoContasDREFabrica';
 
@@ -65,6 +65,7 @@ export default function DreProjetadaPage() {
   const [carregando, setCarregando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
   const [comparar, setComparar] = useState(false);
+  const [filtroAberto, setFiltroAberto] = useState(false);
   const [abertos, setAbertos] = useState<Set<string>>(new Set());
 
   const buscar = useCallback(async (forcar = false) => {
@@ -138,78 +139,173 @@ export default function DreProjetadaPage() {
 
   const corTexto = (v: number) => (v < 0 ? 'text-red-600' : '');
 
+  const lojasSelecionadas = filtro.includes(',') || lojas.some((l) => l.valor === filtro) ? filtro.split(',') : [];
+  const filtroLabel =
+    filtro === 'consolidado' ? 'CONSOLIDADO (TODAS)'
+    : filtro === 'fabrica' ? 'FABRICA'
+    : lojasSelecionadas.length === 1 ? (lojas.find((l) => l.valor === lojasSelecionadas[0])?.label || filtro)
+    : `${lojasSelecionadas.length} LOJAS`;
+  function alternarLoja(valor: string) {
+    const novas = lojasSelecionadas.includes(valor) ? lojasSelecionadas.filter((v) => v !== valor) : [...lojasSelecionadas, valor];
+    setFiltro(novas.length ? novas.join(',') : 'consolidado');
+  }
+  function escolher(valor: string) { setFiltro(valor); setFiltroAberto(false); }
+  const anosTitulo = periodos.length > 0
+    ? (() => { const a1 = periodos[0].key.split('-')[0]; const a2 = periodos[periodos.length - 1].key.split('-')[0]; return a1 === a2 ? a1 : `${a1}-${a2}`; })()
+    : '';
+
   return (
-    <div className="p-6 space-y-4 text-black">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold flex items-center gap-2"><TrendingUp className="w-5 h-5" /> DRE Projetada — próximos 12 meses</h1>
-          <p className="text-xs">
-            Base: mesmo mês do ano anterior ({p ? `${p.baseInicio.split('-').reverse().join('/')} a ${p.baseFim.split('-').reverse().join('/')}` : '…'}).
-            Receita por crescimento %; despesas variáveis mantêm o % sobre a receita; despesas fixas sobem pela inflação.
-            Fixo/variável segue a classificação da tela de DRE.
-          </p>
-        </div>
-        <div className="flex items-end gap-3">
-          <label className="text-xs">Empresa
-            <select value={filtro} onChange={(e) => setFiltro(e.target.value)} className="block border border-gray-300 rounded px-2 py-1 text-sm bg-white">
-              <option value="consolidado">Consolidado (todas)</option>
-              <option value="fabrica">Fábrica</option>
-              {lojas.map((l) => <option key={l.valor} value={l.valor}>{l.label}</option>)}
-            </select>
-          </label>
-          <label className="text-xs">Primeiro mês
-            <input type="month" value={inicio} onChange={(e) => e.target.value && setInicio(e.target.value)} className="block border border-gray-300 rounded px-2 py-1 text-sm" />
-          </label>
-          <label className="flex items-center gap-1 text-xs pb-1.5">
-            <input type="checkbox" checked={comparar} onChange={(e) => setComparar(e.target.checked)} /> Comparar com ano anterior
-          </label>
-          <button onClick={() => buscar(true)} disabled={carregando} className="flex items-center gap-1 border border-gray-300 rounded px-3 py-1.5 text-sm hover:bg-gray-50 disabled:opacity-50" title="Recalcular a base (ignora o cache)">
-            {carregando ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />} Atualizar
-          </button>
+    <div className="max-w-[98%] mx-auto py-6 px-4 space-y-6">
+      {/* Header */}
+      <div className="mb-4">
+        <div className="flex items-center justify-between flex-wrap gap-4">
+          <div className="flex items-center gap-3">
+            <TrendingUp className="w-8 h-8 text-green-600" />
+            <div>
+              <h1 className="text-3xl font-bold text-brand-dark">DRE Projetada - {filtroLabel}</h1>
+              <p className="text-gray-600">Projeção do Resultado dos próximos 12 meses</p>
+              {p && (
+                <p className="text-xs text-gray-400 mt-1">
+                  Base: mesmo mês do ano anterior ({p.baseInicio.split('-').reverse().join('/')} a {p.baseFim.split('-').reverse().join('/')}).
+                  Receita por crescimento %; variáveis mantêm o % sobre a receita; fixas sobem pela inflação (fixo/variável da classificação da DRE).
+                </p>
+              )}
+            </div>
+          </div>
+
+          {/* Filtro */}
+          <div className="flex items-center gap-3">
+            <Filter className="w-5 h-5 text-gray-500" />
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setFiltroAberto((aberto) => !aberto)}
+                className="min-w-[280px] max-w-[360px] flex items-center justify-between gap-2 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white hover:bg-gray-50"
+              >
+                <span className="truncate text-left">{filtroLabel}</span>
+                <ChevronDown className="w-4 h-4 text-gray-500 flex-shrink-0" />
+              </button>
+              {filtroAberto && (
+                <div className="absolute right-0 z-40 mt-2 w-[320px] max-h-[420px] overflow-auto rounded-lg border border-gray-200 bg-white shadow-xl">
+                  <div className="border-b border-gray-100 p-2 space-y-1">
+                    <button type="button" onClick={() => escolher('consolidado')} className={`w-full text-left px-3 py-2 rounded-md text-sm ${filtro === 'consolidado' ? 'bg-green-50 text-green-800 font-semibold' : 'hover:bg-gray-50 text-gray-700'}`}>CONSOLIDADO (TODAS)</button>
+                    <button type="button" onClick={() => escolher('fabrica')} className={`w-full text-left px-3 py-2 rounded-md text-sm ${filtro === 'fabrica' ? 'bg-blue-50 text-blue-800 font-semibold' : 'hover:bg-gray-50 text-gray-700'}`}>FABRICA</button>
+                  </div>
+                  <div className="sticky top-0 flex items-center justify-between gap-2 border-b border-gray-100 bg-white px-3 py-2">
+                    <span className="text-xs font-semibold text-gray-500 uppercase">Lojas</span>
+                    <div className="flex items-center gap-3">
+                      <button type="button" onClick={() => setFiltro(lojas.map((l) => l.valor).join(','))} className="text-xs font-medium text-purple-700 hover:text-purple-900">Todas</button>
+                      <button type="button" onClick={() => setFiltro('consolidado')} className="text-xs font-medium text-gray-600 hover:text-gray-900">Limpar</button>
+                    </div>
+                  </div>
+                  <div className="py-1">
+                    {lojas.map((l) => (
+                      <label key={l.valor} className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-gray-50 cursor-pointer">
+                        <input type="checkbox" checked={lojasSelecionadas.includes(l.valor)} onChange={() => alternarLoja(l.valor)} className="rounded border-gray-300" />
+                        <span>{l.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
-        {CENARIOS.map((c) => (
-          <button
-            key={c.chave}
-            onClick={() => setCenario(c.chave)}
-            className={`text-left rounded-lg border px-3 py-2 ${cenario === c.chave ? 'border-blue-600 bg-blue-50' : 'border-gray-200 bg-white hover:bg-gray-50'}`}
-          >
-            <div className="text-sm font-semibold">{c.titulo}</div>
-            <div className="text-xs">{c.descricao}</div>
-          </button>
-        ))}
-      </div>
-
-      <div className="flex flex-wrap items-end gap-4 text-sm">
-        <label className="text-xs">Inflação (% a.a., contas fixas)
+      {/* Cenario e parametros */}
+      <div className="bg-white rounded-lg shadow-md p-4">
+        <div className="flex items-center gap-2 mb-3">
+          <Calendar className="w-5 h-5 text-brand-primary" />
+          <h2 className="text-base font-semibold text-brand-dark">Cenário e período</h2>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-2 mb-3">
+          {CENARIOS.map((c) => (
+            <button
+              key={c.chave}
+              onClick={() => setCenario(c.chave)}
+              className={`text-left rounded-md border px-3 py-2 ${cenario === c.chave ? 'border-green-600 bg-green-50' : 'border-gray-200 bg-white hover:bg-gray-50'}`}
+            >
+              <div className="text-sm font-semibold text-gray-800">{c.titulo}</div>
+              <div className="text-xs text-gray-600">{c.descricao}</div>
+            </button>
+          ))}
+        </div>
+        <div className="flex flex-wrap gap-3 items-center">
+          <input
+            type="month"
+            value={inicio}
+            onChange={(e) => e.target.value && setInicio(e.target.value)}
+            className="px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-primary"
+          />
+          <span className="text-gray-500">+ 12 meses</span>
+          <span className="text-gray-500 ml-2">Inflação (% a.a.)</span>
           <input
             value={inflacaoTxt}
             onChange={(e) => setInflacaoTxt(e.target.value)}
             placeholder={p ? String(p.ipca.valor).replace('.', ',') : ''}
-            className="block w-28 border border-gray-300 rounded px-2 py-1 text-sm"
+            className="w-24 px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-primary"
           />
-        </label>
-        {cenario === 'personalizado' && (
-          <label className="text-xs">Crescimento da receita (%)
-            <input value={crescimentoTxt} onChange={(e) => setCrescimentoTxt(e.target.value)} className="block w-28 border border-gray-300 rounded px-2 py-1 text-sm" />
-          </label>
-        )}
-        {p && (
-          <div className="text-xs">
-            Em uso: receita <b>{p.crescimentoReceita.toFixed(2).replace('.', ',')}%</b> · fixas <b>{p.inflacaoFixas.toFixed(2).replace('.', ',')}%</b>
-            {' '}· {p.ipca.fonte}: {p.ipca.valor.toFixed(2).replace('.', ',')}%{p.ipca.data ? ` (${p.ipca.data})` : ''}
-          </div>
-        )}
+          {cenario === 'personalizado' && (
+            <>
+              <span className="text-gray-500">Crescimento da receita (%)</span>
+              <input
+                value={crescimentoTxt}
+                onChange={(e) => setCrescimentoTxt(e.target.value)}
+                className="w-24 px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-primary"
+              />
+            </>
+          )}
+          <button
+            onClick={() => buscar(true)}
+            disabled={carregando}
+            title="Atualizar dados (ignora o cache e busca de novo)"
+            className="p-2 text-sm bg-gray-100 text-gray-600 rounded-md hover:bg-gray-200 transition-colors disabled:opacity-50"
+          >
+            <RefreshCw className={`w-4 h-4 ${carregando ? 'animate-spin' : ''}`} />
+          </button>
+          {p && (
+            <span className="text-xs text-gray-600">
+              Em uso: receita <b>{p.crescimentoReceita.toFixed(2).replace('.', ',')}%</b> · fixas <b>{p.inflacaoFixas.toFixed(2).replace('.', ',')}%</b>
+              {' '}· {p.ipca.fonte}: {p.ipca.valor.toFixed(2).replace('.', ',')}%{p.ipca.data ? ` (${p.ipca.data})` : ''}
+            </span>
+          )}
+        </div>
+        {erro && <div className="mt-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2">{erro}</div>}
       </div>
 
-      {erro && <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2">{erro}</div>}
-
-      {!dados && carregando && <div className="flex items-center gap-2 py-12 justify-center"><Loader2 className="w-5 h-5 animate-spin" /> Calculando a base do ano anterior…</div>}
+      {!dados && carregando && (
+        <div className="bg-white rounded-lg shadow border border-gray-200 p-8 flex items-center justify-center gap-2 text-gray-600">
+          <RefreshCw className="w-6 h-6 animate-spin text-green-600" /> Calculando a base do ano anterior…
+        </div>
+      )}
 
       {dados && (
-        <div className="bg-white rounded-lg shadow overflow-hidden">
+        <div className="bg-white rounded-xl shadow-lg overflow-hidden border border-gray-200">
+          <div className="p-5 border-b-2 bg-gradient-to-r from-green-50 to-green-100 border-green-200">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-bold text-gray-800">Projeção de Resultado - {filtroLabel}</h2>
+                <p className="text-sm text-gray-600 mt-1">
+                  Período: {periodos[0]?.label} a {periodos[periodos.length - 1]?.label} · Cenário {CENARIOS.find((c) => c.chave === cenario)?.titulo}
+                </p>
+              </div>
+              <div className="flex items-center gap-3">
+                <label className="flex items-center gap-2 text-xs font-medium text-gray-600 cursor-pointer select-none">
+                  Comparar com ano anterior
+                  <button
+                    role="switch"
+                    aria-checked={comparar}
+                    onClick={() => setComparar(!comparar)}
+                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${comparar ? 'bg-blue-600' : 'bg-gray-300'}`}
+                  >
+                    <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${comparar ? 'translate-x-5' : 'translate-x-1'}`} />
+                  </button>
+                </label>
+                <div className="px-4 py-2 rounded-lg text-sm font-semibold bg-green-200 text-green-800">{anosTitulo}</div>
+              </div>
+            </div>
+          </div>
           <div className="overflow-x-auto">
             <table className="w-full border-collapse">
               <thead>
@@ -326,7 +422,7 @@ export default function DreProjetadaPage() {
           </div>
         </div>
       )}
-      <p className="text-xs">Valores em R$. Despesas aparecem negativas (como na DRE). A/V % = percentual sobre a receita líquida do período.</p>
+      <p className="text-xs text-gray-500">Valores em R$. Despesas aparecem negativas (como na DRE). A/V % = percentual sobre a receita líquida do período.</p>
     </div>
   );
 }
