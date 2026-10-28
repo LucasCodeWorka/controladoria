@@ -1157,6 +1157,41 @@ def obter_carteira_pedidos_por_lote(grupo: str = Query(..., description="andamen
         raise HTTPException(status_code=500, detail="Erro ao buscar a carteira por lote")
 
 
+@router.get("/api/fluxo-caixa/carteira-pedidos/motivos")
+def obter_carteira_pedidos_por_motivo():
+    """Pedidos bloqueados (situacao 5) agrupados pelo motivo do bloqueio
+    (vr_ped_pedidoc2.cd_motivobloq -> vr_ped_motivobloq.ds_motivo) - mesmos
+    filtros do card, entao a soma bate com o valor do card."""
+    try:
+        rows = execute_query("""
+            SELECT c.cd_motivobloq,
+                   MAX(m.ds_motivo) AS ds_motivo,
+                   COUNT(DISTINCT (i.cd_empresa, i.cd_pedido))::int AS pedidos,
+                   COALESCE(SUM(i.qt_pendente), 0) AS qt_pendente,
+                   COALESCE(SUM(i.vl_pendente), 0) AS vl_pendente
+            FROM vr_ped_pedidoi i
+            LEFT JOIN vr_ped_pedidoc2 c ON c.cd_empresa = i.cd_empresa AND c.cd_pedido = i.cd_pedido
+            LEFT JOIN vr_ped_motivobloq m ON m.cd_motivo = c.cd_motivobloq
+            WHERE i.cd_empresa = %s AND i.qt_pendente > 0 AND i.tp_situacao = 5
+              AND i.cd_representant IS DISTINCT FROM %s
+            GROUP BY c.cd_motivobloq
+            ORDER BY vl_pendente DESC
+        """, (_EMPRESA_CARTEIRA, _REPRESENTANTE_FORA_CARTEIRA)) or []
+        return [
+            {
+                "motivo": r["cd_motivobloq"],
+                "descricao": r["ds_motivo"],
+                "pedidos": r["pedidos"],
+                "qtPendente": float(r["qt_pendente"] or 0),
+                "vlPendente": float(r["vl_pendente"] or 0),
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        print(f"[ERROR] Erro ao buscar carteira de pedidos por motivo: {e}")
+        raise HTTPException(status_code=500, detail="Erro ao buscar a carteira por motivo")
+
+
 @router.get("/api/fluxo-caixa/empresas")
 def listar_empresas_fluxo_caixa():
     _criar_tabelas_fluxo_caixa()

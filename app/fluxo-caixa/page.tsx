@@ -187,6 +187,7 @@ interface BoletoBancoResumo {
 
 interface CarteiraGrupo { pedidos: number; linhas: number; qtPendente: number; vlPendente: number }
 interface CarteiraPedidos { andamento: CarteiraGrupo; bloqueado: CarteiraGrupo }
+interface CarteiraMotivo { motivo: number | null; descricao: string | null; pedidos: number; qtPendente: number; vlPendente: number }
 interface CarteiraLote { lote: string | null; descricao: string | null; dtFim: string | null; pedidos: number; qtPendente: number; vlPendente: number }
 
 interface BoletoDetalheItem {
@@ -1381,7 +1382,7 @@ export default function FluxoCaixaPage() {
   // Ordenacao das colunas do modal por lote (padrao: maior valor primeiro).
   const [carteiraOrdCampo, setCarteiraOrdCampo] = useState<'lote' | 'descricao' | 'dtFim' | 'pedidos' | 'qtPendente' | 'vlPendente'>('vlPendente');
   const [carteiraOrdDir, setCarteiraOrdDir] = useState<'asc' | 'desc'>('desc');
-  const [carteiraLotes, setCarteiraLotes] = useState<{ grupo: 'andamento' | 'bloqueado'; titulo: string; itens: CarteiraLote[] | null; erro: string | null } | null>(null);
+  const [carteiraLotes, setCarteiraLotes] = useState<{ grupo: 'andamento' | 'bloqueado'; titulo: string; itens: CarteiraLote[] | null; motivos?: CarteiraMotivo[]; erro: string | null } | null>(null);
   const [boletoBancoModal, setBoletoBancoModal] = useState<string | null>(null);
   // Modal por banco: 'recebimento' (padrao, com D+1/fim de semana/feriado) ou 'vencimento' (puro).
   const [boletoBancoVisao, setBoletoBancoVisao] = useState<'recebimento' | 'vencimento'>('recebimento');
@@ -1649,10 +1650,14 @@ export default function FluxoCaixaPage() {
     setCarteiraOrdDir('desc');
     setCarteiraLotes({ grupo, titulo, itens: null, erro: null });
     try {
-      const resp = await fetch(`/api/fluxo-caixa/carteira-pedidos/lotes?grupo=${grupo}`, { cache: 'no-store' });
+      const [resp, respMotivos] = await Promise.all([
+        fetch(`/api/fluxo-caixa/carteira-pedidos/lotes?grupo=${grupo}`, { cache: 'no-store' }),
+        grupo === 'bloqueado' ? fetch('/api/fluxo-caixa/carteira-pedidos/motivos', { cache: 'no-store' }) : Promise.resolve(null),
+      ]);
       const json = await resp.json();
       if (!resp.ok) throw new Error(json.detail || json.error || 'Erro ao buscar os lotes');
-      setCarteiraLotes({ grupo, titulo, itens: json, erro: null });
+      const motivos = respMotivos && respMotivos.ok ? await respMotivos.json() : undefined;
+      setCarteiraLotes({ grupo, titulo, itens: json, motivos, erro: null });
     } catch (e) {
       setCarteiraLotes({ grupo, titulo, itens: [], erro: e instanceof Error ? e.message : 'Erro desconhecido' });
     }
@@ -3105,6 +3110,45 @@ export default function FluxoCaixaPage() {
               )}
               {carteiraLotes.itens !== null && !carteiraLotes.erro && carteiraLotes.itens.length === 0 && (
                 <p className="text-sm text-black py-12 text-center">Nenhum item pendente nesse grupo.</p>
+              )}
+              {carteiraLotes.motivos && carteiraLotes.motivos.length > 0 && (
+                <div className="px-5 pt-4 pb-2">
+                  <h3 className="text-sm font-semibold text-black mb-1">Por motivo do bloqueio</h3>
+                  <table className="w-full text-sm border border-gray-200">
+                    <thead className="bg-gray-50 border-b border-gray-200">
+                      <tr>
+                        <th className="text-left px-3 py-1.5 font-medium text-black">Motivo</th>
+                        <th className="text-right px-3 py-1.5 font-medium text-black">Pedidos</th>
+                        <th className="text-right px-3 py-1.5 font-medium text-black">Peças</th>
+                        <th className="text-right px-3 py-1.5 font-medium text-black">Valor pendente</th>
+                        <th className="text-right px-3 py-1.5 font-medium text-black">%</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(() => {
+                        const totalMotivos = carteiraLotes.motivos!.reduce((a, m) => a + m.vlPendente, 0);
+                        return carteiraLotes.motivos!.map((m, i) => (
+                          <tr key={`${m.motivo ?? 'sem'}-${i}`} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                            <td className="px-3 py-1.5 text-black">{m.motivo === null ? <span className="italic">Sem motivo informado</span> : `${m.motivo} - ${m.descricao ?? '—'}`}</td>
+                            <td className="px-3 py-1.5 text-right text-black tabular-nums">{fmtNum(m.pedidos)}</td>
+                            <td className="px-3 py-1.5 text-right text-black tabular-nums">{fmtNum(m.qtPendente)}</td>
+                            <td className="px-3 py-1.5 text-right font-semibold text-blue-700 tabular-nums whitespace-nowrap">{fmtBRL(m.vlPendente)}</td>
+                            <td className="px-3 py-1.5 text-right text-black tabular-nums">{totalMotivos > 0 ? `${((m.vlPendente / totalMotivos) * 100).toFixed(1).replace('.', ',')}%` : '—'}</td>
+                          </tr>
+                        ));
+                      })()}
+                    </tbody>
+                    <tfoot>
+                      <tr className="font-bold bg-gray-200 border-t-2 border-gray-400">
+                        <td className="px-3 py-1.5 text-right uppercase text-xs tracking-wide text-black">Total</td>
+                        <td className="px-3 py-1.5" />
+                        <td className="px-3 py-1.5 text-right tabular-nums text-black">{fmtNum(carteiraLotes.motivos.reduce((a, m) => a + m.qtPendente, 0))}</td>
+                        <td className="px-3 py-1.5 text-right tabular-nums text-blue-700 whitespace-nowrap">{fmtBRL(carteiraLotes.motivos.reduce((a, m) => a + m.vlPendente, 0))}</td>
+                        <td className="px-3 py-1.5" />
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
               )}
               {carteiraLotes.itens !== null && carteiraLotes.itens.length > 0 && (
                 <table className="w-full text-sm">
