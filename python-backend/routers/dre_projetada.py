@@ -4,8 +4,9 @@ DRE projetada dos proximos 12 meses.
 Base: o MESMO mes do ano anterior (DRE consolidada/analitica ja existente, via
 dre_cache - mesma consulta e mesmo cache da tela de DRE). Cada conta folha vira:
   - receita (01.*): realizado do mes-base x (1 + crescimento da receita);
-  - variavel (% da receita): percentual sobre a receita bruta do mes-base,
-    aplicado na receita projetada do mes;
+  - variavel (% da receita): percentual sobre a receita LIQUIDA do mes-base,
+    aplicado na receita liquida projetada do mes (deducoes, grupo 02, usam a
+    receita bruta, pois sao elas que formam a liquida);
   - fixa: realizado do mes-base x (1 + inflacao).
 A classificacao fixa/variavel e a da tela de DRE (plano_contas_dre_tipo_custo);
 o que nao foi classificado cai no padrao de _tipo_padrao.
@@ -148,8 +149,9 @@ def dre_projetada(
 
         projetado = {}
         tipos = {}
-        for c in folhas:
-            tipo = _tipo_da_conta(c, classif) if not c.startswith('01') else 'receita'
+
+        def projetar(c, base_pct, proj_pct):
+            tipo = _tipo_da_conta(c, classif) if not c.startswith("01") else "receita"
             tipos[c] = tipo
             linha = {"total": 0.0}
             for pj, pb in zip(proj, base):
@@ -157,13 +159,29 @@ def dre_projetada(
                 if tipo == "receita":
                     v = b * (1 + g_rec / 100)
                 elif tipo == "variavel":
-                    pct = (b / receita_base[pb]) if receita_base[pb] else 0
-                    v = pct * receita_proj[pj]
+                    # % sobre a receita do mes-base, aplicado na receita projetada do mes
+                    pct = (b / base_pct[pb]) if base_pct[pb] else 0
+                    v = pct * proj_pct[pj]
                 else:
                     v = b * (1 + infl_fixas / 100)
                 linha[pj] = v
                 linha["total"] += v
             projetado[c] = linha
+
+        # 1) receita bruta e deducoes (02): variaveis sobre a receita BRUTA (sao
+        #    elas que formam a liquida, entao nao podem depender dela)
+        for c in folhas:
+            if c.startswith(("01", "02")):
+                projetar(c, receita_base, receita_proj)
+        liquida_proj = {
+            pj: sum(projetado[c][pj] for c in folhas if c.startswith(("01", "02")))
+            for pj in proj
+        }
+        liquida_base = {pb: val("03", pb) for pb in base}
+        # 2) demais contas: variaveis sobre a receita LIQUIDA
+        for c in folhas:
+            if not c.startswith(("01", "02")):
+                projetar(c, liquida_base, liquida_proj)
 
         projetado = dre_mod._somar_hierarquia(projetado, proj)
         projetado = dre_mod._calcular_totalizadores(projetado, proj)
