@@ -1689,6 +1689,9 @@ export default function GiroPage() {
   // campanha, lojas, totais) e igual nos dois niveis.
   function linhaMatriz(item: ItemMatrizGiro, key: string, idx: number, nivel: number): React.ReactNode {
     const regraCampanha = regraDoItem(item);
+    // Referencia mista: o desconto e por cor - a linha da referencia mistura giro
+    // de uma cor com Meses FL de outra e nao representa nenhuma cor, entao nao mostra.
+    const ocultarCampanha = nivel === 0 && !!item.temCorSemMesesFL;
     return (
       <tr key={key} className={`${nivel === 1 ? 'bg-gray-50/70' : idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'} hover:bg-rose-50 transition-colors`}>
         <td
@@ -1729,14 +1732,14 @@ export default function GiroPage() {
         <td className={`px-4 py-2 text-black sticky left-[100px] z-10 ${nivel === 0 ? 'bg-inherit' : 'bg-gray-50/70'}`}>
           <div className={nivel === 1 ? 'pl-4 text-xs font-medium text-black/70' : ''}>
             {item.nome}
-            <span
+            {!ocultarCampanha && <span
               className={`ml-1.5 inline-flex items-center justify-center w-4 h-4 rounded-full text-[9px] font-bold cursor-help ${COR_BADGE_REGRA[regraCampanha]}`}
               onMouseEnter={(ev) => setTooltipCelula({ texto: DESCRICAO_REGRA_CAMPANHA[regraCampanha], x: ev.clientX, y: ev.clientY })}
               onMouseMove={(ev) => setTooltipCelula({ texto: DESCRICAO_REGRA_CAMPANHA[regraCampanha], x: ev.clientX, y: ev.clientY })}
               onMouseLeave={() => setTooltipCelula(null)}
             >
               {regraCampanha}
-            </span>
+            </span>}
             {nivel === 1 && item.temLeveDefeito && (
               <span className="ml-1.5 px-1 py-0.5 text-[9px] font-medium bg-orange-100 text-orange-700 rounded" title="Classificado como Leve Defeito">
                 LD
@@ -1805,16 +1808,16 @@ export default function GiroPage() {
           const descricaoRegraVarejo = escadaPorDesconto
             ? `${DESCRICAO_REGRA_CAMPANHA[regraCampanha]}\nDesconto atual no varejo${item.temCorSemMesesFL ? '' : ' (maior entre as cores)'}: ${descontoAtualRegraCanal(item, 'Varejo', promoVarejo).toFixed(2).replace('.', ',')}% → campanha ${pctCampanhaVarejo}%${avisoFallbackVarejo}`
             : `${DESCRICAO_REGRA_CAMPANHA[regraCampanha]}${avisoFallbackVarejo}`;
-          const precoAtacadoCampanha = calcularPrecoCampanha(cheioAtacado, pctCampanhaAtacado);
-          const precoVarejoCampanha = calcularPrecoCampanha(cheioVarejo, pctCampanhaVarejo);
+          const precoAtacadoCampanha = ocultarCampanha ? null : calcularPrecoCampanha(cheioAtacado, pctCampanhaAtacado);
+          const precoVarejoCampanha = ocultarCampanha ? null : calcularPrecoCampanha(cheioVarejo, pctCampanhaVarejo);
           const precoAtacadoCampanhaReal = calcularPrecoCampanhaReal(cheioAtacado, pctCampanhaAtacado);
           const precoVarejoCampanhaReal = calcularPrecoCampanhaReal(cheioVarejo, pctCampanhaVarejo);
-          const semCheioAtacado = pctCampanhaAtacado > 0 && cheioAtacado === null;
-          const semCheioVarejo = pctCampanhaVarejo > 0 && cheioVarejo === null;
-          const tooltipAtacado = precoAtacadoCampanhaReal !== null
+          const semCheioAtacado = !ocultarCampanha && pctCampanhaAtacado > 0 && cheioAtacado === null;
+          const semCheioVarejo = !ocultarCampanha && pctCampanhaVarejo > 0 && cheioVarejo === null;
+          const tooltipAtacado = ocultarCampanha ? 'Referência mista: o desconto é definido por cor (abra a referência)' : precoAtacadoCampanhaReal !== null
             ? `${descricaoRegraAtacado}\nPreço real (sem arredondamento): ${formatarPreco(precoAtacadoCampanhaReal)}`
             : descricaoRegraAtacado;
-          const tooltipVarejo = precoVarejoCampanhaReal !== null
+          const tooltipVarejo = ocultarCampanha ? 'Referência mista: o desconto é definido por cor (abra a referência)' : precoVarejoCampanhaReal !== null
             ? `${descricaoRegraVarejo}\nPreço real (sem arredondamento): ${formatarPreco(precoVarejoCampanhaReal)}`
             : descricaoRegraVarejo;
           return (
