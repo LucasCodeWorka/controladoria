@@ -18,6 +18,7 @@ from datetime import date, timedelta
 from database import execute_query, execute_insert
 from routers.dre import FILTRO_DUPLICATAS_EXCLUIDAS_SQL, PARAMS_DUPLICATAS_EXCLUIDAS, CCUSTOS_FABRICA, CCUSTOS_ECOMMERCE, CCUSTO_ECOMMERCE_AGRUPADO
 from routers.cmv_detalhado import CD_EMPRESA_FABRICA
+from routers.fluxo_caixa import _obter_saldos_bancarios, _filtros_boleto, _parse_empresas, _criar_tabelas_fluxo_caixa
 
 router = APIRouter()
 
@@ -109,6 +110,19 @@ def _somar_duplicatas_por_vencimento(despesaitens: list, data_inicio: str, data_
     return float((row[0]["total"] if row else 0) or 0)
 
 
+def _somar_boletos_a_receber(data_inicio: str, data_fim: str, empresas: Optional[str]) -> float:
+    """Total da coluna Boleto do Fluxo de Caixa na janela: mesma regra
+    (_filtros_boleto) - boleto em aberto, sem descontado em banco, so de hoje em
+    diante (data efetiva de compensacao)."""
+    _criar_tabelas_fluxo_caixa()
+    where, params = _filtros_boleto(data_inicio, data_fim, _parse_empresas(empresas))
+    rows = execute_query(
+        f"SELECT COALESCE(SUM(vl_fatura - vl_pago), 0) AS total FROM vr_fcr_faturai {where}",
+        tuple(params),
+    ) or []
+    return float(rows[0]["total"] or 0) if rows else 0.0
+
+
 @router.get("/api/balanco-patrimonial/dados")
 def get_balanco_patrimonial(
     mesReferencia: str = Query(..., description="Mes de referencia YYYY-MM"),
@@ -141,6 +155,23 @@ def get_balanco_patrimonial(
             total = _somar_duplicatas_por_vencimento(despesaitens, data_inicio, data_fim, empresas)
             sinal = -1 if conta.upper().startswith("P") else 1
             valores[conta] = sinal * total
+
+        # AC.1 Caixa e equivalentes de caixa = total dos saldos bancarios, o MESMO
+        # valor do fluxo de caixa (posicao de caixa mais recente de cada conta,
+        # sem filtro de empresa - a tabela de saldos nao tem cd_empresa). Nao
+        # depende do mes de referencia: e a posicao de HOJE.
+        try:
+            valores["AC.1"] = _obter_saldos_bancarios()["total"]
+        except Exception as e:
+            print(f"[BALANCO] Saldo bancario indisponivel: {e}")
+
+        # AC.2 Contas a receber = boletos do Fluxo de Caixa (coluna Boleto), na
+        # janela configurada da conta (default 12 meses) e no filtro de empresas.
+        try:
+            ini, fim = _janela_vencimento(mesReferencia, meses_janela_por_conta.get("AC.2", MESES_JANELA_PADRAO))
+            valores["AC.2"] = _somar_boletos_a_receber(ini, fim, empresas)
+        except Exception as e:
+            print(f"[BALANCO] Boletos a receber indisponiveis: {e}")
 
         return {"valores": valores, "mesReferencia": mesReferencia}
     except HTTPException:
