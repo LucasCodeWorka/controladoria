@@ -15,6 +15,7 @@ Cenarios prontos (inflacao = IPCA 12 meses do BCB, editavel na tela):
   pessimista: igual ao ano anterior (receita +0%)
   realista:   receita do ano anterior + inflacao
   otimista:   receita do ano anterior + inflacao + 5%
+  meta:       receita com o crescimento sugerido para chegar a META_LUCRO% de lucro
 As despesas fixas sempre repetem o valor do ano anterior.
 """
 from fastapi import APIRouter, HTTPException, Query
@@ -33,6 +34,7 @@ router = APIRouter()
 TOTALIZADORES = ("03", "05", "07", "09", "11", "14")
 INFLACAO_PADRAO = 4.5
 ADICIONAL_OTIMISTA = 5.0
+META_LUCRO = 10.0  # % de lucro liquido sobre a receita liquida do cenario "meta"
 
 _cache_ipca = {"valor": None, "em": 0.0}
 
@@ -89,6 +91,38 @@ def _soma_meses(ano: int, mes: int, n: int):
     return idx // 12, idx % 12 + 1
 
 
+def _crescimento_meta(inicio, inflacao, filtro, meta):
+    """Crescimento da receita para atingir `meta`% de lucro liquido. Com fixas
+    constantes e variaveis proporcionais a receita, receita liquida e lucro sao
+    lineares no crescimento g; basta avaliar em g=0 e g=100 e resolver
+    lucro(g) = meta% x receita(g). gEfetivo = crescimento total sobre o ano
+    anterior (nunca abaixo da inflacao); necessario = o que falta DEPOIS da
+    inflacao. Sem solucao so com venda: tudo None."""
+    def pontos(g):
+        r = dre_projetada(inicio=inicio, cenario="personalizado", inflacao=inflacao, crescimentoReceita=g,
+                          filtro=filtro, forcar=False)
+        return (float((r["projetado"].get("03") or {}).get("total", 0) or 0),
+                float((r["projetado"].get("14") or {}).get("total", 0) or 0),
+                r["parametros"]["inflacao"])
+    r0, l0, infl_uso = pontos(0.0)
+    r1, l1, _ = pontos(100.0)
+    m = meta / 100
+    den = (l1 - l0) - m * (r1 - r0)  # variacao do (lucro - meta x receita) a cada +100%
+    if r0 > 0 and l0 >= m * r0:
+        g_total = 0.0
+    elif den > 0:
+        g_total = 100.0 * (m * r0 - l0) / den
+    else:
+        return {"necessario": None, "receitaNecessaria": None, "gEfetivo": None}
+    # o crescimento pedido vem DEPOIS da inflacao: (1+inflacao) x (1+x) = 1+g_total
+    g_efetivo = max(g_total, infl_uso)  # a inflacao ja esta na receita projetada
+    return {
+        "necessario": max(0.0, ((1 + g_total / 100) / (1 + infl_uso / 100) - 1) * 100),
+        "receitaNecessaria": r0 + (r1 - r0) * g_efetivo / 100,
+        "gEfetivo": g_efetivo,
+    }
+
+
 @router.get("/api/dre-projetada")
 def dre_projetada(
     inicio: Optional[str] = Query(None, description="Primeiro mes projetado YYYY-MM (default: proximo mes)"),
@@ -115,6 +149,9 @@ def dre_projetada(
             g_rec = infl + ADICIONAL_OTIMISTA
         elif cenario == "personalizado":
             g_rec = infl if crescimentoReceita is None else crescimentoReceita
+        elif cenario == "meta":
+            alvo = _crescimento_meta(inicio, inflacao, filtro, META_LUCRO)
+            g_rec = alvo["gEfetivo"] if alvo["gEfetivo"] is not None else infl  # sem solucao: so inflacao
         else:
             raise HTTPException(status_code=400, detail="cenario invalido")
 
@@ -225,7 +262,7 @@ def resumo(
     inflacao: Optional[float] = Query(None),
     crescimentoReceita: Optional[float] = Query(None, description="Se informado, inclui o cenario personalizado"),
     filtro: str = Query("consolidado"),
-    meta: float = Query(10.0, description="% de lucro liquido desejado sobre a receita liquida"),
+    meta: float = Query(META_LUCRO, description="% de lucro liquido desejado sobre a receita liquida"),
     forcar: bool = Query(False),
 ):
     """Receita liquida e lucro liquido (conta 14) projetados nos 12 meses, em
@@ -244,29 +281,11 @@ def resumo(
             rec_a, luc_a = tot(r["anoAnterior"], "03"), tot(r["anoAnterior"], "14")
             ano_anterior = {"receitaLiquida": rec_a, "lucro": luc_a, "percentual": (luc_a / rec_a * 100) if rec_a else None}
 
-    # Crescimento da receita para atingir a meta: com fixas constantes e variaveis
-    # proporcionais a receita, receita liquida e lucro sao lineares no crescimento g;
-    # basta avaliar em g=0 e g=100 e resolver lucro(g) = meta% x receita(g).
-    def pontos(g):
-        r = dre_projetada(inicio=inicio, cenario="personalizado", inflacao=inflacao, crescimentoReceita=g,
+    alvo = _crescimento_meta(inicio, inflacao, filtro, meta)
+    if alvo["gEfetivo"] is not None:
+        r = dre_projetada(inicio=inicio, cenario="personalizado", inflacao=inflacao, crescimentoReceita=alvo["gEfetivo"],
                           filtro=filtro, forcar=False)
-        return (float((r["projetado"].get("03") or {}).get("total", 0) or 0),
-                float((r["projetado"].get("14") or {}).get("total", 0) or 0),
-                r["parametros"]["inflacao"])
-    r0, l0, infl_uso = pontos(0.0)
-    r1, l1, _ = pontos(100.0)
-    m = meta / 100
-    den = (l1 - l0) - m * (r1 - r0)  # variacao do (lucro - meta x receita) a cada +100%
-    necessario, receita_necessaria = None, None  # None = nao atinge so com venda
-    if r0 > 0 and l0 >= m * r0:
-        g_total = 0.0
-    elif den > 0:
-        g_total = 100.0 * (m * r0 - l0) / den  # crescimento total sobre o ano anterior
-    else:
-        g_total = None
-    if g_total is not None:
-        # o crescimento pedido vem DEPOIS da inflacao: (1+inflacao) x (1+x) = 1+g_total
-        necessario = max(0.0, ((1 + g_total / 100) / (1 + infl_uso / 100) - 1) * 100)
-        g_efetivo = max(g_total, infl_uso)  # a inflacao ja esta na receita projetada
-        receita_necessaria = r0 + (r1 - r0) * g_efetivo / 100
+        rec, luc = float((r["projetado"].get("03") or {}).get("total", 0) or 0), float((r["projetado"].get("14") or {}).get("total", 0) or 0)
+        saida["meta"] = {"receitaLiquida": rec, "lucro": luc, "percentual": (luc / rec * 100) if rec else None}
+    necessario, receita_necessaria = alvo["necessario"], alvo["receitaNecessaria"]
     return {"filtro": filtro, "anoAnterior": ano_anterior, "cenarios": saida, "crescimentoNecessario": necessario, "receitaNecessaria": receita_necessaria, "meta": meta}

@@ -5,7 +5,7 @@ import { Calendar, ChevronDown, ChevronRight, Filter, RefreshCw, TrendingUp } fr
 import { formatarValor } from '../utils/formatters';
 import { PLANO_CONTAS_DRE_FABRICA, type ContaDRE } from '../dre-fabrica/planoContasDREFabrica';
 
-type Cenario = 'pessimista' | 'realista' | 'otimista' | 'personalizado';
+type Cenario = 'pessimista' | 'realista' | 'otimista' | 'meta' | 'personalizado';
 type Valores = Record<string, number>;
 
 interface RespostaProjecao {
@@ -23,6 +23,7 @@ const CENARIOS: { chave: Cenario; titulo: string; descricao: string }[] = [
   { chave: 'pessimista', titulo: 'Pessimista', descricao: 'Igual ao ano anterior' },
   { chave: 'realista', titulo: 'Realista', descricao: 'Receita do ano anterior + inflação' },
   { chave: 'otimista', titulo: 'Otimista', descricao: 'Receita do ano anterior + inflação + 5%' },
+  { chave: 'meta', titulo: 'Meta 10% de lucro', descricao: 'Crescimento sugerido para chegar a 10% de lucro' },
   { chave: 'personalizado', titulo: 'Personalizado', descricao: 'Você define o crescimento da receita' },
 ];
 
@@ -260,7 +261,7 @@ export default function DreProjetadaPage() {
           <Calendar className="w-5 h-5 text-brand-primary" />
           <h2 className="text-base font-semibold text-brand-dark">Cenário e período</h2>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-2 mb-3">
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-2 mb-3">
           {CENARIOS.map((c) => (
             <button
               key={c.chave}
@@ -341,7 +342,7 @@ export default function DreProjetadaPage() {
               <thead>
                 <tr className="bg-gray-50 text-gray-700">
                   <th className="px-3 py-2 text-left border-b border-gray-200">Empresa</th>
-                  {[['anterior', 'Ano anterior'], ['pessimista', 'Pessimista'], ['realista', 'Realista'], ['otimista', 'Otimista'], ...(cenario === 'personalizado' && crescimentoTxt.trim() !== '' ? [['personalizado', 'Personalizado']] : [])].map(([k, t]) => (
+                  {[['anterior', 'Ano anterior'], ['pessimista', 'Pessimista'], ['realista', 'Realista'], ['otimista', 'Otimista'], ['meta', 'Meta 10%'], ...(cenario === 'personalizado' && crescimentoTxt.trim() !== '' ? [['personalizado', 'Personalizado']] : [])].map(([k, t]) => (
                     <th key={k} className="px-3 py-2 text-right border-b border-gray-200" colSpan={1}>{t}</th>
                   ))}
                   <th className="px-3 py-2 text-right border-b border-gray-200 bg-amber-50" title="Crescimento da receita, além da inflação, para chegar a 10% de lucro líquido (fixas constantes, variáveis crescem com a venda)">Crescimento após inflação p/ 10% de lucro</th>
@@ -353,7 +354,7 @@ export default function DreProjetadaPage() {
                 {resumo.map((r) => {
                   const colunas: [string, ResumoCenario | undefined][] = [
                     ['anterior', r.anoAnterior],
-                    ...['pessimista', 'realista', 'otimista', 'personalizado']
+                    ...['pessimista', 'realista', 'otimista', 'meta', 'personalizado']
                       .filter((k) => cenario === 'personalizado' || k !== 'personalizado')
                       .map((k) => [k, r.cenarios?.[k]] as [string, ResumoCenario | undefined]),
                   ].filter(([k]) => k !== 'personalizado' || crescimentoTxt.trim() !== '') as [string, ResumoCenario | undefined][];
