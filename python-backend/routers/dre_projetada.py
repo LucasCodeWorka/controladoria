@@ -7,14 +7,15 @@ dre_cache - mesma consulta e mesmo cache da tela de DRE). Cada conta folha vira:
   - variavel (% da receita): percentual sobre a receita LIQUIDA do mes-base,
     aplicado na receita liquida projetada do mes (deducoes, grupo 02, usam a
     receita bruta, pois sao elas que formam a liquida);
-  - fixa: realizado do mes-base x (1 + inflacao).
+  - fixa: realizado do mes-base, sem reajuste (inflacao e crescimento so valem para a receita).
 A classificacao fixa/variavel e a da tela de DRE (plano_contas_dre_tipo_custo);
 o que nao foi classificado cai no padrao de _tipo_padrao.
 
 Cenarios prontos (inflacao = IPCA 12 meses do BCB, editavel na tela):
-  pessimista: igual ao ano anterior (receita +0%, fixas +0%)
-  realista:   ano anterior + inflacao (receita +inflacao, fixas +inflacao)
-  otimista:   ano anterior + inflacao + 5% (receita +inflacao+5%, fixas +inflacao)
+  pessimista: igual ao ano anterior (receita +0%)
+  realista:   receita do ano anterior + inflacao
+  otimista:   receita do ano anterior + inflacao + 5%
+As despesas fixas sempre repetem o valor do ano anterior.
 """
 from fastapi import APIRouter, HTTPException, Query
 from typing import Optional
@@ -105,14 +106,15 @@ def dre_projetada(
         ipca = _ipca_12m()
         infl = ipca["valor"] if inflacao is None else inflacao
 
+        infl_fixas = 0.0  # fixas repetem o ano anterior; inflacao/crescimento so na receita
         if cenario == "pessimista":
-            g_rec, infl_fixas = 0.0, 0.0
+            g_rec = 0.0
         elif cenario == "realista":
-            g_rec, infl_fixas = infl, infl
+            g_rec = infl
         elif cenario == "otimista":
-            g_rec, infl_fixas = infl + ADICIONAL_OTIMISTA, infl
+            g_rec = infl + ADICIONAL_OTIMISTA
         elif cenario == "personalizado":
-            g_rec, infl_fixas = (infl if crescimentoReceita is None else crescimentoReceita), infl
+            g_rec = infl if crescimentoReceita is None else crescimentoReceita
         else:
             raise HTTPException(status_code=400, detail="cenario invalido")
 

@@ -21,9 +21,9 @@ interface RespostaProjecao {
 
 const CENARIOS: { chave: Cenario; titulo: string; descricao: string }[] = [
   { chave: 'pessimista', titulo: 'Pessimista', descricao: 'Igual ao ano anterior' },
-  { chave: 'realista', titulo: 'Realista', descricao: 'Ano anterior + inflação' },
-  { chave: 'otimista', titulo: 'Otimista', descricao: 'Ano anterior + inflação + 5% na receita' },
-  { chave: 'personalizado', titulo: 'Personalizado', descricao: 'Você define a receita e a inflação' },
+  { chave: 'realista', titulo: 'Realista', descricao: 'Receita do ano anterior + inflação' },
+  { chave: 'otimista', titulo: 'Otimista', descricao: 'Receita do ano anterior + inflação + 5%' },
+  { chave: 'personalizado', titulo: 'Personalizado', descricao: 'Você define o crescimento da receita' },
 ];
 
 // Totalizadores calculados pelo backend, na ordem em que aparecem depois de cada grupo.
@@ -172,7 +172,7 @@ export default function DreProjetadaPage() {
               {p && (
                 <p className="text-xs text-gray-400 mt-1">
                   Base: mesmo mês do ano anterior ({p.baseInicio.split('-').reverse().join('/')} a {p.baseFim.split('-').reverse().join('/')}).
-                  Receita por crescimento %; variáveis mantêm o % sobre a receita; fixas sobem pela inflação (fixo/variável da classificação da DRE).
+                  Receita por crescimento %; variáveis mantêm o % sobre a receita; fixas repetem o valor do ano anterior (fixo/variável da classificação da DRE).
                 </p>
               )}
             </div>
@@ -252,7 +252,7 @@ export default function DreProjetadaPage() {
             title="12 meses a partir do primeiro mês"
             className="px-3 py-2 text-sm border border-gray-300 rounded-md bg-gray-50 text-gray-700 cursor-default"
           />
-          <span className="text-gray-500 ml-2">Inflação (% a.a.)</span>
+          <span className="text-gray-500 ml-2">Inflação da receita (% a.a.)</span>
           <input
             value={inflacaoTxt}
             onChange={(e) => setInflacaoTxt(e.target.value)}
@@ -279,7 +279,7 @@ export default function DreProjetadaPage() {
           </button>
           {p && (
             <span className="text-xs text-gray-600">
-              Em uso: receita <b>{p.crescimentoReceita.toFixed(2).replace('.', ',')}%</b> · fixas <b>{p.inflacaoFixas.toFixed(2).replace('.', ',')}%</b>
+              Em uso: receita <b>{p.crescimentoReceita.toFixed(2).replace('.', ',')}%</b>
               {' '}· {p.ipca.fonte}: {p.ipca.valor.toFixed(2).replace('.', ',')}%{p.ipca.data ? ` (${p.ipca.data})` : ''}
             </span>
           )}
@@ -303,7 +303,7 @@ export default function DreProjetadaPage() {
                   Período: {periodos[0]?.label} a {periodos[periodos.length - 1]?.label} · Cenário {CENARIOS.find((c) => c.chave === cenario)?.titulo}
                 </p>
                 <p className="text-xs text-gray-600 mt-1 flex items-center gap-2">
-                  <span className="px-1.5 py-0.5 text-[10px] rounded bg-slate-200 text-slate-700">Fixa</span> ano anterior + inflação
+                  <span className="px-1.5 py-0.5 text-[10px] rounded bg-slate-200 text-slate-700">Fixa</span> mesmo valor do ano anterior
                   <span className="px-1.5 py-0.5 text-[10px] rounded bg-amber-100 text-amber-800">Variável</span> mesmo % sobre a receita
                   <span className="text-gray-400">(etiquetas no último nível da conta)</span>
                 </p>
