@@ -335,6 +335,8 @@ export default function DREPage() {
     Record<string, AuditoriaFornecedorDespesa | 'loading' | 'erro'>
   >({});
   const [celulasAlertadas, setCelulasAlertadas] = useState<Set<string>>(new Set());
+  // Qtde de celulas (conta x mes) com alerta no periodo/filtro consultado
+  const [totalAlertas, setTotalAlertas] = useState<number | null>(null);
   const [compararAnoAnterior, setCompararAnoAnterior] = useState(false);
   const [valoresAnoAnterior, setValoresAnoAnterior] = useState<Record<string, Record<string, number>>>({});
   const [carregandoAnoAnterior, setCarregandoAnoAnterior] = useState(false);
@@ -856,6 +858,7 @@ export default function DREPage() {
         }
       }
       setCelulasAlertadas(expandido);
+      setTotalAlertas(celulas.length);
     } catch (error) {
       console.error('Erro ao buscar alertas de auditoria:', error);
     }
@@ -2354,7 +2357,7 @@ export default function DREPage() {
               </div>
               <button
                 onClick={() => setMostrarApenasComAlerta(!mostrarApenasComAlerta)}
-                title="Mostrar apenas contas com duplicata fora do padrão do fornecedor"
+                title={`Mostrar apenas contas com duplicata fora do padrão do fornecedor${totalAlertas !== null ? ` — ${totalAlertas} célula(s) (conta x mês) com alerta no período/filtro` : ""}`}
                 className={`flex items-center gap-2 px-3 py-2 rounded-md transition-colors ${
                   mostrarApenasComAlerta
                     ? 'bg-blue-600 text-white hover:bg-blue-700'
@@ -2363,6 +2366,11 @@ export default function DREPage() {
               >
                 <HelpCircle className="w-4 h-4" />
                 Só com problema
+                {totalAlertas !== null && (
+                  <span className={`px-1.5 py-0.5 text-xs font-semibold rounded-full ${mostrarApenasComAlerta ? 'bg-white text-blue-700' : totalAlertas > 0 ? 'bg-blue-600 text-white' : 'bg-green-600 text-white'}`}>
+                    {totalAlertas}
+                  </span>
+                )}
               </button>
               <div className="w-px h-6 bg-gray-300 mx-2" />
               <button
