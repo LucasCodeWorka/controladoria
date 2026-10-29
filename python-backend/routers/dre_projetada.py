@@ -217,3 +217,29 @@ def dre_projetada(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Erro ao montar a DRE projetada: {str(e)}")
+
+
+@router.get("/api/dre-projetada/resumo")
+def resumo(
+    inicio: Optional[str] = Query(None),
+    inflacao: Optional[float] = Query(None),
+    crescimentoReceita: Optional[float] = Query(None, description="Se informado, inclui o cenario personalizado"),
+    filtro: str = Query("consolidado"),
+    forcar: bool = Query(False),
+):
+    """Receita liquida e lucro liquido (conta 14) projetados nos 12 meses, em
+    cada cenario, para UM filtro (empresa). A base do ano anterior vem do
+    cache, entao so o primeiro cenario consulta o banco."""
+    cenarios = ["pessimista", "realista", "otimista"] + (["personalizado"] if crescimentoReceita is not None else [])
+    saida, ano_anterior, periodo = {}, None, None
+    for i, cen in enumerate(cenarios):
+        r = dre_projetada(inicio=inicio, cenario=cen, inflacao=inflacao, crescimentoReceita=crescimentoReceita,
+                          filtro=filtro, forcar=forcar and i == 0)
+        def tot(d, c):
+            return float((d.get(c) or {}).get("total", 0) or 0)
+        rec, luc = tot(r["projetado"], "03"), tot(r["projetado"], "14")
+        saida[cen] = {"receitaLiquida": rec, "lucro": luc, "percentual": (luc / rec * 100) if rec else None}
+        if ano_anterior is None:
+            rec_a, luc_a = tot(r["anoAnterior"], "03"), tot(r["anoAnterior"], "14")
+            ano_anterior = {"receitaLiquida": rec_a, "lucro": luc_a, "percentual": (luc_a / rec_a * 100) if rec_a else None}
+    return {"filtro": filtro, "anoAnterior": ano_anterior, "cenarios": saida}

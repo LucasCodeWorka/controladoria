@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Calendar, ChevronDown, ChevronRight, Filter, RefreshCw, TrendingUp } from 'lucide-react';
 import { formatarValor } from '../utils/formatters';
 import { PLANO_CONTAS_DRE_FABRICA, type ContaDRE } from '../dre-fabrica/planoContasDREFabrica';
@@ -54,6 +54,12 @@ function proximoMesISO() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
+interface ResumoCenario { receitaLiquida: number; lucro: number; percentual: number | null }
+interface ResumoEmpresa {
+  filtro: string; nome: string; carregando: boolean; erro?: string;
+  anoAnterior?: ResumoCenario; cenarios?: Record<string, ResumoCenario>;
+}
+
 export default function DreProjetadaPage() {
   const [cenario, setCenario] = useState<Cenario>('realista');
   const [inicio, setInicio] = useState(proximoMesISO());
@@ -67,6 +73,8 @@ export default function DreProjetadaPage() {
   const [comparar, setComparar] = useState(false);
   const [filtroAberto, setFiltroAberto] = useState(false);
   const [abertos, setAbertos] = useState<Set<string>>(new Set());
+  const [resumo, setResumo] = useState<ResumoEmpresa[] | null>(null);
+  const execResumo = useRef(0);
 
   const buscar = useCallback(async (forcar = false) => {
     setCarregando(true);
@@ -88,6 +96,36 @@ export default function DreProjetadaPage() {
       setCarregando(false);
     }
   }, [inicio, cenario, filtro, inflacaoTxt, crescimentoTxt]);
+
+  const buscarResumo = useCallback(async (forcar = false) => {
+    const id = ++execResumo.current;
+    const empresas = [
+      { filtro: 'consolidado', nome: 'CONSOLIDADO (TODAS)' },
+      { filtro: 'fabrica', nome: 'FABRICA' },
+      ...lojas.map((l) => ({ filtro: l.valor, nome: l.label })),
+    ];
+    setResumo(empresas.map((e) => ({ ...e, carregando: true })));
+    const personalizado = cenario === 'personalizado' ? Number(crescimentoTxt.replace(',', '.')) : NaN;
+    for (const e of empresas) {
+      if (id !== execResumo.current) return;
+      let novo: Partial<ResumoEmpresa>;
+      try {
+        const params = new URLSearchParams({ inicio, filtro: e.filtro });
+        const infl = Number(inflacaoTxt.replace(',', '.'));
+        if (inflacaoTxt.trim() !== '' && !Number.isNaN(infl)) params.set('inflacao', String(infl));
+        if (!Number.isNaN(personalizado) && crescimentoTxt.trim() !== '') params.set('crescimentoReceita', String(personalizado));
+        if (forcar) params.set('forcar', 'true');
+        const resp = await fetch(`/api/dre-projetada/resumo?${params.toString()}`, { cache: 'no-store' });
+        const json = await resp.json();
+        if (!resp.ok) throw new Error(json.detail || json.error || 'Erro');
+        novo = { anoAnterior: json.anoAnterior, cenarios: json.cenarios, carregando: false };
+      } catch (err) {
+        novo = { carregando: false, erro: err instanceof Error ? err.message : 'Erro' };
+      }
+      if (id !== execResumo.current) return;
+      setResumo((prev) => prev && prev.map((r) => (r.filtro === e.filtro ? { ...r, ...novo } : r)));
+    }
+  }, [inicio, cenario, inflacaoTxt, crescimentoTxt, lojas]);
 
   useEffect(() => {
     fetch('/api/dre/centros-custo', { cache: 'no-store' })
@@ -268,14 +306,14 @@ export default function DreProjetadaPage() {
             </>
           )}
           <button
-            onClick={() => buscar()}
+            onClick={() => { buscar(); buscarResumo(); }}
             disabled={carregando}
             className="px-5 py-2 text-sm bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors disabled:opacity-50"
           >
             {carregando ? 'Carregando...' : 'Consultar'}
           </button>
           <button
-            onClick={() => buscar(true)}
+            onClick={() => { buscar(true); buscarResumo(true); }}
             disabled={carregando}
             title="Atualizar dados (ignora o cache e busca de novo)"
             className="p-2 text-sm bg-gray-100 text-gray-600 rounded-md hover:bg-gray-200 transition-colors disabled:opacity-50"
@@ -291,6 +329,50 @@ export default function DreProjetadaPage() {
         </div>
         {erro && <div className="mt-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2">{erro}</div>}
       </div>
+
+      {resumo && (
+        <div className="bg-white rounded-xl shadow-lg overflow-hidden border border-gray-200 mb-6">
+          <div className="p-4 border-b-2 bg-gradient-to-r from-green-50 to-green-100 border-green-200">
+            <h2 className="text-lg font-bold text-gray-800">Resumo por empresa - Lucro líquido e % sobre a receita líquida</h2>
+            <p className="text-xs text-gray-600 mt-1">Total dos 12 meses projetados em cada cenário, comparado ao ano anterior.</p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead>
+                <tr className="bg-gray-50 text-gray-700">
+                  <th className="px-3 py-2 text-left border-b border-gray-200">Empresa</th>
+                  {[['anterior', 'Ano anterior'], ['pessimista', 'Pessimista'], ['realista', 'Realista'], ['otimista', 'Otimista'], ...(cenario === 'personalizado' && crescimentoTxt.trim() !== '' ? [['personalizado', 'Personalizado']] : [])].map(([k, t]) => (
+                    <th key={k} className="px-3 py-2 text-right border-b border-gray-200" colSpan={1}>{t}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {resumo.map((r) => {
+                  const colunas: [string, ResumoCenario | undefined][] = [
+                    ['anterior', r.anoAnterior],
+                    ...['pessimista', 'realista', 'otimista', 'personalizado']
+                      .filter((k) => cenario === 'personalizado' || k !== 'personalizado')
+                      .map((k) => [k, r.cenarios?.[k]] as [string, ResumoCenario | undefined]),
+                  ].filter(([k]) => k !== 'personalizado' || crescimentoTxt.trim() !== '') as [string, ResumoCenario | undefined][];
+                  return (
+                    <tr key={r.filtro} className="hover:bg-gray-50">
+                      <td className="px-3 py-2 border-b border-gray-200 font-medium text-gray-800">{r.nome}</td>
+                      {colunas.map(([k, c]) => (
+                        <td key={k} className={`px-3 py-2 border-b border-gray-200 text-right ${k === 'anterior' ? 'bg-gray-100' : ''} ${c && c.lucro < 0 ? 'text-red-600' : ''}`}>
+                          {r.carregando ? <RefreshCw className="w-3.5 h-3.5 animate-spin inline text-gray-400" />
+                            : r.erro ? <span className="text-xs text-red-600" title={r.erro}>erro</span>
+                            : c ? (<><div className="font-semibold">{formatarValor(c.lucro)}</div><div className="text-xs">{c.percentual === null ? '-' : `${c.percentual.toFixed(2).replace('.', ',')}%`}</div></>)
+                            : '-'}
+                        </td>
+                      ))}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {!dados && carregando && (
         <div className="bg-white rounded-lg shadow border border-gray-200 p-8 flex items-center justify-center gap-2 text-gray-600">
