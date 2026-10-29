@@ -1960,13 +1960,13 @@ def _identificar_regra_campanha(
     # explicito do usuario): vale quando a referencia e
     # MISTA (tem_cor_sem_meses_fl=True, ou seja, tem pelo menos uma cor
     # ainda em linha / sem Meses FL convivendo com cores que ja viraram
-    # oportunidade): 30% so quando Meses FL > 24 E giro > 6 - fora isso,
+    # oportunidade): 30% so quando Meses FL > 18 E giro > 6 - fora isso,
     # 0% (nao cai na escada normal abaixo, nem na excecao do giro>=6 com
     # Meses FL>0). Se a referencia INTEIRA ja virou oportunidade (toda cor
     # com Meses FL), nao e mais "mista" - usa a escada normal, mesmo
     # batendo a familia/linha (pedido explicito do usuario).
     if tem_cor_sem_meses_fl:
-        if giro_total is not None and giro_total > 6 and meses_oportunidade is not None and meses_oportunidade > 24:
+        if giro_total is not None and giro_total > 6 and meses_oportunidade is not None and meses_oportunidade > 18:
             return REGRA_KISS_ME_30
         return REGRA_KISS_ME_0
 

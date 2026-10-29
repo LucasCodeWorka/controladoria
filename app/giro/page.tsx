@@ -413,13 +413,13 @@ function identificarRegraCampanha(
   // Regra exclusiva das familias KISS ME / KISS ME PLUS e das linhas
   // Confort/Free/Ideal/Basic Up/Basicos, e so quando a referencia e MISTA
   // (temCorSemMesesFL=true, tem pelo menos uma cor ainda em linha
-  // convivendo com cor em oportunidade): 30% so quando Meses FL > 24 E
+  // convivendo com cor em oportunidade): 30% so quando Meses FL > 18 E
   // giro > 6 - fora isso, 0% (nao cai na escada normal abaixo, nem na
   // excecao do giro>=6 com Meses FL>0). Se a referencia INTEIRA ja virou
   // oportunidade (toda cor com Meses FL), usa a escada normal mesmo
   // batendo a familia/linha.
   if (temCorSemMesesFL) {
-    if (giroTotal !== null && giroTotal > 6 && mesesOportunidade !== null && mesesOportunidade !== undefined && mesesOportunidade > 24) {
+    if (giroTotal !== null && giroTotal > 6 && mesesOportunidade !== null && mesesOportunidade !== undefined && mesesOportunidade > 18) {
       return REGRA_KISS_ME_30;
     }
     return REGRA_KISS_ME_0;
@@ -506,7 +506,7 @@ const DESCRICAO_REGRA_CAMPANHA: Record<number, string> = {
   [REGRA_APOS_12_MESES]: 'Regra 4: Após 12 meses como FL e giro > 6 → 60%',
   [REGRA_APOS_24_MESES]: 'Regra 5: Após 24 meses como FL e giro > 6 → 70%',
   [REGRA_EXCECAO_30_FIXO]: 'Regra 6 (exceção): Giro ≥ 6, Meses FL > 0, sem promoção ativa → 30% fixo',
-  [REGRA_KISS_ME_30]: 'Regra 7 (exceção referência mista): Giro > 6 e Meses FL > 24 → 30%',
+  [REGRA_KISS_ME_30]: 'Regra 7 (exceção referência mista): Giro > 6 e Meses FL > 18 → 30%',
   [REGRA_KISS_ME_0]: 'Regra 8 (exceção referência mista): fora da condição da regra 7 → 0%',
   [REGRA_SEM_MESES_FL]: 'Regra 9: sem Meses FL (nunca virou oportunidade) → sem sugestão',
   [REGRA_SEM_GIRO]: 'Regra 10: sem giro (sem estoque e sem venda) → sem sugestão',
@@ -2900,7 +2900,7 @@ export default function GiroPage() {
                       EM LINHA NAO PRODUZ ou NOVA COLECAO</strong> (com estoque ou venda) junto com produto em
                       <strong>oportunidade</strong>. Outros status (ex: LEVE DEFEITO) não tornam a referência mista. Nesse caso, substituem a escada acima inteira
                       (não se combinam com ela nem com a regra {REGRA_EXCECAO_30_FIXO}): regra {REGRA_KISS_ME_30} —
-                      Giro {'>'} 6 e Meses FL {' > '}24 → 30%; regra {REGRA_KISS_ME_0} — fora dessa condição → 0%
+                      Giro {'>'} 6 e Meses FL {' > '}18 → 30%; regra {REGRA_KISS_ME_0} — fora dessa condição → 0%
                       (sem sugestão de desconto). Sem produto nesses status em linha, a referência não é mista — segue a escada normal.
                     </p>
                     <p className="text-xs text-black mt-2">
