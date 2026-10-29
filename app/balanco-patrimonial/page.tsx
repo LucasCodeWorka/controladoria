@@ -469,7 +469,7 @@ export default function BalancoPatrimonialPage() {
         <>
           <div className="bg-[#fffbeb] border border-amber-200 rounded-md px-4 py-2.5 text-[13px] text-[#b45309]">
             Estrutura em construção: só as linhas já ligadas trazem valor real (hoje: Caixa e Equivalentes de Caixa = saldo bancário
-            atual do Fluxo de Caixa; Contas a Receber = boletos + cartões do Fluxo de Caixa; Estoques = estoque PA das lojas (custo do CMV) e da fábrica (custo C 999 + 10%), posição atual; e Passivo Circulante 2 - Obrigações de Compra de MP. e Serv.) - o resto continua zerado até as consultas serem plugadas aqui.
+            atual do Fluxo de Caixa; Contas a Receber = boletos + cartões do Fluxo de Caixa; Estoques = PA das lojas (custo do CMV), PA da fábrica (custo C 999 + 10%) e MP da fábrica (custo C 2), posição atual; e Passivo Circulante 2 - Obrigações de Compra de MP. e Serv.) - o resto continua zerado até as consultas serem plugadas aqui.
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
             <CardTotal rotulo="Total dos Ativos" valor={totalAtivos} />

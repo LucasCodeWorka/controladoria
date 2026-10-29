@@ -209,6 +209,31 @@ SQL_ESTOQUE_FABRICA_VALORIZADO = """
 """
 
 
+# Estoque MP da FABRICA (cd_empresa -1 no mesmo cache): saldo mais recente de
+# cada materia-prima (produtos 1.000.000 a 4.999.999) da empresa 1, saldo 1, em
+# prd_prdsaldo x custo tabela 'C' cod 2 (f_prd_valor_produto2). Sem valor = 0.
+# prd_prdsaldo e pesada (~20s) e nao tem view de "atualizacao", entao o cache
+# vale por TTL_ESTOQUE_MP_SEG.
+CD_EMPRESA_CACHE_MP = -1
+TTL_ESTOQUE_MP_SEG = 2 * 3600
+
+SQL_ESTOQUE_MP_VALORIZADO = """
+    SELECT SUM(estoque_bruto) AS pecas,
+           SUM(estoque_bruto * COALESCE(vl_unit, 0)) AS valor
+    FROM (
+        SELECT s.estoque_bruto,
+               NULLIF(f_prd_valor_produto2(1, 1, 'C', 2, s.cd_produto, NULL), 0) AS vl_unit
+        FROM (
+            SELECT DISTINCT ON (s.cd_produto) s.cd_produto, s.qt_saldo AS estoque_bruto
+            FROM prd_prdsaldo s
+            WHERE s.cd_empresa = 1 AND s.cd_saldo = 1 AND s.cd_produto > 1000000 AND s.cd_produto < 5000000
+            ORDER BY s.cd_produto, s.dt_saldo DESC
+        ) s
+        WHERE s.estoque_bruto > 0
+    ) x
+"""
+
+
 def _cache_em_dia(filtro_empresas: str, base) -> bool:
     cache = execute_query(
         f"SELECT MAX(dt_base) AS dt, COUNT(*) AS n FROM fcp_balanco_estoque_lojas WHERE {filtro_empresas}", ()
@@ -220,7 +245,8 @@ def _garantir_cache_estoque_lojas() -> None:
     """Recalcula o cache se a view de estoque foi atualizada depois dele."""
     _criar_tabela_estoque_lojas()
     _garantir_cache_estoque_fabrica()
-    filtro = f"cd_empresa <> {CD_EMPRESA_CACHE_FABRICA}"
+    _garantir_cache_estoque_mp()
+    filtro = "cd_empresa > 1"  # lojas (fabrica = 1 e MP = -1 tem linha propria)
     base = (execute_query(SQL_ESTOQUE_LOJAS_DT_BASE, ()) or [{}])[0].get("dt")
     if _cache_em_dia(filtro, base):
         return
@@ -260,6 +286,46 @@ def _garantir_cache_estoque_fabrica() -> None:
         print(f"[BALANCO] Estoque PA da fabrica recalculado em {time.time() - inicio:.1f}s")
 
 
+def _garantir_cache_estoque_mp() -> None:
+    linha = (execute_query(
+        f"SELECT dt_calculado FROM fcp_balanco_estoque_lojas WHERE cd_empresa = {CD_EMPRESA_CACHE_MP}", ()
+    ) or [None])[0]
+    def _fresco(l) -> bool:
+        if not l:
+            return False
+        idade = (execute_query("SELECT EXTRACT(EPOCH FROM (NOW() - %s::timestamptz)) AS s", (l["dt_calculado"],)) or [{"s": 1e9}])[0]["s"]
+        return float(idade) < TTL_ESTOQUE_MP_SEG
+    if _fresco(linha):
+        return
+    with _lock_estoque_lojas:
+        linha = (execute_query(
+            f"SELECT dt_calculado FROM fcp_balanco_estoque_lojas WHERE cd_empresa = {CD_EMPRESA_CACHE_MP}", ()
+        ) or [None])[0]
+        if _fresco(linha):
+            return
+        inicio = time.time()
+        r = (execute_query(SQL_ESTOQUE_MP_VALORIZADO, ()) or [{}])[0]
+        execute_insert(f"DELETE FROM fcp_balanco_estoque_lojas WHERE cd_empresa = {CD_EMPRESA_CACHE_MP}", ())
+        execute_insert(
+            "INSERT INTO fcp_balanco_estoque_lojas (cd_empresa, pecas, valor, dt_base) VALUES (%s,%s,%s,NOW())",
+            (CD_EMPRESA_CACHE_MP, float(r.get("pecas") or 0), round(float(r.get("valor") or 0), 2)),
+        )
+        print(f"[BALANCO] Estoque MP da fabrica recalculado em {time.time() - inicio:.1f}s")
+
+
+def _estoque_mp_fabrica(empresas: Optional[str]) -> float:
+    """Estoque de materia-prima da fabrica: entra se nao ha filtro de empresas
+    ou se a fabrica (empresa 1) esta entre as selecionadas."""
+    if empresas and CD_EMPRESA_CACHE_FABRICA not in _parse_empresas(empresas):
+        return 0.0
+    _criar_tabela_estoque_lojas()
+    _garantir_cache_estoque_mp()
+    rows = execute_query(
+        f"SELECT COALESCE(SUM(valor), 0) AS total FROM fcp_balanco_estoque_lojas WHERE cd_empresa = {CD_EMPRESA_CACHE_MP}", ()
+    ) or [{"total": 0}]
+    return float(rows[0]["total"] or 0)
+
+
 def _estoque_pa_lojas(empresas: Optional[str]) -> float:
     """Valor do estoque PA das lojas (foto atual), das empresas filtradas
     (todas as lojas se nao houver filtro)."""
@@ -267,7 +333,7 @@ def _estoque_pa_lojas(empresas: Optional[str]) -> float:
     lista = [e for e in _parse_empresas(empresas) if e in CCUSTOS_LOJAS]
     if empresas and not lista:
         return 0.0
-    sql = f"SELECT COALESCE(SUM(valor), 0) AS total FROM fcp_balanco_estoque_lojas WHERE cd_empresa <> {CD_EMPRESA_CACHE_FABRICA}"
+    sql = f"SELECT COALESCE(SUM(valor), 0) AS total FROM fcp_balanco_estoque_lojas WHERE cd_empresa > 1"
     params: tuple = ()
     if empresas:
         sql += " AND cd_empresa = ANY(%s)"
@@ -354,14 +420,16 @@ def get_balanco_patrimonial(
         except Exception as e:
             print(f"[BALANCO] Boletos a receber indisponiveis: {e}")
 
-        # AC.3 Estoques = Estoque PA lojas + fabrica (foto atual - nao depende do
+        # AC.3 Estoques = Estoque PA lojas + PA fabrica + MP fabrica (foto atual - nao depende do
         # mes de referencia; filtro de empresas vale).
         try:
             estoque_lojas = _estoque_pa_lojas(empresas)
             estoque_fabrica = _estoque_pa_fabrica(empresas)
-            valores["AC.3"] = estoque_lojas + estoque_fabrica
+            estoque_mp = _estoque_mp_fabrica(empresas)
+            valores["AC.3"] = estoque_lojas + estoque_fabrica + estoque_mp
             valores["AC.3.1"] = estoque_lojas
             valores["AC.3.2"] = estoque_fabrica
+            valores["AC.3.3"] = estoque_mp
         except Exception as e:
             print(f"[BALANCO] Estoque PA das lojas indisponivel: {e}")
 

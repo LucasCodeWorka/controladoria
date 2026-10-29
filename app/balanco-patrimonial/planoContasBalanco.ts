@@ -35,6 +35,7 @@ export const PLANO_ATIVOS: ContaBalanco[] = [
         detalhes: [
           { codigo: 'AC.3.1', nome: 'ESTOQUE PA (LOJAS)' },
           { codigo: 'AC.3.2', nome: 'ESTOQUE PA (FÁBRICA)' },
+          { codigo: 'AC.3.3', nome: 'ESTOQUE MP (FÁBRICA)' },
         ],
       },
     ],
