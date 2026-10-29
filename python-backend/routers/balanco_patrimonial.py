@@ -365,6 +365,68 @@ async def loop_cache_estoque_lojas() -> None:
         await asyncio.sleep(30 * 60)
 
 
+# ── Bens (investimentos e imobilizado) ───────────────────────────────────
+# Lancamento manual por enquanto: fcp_balanco_bens, criada ja com os bens da
+# planilha de patrimonio (valor da planilha, sem depreciacao - balanco
+# gerencial). linha_balanco = conta do plano (ANC.5 Investimentos, ANC.6
+# Imobilizado). NAO depende do filtro de empresas da tela (sao bens de CB
+# Empreendimentos, Cairo Benevides e Pacifico Holding) nem do mes de
+# referencia (foto atual). saldo_devedor fica guardado, mas ainda nao entra no
+# Passivo.
+BENS_INICIAIS = [
+    # (bloco, descricao, tipo, linha_balanco, empresa, valor, saldo_devedor, referencia)
+    ("CB EMPREENDIMENTOS", "JEEP COMPASS LIMITED", "VEICULO", "ANC.6", "CB EMP.", 190000.00, 0, "POL1E53"),
+    ("CB EMPREENDIMENTOS", "HONDA HR-V EX 1.5 16V CVT", "VEICULO", "ANC.6", "CB EMP.", 160000.00, 0, "SBI1C66"),
+    ("CB EMPREENDIMENTOS", "PEUGEOT EXPERT BUSINPK", "VEICULO", "ANC.6", "CB EMP.", 120000.00, 0, "PMW0H05"),
+    ("CB EMPREENDIMENTOS", "CASA MAUA - 208m2 - APTO 2101", "IMOVEL", "ANC.5", "CB EMP.", 4200000.00, 1725156.73, "ENTREGA DEZ 2028"),
+    ("CB EMPREENDIMENTOS", "CASA MAUA 130m2 - APTO 2602", "IMOVEL", "ANC.5", "CB EMP.", 2790000.00, 1093983.77, "ENTREGA DEZ 2028"),
+    ("CB EMPREENDIMENTOS", "CASA MAUA 130m2 - APTO 2702", "IMOVEL", "ANC.5", "CB EMP.", 2790000.00, 1115315.66, "ENTREGA DEZ 2028"),
+    ("CB EMPREENDIMENTOS", "CASA MAUA 130m2 - APTO 2703", "IMOVEL", "ANC.5", "CB EMP.", 2790000.00, 1135347.54, "ENTREGA DEZ 2028"),
+    ("CB EMPREENDIMENTOS", "EDGE", "IMOVEL", "ANC.5", "CB EMP.", 7500000.00, 4548696.74, "ENTREGA DEZ 2026"),
+    ("CB EMPREENDIMENTOS", "BS DESIGN", "IMOVEL", "ANC.6", "CB EMP.", 10000000.00, 0, "46924"),  # usado pela empresa
+    ("CB EMPREENDIMENTOS", "TERRENO BR 116", "IMOVEL", "ANC.5", "CB EMP.", 5000000.00, 1377735.12, "65884"),
+    ("CB EMPREENDIMENTOS", "TERRENO CASTELAO", "IMOVEL", "ANC.6", "CB EMP.", 7500000.00, 0, "27968"),  # futura fabrica
+    ("CAIRO BENEVIDES INDUSTRIA E COMERCIO", "I/BMW X2 XDRIVE20I MSP", "VEICULO", "ANC.6", "LIEBE", 420000.00, 357255.55, "UVA3I35"),
+    ("CAIRO BENEVIDES INDUSTRIA E COMERCIO", "I/BMW X3 30 XDRIVE", "VEICULO", "ANC.6", "LIEBE", 520000.00, 431819.33, "UUU6G64"),
+    ("PACIFICO HOLDING", "SOLAR PRACA", "IMOVEL", "ANC.5", "CAIRO EIRELLI", 10500000.00, 0, ""),
+]
+
+
+def _criar_tabela_bens():
+    execute_insert("""
+        CREATE TABLE IF NOT EXISTS fcp_balanco_bens (
+            id SERIAL PRIMARY KEY,
+            bloco TEXT NOT NULL,
+            descricao TEXT NOT NULL,
+            tipo TEXT NOT NULL,
+            linha_balanco TEXT NOT NULL,
+            empresa TEXT,
+            valor NUMERIC(16, 2) NOT NULL,
+            saldo_devedor NUMERIC(16, 2) NOT NULL DEFAULT 0,
+            referencia TEXT,
+            ativo BOOLEAN NOT NULL DEFAULT TRUE,
+            dt_atualizacao TIMESTAMP DEFAULT NOW()
+        )
+    """, ())
+    if not (execute_query("SELECT 1 FROM fcp_balanco_bens LIMIT 1", ()) or []):
+        valores_sql = ",".join(["(%s,%s,%s,%s,%s,%s,%s,%s)"] * len(BENS_INICIAIS))
+        params = [p for b in BENS_INICIAIS for p in b]
+        execute_insert(
+            "INSERT INTO fcp_balanco_bens (bloco, descricao, tipo, linha_balanco, empresa, valor, saldo_devedor, referencia) "
+            f"VALUES {valores_sql}",
+            tuple(params),
+        )
+
+
+def _total_bens_por_linha() -> dict:
+    """{'ANC.5': total, 'ANC.6': total} dos bens ativos."""
+    _criar_tabela_bens()
+    rows = execute_query(
+        "SELECT linha_balanco, COALESCE(SUM(valor), 0) AS total FROM fcp_balanco_bens WHERE ativo GROUP BY linha_balanco", ()
+    ) or []
+    return {r["linha_balanco"]: float(r["total"]) for r in rows}
+
+
 @router.get("/api/balanco-patrimonial/dados")
 def get_balanco_patrimonial(
     mesReferencia: str = Query(..., description="Mes de referencia YYYY-MM"),
@@ -432,6 +494,13 @@ def get_balanco_patrimonial(
             valores["AC.3.3"] = estoque_mp
         except Exception as e:
             print(f"[BALANCO] Estoque PA das lojas indisponivel: {e}")
+
+        # ANC.5 Investimentos e ANC.6 Imobilizado = bens cadastrados (fixos).
+        try:
+            for conta, total in _total_bens_por_linha().items():
+                valores[conta] = total
+        except Exception as e:
+            print(f"[BALANCO] Bens indisponiveis: {e}")
 
         return {"valores": valores, "mesReferencia": mesReferencia}
     except HTTPException:
