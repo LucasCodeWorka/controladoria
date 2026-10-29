@@ -266,6 +266,24 @@ function CardTotal({ rotulo, valor, nota }: { rotulo: string; valor: number; not
   );
 }
 
+type Status = 'ok' | 'atencao' | 'ruim' | 'neutro';
+
+const COR_STATUS: Record<Status, string> = { ok: 'text-[#15803d]', atencao: 'text-[#b45309]', ruim: 'text-[#b91c1c]', neutro: 'text-[#1d1d1d]' };
+const BORDA_STATUS: Record<Status, string> = { ok: 'border-l-[#15803d]', atencao: 'border-l-[#b45309]', ruim: 'border-l-[#b91c1c]', neutro: 'border-l-[#d1d5db]' };
+
+function CardIndicador({ rotulo, valor, meta, detalhe, status }: { rotulo: string; valor: string; meta: string; detalhe: string; status: Status }) {
+  return (
+    <div className={`bg-white border border-[#e5e7eb] border-l-4 ${BORDA_STATUS[status]} rounded-lg px-5 py-4 shadow-sm`}>
+      <div className="text-[13px] font-semibold text-[#4b5563]">{rotulo}</div>
+      <div className={`mt-1 text-[28px] leading-tight font-bold [font-variant-numeric:tabular-nums] ${COR_STATUS[status]}`}>{valor}</div>
+      <div className="mt-1 text-xs font-semibold text-[#4b5563]">Meta: {meta}</div>
+      <div className="text-xs text-[#4b5563]">{detalhe}</div>
+    </div>
+  );
+}
+
+const fmtIndice = (v: number) => v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
 export default function BalancoPatrimonialPage() {
   const [mesReferencia, setMesReferencia] = useState(primeiroDiaMesAtual());
   const [empresasDisponiveis, setEmpresasDisponiveis] = useState<EmpresaOpcao[]>([]);
@@ -285,6 +303,7 @@ export default function BalancoPatrimonialPage() {
   const [valoresAtivos, setValoresAtivos] = useState<Record<string, number>>(() => valoresZerados(PLANO_ATIVOS));
   const [valoresPassivo, setValoresPassivo] = useState<Record<string, number>>(() => valoresZerados(PLANO_PASSIVO));
   const [carregando, setCarregando] = useState(false);
+  const [indicadoresDre, setIndicadoresDre] = useState<{ lucroLiquido12m: number; ebitda12m: number } | null>(null);
 
   function alternarOrdenacao(campo: Campo) {
     setOrdenacao((o) => (o?.campo !== campo ? { campo, dir: 'asc' } : o.dir === 'asc' ? { campo, dir: 'desc' } : null));
@@ -360,6 +379,7 @@ export default function BalancoPatrimonialPage() {
     setConsultaExecutada(true);
     setCarregando(true);
     setErro(null);
+    setIndicadoresDre(null);
     // Reseta pro zerado antes de aplicar o que a API devolver - linhas sem
     // consulta ligada ainda ficam em 0.
     setValoresAtivos(valoresZerados(PLANO_ATIVOS));
@@ -376,6 +396,11 @@ export default function BalancoPatrimonialPage() {
       if (totalEmpresas > 0 && empresas.size < totalEmpresas) {
         params.set('empresas', Array.from(empresas).join(','));
       }
+      // Lucro e EBITDA dos ultimos 12 meses (DRE) - nao trava o balanco se falhar.
+      fetch(`/api/balanco-patrimonial/indicadores-dre?mesReferencia=${mes}`, { cache: 'no-store' })
+        .then((r) => r.json())
+        .then((d) => { if (typeof d.lucroLiquido12m === 'number') setIndicadoresDre({ lucroLiquido12m: d.lucroLiquido12m, ebitda12m: d.ebitda12m }); })
+        .catch((e) => console.error('Erro ao buscar indicadores da DRE:', e));
       const response = await fetch(`/api/balanco-patrimonial/dados?${params.toString()}`, { cache: 'no-store' });
       const data = await response.json();
       if (!response.ok || data.error || !data.valores) throw new Error(data.error || data.detail || 'Erro ao buscar o balanço patrimonial');
@@ -391,6 +416,25 @@ export default function BalancoPatrimonialPage() {
 
   const totalAtivos = totalGeral(PLANO_ATIVOS, valoresAtivos);
   const totalPassivo = totalGeral(PLANO_PASSIVO, valoresPassivo);
+
+  // Indicadores. Passivo vem negativo nas contas - aqui entra em valor absoluto.
+  const ativoCirculante = totalGrupo(PLANO_ATIVOS[0], valoresAtivos);
+  const passivoCirculante = Math.abs(totalGrupo(PLANO_PASSIVO[0], valoresPassivo));
+  const caixa = valoresAtivos['AC.1'] ?? 0;
+  const estoques = valoresAtivos['AC.3'] ?? 0;
+  const patrimonioLiquido = totalAtivos - Math.abs(totalPassivo);
+  // Divida = emprestimos (PC.3) + fornecedores (PC.1 aluguéis/fornecedores e PC.2 MP e servicos), menos o caixa.
+  const dividaBruta = Math.abs((valoresPassivo['PC.1'] ?? 0) + (valoresPassivo['PC.2'] ?? 0) + (valoresPassivo['PC.3'] ?? 0));
+  const dividaLiquida = dividaBruta - caixa;
+
+  const liqImediata = passivoCirculante > 0 ? caixa / passivoCirculante : null;
+  const liqSeca = passivoCirculante > 0 ? (ativoCirculante - estoques) / passivoCirculante : null;
+  const liqCorrente = passivoCirculante > 0 ? ativoCirculante / passivoCirculante : null;
+  const roe = indicadoresDre && patrimonioLiquido > 0 ? (indicadoresDre.lucroLiquido12m / patrimonioLiquido) * 100 : null;
+  const dividaEbitda = indicadoresDre && indicadoresDre.ebitda12m > 0 ? dividaLiquida / indicadoresDre.ebitda12m : null;
+
+  // "Quanto mais proximo de 1 melhor": >= 0,8 ok, >= 0,5 atencao.
+  const statusProximoDe1 = (v: number | null): Status => (v === null ? 'neutro' : v >= 0.8 ? 'ok' : v >= 0.5 ? 'atencao' : 'ruim');
 
   return (
     <div className="p-4 md:p-6 space-y-4 bg-[#f5f5f5] min-h-full text-[#1d1d1d]">
@@ -484,6 +528,43 @@ export default function BalancoPatrimonialPage() {
             <CardTotal rotulo="Total dos Ativos" valor={totalAtivos} />
             <CardTotal rotulo="Total do Passivo" valor={totalPassivo} />
             <CardTotal rotulo="Ativos − Passivo" valor={totalAtivos - Math.abs(totalPassivo)} nota="Passivo aparece negativo nas contas; aqui entra em valor absoluto" />
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4">
+            <CardIndicador
+              rotulo="Liquidez imediata"
+              valor={liqImediata === null ? '-' : fmtIndice(liqImediata)}
+              meta="quanto mais perto de 1, melhor"
+              detalhe="Caixa ÷ Passivo Circulante"
+              status={statusProximoDe1(liqImediata)}
+            />
+            <CardIndicador
+              rotulo="Liquidez seca"
+              valor={liqSeca === null ? '-' : fmtIndice(liqSeca)}
+              meta="quanto mais perto de 1, melhor"
+              detalhe="(Ativo Circ. − Estoques) ÷ Passivo Circ."
+              status={statusProximoDe1(liqSeca)}
+            />
+            <CardIndicador
+              rotulo="Liquidez corrente"
+              valor={liqCorrente === null ? '-' : fmtIndice(liqCorrente)}
+              meta="sempre acima de 1"
+              detalhe="Ativo Circulante ÷ Passivo Circulante"
+              status={liqCorrente === null ? 'neutro' : liqCorrente >= 1 ? 'ok' : liqCorrente >= 0.9 ? 'atencao' : 'ruim'}
+            />
+            <CardIndicador
+              rotulo="ROE"
+              valor={roe === null ? (indicadoresDre ? '-' : 'Carregando...') : `${fmtIndice(roe)}%`}
+              meta="lucro 12 meses ÷ patrimônio líquido"
+              detalhe={indicadoresDre ? `Lucro 12m ${formatarValor(indicadoresDre.lucroLiquido12m)}` : 'Lucro líquido da DRE consolidada'}
+              status="neutro"
+            />
+            <CardIndicador
+              rotulo="Dívida líquida ÷ EBITDA"
+              valor={dividaEbitda === null ? (indicadoresDre ? 'n/d' : 'Carregando...') : `${fmtIndice(dividaEbitda)}x`}
+              meta="não pode passar de 3"
+              detalhe={indicadoresDre ? `Dív. líq. ${formatarValor(dividaLiquida)} · EBITDA 12m ${formatarValor(indicadoresDre.ebitda12m)}` : 'Fornecedores + empréstimos − caixa'}
+              status={dividaEbitda === null ? (indicadoresDre ? 'ruim' : 'neutro') : dividaEbitda <= 2.5 ? 'ok' : dividaEbitda <= 3 ? 'atencao' : 'ruim'}
+            />
           </div>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
             <TabelaBalanco

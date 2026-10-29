@@ -19,6 +19,8 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import threading
 import time
+import re
+import dre_cache
 from database import execute_query, execute_insert
 from routers.dre import CCUSTOS_LOJAS, FILTRO_DUPLICATAS_EXCLUIDAS_SQL, PARAMS_DUPLICATAS_EXCLUIDAS, CCUSTOS_FABRICA, CCUSTOS_ECOMMERCE, CCUSTO_ECOMMERCE_AGRUPADO
 from routers.cmv_detalhado import CD_EMPRESA_FABRICA
@@ -426,6 +428,41 @@ def _total_bens_por_linha() -> dict:
         "SELECT linha_balanco, COALESCE(SUM(valor), 0) AS total FROM fcp_balanco_bens WHERE ativo GROUP BY linha_balanco", ()
     ) or []
     return {r["linha_balanco"]: float(r["total"]) for r in rows}
+
+
+@router.get("/api/balanco-patrimonial/indicadores-dre")
+def get_indicadores_dre(mesReferencia: str = Query(..., description="Mes de referencia YYYY-MM")):
+    """Lucro liquido (conta 14) e EBITDA (conta 09) da DRE consolidada nos 12
+    meses que terminam no mes de referencia, lidos do mesmo cache da tela de
+    DRE. Alimenta ROE e Divida liquida / EBITDA."""
+    try:
+        from routers import dre as dre_mod
+        ano, mes = (int(x) for x in mesReferencia.split("-"))
+        if not 1 <= mes <= 12:
+            raise ValueError
+    except ValueError:
+        raise HTTPException(status_code=400, detail="mesReferencia deve ser YYYY-MM")
+    try:
+        ini_ano, ini_mes = (ano - 1, mes + 1) if mes < 12 else (ano, 1)
+        ini = f"{ini_ano}-{ini_mes:02d}-01"
+        prox = date(ano + (mes == 12), mes % 12 + 1, 1)
+        fim = (prox - timedelta(days=1)).isoformat()
+        dados = dre_cache.obter(
+            "analitica", ini, fim, "consolidado", False,
+            lambda: dre_mod._calcular_valores_unificada(ini, fim, "consolidado", campo_data_despesa="dt_emissao"),
+        )
+        valores = dados.get("valores") or {}
+
+        def soma_12m(codigo):
+            return sum(float(v or 0) for k, v in (valores.get(codigo) or {}).items() if re.fullmatch(r"\d{4}-\d{2}", k))
+
+        return {"inicio": ini, "fim": fim, "lucroLiquido12m": soma_12m("14"), "ebitda12m": soma_12m("09")}
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/api/balanco-patrimonial/dados")
