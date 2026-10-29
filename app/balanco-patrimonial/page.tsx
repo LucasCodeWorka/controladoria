@@ -483,7 +483,7 @@ export default function BalancoPatrimonialPage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
             <CardTotal rotulo="Total dos Ativos" valor={totalAtivos} />
             <CardTotal rotulo="Total do Passivo" valor={totalPassivo} />
-            <CardTotal rotulo="Ativos − Passivo" valor={totalAtivos - totalPassivo} nota="Diferença entre os dois totais" />
+            <CardTotal rotulo="Ativos − Passivo" valor={totalAtivos - Math.abs(totalPassivo)} nota="Passivo aparece negativo nas contas; aqui entra em valor absoluto" />
           </div>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
             <TabelaBalanco
