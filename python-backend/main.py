@@ -67,6 +67,9 @@ async def startup_event():
     # periodos usados na tela pra abrir na hora em qualquer computador (ver
     # dre_cache.py).
     asyncio.create_task(dre_cache.loop_agendador())
+    # Cache do estoque PA das lojas (balanco patrimonial) - valorizar o estoque
+    # leva dezenas de segundos, entao fica pronto antes da tela pedir.
+    asyncio.create_task(balanco_patrimonial.loop_cache_estoque_lojas())
 
 
 @app.on_event("shutdown")

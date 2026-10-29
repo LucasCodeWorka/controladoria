@@ -15,8 +15,11 @@ do anexo/modelo da tela.
 from fastapi import APIRouter, HTTPException, Query
 from typing import Optional
 from datetime import date, timedelta
+import asyncio
+import threading
+import time
 from database import execute_query, execute_insert
-from routers.dre import FILTRO_DUPLICATAS_EXCLUIDAS_SQL, PARAMS_DUPLICATAS_EXCLUIDAS, CCUSTOS_FABRICA, CCUSTOS_ECOMMERCE, CCUSTO_ECOMMERCE_AGRUPADO
+from routers.dre import CCUSTOS_LOJAS, FILTRO_DUPLICATAS_EXCLUIDAS_SQL, PARAMS_DUPLICATAS_EXCLUIDAS, CCUSTOS_FABRICA, CCUSTOS_ECOMMERCE, CCUSTO_ECOMMERCE_AGRUPADO
 from routers.cmv_detalhado import CD_EMPRESA_FABRICA
 from routers.fluxo_caixa import _obter_saldos_bancarios, _filtros_boleto, _filtros_cartao, _parse_empresas, _criar_tabelas_fluxo_caixa
 
@@ -136,6 +139,109 @@ def _somar_cartoes_a_receber(data_inicio: str, data_fim: str, empresas: Optional
     return float(rows[0]["total"] or 0) if rows else 0.0
 
 
+# ── Estoque PA das lojas (foto atual) ─────────────────────────────────────
+# Estoque de mv_pcp_estoque_atual_lojas (posicao mais recente de cada
+# empresa x produto) valorizado com o MESMO custo unitario do CMV das lojas
+# (vr_cmv_lojas_v2): tabela 'P' cod 1 pras marcas 0001/0002/0009, 'C' cod 2
+# pras demais, R$ 21,90 se o produto nao tem valor, x0,7 na Maraponga (2) e
+# x0,8 nas outras. Diferenca pro CMV: aqui o valor e o ATUAL do produto (nao
+# o da data da venda). Estoque negativo vale 0. Empresas = lojas da DRE
+# (CCUSTOS_LOJAS, inclui o e-commerce 120) - 100/110/999 sao deposito/CD, nao
+# loja, e ficam de fora.
+# Valorizar os ~50 mil itens leva dezenas de segundos (funcao de valor por
+# linha), entao o resultado por empresa fica em cache no banco e so e refeito
+# quando a materialized view foi atualizada depois do ultimo calculo.
+_lock_estoque_lojas = threading.Lock()
+
+SQL_ESTOQUE_LOJAS_DT_BASE = "SELECT MAX(dt_atualizacao) AS dt FROM mv_pcp_estoque_atual_lojas"
+
+SQL_ESTOQUE_LOJAS_VALORIZADO = """
+    WITH base AS (
+        SELECT e.cd_empresa, e.cd_produto, e.estoque_bruto,
+               btrim(pc.cd_classificacao::text) AS idmarca
+        FROM mv_pcp_estoque_atual_lojas e
+        LEFT JOIN prd_produtoclas pc ON pc.cd_produto = e.cd_produto AND pc.cd_tipoclas = 20
+        WHERE e.estoque_bruto > 0 AND e.cd_empresa = ANY(%s)
+    ),
+    com_valor AS (
+        SELECT b.*,
+            CASE WHEN b.idmarca = ANY (ARRAY['0001','0002','0009'])
+                 THEN COALESCE(NULLIF(f_prd_valor_produto2(1,1,'P',1,b.cd_produto,NULL),0), 21.9)
+                 ELSE COALESCE(NULLIF(f_prd_valor_produto2(1,1,'C',2,b.cd_produto,NULL),0), 21.9)
+            END AS vl_unit
+        FROM base b
+    )
+    SELECT cd_empresa, SUM(estoque_bruto) AS pecas,
+           SUM(estoque_bruto * vl_unit * CASE WHEN cd_empresa = 2 THEN 0.7 ELSE 0.8 END) AS valor
+    FROM com_valor GROUP BY cd_empresa
+"""
+
+
+def _criar_tabela_estoque_lojas():
+    execute_insert("""
+        CREATE TABLE IF NOT EXISTS fcp_balanco_estoque_lojas (
+            cd_empresa INTEGER PRIMARY KEY,
+            pecas NUMERIC(14, 2) NOT NULL,
+            valor NUMERIC(16, 2) NOT NULL,
+            dt_base TIMESTAMPTZ NOT NULL,
+            dt_calculado TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """, ())
+
+
+def _garantir_cache_estoque_lojas() -> None:
+    """Recalcula o cache se a view de estoque foi atualizada depois dele."""
+    _criar_tabela_estoque_lojas()
+    base = (execute_query(SQL_ESTOQUE_LOJAS_DT_BASE, ()) or [{}])[0].get("dt")
+    cache = execute_query("SELECT MAX(dt_base) AS dt, COUNT(*) AS n FROM fcp_balanco_estoque_lojas", ()) or [{}]
+    if base is not None and cache[0].get("n") and cache[0].get("dt") == base:
+        return
+    with _lock_estoque_lojas:
+        cache = execute_query("SELECT MAX(dt_base) AS dt, COUNT(*) AS n FROM fcp_balanco_estoque_lojas", ()) or [{}]
+        if base is not None and cache[0].get("n") and cache[0].get("dt") == base:
+            return  # outra requisicao acabou de calcular
+        inicio = time.time()
+        rows = execute_query(SQL_ESTOQUE_LOJAS_VALORIZADO, (list(CCUSTOS_LOJAS.keys()),)) or []
+        if base is None:
+            return
+        execute_insert("DELETE FROM fcp_balanco_estoque_lojas", ())
+        if rows:
+            valores_sql = ",".join(["(%s,%s,%s,%s)"] * len(rows))
+            params = [p for r in rows for p in (r["cd_empresa"], float(r["pecas"]), round(float(r["valor"]), 2), base)]
+            execute_insert(
+                f"INSERT INTO fcp_balanco_estoque_lojas (cd_empresa, pecas, valor, dt_base) VALUES {valores_sql}",
+                tuple(params),
+            )
+        print(f"[BALANCO] Estoque PA das lojas recalculado: {len(rows)} empresa(s) em {time.time() - inicio:.1f}s")
+
+
+def _estoque_pa_lojas(empresas: Optional[str]) -> float:
+    """Valor do estoque PA das lojas (foto atual), das empresas filtradas
+    (todas as lojas se nao houver filtro)."""
+    _garantir_cache_estoque_lojas()
+    lista = [e for e in _parse_empresas(empresas) if e in CCUSTOS_LOJAS]
+    if empresas and not lista:
+        return 0.0
+    sql = "SELECT COALESCE(SUM(valor), 0) AS total FROM fcp_balanco_estoque_lojas"
+    params: tuple = ()
+    if empresas:
+        sql += " WHERE cd_empresa = ANY(%s)"
+        params = (lista,)
+    return float((execute_query(sql, params) or [{"total": 0}])[0]["total"] or 0)
+
+
+async def loop_cache_estoque_lojas() -> None:
+    """Mantem o cache pronto em background (startup em main.py), pra tela
+    nao esperar o calculo."""
+    await asyncio.sleep(45)
+    while True:
+        try:
+            await asyncio.to_thread(_garantir_cache_estoque_lojas)
+        except Exception as e:
+            print(f"[BALANCO] Erro ao atualizar cache do estoque das lojas: {e}")
+        await asyncio.sleep(30 * 60)
+
+
 @router.get("/api/balanco-patrimonial/dados")
 def get_balanco_patrimonial(
     mesReferencia: str = Query(..., description="Mes de referencia YYYY-MM"),
@@ -190,6 +296,15 @@ def get_balanco_patrimonial(
             valores["AC.2.2"] = cartoes
         except Exception as e:
             print(f"[BALANCO] Boletos a receber indisponiveis: {e}")
+
+        # AC.3 Estoques = Estoque PA (hoje so lojas, foto atual - nao depende do
+        # mes de referencia; filtro de empresas vale).
+        try:
+            estoque_pa = _estoque_pa_lojas(empresas)
+            valores["AC.3"] = estoque_pa
+            valores["AC.3.1"] = estoque_pa
+        except Exception as e:
+            print(f"[BALANCO] Estoque PA das lojas indisponivel: {e}")
 
         return {"valores": valores, "mesReferencia": mesReferencia}
     except HTTPException:

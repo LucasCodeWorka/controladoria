@@ -28,7 +28,12 @@ export const PLANO_ATIVOS: ContaBalanco[] = [
           { codigo: 'AC.2.2', nome: 'CARTÕES' },
         ],
       },
-      { codigo: 'AC.3', nome: '3 - ESTOQUES', nivel: 2 },
+      {
+        codigo: 'AC.3',
+        nome: '3 - ESTOQUES',
+        nivel: 2,
+        detalhes: [{ codigo: 'AC.3.1', nome: 'ESTOQUE PA (LOJAS)' }],
+      },
     ],
   },
   {
