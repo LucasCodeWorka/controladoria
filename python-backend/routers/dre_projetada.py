@@ -257,12 +257,16 @@ def resumo(
     r1, l1, _ = pontos(100.0)
     m = meta / 100
     den = (l1 - l0) - m * (r1 - r0)  # variacao do (lucro - meta x receita) a cada +100%
+    necessario, receita_necessaria = None, None  # None = nao atinge so com venda
     if r0 > 0 and l0 >= m * r0:
-        necessario = 0.0
-    elif den <= 0:
-        necessario = None  # nao atinge so com venda
-    else:
+        g_total = 0.0
+    elif den > 0:
         g_total = 100.0 * (m * r0 - l0) / den  # crescimento total sobre o ano anterior
+    else:
+        g_total = None
+    if g_total is not None:
         # o crescimento pedido vem DEPOIS da inflacao: (1+inflacao) x (1+x) = 1+g_total
         necessario = max(0.0, ((1 + g_total / 100) / (1 + infl_uso / 100) - 1) * 100)
-    return {"filtro": filtro, "anoAnterior": ano_anterior, "cenarios": saida, "crescimentoNecessario": necessario, "meta": meta}
+        g_efetivo = max(g_total, infl_uso)  # a inflacao ja esta na receita projetada
+        receita_necessaria = r0 + (r1 - r0) * g_efetivo / 100
+    return {"filtro": filtro, "anoAnterior": ano_anterior, "cenarios": saida, "crescimentoNecessario": necessario, "receitaNecessaria": receita_necessaria, "meta": meta}

@@ -57,7 +57,7 @@ function proximoMesISO() {
 interface ResumoCenario { receitaLiquida: number; lucro: number; percentual: number | null }
 interface ResumoEmpresa {
   filtro: string; nome: string; carregando: boolean; erro?: string;
-  anoAnterior?: ResumoCenario; cenarios?: Record<string, ResumoCenario>; crescimentoNecessario?: number | null;
+  anoAnterior?: ResumoCenario; cenarios?: Record<string, ResumoCenario>; crescimentoNecessario?: number | null; receitaNecessaria?: number | null;
 }
 
 export default function DreProjetadaPage() {
@@ -118,7 +118,7 @@ export default function DreProjetadaPage() {
         const resp = await fetch(`/api/dre-projetada/resumo?${params.toString()}`, { cache: 'no-store' });
         const json = await resp.json();
         if (!resp.ok) throw new Error(json.detail || json.error || 'Erro');
-        novo = { anoAnterior: json.anoAnterior, cenarios: json.cenarios, crescimentoNecessario: json.crescimentoNecessario, carregando: false };
+        novo = { anoAnterior: json.anoAnterior, cenarios: json.cenarios, crescimentoNecessario: json.crescimentoNecessario, receitaNecessaria: json.receitaNecessaria, carregando: false };
       } catch (err) {
         novo = { carregando: false, erro: err instanceof Error ? err.message : 'Erro' };
       }
@@ -345,6 +345,8 @@ export default function DreProjetadaPage() {
                     <th key={k} className="px-3 py-2 text-right border-b border-gray-200" colSpan={1}>{t}</th>
                   ))}
                   <th className="px-3 py-2 text-right border-b border-gray-200 bg-amber-50" title="Crescimento da receita, além da inflação, para chegar a 10% de lucro líquido (fixas constantes, variáveis crescem com a venda)">Crescimento após inflação p/ 10% de lucro</th>
+                  <th className="px-3 py-2 text-right border-b border-gray-200 bg-amber-50" title="Receita líquida dos 12 meses necessária para 10% de lucro (já com a inflação)">Receita líquida necessária (12 meses)</th>
+                  <th className="px-3 py-2 text-right border-b border-gray-200 bg-amber-50" title="Receita líquida necessária dividida por 12">Média mensal necessária</th>
                 </tr>
               </thead>
               <tbody>
@@ -374,6 +376,13 @@ export default function DreProjetadaPage() {
                           : r.crescimentoNecessario === 0 ? <span className="text-green-700">0% (já tem)</span>
                           : `+${r.crescimentoNecessario.toFixed(2).replace('.', ',')}%`}
                       </td>
+                      {[1, 12].map((div) => (
+                        <td key={div} className="px-3 py-2 border-b border-gray-200 text-right bg-amber-50">
+                          {r.carregando ? <RefreshCw className="w-3.5 h-3.5 animate-spin inline text-gray-400" />
+                            : r.receitaNecessaria == null ? '-'
+                            : formatarValor(r.receitaNecessaria / div)}
+                        </td>
+                      ))}
                     </tr>
                   );
                 })}
