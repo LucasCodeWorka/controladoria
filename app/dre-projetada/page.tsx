@@ -89,8 +89,6 @@ export default function DreProjetadaPage() {
     }
   }, [inicio, cenario, filtro, inflacaoTxt, crescimentoTxt]);
 
-  useEffect(() => { buscar(); }, [buscar]);
-
   useEffect(() => {
     fetch('/api/dre/centros-custo', { cache: 'no-store' })
       .then((r) => r.json())
@@ -270,6 +268,13 @@ export default function DreProjetadaPage() {
             </>
           )}
           <button
+            onClick={() => buscar()}
+            disabled={carregando}
+            className="px-5 py-2 text-sm bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors disabled:opacity-50"
+          >
+            {carregando ? 'Carregando...' : 'Consultar'}
+          </button>
+          <button
             onClick={() => buscar(true)}
             disabled={carregando}
             title="Atualizar dados (ignora o cache e busca de novo)"
@@ -290,6 +295,12 @@ export default function DreProjetadaPage() {
       {!dados && carregando && (
         <div className="bg-white rounded-lg shadow border border-gray-200 p-8 flex items-center justify-center gap-2 text-gray-600">
           <RefreshCw className="w-6 h-6 animate-spin text-green-600" /> Calculando a base do ano anterior…
+        </div>
+      )}
+
+      {!dados && !carregando && !erro && (
+        <div className="bg-white rounded-lg shadow border border-gray-200 p-8 text-center text-gray-500">
+          Escolha o cenário e o período e clique em Consultar para carregar a DRE projetada.
         </div>
       )}
 
