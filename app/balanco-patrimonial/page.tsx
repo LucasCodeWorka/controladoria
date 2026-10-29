@@ -36,6 +36,7 @@ function valoresZerados(plano: ContaBalanco[]): Record<string, number> {
   for (const grupo of plano) {
     for (const filho of grupo.filhos || []) {
       valores[filho.codigo] = 0;
+      for (const d of filho.detalhes || []) valores[d.codigo] = 0;
     }
   }
   return valores;
@@ -45,7 +46,9 @@ function valoresZerados(plano: ContaBalanco[]): Record<string, number> {
 // filtra so os codigos que pertencem a este plano especifico antes de
 // aplicar por cima dos valores zerados.
 function filtrarPorPlano(valoresApi: Record<string, number>, plano: ContaBalanco[]): Record<string, number> {
-  const codigosDoPlano = new Set(plano.flatMap((grupo) => (grupo.filhos || []).map((f) => f.codigo)));
+  const codigosDoPlano = new Set(
+    plano.flatMap((grupo) => (grupo.filhos || []).flatMap((f) => [f.codigo, ...(f.detalhes || []).map((d) => d.codigo)]))
+  );
   const filtrado: Record<string, number> = {};
   for (const [codigo, valor] of Object.entries(valoresApi)) {
     if (codigosDoPlano.has(codigo)) filtrado[codigo] = valor;
@@ -182,18 +185,44 @@ function TabelaBalanco({ titulo, plano, valores, mostrarPercentual, contasExpand
                 {expandido &&
                   (grupo.filhos || []).map((conta) => {
                     const valor = valores[conta.codigo] ?? 0;
+                    const temDetalhes = !!conta.detalhes?.length;
+                    const detalhesAbertos = temDetalhes && contasExpandidas.has(conta.codigo);
                     return (
-                      <tr key={conta.codigo} className="group">
-                        <td className="px-3 py-2 pl-10 font-medium group-hover:bg-[#f5ecef] border-b border-[#e5e7eb]">{conta.nome}</td>
-                        <td className={`px-3 py-2 text-right whitespace-nowrap font-medium group-hover:bg-[#f5ecef] border-b border-[#e5e7eb] ${corValor(valor)}`}>
-                          {formatarValor(valor)}
-                        </td>
-                        {mostrarPercentual && (
-                          <td className="px-3 py-2 text-right whitespace-nowrap font-medium group-hover:bg-[#f5ecef] border-b border-[#e5e7eb]">
-                            {formatarPercentual(valor, totalDoGrupo)}
+                      <React.Fragment key={conta.codigo}>
+                        <tr className={`group ${temDetalhes ? 'cursor-pointer' : ''}`} onClick={temDetalhes ? () => toggleExpansao(conta.codigo) : undefined}>
+                          <td className="px-3 py-2 pl-10 font-medium group-hover:bg-[#f5ecef] border-b border-[#e5e7eb]">
+                            <div className="flex items-center gap-2">
+                              {temDetalhes && (detalhesAbertos ? <ChevronDown className="w-4 h-4 text-[#8e5e68]" /> : <ChevronRight className="w-4 h-4 text-[#8e5e68]" />)}
+                              {conta.nome}
+                            </div>
                           </td>
-                        )}
-                      </tr>
+                          <td className={`px-3 py-2 text-right whitespace-nowrap font-medium group-hover:bg-[#f5ecef] border-b border-[#e5e7eb] ${corValor(valor)}`}>
+                            {formatarValor(valor)}
+                          </td>
+                          {mostrarPercentual && (
+                            <td className="px-3 py-2 text-right whitespace-nowrap font-medium group-hover:bg-[#f5ecef] border-b border-[#e5e7eb]">
+                              {formatarPercentual(valor, totalDoGrupo)}
+                            </td>
+                          )}
+                        </tr>
+                        {detalhesAbertos &&
+                          conta.detalhes!.map((d) => {
+                            const vd = valores[d.codigo] ?? 0;
+                            return (
+                              <tr key={d.codigo} className="group">
+                                <td className="px-3 py-2 pl-16 text-[#4b5563] group-hover:bg-[#f5ecef] border-b border-[#e5e7eb]">{d.nome}</td>
+                                <td className={`px-3 py-2 text-right whitespace-nowrap group-hover:bg-[#f5ecef] border-b border-[#e5e7eb] ${corValor(vd)}`}>
+                                  {formatarValor(vd)}
+                                </td>
+                                {mostrarPercentual && (
+                                  <td className="px-3 py-2 text-right whitespace-nowrap text-[#4b5563] group-hover:bg-[#f5ecef] border-b border-[#e5e7eb]">
+                                    {formatarPercentual(vd, totalDoGrupo)}
+                                  </td>
+                                )}
+                              </tr>
+                            );
+                          })}
+                      </React.Fragment>
                     );
                   })}
               </React.Fragment>
@@ -233,7 +262,7 @@ export default function BalancoPatrimonialPage() {
   const [filtroLojasAberto, setFiltroLojasAberto] = useState(false);
   const [consultaExecutada, setConsultaExecutada] = useState(false);
   const [contasExpandidas, setContasExpandidas] = useState<Set<string>>(
-    new Set([...PLANO_ATIVOS, ...PLANO_PASSIVO].map((g) => g.codigo))
+    new Set([...PLANO_ATIVOS, ...PLANO_PASSIVO].flatMap((g) => [g.codigo, ...(g.filhos || []).filter((f) => f.detalhes).map((f) => f.codigo)]))
   );
   const [ordenacao, setOrdenacao] = useState<Ordenacao>(null);
   const [salvoAtivo, setSalvoAtivo] = useState(false);
@@ -440,7 +469,7 @@ export default function BalancoPatrimonialPage() {
         <>
           <div className="bg-[#fffbeb] border border-amber-200 rounded-md px-4 py-2.5 text-[13px] text-[#b45309]">
             Estrutura em construção: só as linhas já ligadas trazem valor real (hoje: Caixa e Equivalentes de Caixa = saldo bancário
-            atual do Fluxo de Caixa; Contas a Receber = boletos do Fluxo de Caixa; e Passivo Circulante 2 - Obrigações de Compra de MP. e Serv.) - o resto continua zerado até as consultas serem plugadas aqui.
+            atual do Fluxo de Caixa; Contas a Receber = boletos + cartões do Fluxo de Caixa; e Passivo Circulante 2 - Obrigações de Compra de MP. e Serv.) - o resto continua zerado até as consultas serem plugadas aqui.
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
             <CardTotal rotulo="Total dos Ativos" valor={totalAtivos} />

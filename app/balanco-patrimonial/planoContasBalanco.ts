@@ -7,6 +7,9 @@ export interface ContaBalanco {
   nome: string;
   nivel: 1 | 2;
   filhos?: ContaBalanco[];
+  // Abertura so de exibicao (ex: AC.2 em Boletos e Cartoes): NAO entra na soma do
+  // grupo - o valor da propria conta ja e o total das aberturas.
+  detalhes?: { codigo: string; nome: string }[];
 }
 
 export const PLANO_ATIVOS: ContaBalanco[] = [
@@ -16,7 +19,15 @@ export const PLANO_ATIVOS: ContaBalanco[] = [
     nivel: 1,
     filhos: [
       { codigo: 'AC.1', nome: '1 - CAIXA E EQUIVALENTES DE CAIXA', nivel: 2 },
-      { codigo: 'AC.2', nome: '2 - CONTAS A RECEBER', nivel: 2 },
+      {
+        codigo: 'AC.2',
+        nome: '2 - CONTAS A RECEBER',
+        nivel: 2,
+        detalhes: [
+          { codigo: 'AC.2.1', nome: 'BOLETOS' },
+          { codigo: 'AC.2.2', nome: 'CARTÕES' },
+        ],
+      },
       { codigo: 'AC.3', nome: '3 - ESTOQUES', nivel: 2 },
     ],
   },
