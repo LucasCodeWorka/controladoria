@@ -302,8 +302,6 @@ export default function BalancoPatrimonialPage() {
         }
         setMesReferencia(mes);
         setEmpresasSelecionadas(empresas);
-        // Com filtro salvo, ja traz os dados da ultima visita.
-        if (salvo) consultar({ mes, empresas, total: lista.length });
       })
       .catch((error) => console.error('Erro ao buscar empresas:', error));
     // eslint-disable-next-line react-hooks/exhaustive-deps

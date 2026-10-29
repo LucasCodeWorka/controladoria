@@ -16,6 +16,7 @@ from fastapi import APIRouter, HTTPException, Query
 from typing import Optional
 from datetime import date, timedelta
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import threading
 import time
 from database import execute_query, execute_insert
@@ -452,55 +453,71 @@ def get_balanco_patrimonial(
         rows_janela = execute_query("SELECT codigo, meses_janela FROM configuracao_contas_balanco", ()) or []
         meses_janela_por_conta = {r["codigo"]: r["meses_janela"] for r in rows_janela}
 
+        # Cada bloco e uma consulta de 15-25s no banco remoto; em fila davam ~2
+        # minutos. Rodam em paralelo (pool de conexoes e thread-safe) e o
+        # tempo total cai pro da consulta mais lenta.
         valores: dict = {}
-        for conta, despesaitens in despesaitens_por_conta.items():
+
+        def _conta_passivo(conta, despesaitens):
             meses_janela = meses_janela_por_conta.get(conta, MESES_JANELA_PADRAO)
             data_inicio, data_fim = _janela_vencimento(mesReferencia, meses_janela)
             total = _somar_duplicatas_por_vencimento(despesaitens, data_inicio, data_fim, empresas)
             sinal = -1 if conta.upper().startswith("P") else 1
-            valores[conta] = sinal * total
+            return {conta: sinal * total}
 
         # AC.1 Caixa e equivalentes de caixa = total dos saldos bancarios, o MESMO
         # valor do fluxo de caixa (posicao de caixa mais recente de cada conta,
         # sem filtro de empresa - a tabela de saldos nao tem cd_empresa). Nao
         # depende do mes de referencia: e a posicao de HOJE.
-        try:
-            valores["AC.1"] = _obter_saldos_bancarios()["total"]
-        except Exception as e:
-            print(f"[BALANCO] Saldo bancario indisponivel: {e}")
+        def _caixa():
+            return {"AC.1": _obter_saldos_bancarios()["total"]}
 
-        # AC.2 Contas a receber = boletos + cartoes do Fluxo de Caixa (colunas Boleto e Cartao), na
-        # janela configurada da conta (default 12 meses) e no filtro de empresas.
-        try:
+        # AC.2 Contas a receber = boletos + cartoes do Fluxo de Caixa (colunas
+        # Boleto e Cartao), na janela configurada da conta (default 12 meses) e
+        # no filtro de empresas. AC.2.1/AC.2.2 = abertura so de exibicao.
+        def _boletos():
             ini, fim = _janela_vencimento(mesReferencia, meses_janela_por_conta.get("AC.2", MESES_JANELA_PADRAO))
-            boletos = _somar_boletos_a_receber(ini, fim, empresas)
-            cartoes = _somar_cartoes_a_receber(ini, fim, empresas)
-            valores["AC.2"] = boletos + cartoes
-            # Abertura da linha (so exibicao - o total do grupo usa AC.2)
-            valores["AC.2.1"] = boletos
-            valores["AC.2.2"] = cartoes
-        except Exception as e:
-            print(f"[BALANCO] Boletos a receber indisponiveis: {e}")
+            return _somar_boletos_a_receber(ini, fim, empresas)
 
-        # AC.3 Estoques = Estoque PA lojas + PA fabrica + MP fabrica (foto atual - nao depende do
-        # mes de referencia; filtro de empresas vale).
-        try:
-            estoque_lojas = _estoque_pa_lojas(empresas)
-            estoque_fabrica = _estoque_pa_fabrica(empresas)
-            estoque_mp = _estoque_mp_fabrica(empresas)
-            valores["AC.3"] = estoque_lojas + estoque_fabrica + estoque_mp
-            valores["AC.3.1"] = estoque_lojas
-            valores["AC.3.2"] = estoque_fabrica
-            valores["AC.3.3"] = estoque_mp
-        except Exception as e:
-            print(f"[BALANCO] Estoque PA das lojas indisponivel: {e}")
+        def _cartoes():
+            ini, fim = _janela_vencimento(mesReferencia, meses_janela_por_conta.get("AC.2", MESES_JANELA_PADRAO))
+            return _somar_cartoes_a_receber(ini, fim, empresas)
+
+        # AC.3 Estoques = Estoque PA lojas + PA fabrica + MP fabrica (foto atual -
+        # nao depende do mes de referencia; filtro de empresas vale).
+        def _estoques():
+            lojas, fabrica, mp = _estoque_pa_lojas(empresas), _estoque_pa_fabrica(empresas), _estoque_mp_fabrica(empresas)
+            return {"AC.3": lojas + fabrica + mp, "AC.3.1": lojas, "AC.3.2": fabrica, "AC.3.3": mp}
 
         # ANC.5 Investimentos e ANC.6 Imobilizado = bens cadastrados (fixos).
-        try:
-            for conta, total in _total_bens_por_linha().items():
-                valores[conta] = total
-        except Exception as e:
-            print(f"[BALANCO] Bens indisponiveis: {e}")
+        def _bens():
+            return _total_bens_por_linha()
+
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            f_passivo = [pool.submit(_conta_passivo, c, d) for c, d in despesaitens_por_conta.items()]
+            f_opcionais = {
+                "Saldo bancario": pool.submit(_caixa),
+                "Boletos a receber": pool.submit(_boletos),
+                "Cartoes a receber": pool.submit(_cartoes),
+                "Estoques": pool.submit(_estoques),
+                "Bens": pool.submit(_bens),
+            }
+            for f in f_passivo:
+                valores.update(f.result())  # erro aqui derruba a consulta, como antes
+            resultados = {}
+            for nome, f in f_opcionais.items():
+                try:
+                    resultados[nome] = f.result()
+                except Exception as e:
+                    print(f"[BALANCO] {nome} indisponivel: {e}")
+        valores.update(resultados.get("Saldo bancario", {}))
+        if "Boletos a receber" in resultados and "Cartoes a receber" in resultados:
+            boletos, cartoes = resultados["Boletos a receber"], resultados["Cartoes a receber"]
+            valores["AC.2"] = boletos + cartoes
+            valores["AC.2.1"] = boletos
+            valores["AC.2.2"] = cartoes
+        valores.update(resultados.get("Estoques", {}))
+        valores.update(resultados.get("Bens", {}))
 
         return {"valores": valores, "mesReferencia": mesReferencia}
     except HTTPException:
