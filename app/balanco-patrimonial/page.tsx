@@ -67,7 +67,7 @@ type Ordenacao = { campo: Campo; dir: 'asc' | 'desc' } | null;
 const CHAVE_FILTROS = 'balanco_patrimonial_filtros';
 
 // Barra de rolagem acima e abaixo da tabela, sincronizadas (padrao LIEBE).
-function DualScroll({ children }: { children: React.ReactNode }) {
+function DualScroll({ children, secao }: { children: React.ReactNode; secao?: React.ReactNode }) {
   const topo = useRef<HTMLDivElement>(null);
   const corpo = useRef<HTMLDivElement>(null);
   const [largura, setLargura] = useState(0);
@@ -93,6 +93,7 @@ function DualScroll({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="bg-white border border-[#e5e7eb] rounded-lg shadow-sm overflow-hidden">
+      {secao}
       <div ref={topo} onScroll={() => sync(topo.current, corpo.current)} className="overflow-x-auto overflow-y-hidden h-[14px] border-b border-[#e5e7eb]">
         <div style={{ width: largura, height: 1 }} />
       </div>
@@ -145,14 +146,21 @@ function TabelaBalanco({ titulo, plano, valores, mostrarPercentual, contasExpand
     );
   };
 
-  const corValor = (v: number) => (v < 0 ? 'text-[#b91c1c]' : 'text-[#1d1d1d]');
+  const corValor = (v: number) => (v < 0 ? 'text-[#b91c1c]' : v === 0 ? 'text-[#6b7280]' : 'text-[#1d1d1d]');
 
   return (
-    <DualScroll>
+    <DualScroll
+      secao={
+        <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-[#e5e7eb]">
+          <h2 className="text-base font-bold text-[#1d1d1d]">{titulo}</h2>
+          <span className={`text-base font-bold [font-variant-numeric:tabular-nums] ${total < 0 ? 'text-[#b91c1c]' : 'text-[#8e5e68]'}`}>{formatarValor(total)}</span>
+        </div>
+      }
+    >
       <table className="w-full min-w-[420px] border-separate border-spacing-0 text-[13px] text-[#1d1d1d] [font-variant-numeric:tabular-nums]">
         <thead>
           <tr>
-            {cabecalho('conta', titulo, true)}
+            {cabecalho('conta', 'Conta', true)}
             {cabecalho('valor', 'R$', false)}
             {mostrarPercentual && cabecalho('pct', '%', false, 'w-24')}
           </tr>
@@ -167,17 +175,17 @@ function TabelaBalanco({ titulo, plano, valores, mostrarPercentual, contasExpand
             return (
               <React.Fragment key={grupo.codigo}>
                 <tr className="cursor-pointer group" onClick={() => toggleExpansao(grupo.codigo)}>
-                  <td className="px-3 py-2 font-bold text-[#1d1d1d] bg-[#f4f5f7] group-hover:bg-[#f5ecef] border-b border-[#e5e7eb]">
+                  <td className="px-3 py-2.5 font-bold text-[#8e5e68] bg-[#f5ecef] group-hover:bg-[#efe0e4] border-b border-[#e5e7eb] border-l-4 border-l-[#b3838c]">
                     <div className="flex items-center gap-2">
                       {expandido ? <ChevronDown className="w-4 h-4 text-[#8e5e68]" /> : <ChevronRight className="w-4 h-4 text-[#8e5e68]" />}
                       {grupo.nome}
                     </div>
                   </td>
-                  <td className={`px-3 py-2 text-right font-bold whitespace-nowrap bg-[#f4f5f7] group-hover:bg-[#f5ecef] border-b border-[#e5e7eb] ${corValor(totalDoGrupo)}`}>
+                  <td className={`px-3 py-2.5 text-right font-bold whitespace-nowrap bg-[#f5ecef] group-hover:bg-[#efe0e4] border-b border-[#e5e7eb] ${corValor(totalDoGrupo)}`}>
                     {formatarValor(totalDoGrupo)}
                   </td>
                   {mostrarPercentual && (
-                    <td className="px-3 py-2 text-right font-bold whitespace-nowrap bg-[#f4f5f7] group-hover:bg-[#f5ecef] border-b border-[#e5e7eb]">
+                    <td className="px-3 py-2.5 text-right font-bold whitespace-nowrap text-[#8e5e68] bg-[#f5ecef] group-hover:bg-[#efe0e4] border-b border-[#e5e7eb]">
                       {totalDoGrupo === 0 ? '-' : '100,00%'}
                     </td>
                   )}
@@ -190,17 +198,17 @@ function TabelaBalanco({ titulo, plano, valores, mostrarPercentual, contasExpand
                     return (
                       <React.Fragment key={conta.codigo}>
                         <tr className={`group ${temDetalhes ? 'cursor-pointer' : ''}`} onClick={temDetalhes ? () => toggleExpansao(conta.codigo) : undefined}>
-                          <td className="px-3 py-2 pl-10 font-medium group-hover:bg-[#f5ecef] border-b border-[#e5e7eb]">
+                          <td className={`px-3 py-2 pl-10 font-semibold group-hover:bg-[#f5ecef] border-b border-[#e5e7eb] ${valor === 0 && !temDetalhes ? 'text-[#6b7280]' : 'text-[#1d1d1d]'}`}>
                             <div className="flex items-center gap-2">
                               {temDetalhes && (detalhesAbertos ? <ChevronDown className="w-4 h-4 text-[#8e5e68]" /> : <ChevronRight className="w-4 h-4 text-[#8e5e68]" />)}
                               {conta.nome}
                             </div>
                           </td>
-                          <td className={`px-3 py-2 text-right whitespace-nowrap font-medium group-hover:bg-[#f5ecef] border-b border-[#e5e7eb] ${corValor(valor)}`}>
+                          <td className={`px-3 py-2 text-right whitespace-nowrap font-semibold group-hover:bg-[#f5ecef] border-b border-[#e5e7eb] ${corValor(valor)}`}>
                             {formatarValor(valor)}
                           </td>
                           {mostrarPercentual && (
-                            <td className="px-3 py-2 text-right whitespace-nowrap font-medium group-hover:bg-[#f5ecef] border-b border-[#e5e7eb]">
+                            <td className={`px-3 py-2 text-right whitespace-nowrap font-semibold group-hover:bg-[#f5ecef] border-b border-[#e5e7eb] ${valor === 0 ? 'text-[#6b7280]' : ''}`}>
                               {formatarPercentual(valor, totalDoGrupo)}
                             </td>
                           )}
@@ -210,12 +218,15 @@ function TabelaBalanco({ titulo, plano, valores, mostrarPercentual, contasExpand
                             const vd = valores[d.codigo] ?? 0;
                             return (
                               <tr key={d.codigo} className="group">
-                                <td className="px-3 py-2 pl-16 text-[#4b5563] group-hover:bg-[#f5ecef] border-b border-[#e5e7eb]">{d.nome}</td>
-                                <td className={`px-3 py-2 text-right whitespace-nowrap group-hover:bg-[#f5ecef] border-b border-[#e5e7eb] ${corValor(vd)}`}>
+                                <td className="px-3 py-1.5 pl-16 text-[#4b5563] bg-[#fafafa] group-hover:bg-[#f5ecef] border-b border-[#e5e7eb]">
+                                  <span className="inline-block w-1.5 h-1.5 mr-2 rounded-full bg-[#c5949d] align-middle" />
+                                  {d.nome}
+                                </td>
+                                <td className={`px-3 py-1.5 text-right whitespace-nowrap bg-[#fafafa] group-hover:bg-[#f5ecef] border-b border-[#e5e7eb] ${corValor(vd)}`}>
                                   {formatarValor(vd)}
                                 </td>
                                 {mostrarPercentual && (
-                                  <td className="px-3 py-2 text-right whitespace-nowrap text-[#4b5563] group-hover:bg-[#f5ecef] border-b border-[#e5e7eb]">
+                                  <td className="px-3 py-1.5 text-right whitespace-nowrap text-[#4b5563] bg-[#fafafa] group-hover:bg-[#f5ecef] border-b border-[#e5e7eb]">
                                     {formatarPercentual(vd, totalDoGrupo)}
                                   </td>
                                 )}
@@ -231,11 +242,11 @@ function TabelaBalanco({ titulo, plano, valores, mostrarPercentual, contasExpand
         </tbody>
         <tfoot>
           <tr>
-            <td className="sticky bottom-0 px-3 py-2.5 font-bold bg-[#f4f5f7] border-t-2 border-[#d1d5db]">Total</td>
-            <td className={`sticky bottom-0 px-3 py-2.5 text-right font-bold whitespace-nowrap bg-[#f4f5f7] border-t-2 border-[#d1d5db] ${corValor(total)}`}>
+            <td className="sticky bottom-0 px-3 py-3 font-bold bg-[#f4f5f7] border-t-2 border-[#b3838c]">Total</td>
+            <td className={`sticky bottom-0 px-3 py-3 text-right font-bold whitespace-nowrap bg-[#f4f5f7] border-t-2 border-[#b3838c] ${corValor(total)}`}>
               {formatarValor(total)}
             </td>
-            {mostrarPercentual && <td className="sticky bottom-0 bg-[#f4f5f7] border-t-2 border-[#d1d5db]" />}
+            {mostrarPercentual && <td className="sticky bottom-0 bg-[#f4f5f7] border-t-2 border-[#b3838c]" />}
           </tr>
         </tfoot>
       </table>
@@ -474,9 +485,9 @@ export default function BalancoPatrimonialPage() {
             <CardTotal rotulo="Total do Passivo" valor={totalPassivo} />
             <CardTotal rotulo="Ativos − Passivo" valor={totalAtivos - totalPassivo} nota="Diferença entre os dois totais" />
           </div>
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
             <TabelaBalanco
-              titulo="ATIVOS"
+              titulo="Ativos"
               plano={PLANO_ATIVOS}
               valores={valoresAtivos}
               mostrarPercentual
@@ -486,10 +497,10 @@ export default function BalancoPatrimonialPage() {
               alternarOrdenacao={alternarOrdenacao}
             />
             <TabelaBalanco
-              titulo="PASSIVO"
+              titulo="Passivo"
               plano={PLANO_PASSIVO}
               valores={valoresPassivo}
-              mostrarPercentual={false}
+              mostrarPercentual
               contasExpandidas={contasExpandidas}
               toggleExpansao={toggleExpansao}
               ordenacao={ordenacao}

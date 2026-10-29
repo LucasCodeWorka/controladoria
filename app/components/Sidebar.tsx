@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useAuth } from '../contexts/AuthContext';
@@ -23,6 +23,8 @@ import {
   Scale,
   Banknote,
   TrendingUp,
+  Minus,
+  Plus,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -30,9 +32,70 @@ interface SidebarProps {
   setIsOpen: (open: boolean) => void;
 }
 
+const CHAVE_FONTE = 'controladoria_font_scale';
+const CHAVE_ZOOM = 'controladoria_zoom_scale';
+
+function lerEscala(chave: string, min: number, max: number): number {
+  try {
+    const v = parseFloat(localStorage.getItem(chave) || '');
+    if (v >= min && v <= max) return v;
+  } catch { /* segue com o padrao */ }
+  return 1;
+}
+
+function gravarEscala(chave: string, valor: number) {
+  try { localStorage.setItem(chave, String(valor)); } catch { /* segue sem salvar */ }
+}
+
 export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
   const pathname = usePathname();
   const { user, logout } = useAuth();
+  const [fonte, setFonte] = useState(1);
+  const [zoom, setZoom] = useState(1);
+
+  // Acessibilidade (padrao LIEBE): fonte 0.90-1.25 e zoom 0.90-1.15, passo .05.
+  useEffect(() => {
+    setFonte(lerEscala(CHAVE_FONTE, 0.9, 1.25));
+    setZoom(lerEscala(CHAVE_ZOOM, 0.9, 1.15));
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.style.fontSize = `${fonte * 100}%`;
+    gravarEscala(CHAVE_FONTE, fonte);
+  }, [fonte]);
+
+  useEffect(() => {
+    document.body.style.zoom = String(zoom);
+    gravarEscala(CHAVE_ZOOM, zoom);
+  }, [zoom]);
+
+  const ajustar = (atual: number, passo: number, min: number, max: number) =>
+    Math.round(Math.min(max, Math.max(min, atual + passo)) * 100) / 100;
+
+  const controle = (rotulo: string, valor: number, set: (v: number) => void, min: number, max: number) => (
+    <div className="flex items-center justify-between gap-2">
+      <span className="text-xs font-semibold text-[#e5e7eb] w-12">{rotulo}</span>
+      <div className="flex items-center gap-1">
+        <button
+          onClick={() => set(ajustar(valor, -0.05, min, max))}
+          disabled={valor <= min}
+          aria-label={`Diminuir ${rotulo}`}
+          className="w-7 h-7 flex items-center justify-center rounded bg-white/10 text-white hover:bg-brand-primary disabled:opacity-40"
+        >
+          <Minus className="w-3.5 h-3.5" />
+        </button>
+        <span className="w-11 text-center text-xs font-semibold text-white [font-variant-numeric:tabular-nums]">{Math.round(valor * 100)}%</span>
+        <button
+          onClick={() => set(ajustar(valor, 0.05, min, max))}
+          disabled={valor >= max}
+          aria-label={`Aumentar ${rotulo}`}
+          className="w-7 h-7 flex items-center justify-center rounded bg-white/10 text-white hover:bg-brand-primary disabled:opacity-40"
+        >
+          <Plus className="w-3.5 h-3.5" />
+        </button>
+      </div>
+    </div>
+  );
 
   const menuItems = [
     {
@@ -220,7 +283,15 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
           </div>
         </nav>
 
-        <div className="p-4 border-t border-gray-700">
+        {isOpen && (
+          <div className="px-4 pt-4 space-y-2 border-t border-gray-700">
+            <div className="text-[11px] font-bold uppercase tracking-[.04em] text-[#e5e7eb]">Acessibilidade</div>
+            {controle('Fonte', fonte, setFonte, 0.9, 1.25)}
+            {controle('Zoom', zoom, setZoom, 0.9, 1.15)}
+          </div>
+        )}
+
+        <div className={`p-4 ${isOpen ? '' : 'border-t border-gray-700'}`}>
           <button
             onClick={logout}
             className={`flex items-center gap-3 px-4 py-3 w-full rounded-lg hover:bg-brand-secondary transition-colors text-gray-300 hover:text-white ${
