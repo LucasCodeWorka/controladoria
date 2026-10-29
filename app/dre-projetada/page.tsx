@@ -107,7 +107,11 @@ export default function DreProjetadaPage() {
     ];
     setResumo(empresas.map((e) => ({ ...e, carregando: true })));
     const personalizado = cenario === 'personalizado' ? Number(crescimentoTxt.replace(',', '.')) : NaN;
-    for (const e of empresas) {
+    // 4 empresas por vez (o backend ainda calcula uma base pesada de cada vez,
+    // entao o ganho maior vem do cache pre-aquecido)
+    const fila = [...empresas];
+    const processar = async () => {
+    for (let e = fila.shift(); e; e = fila.shift()) {
       if (id !== execResumo.current) return;
       let novo: Partial<ResumoEmpresa>;
       try {
@@ -124,8 +128,11 @@ export default function DreProjetadaPage() {
         novo = { carregando: false, erro: err instanceof Error ? err.message : 'Erro' };
       }
       if (id !== execResumo.current) return;
-      setResumo((prev) => prev && prev.map((r) => (r.filtro === e.filtro ? { ...r, ...novo } : r)));
+      const filtroAtual = e.filtro;
+      setResumo((prev) => prev && prev.map((r) => (r.filtro === filtroAtual ? { ...r, ...novo } : r)));
     }
+    };
+    await Promise.all(Array.from({ length: 4 }, processar));
   }, [inicio, cenario, inflacaoTxt, crescimentoTxt, lojas]);
 
   useEffect(() => {

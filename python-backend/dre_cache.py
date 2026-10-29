@@ -266,6 +266,13 @@ def _ano_anterior(d: date) -> date:
     return d.replace(year=d.year - 1, day=min(d.day, monthrange(d.year - 1, d.month)[1]))
 
 
+def _filtros_empresas() -> list:
+    """Filtros de empresa da DRE Projetada: consolidado, fabrica e cada loja
+    (centro de custo). Import tardio: routers.dre importa este modulo."""
+    from routers.dre import CCUSTOS_LOJAS
+    return [FILTRO_PADRAO, "fabrica"] + [str(cd) for cd in sorted(CCUSTOS_LOJAS.keys())]
+
+
 def periodos_alvo(hoje: date) -> list:
     inicio_mes = hoje.replace(day=1)
     fim_mes_anterior = inicio_mes - timedelta(days=1)
@@ -293,6 +300,13 @@ def periodos_alvo(hoje: date) -> list:
         if tem_comparativo:
             for i, f in comparativos:
                 alvos.append((visao, i.isoformat(), f.isoformat(), filtro))
+    # Base da DRE Projetada (routers/dre_projetada.py): os 12 meses terminando no
+    # mes atual (a projecao comeca no mes seguinte), na Analitica, uma vez por
+    # empresa - e o que o "Resumo por empresa" da tela consulta.
+    ini_base = _menos_meses(inicio_mes, 11)
+    fim_base = _fim_mes(hoje.year, hoje.month)
+    for filtro in _filtros_empresas():
+        alvos.append(("analitica", ini_base.isoformat(), fim_base.isoformat(), filtro))
     vistos = set()
     unicos = []
     for alvo in alvos:
