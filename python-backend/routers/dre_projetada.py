@@ -225,6 +225,7 @@ def resumo(
     inflacao: Optional[float] = Query(None),
     crescimentoReceita: Optional[float] = Query(None, description="Se informado, inclui o cenario personalizado"),
     filtro: str = Query("consolidado"),
+    meta: float = Query(10.0, description="% de lucro liquido desejado sobre a receita liquida"),
     forcar: bool = Query(False),
 ):
     """Receita liquida e lucro liquido (conta 14) projetados nos 12 meses, em
@@ -242,4 +243,26 @@ def resumo(
         if ano_anterior is None:
             rec_a, luc_a = tot(r["anoAnterior"], "03"), tot(r["anoAnterior"], "14")
             ano_anterior = {"receitaLiquida": rec_a, "lucro": luc_a, "percentual": (luc_a / rec_a * 100) if rec_a else None}
-    return {"filtro": filtro, "anoAnterior": ano_anterior, "cenarios": saida}
+
+    # Crescimento da receita para atingir a meta: com fixas constantes e variaveis
+    # proporcionais a receita, receita liquida e lucro sao lineares no crescimento g;
+    # basta avaliar em g=0 e g=100 e resolver lucro(g) = meta% x receita(g).
+    def pontos(g):
+        r = dre_projetada(inicio=inicio, cenario="personalizado", inflacao=inflacao, crescimentoReceita=g,
+                          filtro=filtro, forcar=False)
+        return (float((r["projetado"].get("03") or {}).get("total", 0) or 0),
+                float((r["projetado"].get("14") or {}).get("total", 0) or 0),
+                r["parametros"]["inflacao"])
+    r0, l0, infl_uso = pontos(0.0)
+    r1, l1, _ = pontos(100.0)
+    m = meta / 100
+    den = (l1 - l0) - m * (r1 - r0)  # variacao do (lucro - meta x receita) a cada +100%
+    if r0 > 0 and l0 >= m * r0:
+        necessario = 0.0
+    elif den <= 0:
+        necessario = None  # nao atinge so com venda
+    else:
+        g_total = 100.0 * (m * r0 - l0) / den  # crescimento total sobre o ano anterior
+        # o crescimento pedido vem DEPOIS da inflacao: (1+inflacao) x (1+x) = 1+g_total
+        necessario = max(0.0, ((1 + g_total / 100) / (1 + infl_uso / 100) - 1) * 100)
+    return {"filtro": filtro, "anoAnterior": ano_anterior, "cenarios": saida, "crescimentoNecessario": necessario, "meta": meta}

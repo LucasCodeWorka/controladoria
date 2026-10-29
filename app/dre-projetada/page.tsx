@@ -57,7 +57,7 @@ function proximoMesISO() {
 interface ResumoCenario { receitaLiquida: number; lucro: number; percentual: number | null }
 interface ResumoEmpresa {
   filtro: string; nome: string; carregando: boolean; erro?: string;
-  anoAnterior?: ResumoCenario; cenarios?: Record<string, ResumoCenario>;
+  anoAnterior?: ResumoCenario; cenarios?: Record<string, ResumoCenario>; crescimentoNecessario?: number | null;
 }
 
 export default function DreProjetadaPage() {
@@ -118,7 +118,7 @@ export default function DreProjetadaPage() {
         const resp = await fetch(`/api/dre-projetada/resumo?${params.toString()}`, { cache: 'no-store' });
         const json = await resp.json();
         if (!resp.ok) throw new Error(json.detail || json.error || 'Erro');
-        novo = { anoAnterior: json.anoAnterior, cenarios: json.cenarios, carregando: false };
+        novo = { anoAnterior: json.anoAnterior, cenarios: json.cenarios, crescimentoNecessario: json.crescimentoNecessario, carregando: false };
       } catch (err) {
         novo = { carregando: false, erro: err instanceof Error ? err.message : 'Erro' };
       }
@@ -344,6 +344,7 @@ export default function DreProjetadaPage() {
                   {[['anterior', 'Ano anterior'], ['pessimista', 'Pessimista'], ['realista', 'Realista'], ['otimista', 'Otimista'], ...(cenario === 'personalizado' && crescimentoTxt.trim() !== '' ? [['personalizado', 'Personalizado']] : [])].map(([k, t]) => (
                     <th key={k} className="px-3 py-2 text-right border-b border-gray-200" colSpan={1}>{t}</th>
                   ))}
+                  <th className="px-3 py-2 text-right border-b border-gray-200 bg-amber-50" title="Crescimento da receita, além da inflação, para chegar a 10% de lucro líquido (fixas constantes, variáveis crescem com a venda)">Crescimento após inflação p/ 10% de lucro</th>
                 </tr>
               </thead>
               <tbody>
@@ -365,6 +366,14 @@ export default function DreProjetadaPage() {
                             : '-'}
                         </td>
                       ))}
+                      <td className="px-3 py-2 border-b border-gray-200 text-right font-semibold bg-amber-50">
+                        {r.carregando ? <RefreshCw className="w-3.5 h-3.5 animate-spin inline text-gray-400" />
+                          : r.erro ? '-'
+                          : r.crescimentoNecessario === undefined ? '-'
+                          : r.crescimentoNecessario === null ? <span className="text-xs font-normal text-red-600" title="Só com venda não chega à meta">não atinge</span>
+                          : r.crescimentoNecessario === 0 ? <span className="text-green-700">0% (já tem)</span>
+                          : `+${r.crescimentoNecessario.toFixed(2).replace('.', ',')}%`}
+                      </td>
                     </tr>
                   );
                 })}
