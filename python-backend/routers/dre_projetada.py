@@ -91,7 +91,7 @@ def _soma_meses(ano: int, mes: int, n: int):
     return idx // 12, idx % 12 + 1
 
 
-def _crescimento_meta(inicio, inflacao, filtro, meta):
+def _crescimento_meta(inicio, inflacao, filtro, meta, ctx=None):
     """Crescimento da receita para atingir `meta`% de lucro liquido. Com fixas
     constantes e variaveis proporcionais a receita, receita liquida e lucro sao
     lineares no crescimento g; basta avaliar em g=0 e g=100 e resolver
@@ -99,8 +99,7 @@ def _crescimento_meta(inicio, inflacao, filtro, meta):
     anterior (nunca abaixo da inflacao); necessario = o que falta DEPOIS da
     inflacao. Sem solucao so com venda: tudo None."""
     def pontos(g):
-        r = dre_projetada(inicio=inicio, cenario="personalizado", inflacao=inflacao, crescimentoReceita=g,
-                          filtro=filtro, forcar=False)
+        r = _projetar(inicio, "personalizado", inflacao, g, filtro, False, ctx)
         return (float((r["projetado"].get("03") or {}).get("total", 0) or 0),
                 float((r["projetado"].get("14") or {}).get("total", 0) or 0),
                 r["parametros"]["inflacao"])
@@ -126,12 +125,19 @@ def _crescimento_meta(inicio, inflacao, filtro, meta):
 @router.get("/api/dre-projetada")
 def dre_projetada(
     inicio: Optional[str] = Query(None, description="Primeiro mes projetado YYYY-MM (default: proximo mes)"),
-    cenario: str = Query("realista", description="pessimista | realista | otimista | personalizado"),
-    inflacao: Optional[float] = Query(None, description="% de inflacao aplicada as contas fixas (default: IPCA 12m)"),
+    cenario: str = Query("realista", description="pessimista | realista | otimista | meta | personalizado"),
+    inflacao: Optional[float] = Query(None, description="% de inflacao da RECEITA (default: IPCA 12m); fixas nao tem reajuste"),
     crescimentoReceita: Optional[float] = Query(None, description="% de crescimento da receita (so no cenario personalizado)"),
     filtro: str = Query("consolidado"),
     forcar: bool = Query(False),
 ):
+    return _projetar(inicio, cenario, inflacao, crescimentoReceita, filtro, forcar, None)
+
+
+def _projetar(inicio, cenario, inflacao, crescimentoReceita, filtro, forcar, ctx):
+    """ctx (opcional): dict que guarda a base (cache da DRE) e a classificacao
+    entre varias projecoes da mesma empresa - o resumo roda 6 por empresa e
+    cada leitura do cache e uma ida ao banco."""
     try:
         hoje = date.today()
         ano, mes = (int(x) for x in inicio.split("-")) if inicio else _soma_meses(hoje.year, hoje.month, 1)
@@ -150,7 +156,7 @@ def dre_projetada(
         elif cenario == "personalizado":
             g_rec = infl if crescimentoReceita is None else crescimentoReceita
         elif cenario == "meta":
-            alvo = _crescimento_meta(inicio, inflacao, filtro, META_LUCRO)
+            alvo = _crescimento_meta(inicio, inflacao, filtro, META_LUCRO, ctx)
             g_rec = alvo["gEfetivo"] if alvo["gEfetivo"] is not None else infl  # sem solucao: so inflacao
         else:
             raise HTTPException(status_code=400, detail="cenario invalido")
@@ -166,10 +172,16 @@ def dre_projetada(
         ult = date(a_fim, m_fim, 1).toordinal() - 1
         fim_base = date.fromordinal(ult).isoformat()
 
-        dados = dre_cache.obter(
-            "analitica", ini_base, fim_base, filtro, forcar,
-            lambda: dre_mod._calcular_valores_unificada(ini_base, fim_base, filtro, campo_data_despesa="dt_emissao"),
-        )
+        chave_base = (ini_base, fim_base, filtro)
+        if ctx is not None and chave_base in ctx:
+            dados = ctx[chave_base]
+        else:
+            dados = dre_cache.obter(
+                "analitica", ini_base, fim_base, filtro, forcar,
+                lambda: dre_mod._calcular_valores_unificada(ini_base, fim_base, filtro, campo_data_despesa="dt_emissao"),
+            )
+            if ctx is not None:
+                ctx[chave_base] = dados
         valores = dados.get("valores") or {}
 
         codigos = set(valores.keys())
@@ -178,7 +190,12 @@ def dre_projetada(
             if c not in TOTALIZADORES and c not in ("NAO_CLASSIFICADO", "EXCLUIDO")
             and not any(o != c and o.startswith(c + ".") for o in codigos)
         ]
-        classif = _classificacoes()
+        if ctx is not None and "classif" in ctx:
+            classif = ctx["classif"]
+        else:
+            classif = _classificacoes()
+            if ctx is not None:
+                ctx["classif"] = classif
 
         def val(codigo, periodo):
             return float((valores.get(codigo) or {}).get(periodo, 0) or 0)
@@ -269,10 +286,10 @@ def resumo(
     cada cenario, para UM filtro (empresa). A base do ano anterior vem do
     cache, entao so o primeiro cenario consulta o banco."""
     cenarios = ["pessimista", "realista", "otimista"] + (["personalizado"] if crescimentoReceita is not None else [])
+    ctx = {}
     saida, ano_anterior, periodo = {}, None, None
     for i, cen in enumerate(cenarios):
-        r = dre_projetada(inicio=inicio, cenario=cen, inflacao=inflacao, crescimentoReceita=crescimentoReceita,
-                          filtro=filtro, forcar=forcar and i == 0)
+        r = _projetar(inicio, cen, inflacao, crescimentoReceita, filtro, forcar and i == 0, ctx)
         def tot(d, c):
             return float((d.get(c) or {}).get("total", 0) or 0)
         rec, luc = tot(r["projetado"], "03"), tot(r["projetado"], "14")
@@ -281,10 +298,9 @@ def resumo(
             rec_a, luc_a = tot(r["anoAnterior"], "03"), tot(r["anoAnterior"], "14")
             ano_anterior = {"receitaLiquida": rec_a, "lucro": luc_a, "percentual": (luc_a / rec_a * 100) if rec_a else None}
 
-    alvo = _crescimento_meta(inicio, inflacao, filtro, meta)
+    alvo = _crescimento_meta(inicio, inflacao, filtro, meta, ctx)
     if alvo["gEfetivo"] is not None:
-        r = dre_projetada(inicio=inicio, cenario="personalizado", inflacao=inflacao, crescimentoReceita=alvo["gEfetivo"],
-                          filtro=filtro, forcar=False)
+        r = _projetar(inicio, "personalizado", inflacao, alvo["gEfetivo"], filtro, False, ctx)
         rec, luc = float((r["projetado"].get("03") or {}).get("total", 0) or 0), float((r["projetado"].get("14") or {}).get("total", 0) or 0)
         saida["meta"] = {"receitaLiquida": rec, "lucro": luc, "percentual": (luc / rec * 100) if rec else None}
     necessario, receita_necessaria = alvo["necessario"], alvo["receitaNecessaria"]
