@@ -471,36 +471,23 @@ def get_balanco_patrimonial(
     empresas: Optional[str] = Query(None, description="Lista de cd_empresa/cd_ccusto separados por virgula (default: todas)")
 ):
     """
-    Valores do Balanco Patrimonial, uma conta de cada vez, a partir da
-    classificacao de despesas configurada em /configuracoes/plano-contas-balanco
-    (cada despesaitem -> uma conta) e da janela de vencimento configurada por
-    conta (default 12 meses). Conta sem despesa classificada nao entra no
-    dict (fica zerada no frontend).
+    Valores do Balanco Patrimonial: Caixa, Contas a Receber (boletos e
+    cartoes), Estoques e Bens. O Passivo nao tem mais fonte ligada (a tela de
+    classificacao de despesas foi descontinuada) e fica zerado.
     """
     try:
         _criar_tabelas_balanco()
 
-        rows_classificacao = execute_query(
-            "SELECT cd_despesaitem, conta_balanco FROM classificacao_despesas_balanco", ()
-        ) or []
-        despesaitens_por_conta: dict = {}
-        for r in rows_classificacao:
-            despesaitens_por_conta.setdefault(r["conta_balanco"], []).append(r["cd_despesaitem"])
-
-        rows_janela = execute_query("SELECT codigo, meses_janela FROM configuracao_contas_balanco", ()) or []
-        meses_janela_por_conta = {r["codigo"]: r["meses_janela"] for r in rows_janela}
+        # A tela de configuracao do balanco (classificacao de despesas -> contas do
+        # Passivo e janela por conta) foi descontinuada: as contas do Passivo que
+        # dependiam dela (PC.1 a PC.4) ficam zeradas e a janela de Contas a
+        # Receber usa o padrao. As tabelas continuam no banco, so nao alimentam mais.
+        meses_janela_receber = MESES_JANELA_PADRAO
 
         # Cada bloco e uma consulta de 15-25s no banco remoto; em fila davam ~2
         # minutos. Rodam em paralelo (pool de conexoes e thread-safe) e o
         # tempo total cai pro da consulta mais lenta.
         valores: dict = {}
-
-        def _conta_passivo(conta, despesaitens):
-            meses_janela = meses_janela_por_conta.get(conta, MESES_JANELA_PADRAO)
-            data_inicio, data_fim = _janela_vencimento(mesReferencia, meses_janela)
-            total = _somar_duplicatas_por_vencimento(despesaitens, data_inicio, data_fim, empresas)
-            sinal = -1 if conta.upper().startswith("P") else 1
-            return {conta: sinal * total}
 
         # AC.1 Caixa e equivalentes de caixa = total dos saldos bancarios, o MESMO
         # valor do fluxo de caixa (posicao de caixa mais recente de cada conta,
@@ -514,11 +501,11 @@ def get_balanco_patrimonial(
         # Boleto e Cartao), na janela configurada da conta (default 12 meses) e
         # no filtro de empresas. AC.2.1/AC.2.2 = abertura so de exibicao.
         def _boletos():
-            ini, fim = _janela_vencimento(mesReferencia, meses_janela_por_conta.get("AC.2", MESES_JANELA_PADRAO))
+            ini, fim = _janela_vencimento(mesReferencia, meses_janela_receber)
             return _somar_boletos_a_receber(ini, fim, empresas)
 
         def _cartoes():
-            ini, fim = _janela_vencimento(mesReferencia, meses_janela_por_conta.get("AC.2", MESES_JANELA_PADRAO))
+            ini, fim = _janela_vencimento(mesReferencia, meses_janela_receber)
             return _somar_cartoes_a_receber(ini, fim, empresas)
 
         # AC.3 Estoques = Estoque PA lojas + PA fabrica + MP fabrica (foto atual -
@@ -532,7 +519,6 @@ def get_balanco_patrimonial(
             return _total_bens_por_linha()
 
         with ThreadPoolExecutor(max_workers=6) as pool:
-            f_passivo = [pool.submit(_conta_passivo, c, d) for c, d in despesaitens_por_conta.items()]
             f_opcionais = {
                 "Saldo bancario": pool.submit(_caixa),
                 "Boletos a receber": pool.submit(_boletos),
@@ -540,8 +526,6 @@ def get_balanco_patrimonial(
                 "Estoques": pool.submit(_estoques),
                 "Bens": pool.submit(_bens),
             }
-            for f in f_passivo:
-                valores.update(f.result())  # erro aqui derruba a consulta, como antes
             resultados = {}
             for nome, f in f_opcionais.items():
                 try:
