@@ -159,9 +159,9 @@ function TabelaBalanco({ titulo, plano, valores, mostrarPercentual, contasExpand
         </div>
       }
       secao={
-        <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-[#e5e7eb]">
-          <h2 className="text-base font-bold text-[#1d1d1d]">{titulo}</h2>
-          <span className={`text-base font-bold [font-variant-numeric:tabular-nums] ${total < 0 ? 'text-[#b91c1c]' : 'text-[#8e5e68]'}`}>{formatarValor(total)}</span>
+        <div className={`flex items-center justify-between gap-3 px-4 py-3 border-b ${titulo === 'Ativos' ? 'bg-[#dcfce7] border-[#86efac]' : 'bg-[#fee2e2] border-[#fca5a5]'}`}>
+          <h2 className={`text-base font-bold ${titulo === 'Ativos' ? 'text-[#14532d]' : 'text-[#7f1d1d]'}`}>{titulo}</h2>
+          <span className={`text-base font-bold [font-variant-numeric:tabular-nums] ${titulo === 'Ativos' ? 'text-[#14532d]' : 'text-[#7f1d1d]'}`}>{formatarValor(total)}</span>
         </div>
       }
     >
