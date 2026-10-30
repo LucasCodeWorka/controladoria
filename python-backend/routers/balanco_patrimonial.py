@@ -30,6 +30,15 @@ router = APIRouter()
 
 MESES_JANELA_PADRAO = 12
 
+# PC.2 Obrigacoes de compra de MP. e serv.: despesaitens de materia-prima
+# validados pelo usuario (1196 codigos), a pagar de hoje em diante.
+DESPESAITENS_MATERIA_PRIMA = tuple(str(c) for c in (
+    [1, 2, 3, 19, 21, 69, 75, 88, 89, 92, 101, 106, 107, 108, 109, 133, 223, 849, 983]
+    + list(range(176, 186)) + list(range(281, 285)) + list(range(288, 473)) + list(range(474, 488))
+    + list(range(494, 523)) + list(range(528, 539)) + list(range(1453, 1478))
+    + list(range(10000, 10187)) + list(range(11000, 11712))
+))
+
 
 def _criar_tabelas_balanco():
     execute_insert("""
@@ -472,7 +481,7 @@ def get_balanco_patrimonial(
 ):
     """
     Valores do Balanco Patrimonial: Caixa, Contas a Receber (boletos e
-    cartoes), Estoques e Bens, e no Passivo so Emprestimos (PC.3 ate 12 meses e PNC.8 depois). As
+    cartoes), Estoques e Bens, e no Passivo Materia-prima (PC.2) e Emprestimos (PC.3 ate 12 meses e PNC.8 depois). As
     demais contas do Passivo nao tem fonte ligada (a tela de classificacao de
     despesas foi descontinuada) e ficam zeradas.
     """
@@ -545,6 +554,19 @@ def get_balanco_patrimonial(
                 "PNC.8": pnc_p + pnc_j, "PNC.8.1": pnc_p, "PNC.8.2": pnc_j,
             }
 
+        # PC.2 = materia-prima a pagar (vencimento de hoje em diante, em aberto,
+        # nada pago), sem filtro de empresa e sem separacao por prazo.
+        def _materia_prima():
+            rows = execute_query(
+                """SELECT COALESCE(SUM(vl_rateio), 0) AS total
+                   FROM public.vr_fcp_despduplicatai
+                   WHERE cd_despesaitem IN %s
+                     AND dt_vencimento >= CURRENT_DATE
+                     AND tp_situacao = 'N'
+                     AND vl_pago = 0""", (DESPESAITENS_MATERIA_PRIMA,)
+            ) or []
+            return {"PC.2": -float(rows[0]["total"]) if rows else 0.0}
+
         with ThreadPoolExecutor(max_workers=6) as pool:
             f_opcionais = {
                 "Saldo bancario": pool.submit(_caixa),
@@ -553,6 +575,7 @@ def get_balanco_patrimonial(
                 "Estoques": pool.submit(_estoques),
                 "Bens": pool.submit(_bens),
                 "Emprestimos": pool.submit(_emprestimos),
+                "Materia-prima": pool.submit(_materia_prima),
             }
             resultados = {}
             for nome, f in f_opcionais.items():
@@ -569,6 +592,7 @@ def get_balanco_patrimonial(
         valores.update(resultados.get("Estoques", {}))
         valores.update(resultados.get("Bens", {}))
         valores.update(resultados.get("Emprestimos", {}))
+        valores.update(resultados.get("Materia-prima", {}))
 
         return {"valores": valores, "mesReferencia": mesReferencia}
     except HTTPException:
