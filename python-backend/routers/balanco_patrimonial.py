@@ -490,7 +490,7 @@ def get_balanco_patrimonial(
 ):
     """
     Valores do Balanco Patrimonial: Caixa, Contas a Receber (boletos e
-    cartoes), Estoques e Bens, e no Passivo Fornecedores (PC.1 ate 12 meses e PNC.7 depois), Materia-prima (PC.2) e Emprestimos (PC.3 ate 12 meses e PNC.8 depois). As
+    cartoes), Estoques e Bens, e no Passivo Fornecedores (PC.1 ate 12 meses e PNC.7 depois), Salarios (PC.4), Materia-prima (PC.2) e Emprestimos (PC.3 ate 12 meses e PNC.8 depois). As
     demais contas do Passivo nao tem fonte ligada (a tela de classificacao de
     despesas foi descontinuada) e ficam zeradas.
     """
@@ -593,6 +593,14 @@ def get_balanco_patrimonial(
             r = rows[0] if rows else {"ate_12m": 0, "apos_12m": 0}
             return {"PC.1": -float(r["ate_12m"]), "PNC.7": -float(r["apos_12m"])}
 
+        # PC.4 Salarios e encargos a pagar = custo_total da competencia mais
+        # recente de fato_custo_mensal. Passivo = negativo.
+        def _salarios():
+            rows = execute_query(
+                "SELECT competencia, custo_total FROM fato_custo_mensal ORDER BY competencia DESC LIMIT 1", ()
+            ) or []
+            return {"PC.4": -float(rows[0]["custo_total"] or 0) if rows else 0.0}
+
         with ThreadPoolExecutor(max_workers=6) as pool:
             f_opcionais = {
                 "Saldo bancario": pool.submit(_caixa),
@@ -603,6 +611,7 @@ def get_balanco_patrimonial(
                 "Emprestimos": pool.submit(_emprestimos),
                 "Materia-prima": pool.submit(_materia_prima),
                 "Fornecedores": pool.submit(_fornecedores),
+                "Salarios": pool.submit(_salarios),
             }
             resultados = {}
             for nome, f in f_opcionais.items():
@@ -621,6 +630,7 @@ def get_balanco_patrimonial(
         valores.update(resultados.get("Emprestimos", {}))
         valores.update(resultados.get("Materia-prima", {}))
         valores.update(resultados.get("Fornecedores", {}))
+        valores.update(resultados.get("Salarios", {}))
 
         return {"valores": valores, "mesReferencia": mesReferencia}
     except HTTPException:
