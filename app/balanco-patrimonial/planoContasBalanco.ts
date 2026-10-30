@@ -60,7 +60,15 @@ export const PLANO_PASSIVO: ContaBalanco[] = [
     filhos: [
       { codigo: 'PC.1', nome: '1 - FORNECEDORES E ALUGUÉIS A PAGAR', nivel: 2 },
       { codigo: 'PC.2', nome: '2 - OBRIGAÇÕES DE COMPRA DE MP. E SERV.', nivel: 2 },
-      { codigo: 'PC.3', nome: '3 - EMPRÉSTIMOS, FINANCIAMENTOS E DEBÊNTURES', nivel: 2 },
+      {
+        codigo: 'PC.3',
+        nome: '3 - EMPRÉSTIMOS, FINANCIAMENTOS E DEBÊNTURES',
+        nivel: 2,
+        detalhes: [
+          { codigo: 'PC.3.1', nome: 'PRINCIPAL' },
+          { codigo: 'PC.3.2', nome: 'JUROS' },
+        ],
+      },
       { codigo: 'PC.4', nome: '4 - SALÁRIOS E ENCARGOS A PAGAR', nivel: 2 },
       { codigo: 'PC.5', nome: '5 - TRIBUTOS A RECOLHER', nivel: 2 },
       { codigo: 'PC.6', nome: '6 - IMPOSTO DE RENDA E CONTRIBUIÇÃO SOCIAL DIFERIDOS', nivel: 2 },
@@ -72,7 +80,15 @@ export const PLANO_PASSIVO: ContaBalanco[] = [
     nivel: 1,
     filhos: [
       { codigo: 'PNC.7', nome: '7 - FORNECEDORES E ALUGUÉIS A PAGAR', nivel: 2 },
-      { codigo: 'PNC.8', nome: '8 - EMPRÉSTIMOS, FINANCIAMENTOS E DEBÊNTURES', nivel: 2 },
+      {
+        codigo: 'PNC.8',
+        nome: '8 - EMPRÉSTIMOS, FINANCIAMENTOS E DEBÊNTURES',
+        nivel: 2,
+        detalhes: [
+          { codigo: 'PNC.8.1', nome: 'PRINCIPAL' },
+          { codigo: 'PNC.8.2', nome: 'JUROS' },
+        ],
+      },
       { codigo: 'PNC.9', nome: '9 - TRIBUTOS A RECOLHER', nivel: 2 },
       { codigo: 'PNC.10', nome: '10 - IMPOSTO DE RENDA E CONTRIBUIÇÃO SOCIAL DIFERIDOS', nivel: 2 },
     ],

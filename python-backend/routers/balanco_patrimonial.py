@@ -472,8 +472,9 @@ def get_balanco_patrimonial(
 ):
     """
     Valores do Balanco Patrimonial: Caixa, Contas a Receber (boletos e
-    cartoes), Estoques e Bens. O Passivo nao tem mais fonte ligada (a tela de
-    classificacao de despesas foi descontinuada) e fica zerado.
+    cartoes), Estoques e Bens, e no Passivo so Emprestimos (PC.3 ate 12 meses e PNC.8 depois). As
+    demais contas do Passivo nao tem fonte ligada (a tela de classificacao de
+    despesas foi descontinuada) e ficam zeradas.
     """
     try:
         _criar_tabelas_balanco()
@@ -518,6 +519,32 @@ def get_balanco_patrimonial(
         def _bens():
             return _total_bens_por_linha()
 
+        # Emprestimos = principal (despesaitem 114) + juros (137) em aberto (nada
+        # pago), sem filtro de empresa, igual a consulta passada pelo usuario.
+        # PC.3 = vence em ate 12 meses (de hoje); PNC.8 = vence depois disso.
+        # .1 = principal e .2 = juros (aberturas so de exibicao). Passivo = negativo.
+        def _emprestimos():
+            rows = execute_query(
+                """SELECT cd_despesaitem::text AS item,
+                          COALESCE(SUM(CASE WHEN dt_vencimento < CURRENT_DATE + INTERVAL '12 months' THEN vl_rateio END), 0) AS ate_12m,
+                          COALESCE(SUM(CASE WHEN dt_vencimento >= CURRENT_DATE + INTERVAL '12 months' THEN vl_rateio END), 0) AS apos_12m
+                   FROM public.vr_fcp_despduplicatai
+                   WHERE cd_despesaitem IN ('114', '137')
+                     AND dt_vencimento >= CURRENT_DATE
+                     AND tp_situacao = 'N'
+                     AND vl_pago = '0'
+                   GROUP BY 1""", ()
+            ) or []
+            por_item = {r["item"]: r for r in rows}
+            def v(item, col):
+                return -float(por_item[item][col]) if item in por_item else 0.0
+            pc_p, pc_j = v("114", "ate_12m"), v("137", "ate_12m")
+            pnc_p, pnc_j = v("114", "apos_12m"), v("137", "apos_12m")
+            return {
+                "PC.3": pc_p + pc_j, "PC.3.1": pc_p, "PC.3.2": pc_j,
+                "PNC.8": pnc_p + pnc_j, "PNC.8.1": pnc_p, "PNC.8.2": pnc_j,
+            }
+
         with ThreadPoolExecutor(max_workers=6) as pool:
             f_opcionais = {
                 "Saldo bancario": pool.submit(_caixa),
@@ -525,6 +552,7 @@ def get_balanco_patrimonial(
                 "Cartoes a receber": pool.submit(_cartoes),
                 "Estoques": pool.submit(_estoques),
                 "Bens": pool.submit(_bens),
+                "Emprestimos": pool.submit(_emprestimos),
             }
             resultados = {}
             for nome, f in f_opcionais.items():
@@ -540,6 +568,7 @@ def get_balanco_patrimonial(
             valores["AC.2.2"] = cartoes
         valores.update(resultados.get("Estoques", {}))
         valores.update(resultados.get("Bens", {}))
+        valores.update(resultados.get("Emprestimos", {}))
 
         return {"valores": valores, "mesReferencia": mesReferencia}
     except HTTPException:
