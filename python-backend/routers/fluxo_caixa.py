@@ -286,7 +286,7 @@ SQL_SALDOS_BANCARIOS = """
 """
 
 
-def _obter_saldos_bancarios() -> dict:
+def _obter_saldos_bancarios(somente_hoje: bool = True) -> dict:
     """Conta cuja ultima posicao nao e de HOJE (horario de Brasilia) entra
     com saldo 0 e semDados=True - saldo de dias anteriores nao vale como
     posicao de caixa atual (pedido explicito do usuario). Vale pra tabela,
@@ -308,14 +308,18 @@ def _obter_saldos_bancarios() -> dict:
     7 usados, 0 restantes - limite nao mostrado). Conta sem franquia
     contratada (qt_dias_carencia = 0, ex.: Banco do Brasil) nao mostra a
     situacao de dias (fica "-"), mesmo tendo um vl_limite_total_credito >
-    0 cadastrado."""
+    0 cadastrado.
+
+    somente_hoje=False (usado pelo Balanco Patrimonial): mantem o ultimo saldo
+    de cada conta mesmo que nao seja de hoje; semDados continua indicando
+    que a posicao nao e do dia."""
     hoje = datetime.now(ZoneInfo("America/Sao_Paulo")).date().isoformat()
     rows = execute_query(SQL_SALDOS_BANCARIOS) or []
     contas = []
     for r in rows:
         dt_posicao = _dia_str(r["dt_posicao"])
         sem_dados = dt_posicao != hoje
-        vl_saldo = 0.0 if sem_dados else float(r["vl_saldo"])
+        vl_saldo = 0.0 if (sem_dados and somente_hoje) else float(r["vl_saldo"])
         qt_dias_carencia = int(r["qt_dias_carencia"] or 0)
         qt_dias_usados = int(r["qt_dias_cheque_especial"] or 0)
         qt_dias_restantes = max(qt_dias_carencia - qt_dias_usados, 0)

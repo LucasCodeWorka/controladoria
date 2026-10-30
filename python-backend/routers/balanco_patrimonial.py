@@ -507,7 +507,8 @@ def get_balanco_patrimonial(
         # sem filtro de empresa - a tabela de saldos nao tem cd_empresa). Nao
         # depende do mes de referencia: e a posicao de HOJE.
         def _caixa():
-            return {"AC.1": _obter_saldos_bancarios()["total"]}
+            # Sem posicao de hoje, vale o ultimo saldo de cada conta.
+            return {"AC.1": _obter_saldos_bancarios(somente_hoje=False)["total"]}
 
         # AC.2 Contas a receber = boletos + cartoes do Fluxo de Caixa (colunas
         # Boleto e Cartao), na janela configurada da conta (default 12 meses) e

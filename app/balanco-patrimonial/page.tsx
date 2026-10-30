@@ -67,7 +67,7 @@ type Ordenacao = { campo: Campo; dir: 'asc' | 'desc' } | null;
 const CHAVE_FILTROS = 'balanco_patrimonial_filtros';
 
 // Barra de rolagem acima e abaixo da tabela, sincronizadas (padrao LIEBE).
-function DualScroll({ children, secao }: { children: React.ReactNode; secao?: React.ReactNode }) {
+function DualScroll({ children, secao, rodape }: { children: React.ReactNode; secao?: React.ReactNode; rodape?: React.ReactNode }) {
   const topo = useRef<HTMLDivElement>(null);
   const corpo = useRef<HTMLDivElement>(null);
   const [largura, setLargura] = useState(0);
@@ -92,14 +92,15 @@ function DualScroll({ children, secao }: { children: React.ReactNode; secao?: Re
   };
 
   return (
-    <div className="bg-white border border-[#e5e7eb] rounded-lg shadow-sm overflow-hidden">
+    <div className="bg-white border border-[#e5e7eb] rounded-lg shadow-sm overflow-hidden flex flex-col h-full">
       {secao}
       <div ref={topo} onScroll={() => sync(topo.current, corpo.current)} className="overflow-x-auto overflow-y-hidden h-[14px] border-b border-[#e5e7eb]">
         <div style={{ width: largura, height: 1 }} />
       </div>
-      <div ref={corpo} onScroll={() => sync(corpo.current, topo.current)} className="overflow-auto max-h-[calc(100vh-320px)]">
+      <div ref={corpo} onScroll={() => sync(corpo.current, topo.current)} className="overflow-auto max-h-[calc(100vh-320px)] flex-1 min-h-0">
         {children}
       </div>
+      {rodape}
     </div>
   );
 }
@@ -150,6 +151,13 @@ function TabelaBalanco({ titulo, plano, valores, mostrarPercentual, contasExpand
 
   return (
     <DualScroll
+      rodape={
+        <div className="flex border-t-2 border-[#b3838c] bg-[#f4f5f7] text-[13px] font-bold [font-variant-numeric:tabular-nums]">
+          <div className="flex-1 px-3 py-3 text-[#1d1d1d]">Total</div>
+          <div className={`w-44 px-3 py-3 text-right whitespace-nowrap ${corValor(total)}`}>{formatarValor(total)}</div>
+          {mostrarPercentual && <div className="w-24 px-3 py-3" />}
+        </div>
+      }
       secao={
         <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-[#e5e7eb]">
           <h2 className="text-base font-bold text-[#1d1d1d]">{titulo}</h2>
@@ -157,12 +165,17 @@ function TabelaBalanco({ titulo, plano, valores, mostrarPercentual, contasExpand
         </div>
       }
     >
-      <table className="w-full min-w-[420px] border-separate border-spacing-0 text-[13px] text-[#1d1d1d] [font-variant-numeric:tabular-nums]">
+      <table className="w-full min-w-[420px] table-fixed border-separate border-spacing-0 text-[13px] text-[#1d1d1d] [font-variant-numeric:tabular-nums]">
+        <colgroup>
+          <col />
+          <col className="w-44" />
+          {mostrarPercentual && <col className="w-24" />}
+        </colgroup>
         <thead>
           <tr>
             {cabecalho('conta', 'Conta', true)}
             {cabecalho('valor', 'R$', false)}
-            {mostrarPercentual && cabecalho('pct', '%', false, 'w-24')}
+            {mostrarPercentual && cabecalho('pct', '%', false)}
           </tr>
         </thead>
         <tbody>
@@ -240,15 +253,6 @@ function TabelaBalanco({ titulo, plano, valores, mostrarPercentual, contasExpand
             );
           })}
         </tbody>
-        <tfoot>
-          <tr>
-            <td className="sticky bottom-0 px-3 py-3 font-bold bg-[#f4f5f7] border-t-2 border-[#b3838c]">Total</td>
-            <td className={`sticky bottom-0 px-3 py-3 text-right font-bold whitespace-nowrap bg-[#f4f5f7] border-t-2 border-[#b3838c] ${corValor(total)}`}>
-              {formatarValor(total)}
-            </td>
-            {mostrarPercentual && <td className="sticky bottom-0 bg-[#f4f5f7] border-t-2 border-[#b3838c]" />}
-          </tr>
-        </tfoot>
       </table>
     </DualScroll>
   );
@@ -566,7 +570,7 @@ export default function BalancoPatrimonialPage() {
               status={dividaEbitda === null ? (indicadoresDre ? 'ruim' : 'neutro') : dividaEbitda <= 2.5 ? 'ok' : dividaEbitda <= 3 ? 'atencao' : 'ruim'}
             />
           </div>
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-stretch">
             <TabelaBalanco
               titulo="Ativos"
               plano={PLANO_ATIVOS}
