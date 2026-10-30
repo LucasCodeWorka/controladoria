@@ -138,7 +138,7 @@ function TabelaBalanco({ titulo, plano, valores, mostrarPercentual, contasExpand
         aria-sort={!ativa ? 'none' : ordenacao!.dir === 'asc' ? 'ascending' : 'descending'}
         onClick={() => alternarOrdenacao(campo)}
         className={`sticky top-0 z-[2] px-3 py-2 text-xs font-bold uppercase tracking-[.04em] cursor-pointer select-none whitespace-nowrap ${esquerda ? 'text-left' : 'text-right'} ${
-          ativa ? 'bg-[#f5ecef] text-[#8e5e68]' : 'bg-[#eef0f3] text-[#374151] hover:bg-[#e3e6ea]'
+          ativa ? 'bg-[#f5ecef] text-[#8e5e68]' : 'bg-[#d9dde3] text-[#1f2937] hover:bg-[#ced3da]'
         } ${extra}`}
       >
         {rotulo}
@@ -152,7 +152,7 @@ function TabelaBalanco({ titulo, plano, valores, mostrarPercentual, contasExpand
   return (
     <DualScroll
       rodape={
-        <div className="flex border-t-2 border-[#b3838c] bg-[#f4f5f7] text-[13px] font-bold [font-variant-numeric:tabular-nums]">
+        <div className="flex border-t-2 border-[#b3838c] bg-[#dfe2e7] text-[13px] font-bold [font-variant-numeric:tabular-nums]">
           <div className="flex-1 px-3 py-3 text-[#1d1d1d]">Total</div>
           <div className={`w-44 px-3 py-3 text-right whitespace-nowrap ${corValor(total)}`}>{formatarValor(total)}</div>
           {mostrarPercentual && <div className="w-24 px-3 py-3" />}
@@ -188,40 +188,40 @@ function TabelaBalanco({ titulo, plano, valores, mostrarPercentual, contasExpand
             return (
               <React.Fragment key={grupo.codigo}>
                 <tr className="cursor-pointer group" onClick={() => toggleExpansao(grupo.codigo)}>
-                  <td className="px-3 py-2.5 font-bold text-[#8e5e68] bg-[#f5ecef] group-hover:bg-[#efe0e4] border-b border-[#e5e7eb] border-l-4 border-l-[#b3838c]">
+                  <td className="px-3 py-2.5 font-bold text-[#8e5e68] bg-[#e6cfd5] group-hover:bg-[#dcbfc7] border-b border-[#e5e7eb] border-l-4 border-l-[#b3838c]">
                     <div className="flex items-center gap-2">
                       {expandido ? <ChevronDown className="w-4 h-4 text-[#8e5e68]" /> : <ChevronRight className="w-4 h-4 text-[#8e5e68]" />}
                       {grupo.nome}
                     </div>
                   </td>
-                  <td className={`px-3 py-2.5 text-right font-bold whitespace-nowrap bg-[#f5ecef] group-hover:bg-[#efe0e4] border-b border-[#e5e7eb] ${corValor(totalDoGrupo)}`}>
+                  <td className={`px-3 py-2.5 text-right font-bold whitespace-nowrap bg-[#e6cfd5] group-hover:bg-[#dcbfc7] border-b border-[#e5e7eb] ${corValor(totalDoGrupo)}`}>
                     {formatarValor(totalDoGrupo)}
                   </td>
                   {mostrarPercentual && (
-                    <td className="px-3 py-2.5 text-right font-bold whitespace-nowrap text-[#8e5e68] bg-[#f5ecef] group-hover:bg-[#efe0e4] border-b border-[#e5e7eb]">
+                    <td className="px-3 py-2.5 text-right font-bold whitespace-nowrap text-[#8e5e68] bg-[#e6cfd5] group-hover:bg-[#dcbfc7] border-b border-[#e5e7eb]">
                       {totalDoGrupo === 0 ? '-' : '100,00%'}
                     </td>
                   )}
                 </tr>
                 {expandido &&
-                  (grupo.filhos || []).map((conta) => {
+                  (grupo.filhos || []).map((conta, idx) => {
                     const valor = valores[conta.codigo] ?? 0;
                     const temDetalhes = !!conta.detalhes?.length;
                     const detalhesAbertos = temDetalhes && contasExpandidas.has(conta.codigo);
                     return (
                       <React.Fragment key={conta.codigo}>
-                        <tr className={`group ${temDetalhes ? 'cursor-pointer' : ''}`} onClick={temDetalhes ? () => toggleExpansao(conta.codigo) : undefined}>
-                          <td className={`px-3 py-2 pl-10 font-semibold group-hover:bg-[#f5ecef] border-b border-[#e5e7eb] ${valor === 0 && !temDetalhes ? 'text-[#6b7280]' : 'text-[#1d1d1d]'}`}>
+                        <tr className={`group ${idx % 2 === 1 ? 'bg-[#f0f1f4]' : 'bg-white'} ${temDetalhes ? 'cursor-pointer' : ''}`} onClick={temDetalhes ? () => toggleExpansao(conta.codigo) : undefined}>
+                          <td className={`px-3 py-2 pl-10 font-semibold group-hover:bg-[#efdde2] border-b border-[#e5e7eb] ${valor === 0 && !temDetalhes ? 'text-[#6b7280]' : 'text-[#1d1d1d]'}`}>
                             <div className="flex items-center gap-2">
                               {temDetalhes && (detalhesAbertos ? <ChevronDown className="w-4 h-4 text-[#8e5e68]" /> : <ChevronRight className="w-4 h-4 text-[#8e5e68]" />)}
                               {conta.nome}
                             </div>
                           </td>
-                          <td className={`px-3 py-2 text-right whitespace-nowrap font-semibold group-hover:bg-[#f5ecef] border-b border-[#e5e7eb] ${corValor(valor)}`}>
+                          <td className={`px-3 py-2 text-right whitespace-nowrap font-semibold group-hover:bg-[#efdde2] border-b border-[#e5e7eb] ${corValor(valor)}`}>
                             {formatarValor(valor)}
                           </td>
                           {mostrarPercentual && (
-                            <td className={`px-3 py-2 text-right whitespace-nowrap font-semibold group-hover:bg-[#f5ecef] border-b border-[#e5e7eb] ${valor === 0 ? 'text-[#6b7280]' : ''}`}>
+                            <td className={`px-3 py-2 text-right whitespace-nowrap font-semibold group-hover:bg-[#efdde2] border-b border-[#e5e7eb] ${valor === 0 ? 'text-[#6b7280]' : ''}`}>
                               {formatarPercentual(valor, totalDoGrupo)}
                             </td>
                           )}
@@ -231,15 +231,15 @@ function TabelaBalanco({ titulo, plano, valores, mostrarPercentual, contasExpand
                             const vd = valores[d.codigo] ?? 0;
                             return (
                               <tr key={d.codigo} className="group">
-                                <td className="px-3 py-1.5 pl-16 text-[#4b5563] bg-[#fafafa] group-hover:bg-[#f5ecef] border-b border-[#e5e7eb]">
+                                <td className="px-3 py-1.5 pl-16 text-[#4b5563] bg-[#e3e6ea] group-hover:bg-[#efdde2] border-b border-[#e5e7eb]">
                                   <span className="inline-block w-1.5 h-1.5 mr-2 rounded-full bg-[#c5949d] align-middle" />
                                   {d.nome}
                                 </td>
-                                <td className={`px-3 py-1.5 text-right whitespace-nowrap bg-[#fafafa] group-hover:bg-[#f5ecef] border-b border-[#e5e7eb] ${corValor(vd)}`}>
+                                <td className={`px-3 py-1.5 text-right whitespace-nowrap bg-[#e3e6ea] group-hover:bg-[#efdde2] border-b border-[#e5e7eb] ${corValor(vd)}`}>
                                   {formatarValor(vd)}
                                 </td>
                                 {mostrarPercentual && (
-                                  <td className="px-3 py-1.5 text-right whitespace-nowrap text-[#4b5563] bg-[#fafafa] group-hover:bg-[#f5ecef] border-b border-[#e5e7eb]">
+                                  <td className="px-3 py-1.5 text-right whitespace-nowrap text-[#4b5563] bg-[#e3e6ea] group-hover:bg-[#efdde2] border-b border-[#e5e7eb]">
                                     {formatarPercentual(vd, totalDoGrupo)}
                                   </td>
                                 )}
