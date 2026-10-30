@@ -493,7 +493,7 @@ def get_balanco_patrimonial(
 ):
     """
     Valores do Balanco Patrimonial: Caixa, Contas a Receber (boletos e
-    cartoes), Estoques e Bens, e no Passivo Fornecedores (PC.1 ate 12 meses e PNC.7 depois), Salarios (PC.4), Tributos (PC.5), Materia-prima (PC.2) e Emprestimos (PC.3 ate 12 meses e PNC.8 depois). As
+    cartoes), Estoques e Bens, e no Passivo Fornecedores (PC.1 ate 12 meses e PNC.7 depois), Salarios (PC.4), Tributos (PC.5 ate 12 meses e PNC.9 depois), Materia-prima (PC.2) e Emprestimos (PC.3 ate 12 meses e PNC.8 depois). As
     demais contas do Passivo nao tem fonte ligada (a tela de classificacao de
     despesas foi descontinuada) e ficam zeradas.
     """
@@ -596,18 +596,21 @@ def get_balanco_patrimonial(
             r = rows[0] if rows else {"ate_12m": 0, "apos_12m": 0}
             return {"PC.1": -float(r["ate_12m"]), "PNC.7": -float(r["apos_12m"])}
 
-        # PC.5 = tributos a recolher (vencimento de hoje em diante, em aberto,
-        # nada pago), sem filtro de empresa e sem separacao por prazo.
+        # PC.5 = tributos a recolher que vencem em ate 12 meses (de hoje); PNC.9 =
+        # os que vencem depois disso. Em aberto, nada pago, sem filtro de empresa.
         def _tributos():
             rows = execute_query(
-                """SELECT COALESCE(SUM(vl_rateio), 0) AS total
+                """SELECT
+                       COALESCE(SUM(CASE WHEN dt_vencimento < CURRENT_DATE + INTERVAL '12 months' THEN vl_rateio END), 0) AS ate_12m,
+                       COALESCE(SUM(CASE WHEN dt_vencimento >= CURRENT_DATE + INTERVAL '12 months' THEN vl_rateio END), 0) AS apos_12m
                    FROM public.vr_fcp_despduplicatai
                    WHERE cd_despesaitem IN %s
                      AND dt_vencimento >= CURRENT_DATE
                      AND tp_situacao = 'N'
                      AND vl_pago = 0""", (DESPESAITENS_TRIBUTOS,)
             ) or []
-            return {"PC.5": -float(rows[0]["total"]) if rows else 0.0}
+            r = rows[0] if rows else {"ate_12m": 0, "apos_12m": 0}
+            return {"PC.5": -float(r["ate_12m"]), "PNC.9": -float(r["apos_12m"])}
 
         # PC.4 Salarios e encargos a pagar = custo_total da competencia mais
         # recente de fato_custo_mensal. Passivo = negativo.
