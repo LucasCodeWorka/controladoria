@@ -524,10 +524,6 @@ export default function BalancoPatrimonialPage() {
         </div>
       ) : (
         <>
-          <div className="bg-[#fffbeb] border border-amber-200 rounded-md px-4 py-2.5 text-[13px] text-[#b45309]">
-            Estrutura em construção: só as linhas já ligadas trazem valor real (hoje: Caixa e Equivalentes de Caixa = saldo bancário
-            atual do Fluxo de Caixa; Contas a Receber = boletos + cartões do Fluxo de Caixa; Estoques = PA das lojas (custo do CMV), PA da fábrica (custo C 999 + 10%) e MP da fábrica (custo C 2), posição atual; Investimentos e Imobilizado = bens cadastrados (planilha de patrimônio, sem filtro de empresa); e Empréstimos do Passivo (principal + juros a vencer: até 12 meses no Circulante, depois disso no Não Circulante)) - o resto continua zerado até as consultas serem plugadas aqui.
-          </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
             <CardTotal rotulo="Total dos Ativos" valor={totalAtivos} />
             <CardTotal rotulo="Total do Passivo" valor={totalPassivo} />
