@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Scale, ChevronDown, ChevronRight, RefreshCw } from 'lucide-react';
+import { Scale, ChevronDown, ChevronRight, RefreshCw, FileDown } from 'lucide-react';
 import { formatarValor } from '../utils/formatters';
 import { carregarFiltro } from '../utils/persistirFiltro';
 import { apagarCookie, carregarFiltroCookie, salvarFiltroCookie } from '../utils/filtrosCookie';
@@ -92,12 +92,12 @@ function DualScroll({ children, secao, rodape }: { children: React.ReactNode; se
   };
 
   return (
-    <div className="bg-white border border-[#e5e7eb] rounded-lg shadow-sm overflow-hidden flex flex-col h-full">
+    <div className="bg-white border border-[#e5e7eb] rounded-lg shadow-sm overflow-hidden flex flex-col h-full print:shadow-none print:h-auto print:break-inside-avoid">
       {secao}
-      <div ref={topo} onScroll={() => sync(topo.current, corpo.current)} className="overflow-x-auto overflow-y-hidden h-[14px] border-b border-[#e5e7eb]">
+      <div ref={topo} onScroll={() => sync(topo.current, corpo.current)} className="overflow-x-auto overflow-y-hidden h-[14px] border-b border-[#e5e7eb] print:hidden">
         <div style={{ width: largura, height: 1 }} />
       </div>
-      <div ref={corpo} onScroll={() => sync(corpo.current, topo.current)} className="overflow-auto max-h-[calc(100vh-320px)] flex-1 min-h-0">
+      <div ref={corpo} onScroll={() => sync(corpo.current, topo.current)} className="overflow-auto max-h-[calc(100vh-320px)] flex-1 min-h-0 print:max-h-none print:overflow-visible">
         {children}
       </div>
       {rodape}
@@ -304,6 +304,7 @@ export default function BalancoPatrimonialPage() {
   const [ordenacao, setOrdenacao] = useState<Ordenacao>(null);
   const [salvoAtivo, setSalvoAtivo] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
+  const [infoConsulta, setInfoConsulta] = useState<{ mes: string; empresas: string } | null>(null);
 
   // Valores zerados por padrao - linhas com consulta real ja ligada (ex:
   // PC.2) vem do endpoint /api/balanco-patrimonial/dados e sobrescrevem o
@@ -385,6 +386,14 @@ export default function BalancoPatrimonialPage() {
     const empresas = sobrescrever?.empresas ?? empresasSelecionadas;
     const totalEmpresas = sobrescrever?.total ?? empresasDisponiveis.length;
     setConsultaExecutada(true);
+    const [anoRef, mesRef] = mes.split('-');
+    setInfoConsulta({
+      mes: `${mesRef}/${anoRef}`,
+      empresas:
+        empresas.size >= totalEmpresas
+          ? 'Todas as empresas'
+          : empresasDisponiveis.filter((e) => empresas.has(e.cdEmpresa)).map((e) => e.nome).join(', '),
+    });
     setCarregando(true);
     setErro(null);
     setIndicadoresDre(null);
@@ -445,16 +454,21 @@ export default function BalancoPatrimonialPage() {
   const statusProximoDe1 = (v: number | null): Status => (v === null ? 'neutro' : v >= 0.8 ? 'ok' : v >= 0.5 ? 'atencao' : 'ruim');
 
   return (
-    <div className="p-4 md:p-6 space-y-4 bg-[#f5f5f5] min-h-full text-[#1d1d1d]">
+    <div className="p-4 md:p-6 space-y-4 bg-[#f5f5f5] min-h-full text-[#1d1d1d] print:p-0 print:bg-white [print-color-adjust:exact] [-webkit-print-color-adjust:exact]">
       <div className="flex items-center gap-3">
         <Scale className="w-7 h-7 text-[#8e5e68]" />
         <div>
           <h1 className="text-2xl font-bold text-[#1d1d1d]">Balanço Patrimonial</h1>
-          <p className="text-sm text-[#4b5563]">Ativos e Passivo, por empresa e mês de referência.</p>
+          <p className="text-sm text-[#4b5563] print:hidden">Ativos e Passivo, por empresa e mês de referência.</p>
+          {infoConsulta && (
+            <p className="hidden print:block text-sm text-[#4b5563]">
+              Mês de referência: {infoConsulta.mes} · {infoConsulta.empresas} · Gerado em {new Date().toLocaleString('pt-BR')}
+            </p>
+          )}
         </div>
       </div>
 
-      <div className="bg-white border border-[#e5e7eb] rounded-lg shadow-sm p-4">
+      <div className="bg-white border border-[#e5e7eb] rounded-lg shadow-sm p-4 print:hidden">
         <div className="flex items-end gap-4 flex-wrap">
           <div>
             <label className="block text-[13px] font-semibold text-[#4b5563] mb-1">Mês de referência</label>
@@ -514,6 +528,15 @@ export default function BalancoPatrimonialPage() {
             className="px-4 py-2 border border-[#d1d5db] rounded-md text-sm font-medium text-[#4b5563] bg-white hover:bg-[#f5ecef]"
           >
             Limpar filtros
+          </button>
+          <button
+            onClick={() => window.print()}
+            disabled={!consultaExecutada || carregando}
+            title={consultaExecutada ? 'Gerar PDF da página (Salvar como PDF na janela de impressão)' : 'Faça a consulta primeiro'}
+            className="px-4 py-2 border border-[#d1d5db] rounded-md text-sm font-medium text-[#1d1d1d] bg-white hover:bg-[#f5ecef] flex items-center gap-2 disabled:opacity-50"
+          >
+            <FileDown className="w-4 h-4 text-[#8e5e68]" />
+            Gerar PDF
           </button>
           {salvoAtivo && <span className="text-[13px] text-[#8e5e68] font-medium">Filtros salvos aplicados</span>}
         </div>
