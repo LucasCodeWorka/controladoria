@@ -24,7 +24,7 @@ import dre_cache
 from database import execute_query, execute_insert
 from routers.dre import CCUSTOS_LOJAS, FILTRO_DUPLICATAS_EXCLUIDAS_SQL, PARAMS_DUPLICATAS_EXCLUIDAS, CCUSTOS_FABRICA, CCUSTOS_ECOMMERCE, CCUSTO_ECOMMERCE_AGRUPADO
 from routers.cmv_detalhado import CD_EMPRESA_FABRICA
-from routers.fluxo_caixa import _obter_saldos_bancarios, _filtros_boleto, _filtros_cartao, _parse_empresas, _criar_tabelas_fluxo_caixa
+from routers.fluxo_caixa import _obter_saldos_bancarios, _filtros_boleto, _filtros_cartao, _filtros_cheque, _parse_empresas, _criar_tabelas_fluxo_caixa
 
 router = APIRouter()
 
@@ -158,6 +158,19 @@ def _somar_cartoes_a_receber(data_inicio: str, data_fim: str, empresas: Optional
     where, params = _filtros_cartao(data_inicio, data_fim, _parse_empresas(empresas))
     rows = execute_query(
         f"SELECT COALESCE(SUM(vl_fatura - COALESCE(vl_desconto, 0)), 0) AS total FROM vr_fcr_faturai {where}",
+        tuple(params),
+    ) or []
+    return float(rows[0]["total"] or 0) if rows else 0.0
+
+
+def _somar_cheques_a_receber(data_inicio: str, data_fim: str, empresas: Optional[str]) -> float:
+    """Total da coluna Cheque do Fluxo de Caixa na janela: mesma regra
+    (_filtros_cheque) - cheque em aberto, so de hoje em diante (data efetiva
+    de compensacao, fim de semana avanca pro proximo dia util)."""
+    _criar_tabelas_fluxo_caixa()
+    where, params = _filtros_cheque(data_inicio, data_fim, _parse_empresas(empresas))
+    rows = execute_query(
+        f"SELECT COALESCE(SUM(vl_fatura - vl_pago), 0) AS total FROM vr_fcr_faturai {where}",
         tuple(params),
     ) or []
     return float(rows[0]["total"] or 0) if rows else 0.0
@@ -519,7 +532,7 @@ def get_balanco_patrimonial(
             # Sem posicao de hoje, vale o ultimo saldo de cada conta.
             return {"AC.1": _obter_saldos_bancarios(somente_hoje=False)["total"]}
 
-        # AC.2 Contas a receber = boletos + cartoes do Fluxo de Caixa (colunas
+        # AC.2 Contas a receber = boletos + cartoes + cheques do Fluxo de Caixa (colunas
         # Boleto e Cartao), na janela configurada da conta (default 12 meses) e
         # no filtro de empresas. AC.2.1/AC.2.2 = abertura so de exibicao.
         def _boletos():
@@ -529,6 +542,10 @@ def get_balanco_patrimonial(
         def _cartoes():
             ini, fim = _janela_vencimento(mesReferencia, meses_janela_receber)
             return _somar_cartoes_a_receber(ini, fim, empresas)
+
+        def _cheques():
+            ini, fim = _janela_vencimento(mesReferencia, meses_janela_receber)
+            return _somar_cheques_a_receber(ini, fim, empresas)
 
         # AC.3 Estoques = Estoque PA lojas + PA fabrica + MP fabrica (foto atual -
         # nao depende do mes de referencia; filtro de empresas vale).
@@ -625,6 +642,7 @@ def get_balanco_patrimonial(
                 "Saldo bancario": pool.submit(_caixa),
                 "Boletos a receber": pool.submit(_boletos),
                 "Cartoes a receber": pool.submit(_cartoes),
+                "Cheques a receber": pool.submit(_cheques),
                 "Estoques": pool.submit(_estoques),
                 "Bens": pool.submit(_bens),
                 "Emprestimos": pool.submit(_emprestimos),
@@ -640,11 +658,12 @@ def get_balanco_patrimonial(
                 except Exception as e:
                     print(f"[BALANCO] {nome} indisponivel: {e}")
         valores.update(resultados.get("Saldo bancario", {}))
-        if "Boletos a receber" in resultados and "Cartoes a receber" in resultados:
-            boletos, cartoes = resultados["Boletos a receber"], resultados["Cartoes a receber"]
-            valores["AC.2"] = boletos + cartoes
+        if "Boletos a receber" in resultados and "Cartoes a receber" in resultados and "Cheques a receber" in resultados:
+            boletos, cartoes, cheques = resultados["Boletos a receber"], resultados["Cartoes a receber"], resultados["Cheques a receber"]
+            valores["AC.2"] = boletos + cartoes + cheques
             valores["AC.2.1"] = boletos
             valores["AC.2.2"] = cartoes
+            valores["AC.2.3"] = cheques
         valores.update(resultados.get("Estoques", {}))
         valores.update(resultados.get("Bens", {}))
         valores.update(resultados.get("Emprestimos", {}))
