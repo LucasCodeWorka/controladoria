@@ -39,6 +39,9 @@ DESPESAITENS_FORNECEDORES = (
     227, 228, 229, 231, 259, 262, 263, 264, 271, 280, 287, 488, 539, 543, 544, 546,
 )
 
+# PC.5 Tributos a recolher: despesaitens indicados pelo usuario (14 codigos).
+DESPESAITENS_TRIBUTOS = (111, 112, 113, 116, 117, 118, 119, 120, 124, 125, 126, 127, 250, 285)
+
 # PC.2 Obrigacoes de compra de MP. e serv.: despesaitens de materia-prima
 # validados pelo usuario (1196 codigos), a pagar de hoje em diante.
 DESPESAITENS_MATERIA_PRIMA = tuple(str(c) for c in (
@@ -490,7 +493,7 @@ def get_balanco_patrimonial(
 ):
     """
     Valores do Balanco Patrimonial: Caixa, Contas a Receber (boletos e
-    cartoes), Estoques e Bens, e no Passivo Fornecedores (PC.1 ate 12 meses e PNC.7 depois), Salarios (PC.4), Materia-prima (PC.2) e Emprestimos (PC.3 ate 12 meses e PNC.8 depois). As
+    cartoes), Estoques e Bens, e no Passivo Fornecedores (PC.1 ate 12 meses e PNC.7 depois), Salarios (PC.4), Tributos (PC.5), Materia-prima (PC.2) e Emprestimos (PC.3 ate 12 meses e PNC.8 depois). As
     demais contas do Passivo nao tem fonte ligada (a tela de classificacao de
     despesas foi descontinuada) e ficam zeradas.
     """
@@ -593,6 +596,19 @@ def get_balanco_patrimonial(
             r = rows[0] if rows else {"ate_12m": 0, "apos_12m": 0}
             return {"PC.1": -float(r["ate_12m"]), "PNC.7": -float(r["apos_12m"])}
 
+        # PC.5 = tributos a recolher (vencimento de hoje em diante, em aberto,
+        # nada pago), sem filtro de empresa e sem separacao por prazo.
+        def _tributos():
+            rows = execute_query(
+                """SELECT COALESCE(SUM(vl_rateio), 0) AS total
+                   FROM public.vr_fcp_despduplicatai
+                   WHERE cd_despesaitem IN %s
+                     AND dt_vencimento >= CURRENT_DATE
+                     AND tp_situacao = 'N'
+                     AND vl_pago = 0""", (DESPESAITENS_TRIBUTOS,)
+            ) or []
+            return {"PC.5": -float(rows[0]["total"]) if rows else 0.0}
+
         # PC.4 Salarios e encargos a pagar = custo_total da competencia mais
         # recente de fato_custo_mensal. Passivo = negativo.
         def _salarios():
@@ -612,6 +628,7 @@ def get_balanco_patrimonial(
                 "Materia-prima": pool.submit(_materia_prima),
                 "Fornecedores": pool.submit(_fornecedores),
                 "Salarios": pool.submit(_salarios),
+                "Tributos": pool.submit(_tributos),
             }
             resultados = {}
             for nome, f in f_opcionais.items():
@@ -631,6 +648,7 @@ def get_balanco_patrimonial(
         valores.update(resultados.get("Materia-prima", {}))
         valores.update(resultados.get("Fornecedores", {}))
         valores.update(resultados.get("Salarios", {}))
+        valores.update(resultados.get("Tributos", {}))
 
         return {"valores": valores, "mesReferencia": mesReferencia}
     except HTTPException:
