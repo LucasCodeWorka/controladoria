@@ -58,7 +58,7 @@ function filtrarPorPlano(valoresApi: Record<string, number>, plano: ContaBalanco
 
 function formatarPercentual(valor: number, total: number): string {
   if (total === 0) return '-';
-  return `${((valor / total) * 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
+  return `${(((valor / total) * 100) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
 }
 
 type Campo = 'conta' | 'valor' | 'pct';
@@ -213,7 +213,11 @@ function TabelaBalanco({ titulo, plano, valores, mostrarPercentual, contasExpand
                         <tr className={`group ${idx % 2 === 1 ? 'bg-[#f0f1f4]' : 'bg-white'} ${temDetalhes ? 'cursor-pointer' : ''}`} onClick={temDetalhes ? () => toggleExpansao(conta.codigo) : undefined}>
                           <td className={`px-3 py-2 pl-10 font-semibold group-hover:bg-[#efdde2] border-b border-[#e5e7eb] ${valor === 0 && !temDetalhes ? 'text-[#6b7280]' : 'text-[#1d1d1d]'}`}>
                             <div className="flex items-center gap-2">
-                              {temDetalhes && (detalhesAbertos ? <ChevronDown className="w-4 h-4 text-[#8e5e68]" /> : <ChevronRight className="w-4 h-4 text-[#8e5e68]" />)}
+                              {temDetalhes ? (
+                                detalhesAbertos ? <ChevronDown className="w-4 h-4 flex-shrink-0 text-[#8e5e68]" /> : <ChevronRight className="w-4 h-4 flex-shrink-0 text-[#8e5e68]" />
+                              ) : (
+                                <span className="w-4 h-4 flex-shrink-0" aria-hidden="true" />
+                              )}
                               {conta.nome}
                             </div>
                           </td>
