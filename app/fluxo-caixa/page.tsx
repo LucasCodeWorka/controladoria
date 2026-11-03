@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import Image from 'next/image';
 import {
   Banknote, ChevronDown, Loader2, Settings, X, RotateCcw,
   ArrowUp, ArrowDown, ArrowUpDown, Landmark,
@@ -329,16 +330,15 @@ function TooltipMes({ active, payload }: { active?: boolean; payload?: TooltipMe
   );
 }
 
-// Selo do banco (sigla nas cores da marca) ao lado do nome em Saldos
-// Bancarios - sem imagem externa. Banco fora da lista ganha selo cinza com
-// as iniciais; pra dar cor a um banco novo, basta incluir aqui.
-const SELOS_BANCO: { chaves: string[]; sigla: string; fundo: string; texto: string }[] = [
-  { chaves: ['itau'], sigla: 'it', fundo: '#EC7000', texto: '#002D72' },
-  { chaves: ['santander'], sigla: 'S', fundo: '#EC0000', texto: '#FFFFFF' },
-  { chaves: ['banco do brasil', 'bb'], sigla: 'BB', fundo: '#FAE128', texto: '#0038A8' },
-  { chaves: ['abc'], sigla: 'ABC', fundo: '#00335E', texto: '#FFFFFF' },
-  { chaves: ['bnb', 'nordeste'], sigla: 'BNB', fundo: '#B5121B', texto: '#FFFFFF' },
-  { chaves: ['safra'], sigla: 'S', fundo: '#0B2240', texto: '#C9A54C' },
+// Logotipos locais dos bancos em Saldos Bancarios. Bancos sem imagem
+// cadastrada (ou com falha ao carregar) mantem o selo com as iniciais.
+const SELOS_BANCO: { chaves: string[]; sigla: string; fundo: string; texto: string; logo?: string }[] = [
+  { chaves: ['itau'], sigla: 'it', fundo: '#EC7000', texto: '#002D72', logo: '/bancos/itau.png' },
+  { chaves: ['santander'], sigla: 'S', fundo: '#EC0000', texto: '#FFFFFF', logo: '/bancos/santander.png' },
+  { chaves: ['banco do brasil', 'bb'], sigla: 'BB', fundo: '#FAE128', texto: '#0038A8', logo: '/bancos/banco-do-brasil.png' },
+  { chaves: ['abc'], sigla: 'ABC', fundo: '#00335E', texto: '#FFFFFF', logo: '/bancos/abc-brasil.svg' },
+  { chaves: ['bnb', 'nordeste'], sigla: 'BNB', fundo: '#B5121B', texto: '#FFFFFF', logo: '/bancos/banco-do-nordeste.svg' },
+  { chaves: ['safra'], sigla: 'S', fundo: '#0B2240', texto: '#C9A54C', logo: '/bancos/safra.png' },
   { chaves: ['bradesco'], sigla: 'B', fundo: '#CC092F', texto: '#FFFFFF' },
   { chaves: ['caixa', 'cef'], sigla: 'CX', fundo: '#005CA9', texto: '#F39200' },
   { chaves: ['sicoob'], sigla: 'SC', fundo: '#003641', texto: '#00AE9D' },
@@ -353,8 +353,23 @@ function normalizarNome(nome: string): string {
 }
 
 function SeloBanco({ nome }: { nome: string }) {
+  const [logoComFalha, setLogoComFalha] = useState<string | null>(null);
   const n = normalizarNome(nome);
   const selo = SELOS_BANCO.find((s) => s.chaves.some((k) => n === k || n.startsWith(`${k} `) || n.includes(k)));
+  if (selo?.logo && logoComFalha !== selo.logo) {
+    return (
+      <Image
+        src={selo.logo}
+        alt=""
+        aria-hidden="true"
+        width={24}
+        height={24}
+        unoptimized
+        className="h-6 w-6 flex-shrink-0 object-contain"
+        onError={() => setLogoComFalha(selo.logo!)}
+      />
+    );
+  }
   const palavras = nome.split(/\s+/).filter((p) => p && !['banco', 'do', 'da', 'de', 's.a.', 'sa'].includes(normalizarNome(p)));
   const sigla = selo?.sigla ?? (palavras.length ? palavras : [nome]).slice(0, 2).map((p) => p[0]).join('').toUpperCase();
   return (
