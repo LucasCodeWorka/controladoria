@@ -39,8 +39,9 @@ DESPESAITENS_FORNECEDORES = (
     227, 228, 229, 231, 259, 262, 263, 264, 271, 280, 287, 488, 539, 543, 544, 546,
 )
 
-# PC.5 / PNC.9 Tributos a recolher: despesaitens indicados pelo usuario (12 codigos).
-DESPESAITENS_TRIBUTOS = (111, 112, 113, 116, 117, 118, 119, 120, 126, 127, 250, 285)
+# PC.5 / PNC.9 Tributos a recolher: despesaitens indicados pelo usuario (15 codigos;
+# inclui 158 Multas SEFAZ, 123 ISS ret. fonte e 230 IRRF outros servicos).
+DESPESAITENS_TRIBUTOS = (111, 112, 113, 116, 117, 118, 119, 120, 123, 126, 127, 158, 230, 250, 285)
 
 # PC.IMV / PNC.IMV Obrigacoes por compra de imoveis: contratos de compra de
 # imoveis (EDGE 700 e CASA MAUA 2101/2702/2703/2602).
