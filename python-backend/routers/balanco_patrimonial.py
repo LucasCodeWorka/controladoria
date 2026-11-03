@@ -42,6 +42,10 @@ DESPESAITENS_FORNECEDORES = (
 # PC.5 / PNC.9 Tributos a recolher: despesaitens indicados pelo usuario (12 codigos).
 DESPESAITENS_TRIBUTOS = (111, 112, 113, 116, 117, 118, 119, 120, 126, 127, 250, 285)
 
+# PC.IMV / PNC.IMV Obrigacoes por compra de imoveis: contratos de compra de
+# imoveis (EDGE 700 e CASA MAUA 2101/2702/2703/2602).
+DESPESAITENS_IMOVEIS = (992, 994, 996, 998, 999)
+
 # PC.6 / PNC.10 IR e CSLL: IRPJ apuracao (125) e CSLL apuracao (124).
 DESPESAITENS_IR_CSLL = (124, 125)
 
@@ -509,7 +513,7 @@ def get_balanco_patrimonial(
 ):
     """
     Valores do Balanco Patrimonial: Caixa, Contas a Receber (boletos e
-    cartoes), Estoques e Bens, e no Passivo Fornecedores (PC.1 ate 12 meses e PNC.7 depois), Salarios (PC.4), Tributos (PC.5 ate 12 meses e PNC.9 depois), IR e CSLL (PC.6 ate 12 meses e PNC.10 depois), Materia-prima (PC.2) e Emprestimos (PC.3 ate 12 meses e PNC.8 depois). As
+    cartoes), Estoques e Bens, e no Passivo Fornecedores (PC.1 ate 12 meses e PNC.7 depois), Salarios (PC.4), Tributos (PC.5 ate 12 meses e PNC.9 depois), IR e CSLL (PC.6 ate 12 meses e PNC.10 depois), Obrigacoes por compra de imoveis (PC.IMV ate 12 meses e PNC.IMV depois), Materia-prima (PC.2) e Emprestimos (PC.3 ate 12 meses e PNC.8 depois). As
     demais contas do Passivo nao tem fonte ligada (a tela de classificacao de
     despesas foi descontinuada) e ficam zeradas.
     """
@@ -648,6 +652,23 @@ def get_balanco_patrimonial(
             r = rows[0] if rows else {"ate_12m": 0, "apos_12m": 0}
             return {"PC.6": -float(r["ate_12m"]), "PNC.10": -float(r["apos_12m"])}
 
+        # Obrigacoes por compra de imoveis: ate 12 meses (de hoje) = PC.IMV, depois
+        # disso = PNC.IMV. A vencer, em aberto, nada pago (vencidos nao entram),
+        # sem filtro de empresa.
+        def _imoveis():
+            rows = execute_query(
+                """SELECT
+                       COALESCE(SUM(CASE WHEN dt_vencimento < CURRENT_DATE + INTERVAL '12 months' THEN vl_rateio END), 0) AS ate_12m,
+                       COALESCE(SUM(CASE WHEN dt_vencimento >= CURRENT_DATE + INTERVAL '12 months' THEN vl_rateio END), 0) AS apos_12m
+                   FROM public.vr_fcp_despduplicatai
+                   WHERE cd_despesaitem IN %s
+                     AND dt_vencimento >= CURRENT_DATE
+                     AND tp_situacao = 'N'
+                     AND vl_pago = 0""", (DESPESAITENS_IMOVEIS,)
+            ) or []
+            r = rows[0] if rows else {"ate_12m": 0, "apos_12m": 0}
+            return {"PC.IMV": -float(r["ate_12m"]), "PNC.IMV": -float(r["apos_12m"])}
+
         # PC.4 Salarios e encargos a pagar = custo_total da competencia mais
         # recente de fato_custo_mensal. Passivo = negativo.
         def _salarios():
@@ -670,6 +691,7 @@ def get_balanco_patrimonial(
                 "Salarios": pool.submit(_salarios),
                 "Tributos": pool.submit(_tributos),
                 "IR e CSLL": pool.submit(_ir_csll),
+                "Imoveis": pool.submit(_imoveis),
             }
             resultados = {}
             for nome, f in f_opcionais.items():
@@ -692,6 +714,7 @@ def get_balanco_patrimonial(
         valores.update(resultados.get("Salarios", {}))
         valores.update(resultados.get("Tributos", {}))
         valores.update(resultados.get("IR e CSLL", {}))
+        valores.update(resultados.get("Imoveis", {}))
 
         return {"valores": valores, "mesReferencia": mesReferencia}
     except HTTPException:
