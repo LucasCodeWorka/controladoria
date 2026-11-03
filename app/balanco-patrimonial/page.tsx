@@ -323,7 +323,7 @@ type Status = 'ok' | 'atencao' | 'ruim' | 'neutro';
 const ESTILOS_STATUS = {
   ok: { texto: 'text-teal-700', fundo: 'bg-teal-50', borda: 'border-teal-100', rotulo: 'Dentro da referência', icone: CheckCircle2 },
   atencao: { texto: 'text-amber-800', fundo: 'bg-amber-50', borda: 'border-amber-200', rotulo: 'Atenção', icone: AlertCircle },
-  ruim: { texto: 'text-rose-700', fundo: 'bg-rose-50', borda: 'border-rose-100', rotulo: 'Fora da referência', icone: AlertCircle },
+  ruim: { texto: 'text-rose-700', fundo: 'bg-rose-50', borda: 'border-rose-100', rotulo: 'Atenção', icone: AlertCircle },
   neutro: { texto: 'text-slate-600', fundo: 'bg-slate-100', borda: 'border-slate-200', rotulo: 'Informativo', icone: MinusCircle },
 };
 
