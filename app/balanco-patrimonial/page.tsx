@@ -61,13 +61,6 @@ function formatarPercentual(valor: number, total: number): string {
   return `${(((valor / total) * 100) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
 }
 
-// A apresentação usa caixa de frase, preservando as siglas do plano original.
-function nomeConta(nome: string): string {
-  return nome.toLocaleLowerCase('pt-BR')
-    .replace(/(^| - )([a-zà-ú])/g, (_, prefixo: string, letra: string) => prefixo + letra.toLocaleUpperCase('pt-BR'))
-    .replace(/\b(pa|mp)\b/g, (sigla) => sigla.toUpperCase());
-}
-
 type Campo = 'conta' | 'valor' | 'pct';
 type Ordenacao = { campo: Campo; dir: 'asc' | 'desc' } | null;
 
@@ -201,7 +194,7 @@ function TabelaBalanco({ titulo, plano, valores, mostrarPercentual, contasExpand
                   <td className="px-4 py-3 font-bold text-[#8e5e68] bg-[#f3e7eb] group-hover:bg-[#eddee3] border-b border-[#e5e7eb] border-l-[3px] border-l-[#b3838c]">
                     <button type="button" aria-expanded={expandido} onClick={() => toggleExpansao(grupo.codigo)} className="flex w-full items-center gap-2.5 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#b3838c]">
                       {expandido ? <ChevronDown aria-hidden="true" className="h-3.5 w-3.5 shrink-0" /> : <ChevronRight aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />}
-                      {nomeConta(grupo.nome)}
+                      {grupo.nome}
                     </button>
                   </td>
                   <td className={`px-4 py-3 text-right font-bold whitespace-nowrap bg-[#f3e7eb] group-hover:bg-[#eddee3] border-b border-[#e5e7eb] ${corValor(totalDoGrupo)}`}>
@@ -225,10 +218,10 @@ function TabelaBalanco({ titulo, plano, valores, mostrarPercentual, contasExpand
                             {temDetalhes ? (
                               <button type="button" aria-expanded={detalhesAbertos} onClick={() => toggleExpansao(conta.codigo)} className="flex w-full items-center gap-2.5 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#b3838c]">
                                 {detalhesAbertos ? <ChevronDown aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-[#8e5e68]" /> : <ChevronRight aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-[#8e5e68]" />}
-                                <span>{nomeConta(conta.nome)}</span>
+                                <span>{conta.nome}</span>
                               </button>
                             ) : (
-                              <div className="pl-6">{nomeConta(conta.nome)}</div>
+                              <div className="pl-6">{conta.nome}</div>
                             )}
                           </td>
                           <td className={`px-4 py-3 text-right whitespace-nowrap font-medium group-hover:bg-[#faf3f5] border-b border-[#eef0f2] ${idx % 2 === 1 ? 'bg-[#fafafb]' : 'bg-white'} ${corValor(valor)}`}>
@@ -247,7 +240,7 @@ function TabelaBalanco({ titulo, plano, valores, mostrarPercentual, contasExpand
                               <tr key={d.codigo} className="group">
                                 <td className="px-4 py-2.5 pl-14 text-[#4b5563] bg-[#fcfcfd] group-hover:bg-[#faf3f5] border-b border-[#eef0f2]">
                                   <span className="inline-block w-1.5 h-1.5 mr-2 rounded-full bg-[#c5949d] align-middle" />
-                                  {nomeConta(d.nome)}
+                                  {d.nome}
                                 </td>
                                 <td className={`px-4 py-2.5 text-right whitespace-nowrap bg-[#fcfcfd] group-hover:bg-[#faf3f5] border-b border-[#eef0f2] ${corValor(vd)}`}>
                                   {formatarValor(vd)}
@@ -467,7 +460,7 @@ export default function BalancoPatrimonialPage() {
   const statusProximoDe1 = (v: number | null): Status => (v === null ? 'neutro' : v >= 0.8 ? 'ok' : v >= 0.5 ? 'atencao' : 'ruim');
 
   return (
-    <div className="p-4 md:p-6 space-y-4 bg-[#f5f5f5] min-h-full text-[#1d1d1d] print:p-0 print:bg-white [print-color-adjust:exact] [-webkit-print-color-adjust:exact]">
+    <div className="uppercase p-4 md:p-6 space-y-4 bg-[#f5f5f5] min-h-full text-[#1d1d1d] print:p-0 print:bg-white [print-color-adjust:exact] [-webkit-print-color-adjust:exact]">
       <div className="flex items-center gap-3">
         <Scale className="w-7 h-7 text-[#8e5e68]" />
         <div>
