@@ -61,6 +61,13 @@ function formatarPercentual(valor: number, total: number): string {
   return `${(((valor / total) * 100) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
 }
 
+// A apresentação usa caixa de frase, preservando as siglas do plano original.
+function nomeConta(nome: string): string {
+  return nome.toLocaleLowerCase('pt-BR')
+    .replace(/(^| - )([a-zà-ú])/g, (_, prefixo: string, letra: string) => prefixo + letra.toLocaleUpperCase('pt-BR'))
+    .replace(/\b(pa|mp)\b/g, (sigla) => sigla.toUpperCase());
+}
+
 type Campo = 'conta' | 'valor' | 'pct';
 type Ordenacao = { campo: Campo; dir: 'asc' | 'desc' } | null;
 
@@ -92,12 +99,12 @@ function DualScroll({ children, secao, rodape }: { children: React.ReactNode; se
   };
 
   return (
-    <div className="bg-white border border-[#e5e7eb] rounded-lg shadow-sm overflow-hidden flex flex-col h-full print:shadow-none print:h-auto print:break-inside-avoid">
+    <div className="bg-white border border-[#e5e7eb] rounded-xl shadow-sm overflow-hidden flex flex-col h-full min-w-0 print:shadow-none print:h-auto print:break-inside-avoid">
       {secao}
       <div ref={topo} onScroll={() => sync(topo.current, corpo.current)} className="overflow-x-auto overflow-y-hidden h-[14px] border-b border-[#e5e7eb] print:hidden">
         <div style={{ width: largura, height: 1 }} />
       </div>
-      <div ref={corpo} onScroll={() => sync(corpo.current, topo.current)} className="overflow-auto max-h-[calc(100vh-320px)] flex-1 min-h-0 print:max-h-none print:overflow-visible">
+      <div ref={corpo} onScroll={() => sync(corpo.current, topo.current)} className="overflow-auto max-h-[calc(100vh-320px)] flex-1 min-h-0 [transform:translateZ(0)] print:max-h-none print:overflow-visible">
         {children}
       </div>
       {rodape}
@@ -136,36 +143,39 @@ function TabelaBalanco({ titulo, plano, valores, mostrarPercentual, contasExpand
       <th
         scope="col"
         aria-sort={!ativa ? 'none' : ordenacao!.dir === 'asc' ? 'ascending' : 'descending'}
-        onClick={() => alternarOrdenacao(campo)}
-        className={`sticky top-0 z-[2] px-3 py-2 text-xs font-bold uppercase tracking-[.04em] cursor-pointer select-none whitespace-nowrap ${esquerda ? 'text-left' : 'text-right'} ${
-          ativa ? 'bg-[#f5ecef] text-[#8e5e68]' : 'bg-[#d9dde3] text-[#1f2937] hover:bg-[#ced3da]'
+        className={`sticky top-0 z-[2] px-4 py-0 text-[11px] font-semibold uppercase tracking-[.06em] select-none whitespace-nowrap ${esquerda ? 'text-left' : 'text-right'} ${
+          ativa ? 'bg-[#f5ecef] text-[#8e5e68]' : 'bg-[#f3f4f6] text-[#6b7280] hover:bg-[#eceef1]'
         } ${extra}`}
       >
-        {rotulo}
-        <span className={`ml-1 text-[10px] ${ativa ? 'text-[#8e5e68]' : 'text-[#6b7280]'}`}>{seta}</span>
+        <button type="button" onClick={() => alternarOrdenacao(campo)} className={`flex w-full items-center gap-1.5 py-3 uppercase tracking-[.06em] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#b3838c] ${esquerda ? 'justify-start' : 'justify-end'}`}>
+          {rotulo}
+          <span aria-hidden="true" className={`text-[10px] ${ativa ? 'text-[#8e5e68]' : 'text-[#9ca3af]'}`}>{seta}</span>
+        </button>
       </th>
     );
   };
 
-  const corValor = (v: number) => (v < 0 ? 'text-[#b91c1c]' : v === 0 ? 'text-[#6b7280]' : 'text-[#1d1d1d]');
+  const corValor = (v: number) => (v < 0 ? 'text-[#a34455]' : v === 0 ? 'text-[#6b7280]' : 'text-[#1d1d1d]');
 
   return (
     <DualScroll
       rodape={
-        <div className="flex border-t-2 border-[#b3838c] bg-[#dfe2e7] text-[13px] font-bold [font-variant-numeric:tabular-nums]">
-          <div className="flex-1 px-3 py-3 text-[#1d1d1d]">Total</div>
-          <div className={`w-44 px-3 py-3 text-right whitespace-nowrap ${corValor(total)}`}>{formatarValor(total)}</div>
-          {mostrarPercentual && <div className="w-24 px-3 py-3" />}
+        <div className="flex items-center gap-3 border-t-2 border-[#b3838c] bg-[#f0f1f4] px-4 py-4 [font-variant-numeric:tabular-nums]">
+          <div className="flex-1 text-xs font-bold uppercase tracking-[.05em] text-[#4b5563]">{titulo === 'Ativos' ? 'Total do ativo' : 'Total do passivo'}</div>
+          <div className={`text-right text-base font-bold whitespace-nowrap ${corValor(total)}`}>{formatarValor(total)}</div>
         </div>
       }
       secao={
-        <div className={`flex items-center justify-between gap-3 px-4 py-3 border-b ${titulo === 'Ativos' ? 'bg-[#dcfce7] border-[#86efac]' : 'bg-[#fee2e2] border-[#fca5a5]'}`}>
-          <h2 className={`text-base font-bold ${titulo === 'Ativos' ? 'text-[#14532d]' : 'text-[#7f1d1d]'}`}>{titulo}</h2>
-          <span className={`text-base font-bold [font-variant-numeric:tabular-nums] ${titulo === 'Ativos' ? 'text-[#14532d]' : 'text-[#7f1d1d]'}`}>{formatarValor(total)}</span>
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#eadce0] bg-[#faf6f7] px-5 py-4">
+          <div>
+            <h2 className="text-sm font-bold uppercase tracking-[.1em] text-[#8e5e68]">{titulo === 'Ativos' ? 'Ativo' : 'Passivo'}</h2>
+            <p className="mt-1 text-xs text-[#6b7280]">Posição patrimonial</p>
+          </div>
+          <span className={`text-lg font-bold tracking-tight [font-variant-numeric:tabular-nums] ${corValor(total)}`}>{formatarValor(total)}</span>
         </div>
       }
     >
-      <table className="w-full min-w-[420px] table-fixed border-separate border-spacing-0 text-[13px] text-[#1d1d1d] [font-variant-numeric:tabular-nums]">
+      <table aria-label={`Contas do ${titulo === 'Ativos' ? 'ativo' : 'passivo'}`} className="w-full min-w-[540px] table-fixed border-separate border-spacing-0 text-[13px] text-[#1d1d1d] [font-variant-numeric:tabular-nums]">
         <colgroup>
           <col />
           <col className="w-44" />
@@ -174,31 +184,31 @@ function TabelaBalanco({ titulo, plano, valores, mostrarPercentual, contasExpand
         <thead>
           <tr>
             {cabecalho('conta', 'Conta', true)}
-            {cabecalho('valor', 'R$', false)}
-            {mostrarPercentual && cabecalho('pct', '%', false)}
+            {cabecalho('valor', 'Saldo (R$)', false)}
+            {mostrarPercentual && cabecalho('pct', '% do grupo', false)}
           </tr>
         </thead>
         <tbody>
           {grupos.length === 0 && (
-            <tr><td colSpan={3} className="px-3 py-6 text-center text-[#4b5563]">Nenhum registro para o filtro.</td></tr>
+            <tr><td colSpan={mostrarPercentual ? 3 : 2} className="px-3 py-6 text-center text-[#4b5563]">Nenhum registro para o filtro.</td></tr>
           )}
           {grupos.map((grupo) => {
             const expandido = contasExpandidas.has(grupo.codigo);
             const totalDoGrupo = totalGrupo(grupo, valores);
             return (
               <React.Fragment key={grupo.codigo}>
-                <tr className="cursor-pointer group" onClick={() => toggleExpansao(grupo.codigo)}>
-                  <td className="px-3 py-2.5 font-bold text-[#8e5e68] bg-[#e6cfd5] group-hover:bg-[#dcbfc7] border-b border-[#e5e7eb] border-l-4 border-l-[#b3838c]">
-                    <div className="flex items-center gap-2">
-                      {expandido ? <ChevronDown className="w-4 h-4 text-[#8e5e68]" /> : <ChevronRight className="w-4 h-4 text-[#8e5e68]" />}
-                      {grupo.nome}
-                    </div>
+                <tr className="group">
+                  <td className="px-4 py-3 font-bold text-[#8e5e68] bg-[#f3e7eb] group-hover:bg-[#eddee3] border-b border-[#e5e7eb] border-l-[3px] border-l-[#b3838c]">
+                    <button type="button" aria-expanded={expandido} onClick={() => toggleExpansao(grupo.codigo)} className="flex w-full items-center gap-2.5 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#b3838c]">
+                      {expandido ? <ChevronDown aria-hidden="true" className="h-3.5 w-3.5 shrink-0" /> : <ChevronRight aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />}
+                      {nomeConta(grupo.nome)}
+                    </button>
                   </td>
-                  <td className={`px-3 py-2.5 text-right font-bold whitespace-nowrap bg-[#e6cfd5] group-hover:bg-[#dcbfc7] border-b border-[#e5e7eb] ${corValor(totalDoGrupo)}`}>
+                  <td className={`px-4 py-3 text-right font-bold whitespace-nowrap bg-[#f3e7eb] group-hover:bg-[#eddee3] border-b border-[#e5e7eb] ${corValor(totalDoGrupo)}`}>
                     {formatarValor(totalDoGrupo)}
                   </td>
                   {mostrarPercentual && (
-                    <td className="px-3 py-2.5 text-right font-bold whitespace-nowrap text-[#8e5e68] bg-[#e6cfd5] group-hover:bg-[#dcbfc7] border-b border-[#e5e7eb]">
+                    <td className="px-4 py-3 text-right font-normal whitespace-nowrap text-[#8e5e68] bg-[#f3e7eb] group-hover:bg-[#eddee3] border-b border-[#e5e7eb]">
                       {totalDoGrupo === 0 ? '-' : '100,00%'}
                     </td>
                   )}
@@ -210,22 +220,22 @@ function TabelaBalanco({ titulo, plano, valores, mostrarPercentual, contasExpand
                     const detalhesAbertos = temDetalhes && contasExpandidas.has(conta.codigo);
                     return (
                       <React.Fragment key={conta.codigo}>
-                        <tr className={`group ${idx % 2 === 1 ? 'bg-[#f0f1f4]' : 'bg-white'} ${temDetalhes ? 'cursor-pointer' : ''}`} onClick={temDetalhes ? () => toggleExpansao(conta.codigo) : undefined}>
-                          <td className={`px-3 py-2 pl-10 font-semibold group-hover:bg-[#efdde2] border-b border-[#e5e7eb] ${valor === 0 && !temDetalhes ? 'text-[#6b7280]' : 'text-[#1d1d1d]'}`}>
-                            <div className="flex items-center gap-2">
-                              {temDetalhes ? (
-                                detalhesAbertos ? <ChevronDown className="w-4 h-4 flex-shrink-0 text-[#8e5e68]" /> : <ChevronRight className="w-4 h-4 flex-shrink-0 text-[#8e5e68]" />
-                              ) : (
-                                <span className="w-4 h-4 flex-shrink-0" aria-hidden="true" />
-                              )}
-                              {conta.nome}
-                            </div>
+                        <tr className="group">
+                          <td className={`px-4 py-3 pl-7 font-medium group-hover:bg-[#faf3f5] border-b border-[#eef0f2] ${idx % 2 === 1 ? 'bg-[#fafafb]' : 'bg-white'} ${valor === 0 && !temDetalhes ? 'text-[#6b7280]' : 'text-[#1d1d1d]'}`}>
+                            {temDetalhes ? (
+                              <button type="button" aria-expanded={detalhesAbertos} onClick={() => toggleExpansao(conta.codigo)} className="flex w-full items-center gap-2.5 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#b3838c]">
+                                {detalhesAbertos ? <ChevronDown aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-[#8e5e68]" /> : <ChevronRight aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-[#8e5e68]" />}
+                                <span>{nomeConta(conta.nome)}</span>
+                              </button>
+                            ) : (
+                              <div className="pl-6">{nomeConta(conta.nome)}</div>
+                            )}
                           </td>
-                          <td className={`px-3 py-2 text-right whitespace-nowrap font-semibold group-hover:bg-[#efdde2] border-b border-[#e5e7eb] ${corValor(valor)}`}>
+                          <td className={`px-4 py-3 text-right whitespace-nowrap font-medium group-hover:bg-[#faf3f5] border-b border-[#eef0f2] ${idx % 2 === 1 ? 'bg-[#fafafb]' : 'bg-white'} ${corValor(valor)}`}>
                             {formatarValor(valor)}
                           </td>
                           {mostrarPercentual && (
-                            <td className={`px-3 py-2 text-right whitespace-nowrap font-semibold group-hover:bg-[#efdde2] border-b border-[#e5e7eb] ${valor === 0 ? 'text-[#6b7280]' : ''}`}>
+                            <td className={`px-4 py-3 text-right whitespace-nowrap font-medium group-hover:bg-[#faf3f5] border-b border-[#eef0f2] ${idx % 2 === 1 ? 'bg-[#fafafb]' : 'bg-white'} text-[#6b7280]`}>
                               {formatarPercentual(valor, totalDoGrupo)}
                             </td>
                           )}
@@ -235,15 +245,15 @@ function TabelaBalanco({ titulo, plano, valores, mostrarPercentual, contasExpand
                             const vd = valores[d.codigo] ?? 0;
                             return (
                               <tr key={d.codigo} className="group">
-                                <td className="px-3 py-1.5 pl-16 text-[#4b5563] bg-[#e3e6ea] group-hover:bg-[#efdde2] border-b border-[#e5e7eb]">
+                                <td className="px-4 py-2.5 pl-14 text-[#4b5563] bg-[#fcfcfd] group-hover:bg-[#faf3f5] border-b border-[#eef0f2]">
                                   <span className="inline-block w-1.5 h-1.5 mr-2 rounded-full bg-[#c5949d] align-middle" />
-                                  {d.nome}
+                                  {nomeConta(d.nome)}
                                 </td>
-                                <td className={`px-3 py-1.5 text-right whitespace-nowrap bg-[#e3e6ea] group-hover:bg-[#efdde2] border-b border-[#e5e7eb] ${corValor(vd)}`}>
+                                <td className={`px-4 py-2.5 text-right whitespace-nowrap bg-[#fcfcfd] group-hover:bg-[#faf3f5] border-b border-[#eef0f2] ${corValor(vd)}`}>
                                   {formatarValor(vd)}
                                 </td>
                                 {mostrarPercentual && (
-                                  <td className="px-3 py-1.5 text-right whitespace-nowrap text-[#4b5563] bg-[#e3e6ea] group-hover:bg-[#efdde2] border-b border-[#e5e7eb]">
+                                  <td className="px-4 py-2.5 text-right whitespace-nowrap text-[#4b5563] bg-[#fcfcfd] group-hover:bg-[#faf3f5] border-b border-[#eef0f2]">
                                     {formatarPercentual(vd, totalDoGrupo)}
                                   </td>
                                 )}
