@@ -1622,7 +1622,6 @@ export default function FluxoCaixaPage() {
       const qs = params.toString();
       consultaRef.current = qs;
       limparDespesaSel();
-      buscarBoletoPorBanco();
       buscarCarteira();
       const [respDados, respFornecedor, respDespesa, respSaldos] = await Promise.all([
         fetch(`/api/fluxo-caixa/dados?${qs}`, { cache: 'no-store' }),
@@ -1689,15 +1688,20 @@ export default function FluxoCaixaPage() {
     }
   }
 
+  // O resumo de boletos por banco nao depende dos filtros: carrega ao abrir a tela.
+  useEffect(() => {
+    buscarBoletoPorBanco();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function buscarBoletoPorBanco() {
     const pedido = ++pedidoBoletoPorBancoRef.current;
     setBoletoPorBanco(null);
     setBoletoPorBancoErro(false);
     try {
-      const params = new URLSearchParams({ dtInicio, dtFim });
-      if (empresasSelecionadas.size > 0 && empresasSelecionadas.size < empresasDisponiveis.length) {
-        params.set('empresas', Array.from(empresasSelecionadas).join(','));
-      }
+      // Resumo fixo: nao respeita periodo nem empresas dos filtros - sempre o
+      // que esta em aberto de hoje em diante (o backend ja ignora vencidos).
+      const params = new URLSearchParams({ dtInicio: isoHoje(), dtFim: isoHoje(3650) });
       const resp = await fetch(`/api/fluxo-caixa/boleto-por-banco?${params.toString()}`, { cache: 'no-store' });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const json = await resp.json();
@@ -2505,12 +2509,12 @@ export default function FluxoCaixaPage() {
             )}
             </div>
 
-            {/* Boletos do periodo inteiro por banco de cobranca - mesmo
-                filtro de periodo/empresas da tabela, mesma regra de banco do
-                modal de detalhe do dia. */}
+            {/* Boletos em aberto de hoje em diante por banco de cobranca - NAO
+                respeita os filtros de periodo/empresas da tela; mesma regra de
+                banco do modal de detalhe do dia. */}
             <div className="ml-auto bg-white border border-sky-200 rounded-lg px-4 py-3 min-w-[20rem] max-w-full">
               <div className="flex items-baseline justify-between gap-6 mb-2">
-                <span className="text-sm font-semibold text-black">Boletos no período por banco</span>
+                <span className="text-sm font-semibold text-black">Boletos a receber por banco <span className="font-normal text-xs">(de hoje em diante, todas as empresas)</span></span>
                 {boletoPorBanco && boletoPorBanco.length > 0 && (
                   <span className="text-sm text-black tabular-nums whitespace-nowrap">
                     Total <span className="text-base font-bold text-sky-700">{fmtBRL(boletoPorBanco.reduce((acc, b) => acc + b.valor, 0))}</span>
@@ -2519,14 +2523,15 @@ export default function FluxoCaixaPage() {
               </div>
               {boletoPorBancoErro ? (
                 <p className="text-sm text-red-700 flex items-center gap-1">
-                  <AlertCircle className="w-4 h-4 flex-shrink-0" /> Não foi possível carregar. Clique em Aplicar de novo.
+                  <AlertCircle className="w-4 h-4 flex-shrink-0" /> Não foi possível carregar.{' '}
+                  <button type="button" onClick={buscarBoletoPorBanco} className="underline font-medium">Tentar de novo</button>
                 </p>
               ) : boletoPorBanco === null ? (
                 <p className="text-sm text-black flex items-center gap-1.5">
-                  {loading || dados ? <><Loader2 className="w-4 h-4 animate-spin" /> Carregando…</> : 'Clique em Aplicar para carregar.'}
+                  <><Loader2 className="w-4 h-4 animate-spin" /> Carregando…</>
                 </p>
               ) : boletoPorBanco.length === 0 ? (
-                <p className="text-sm text-black">Nenhum boleto a receber no período.</p>
+                <p className="text-sm text-black">Nenhum boleto a receber de hoje em diante.</p>
               ) : (
                 <div className="flex flex-wrap gap-x-3 gap-y-2">
                   {boletoPorBanco.map((b) => (
@@ -2901,9 +2906,6 @@ export default function FluxoCaixaPage() {
         const mesesModal = (porVenc ? resumo?.mesesVenc : resumo?.meses) ?? [];
         const qtdModal = (porVenc ? resumo?.qtdVenc : resumo?.qtd) ?? 0;
         const valorModal = (porVenc ? resumo?.valorVenc : resumo?.valor) ?? 0;
-        const consulta = new URLSearchParams(consultaRef.current);
-        const periodoIni = (consulta.get('dt_inicio') || dtInicio).split('-').reverse().join('/');
-        const periodoFim = (consulta.get('dt_fim') || dtFim).split('-').reverse().join('/');
         return (
           <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setBoletoBancoModal(null)}>
             <div className="bg-white rounded-lg shadow-xl max-w-lg w-full max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
@@ -2911,7 +2913,7 @@ export default function FluxoCaixaPage() {
                 <div>
                   <h2 className="text-base font-semibold text-black">{boletoBancoModal} — boletos por mês</h2>
                   <p className="text-xs text-black">
-                    Período {periodoIni} a {periodoFim}
+                    De hoje em diante, todas as empresas
                   </p>
                   <div className="mt-2 inline-flex rounded-md border border-gray-300 overflow-hidden text-xs">
                     {([['recebimento', 'Por recebimento'], ['vencimento', 'Por vencimento']] as const).map(([k, rot]) => (

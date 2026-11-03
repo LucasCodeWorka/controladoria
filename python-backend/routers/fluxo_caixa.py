@@ -760,12 +760,34 @@ def _nr_ctapes_por_fatura(rows) -> dict:
     return {_chave_fatura(c): c["nr_ctapes"] for c in execute_query(sql, params) or []}
 
 
+# Cache em memoria do resumo de boletos por banco: a tela pede sempre a mesma
+# janela (de hoje em diante, todas as empresas) e a consulta e pesada (dezenas
+# de segundos), entao o resultado vale por alguns minutos.
+_CACHE_BOLETO_BANCO: dict = {}
+_CACHE_BOLETO_BANCO_TTL = 600  # segundos
+_LOCK_BOLETO_BANCO = threading.Lock()
+
+
 @router.get("/api/fluxo-caixa/boleto-por-banco")
 def obter_boleto_por_banco(
     dtInicio: str = Query(...),
     dtFim: str = Query(...),
     empresas: Optional[str] = Query(None),
+    forcar: bool = Query(False, description="Ignora o cache e recalcula"),
 ):
+    chave = (dtInicio, dtFim, empresas or "")
+    # O lock evita duas consultas pesadas iguais ao mesmo tempo (a segunda
+    # espera e ja pega o resultado da primeira).
+    with _LOCK_BOLETO_BANCO:
+        item = _CACHE_BOLETO_BANCO.get(chave)
+        if not forcar and item and time.time() - item[0] < _CACHE_BOLETO_BANCO_TTL:
+            return item[1]
+        resultado = _calcular_boleto_por_banco(dtInicio, dtFim, empresas)
+        _CACHE_BOLETO_BANCO[chave] = (time.time(), resultado)
+        return resultado
+
+
+def _calcular_boleto_por_banco(dtInicio: str, dtFim: str, empresas: Optional[str]):
     """Total da coluna Boleto no periodo inteiro, quebrado por banco de
     cobranca (e, dentro de cada banco, por mes da data efetiva - mesmo mes
     da coluna Boleto da visao mensal) - mesmo filtro (_filtros_boleto) e
