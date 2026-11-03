@@ -216,7 +216,7 @@ function TabelaBalanco({ titulo, plano, valores, mostrarPercentual, contasExpand
             const expandido = contasExpandidas.has(grupo.codigo);
             const totalDoGrupo = totalGrupo(grupo, valores);
             const IconeGrupo = grupo.codigo === 'AC' || grupo.codigo === 'PC' ? Clock3 : Building2;
-            const fundoGrupo = ativo ? 'bg-[#e8f3f1] group-hover:bg-[#dceeea]' : 'bg-[#f6e7ed] group-hover:bg-[#efdbe3]';
+            const fundoGrupo = ativo ? 'bg-[#bfe5d6] group-hover:bg-[#aedcc9]' : 'bg-[#f6e7ed] group-hover:bg-[#efdbe3]';
             return (
               <React.Fragment key={grupo.codigo}>
                 <tr className="group">
