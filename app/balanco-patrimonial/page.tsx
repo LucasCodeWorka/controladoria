@@ -374,6 +374,7 @@ export default function BalancoPatrimonialPage() {
   // zero aqui; o resto continua zerado ate ser implementado.
   const [valoresAtivos, setValoresAtivos] = useState<Record<string, number>>(() => valoresZerados(PLANO_ATIVOS));
   const [valoresPassivo, setValoresPassivo] = useState<Record<string, number>>(() => valoresZerados(PLANO_PASSIVO));
+  const [bens, setBens] = useState<{ codigo: string; linha: string; nome: string; valor: number }[]>([]);
   const [carregando, setCarregando] = useState(false);
   const [indicadoresDre, setIndicadoresDre] = useState<{ lucroLiquido12m: number; ebitda12m: number; inicio: string; fim: string } | null>(null);
 
@@ -460,6 +461,7 @@ export default function BalancoPatrimonialPage() {
     setCarregando(true);
     setErro(null);
     setIndicadoresDre(null);
+    setBens([]);
     // Reseta pro zerado antes de aplicar o que a API devolver - linhas sem
     // consulta ligada ainda ficam em 0.
     setValoresAtivos(valoresZerados(PLANO_ATIVOS));
@@ -484,6 +486,7 @@ export default function BalancoPatrimonialPage() {
       const response = await fetch(`/api/balanco-patrimonial/dados?${params.toString()}`, { cache: 'no-store' });
       const data = await response.json();
       if (!response.ok || data.error || !data.valores) throw new Error(data.error || data.detail || 'Erro ao buscar o balanço patrimonial');
+      setBens(Array.isArray(data.bens) ? data.bens : []);
       setValoresAtivos((prev) => ({ ...prev, ...filtrarPorPlano(data.valores, PLANO_ATIVOS) }));
       setValoresPassivo((prev) => ({ ...prev, ...filtrarPorPlano(data.valores, PLANO_PASSIVO) }));
     } catch (error) {
@@ -494,6 +497,22 @@ export default function BalancoPatrimonialPage() {
     }
   }
 
+  // ANC.5/ANC.6 abrem em um bem por linha (so exibicao, nao soma no total).
+  const planoAtivos = useMemo(
+    () =>
+      PLANO_ATIVOS.map((g) => ({
+        ...g,
+        filhos: g.filhos?.map((f) => {
+          const doBem = bens.filter((b) => b.linha === f.codigo);
+          return doBem.length ? { ...f, detalhes: doBem.map((b) => ({ codigo: b.codigo, nome: b.nome })) } : f;
+        }),
+      })),
+    [bens]
+  );
+  const valoresAtivosComBens = useMemo(
+    () => ({ ...valoresAtivos, ...Object.fromEntries(bens.map((b) => [b.codigo, b.valor])) }),
+    [valoresAtivos, bens]
+  );
   const totalAtivos = totalGeral(PLANO_ATIVOS, valoresAtivos);
   const totalPassivo = totalGeral(PLANO_PASSIVO, valoresPassivo);
 
@@ -692,8 +711,8 @@ export default function BalancoPatrimonialPage() {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-stretch">
             <TabelaBalanco
               titulo="Ativos"
-              plano={PLANO_ATIVOS}
-              valores={valoresAtivos}
+              plano={planoAtivos}
+              valores={valoresAtivosComBens}
               mostrarPercentual
               contasExpandidas={contasExpandidas}
               toggleExpansao={toggleExpansao}

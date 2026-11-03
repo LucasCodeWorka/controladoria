@@ -472,6 +472,23 @@ def _total_bens_por_linha() -> dict:
     return {r["linha_balanco"]: float(r["total"]) for r in rows}
 
 
+def _listar_bens() -> list:
+    """Bens ativos (um por linha) para abrir ANC.5/ANC.6 no balanco."""
+    _criar_tabela_bens()
+    rows = execute_query(
+        "SELECT id, linha_balanco, descricao, empresa, valor FROM fcp_balanco_bens WHERE ativo ORDER BY linha_balanco, valor DESC, id", ()
+    ) or []
+    return [
+        {
+            "codigo": f"{r['linha_balanco']}.B{r['id']}",
+            "linha": r["linha_balanco"],
+            "nome": f"{r['descricao']} ({r['empresa']})" if r.get("empresa") else r["descricao"],
+            "valor": float(r["valor"]),
+        }
+        for r in rows
+    ]
+
+
 @router.get("/api/balanco-patrimonial/indicadores-dre")
 def get_indicadores_dre(mesReferencia: str = Query(..., description="Mes de referencia YYYY-MM")):
     """Lucro liquido (conta 14) e EBITDA (conta 09) da DRE consolidada nos 12
@@ -722,7 +739,13 @@ def get_balanco_patrimonial(
         valores.update(resultados.get("IR e CSLL", {}))
         valores.update(resultados.get("Imoveis", {}))
 
-        return {"valores": valores, "mesReferencia": mesReferencia}
+        bens = []
+        if "Bens" in resultados:
+            try:
+                bens = _listar_bens()
+            except Exception as e:
+                print(f"[BALANCO] detalhe de bens indisponivel: {e}")
+        return {"valores": valores, "bens": bens, "mesReferencia": mesReferencia}
     except HTTPException:
         raise
     except Exception as e:
