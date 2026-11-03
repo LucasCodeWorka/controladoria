@@ -475,8 +475,10 @@ def _total_bens_por_linha() -> dict:
 @router.get("/api/balanco-patrimonial/indicadores-dre")
 def get_indicadores_dre(mesReferencia: str = Query(..., description="Mes de referencia YYYY-MM")):
     """Lucro liquido (conta 14) e EBITDA (conta 09) da DRE consolidada nos 12
-    meses que terminam no mes de referencia, lidos do mesmo cache da tela de
-    DRE. Alimenta ROE e Divida liquida / EBITDA."""
+    meses fechados que terminam no mes de referencia, lidos do mesmo cache da
+    tela de DRE. Se o mes de referencia e o mes corrente (ou futuro), ainda
+    esta aberto e distorce o resultado - a janela termina no ultimo mes
+    fechado. Alimenta ROE e Divida liquida / EBITDA."""
     try:
         from routers import dre as dre_mod
         ano, mes = (int(x) for x in mesReferencia.split("-"))
@@ -485,6 +487,9 @@ def get_indicadores_dre(mesReferencia: str = Query(..., description="Mes de refe
     except ValueError:
         raise HTTPException(status_code=400, detail="mesReferencia deve ser YYYY-MM")
     try:
+        hoje = date.today()
+        if (ano, mes) >= (hoje.year, hoje.month):
+            ano, mes = (hoje.year, hoje.month - 1) if hoje.month > 1 else (hoje.year - 1, 12)
         ini_ano, ini_mes = (ano - 1, mes + 1) if mes < 12 else (ano, 1)
         ini = f"{ini_ano}-{ini_mes:02d}-01"
         prox = date(ano + (mes == 12), mes % 12 + 1, 1)
@@ -498,7 +503,7 @@ def get_indicadores_dre(mesReferencia: str = Query(..., description="Mes de refe
         def soma_12m(codigo):
             return sum(float(v or 0) for k, v in (valores.get(codigo) or {}).items() if re.fullmatch(r"\d{4}-\d{2}", k))
 
-        return {"inicio": ini, "fim": fim, "lucroLiquido12m": soma_12m("14"), "ebitda12m": soma_12m("09")}
+        return {"inicio": ini, "fim": fim, "mesFim": f"{ano}-{mes:02d}", "lucroLiquido12m": soma_12m("14"), "ebitda12m": soma_12m("09")}
     except HTTPException:
         raise
     except Exception as e:

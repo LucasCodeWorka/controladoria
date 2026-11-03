@@ -290,6 +290,9 @@ function CardIndicador({ rotulo, valor, meta, detalhe, status }: { rotulo: strin
   );
 }
 
+// 'YYYY-MM-DD' -> 'mm/aa'
+const mesAno = (iso: string) => `${iso.slice(5, 7)}/${iso.slice(2, 4)}`;
+
 const fmtIndice = (v: number) => v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 export default function BalancoPatrimonialPage() {
@@ -312,7 +315,7 @@ export default function BalancoPatrimonialPage() {
   const [valoresAtivos, setValoresAtivos] = useState<Record<string, number>>(() => valoresZerados(PLANO_ATIVOS));
   const [valoresPassivo, setValoresPassivo] = useState<Record<string, number>>(() => valoresZerados(PLANO_PASSIVO));
   const [carregando, setCarregando] = useState(false);
-  const [indicadoresDre, setIndicadoresDre] = useState<{ lucroLiquido12m: number; ebitda12m: number } | null>(null);
+  const [indicadoresDre, setIndicadoresDre] = useState<{ lucroLiquido12m: number; ebitda12m: number; inicio: string; fim: string } | null>(null);
 
   function alternarOrdenacao(campo: Campo) {
     setOrdenacao((o) => (o?.campo !== campo ? { campo, dir: 'asc' } : o.dir === 'asc' ? { campo, dir: 'desc' } : null));
@@ -416,7 +419,7 @@ export default function BalancoPatrimonialPage() {
       // Lucro e EBITDA dos ultimos 12 meses (DRE) - nao trava o balanco se falhar.
       fetch(`/api/balanco-patrimonial/indicadores-dre?mesReferencia=${mes}`, { cache: 'no-store' })
         .then((r) => r.json())
-        .then((d) => { if (typeof d.lucroLiquido12m === 'number') setIndicadoresDre({ lucroLiquido12m: d.lucroLiquido12m, ebitda12m: d.ebitda12m }); })
+        .then((d) => { if (typeof d.lucroLiquido12m === 'number') setIndicadoresDre({ lucroLiquido12m: d.lucroLiquido12m, ebitda12m: d.ebitda12m, inicio: d.inicio, fim: d.fim }); })
         .catch((e) => console.error('Erro ao buscar indicadores da DRE:', e));
       const response = await fetch(`/api/balanco-patrimonial/dados?${params.toString()}`, { cache: 'no-store' });
       const data = await response.json();
@@ -582,14 +585,14 @@ export default function BalancoPatrimonialPage() {
               rotulo="ROE"
               valor={roe === null ? (indicadoresDre ? '-' : 'Carregando...') : `${fmtIndice(roe)}%`}
               meta="lucro 12 meses ÷ patrimônio líquido"
-              detalhe={indicadoresDre ? `Lucro 12m ${formatarValor(indicadoresDre.lucroLiquido12m)}` : 'Lucro líquido da DRE consolidada'}
+              detalhe={indicadoresDre ? `Lucro 12m (${mesAno(indicadoresDre.inicio)} a ${mesAno(indicadoresDre.fim)}): ${formatarValor(indicadoresDre.lucroLiquido12m)}` : 'Lucro líquido da DRE consolidada'}
               status="neutro"
             />
             <CardIndicador
               rotulo="Dívida líquida ÷ EBITDA"
               valor={dividaEbitda === null ? (indicadoresDre ? 'n/d' : 'Carregando...') : `${fmtIndice(dividaEbitda)}x`}
               meta="não pode passar de 3"
-              detalhe={indicadoresDre ? `Dív. líq. ${formatarValor(dividaLiquida)} · EBITDA 12m ${formatarValor(indicadoresDre.ebitda12m)}` : 'Fornecedores + empréstimos − caixa'}
+              detalhe={indicadoresDre ? `Dív. líq. ${formatarValor(dividaLiquida)} · EBITDA 12m (${mesAno(indicadoresDre.inicio)} a ${mesAno(indicadoresDre.fim)}): ${formatarValor(indicadoresDre.ebitda12m)}` : 'Fornecedores + empréstimos − caixa'}
               status={dividaEbitda === null ? (indicadoresDre ? 'ruim' : 'neutro') : dividaEbitda <= 2.5 ? 'ok' : dividaEbitda <= 3 ? 'atencao' : 'ruim'}
             />
           </div>
