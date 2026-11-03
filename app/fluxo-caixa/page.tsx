@@ -2748,7 +2748,7 @@ export default function FluxoCaixaPage() {
                       return (
                       <tr key={`${f.cdFornecedor}-${i}`} className="group transition-colors">
                         <td className={`px-4 py-2 text-black border-b border-gray-200 ${bgHover}`}>{f.nome}</td>
-                        <td className={`px-4 py-2 text-right font-semibold text-red-600 tabular-nums border-b border-gray-200 ${bgHover}`}>{fmtBRL(-f.valor)}</td>
+                        <td className={`px-4 py-2 text-right font-semibold text-red-600 tabular-nums whitespace-nowrap border-b border-gray-200 ${bgHover}`}>{fmtBRL(-f.valor)}</td>
                       </tr>
                       );
                     })}
