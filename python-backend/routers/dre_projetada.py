@@ -131,7 +131,7 @@ def _crescimento_meta(inicio, inflacao, filtro, meta, ctx=None):
 @router.get("/api/dre-projetada")
 def dre_projetada(
     inicio: Optional[str] = Query(None, description="Primeiro mes projetado YYYY-MM (default: proximo mes)"),
-    cenario: str = Query("realista", description="pessimista | realista | otimista | meta | personalizado"),
+    cenario: str = Query("realista", description="pessimista | realista | otimista | meta | equilibrio (meta 0% de lucro) | personalizado"),
     inflacao: Optional[float] = Query(None, description="% de inflacao da RECEITA (default: IPCA 12m); fixas nao tem reajuste"),
     crescimentoReceita: Optional[float] = Query(None, description="% de crescimento da receita (so no cenario personalizado)"),
     filtro: str = Query("consolidado"),
@@ -161,8 +161,8 @@ def _projetar(inicio, cenario, inflacao, crescimentoReceita, filtro, forcar, ctx
             g_rec = infl + ADICIONAL_OTIMISTA
         elif cenario == "personalizado":
             g_rec = infl if crescimentoReceita is None else crescimentoReceita
-        elif cenario == "meta":
-            alvo = _crescimento_meta(inicio, inflacao, filtro, META_LUCRO, ctx)
+        elif cenario in ("meta", "equilibrio"):
+            alvo = _crescimento_meta(inicio, inflacao, filtro, META_LUCRO if cenario == "meta" else 0.0, ctx)
             g_rec = alvo["gEfetivo"] if alvo["gEfetivo"] is not None else infl  # sem solucao: so inflacao
         else:
             raise HTTPException(status_code=400, detail="cenario invalido")
@@ -326,5 +326,10 @@ def resumo(
         r = _projetar(inicio, "personalizado", inflacao, alvo["gEfetivo"], filtro, False, ctx)
         rec, luc = float((r["projetado"].get("03") or {}).get("total", 0) or 0), float((r["projetado"].get("14") or {}).get("total", 0) or 0)
         saida["meta"] = {"receitaLiquida": rec, "lucro": luc, "percentual": (luc / rec * 100) if rec else None}
+    alvo0 = _crescimento_meta(inicio, inflacao, filtro, 0.0, ctx)
+    if alvo0["gEfetivo"] is not None:
+        r = _projetar(inicio, "personalizado", inflacao, alvo0["gEfetivo"], filtro, False, ctx)
+        rec, luc = float((r["projetado"].get("03") or {}).get("total", 0) or 0), float((r["projetado"].get("14") or {}).get("total", 0) or 0)
+        saida["equilibrio"] = {"receitaLiquida": rec, "lucro": luc, "percentual": (luc / rec * 100) if rec else None}
     necessario, receita_necessaria = alvo["necessario"], alvo["receitaNecessaria"]
     return {"filtro": filtro, "anoAnterior": ano_anterior, "cenarios": saida, "crescimentoNecessario": necessario, "receitaNecessaria": receita_necessaria, "meta": meta}
