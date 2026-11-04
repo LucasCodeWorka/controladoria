@@ -45,34 +45,13 @@ LINHAS_MANUAIS = [
 # ou ("abate", valor mensal a abater da projecao padrao, sem passar de zero).
 AJUSTES_ECOMMERCE = {
     "08.01.07": ("fixo", -120.0),      # TAXAS E EMOLUMENTO - CO
-    "08.02.20": ("abate", 3000.0),     # MANUT DE SOFTWARE: projecao padrao (sem o Google) abatida em R$ 3.000/mes
+    "08.02.20": ("fixo", -6812.30),    # MANUT DE SOFTWARE
+    "08.05.02": ("fixo", -12000.0),    # PROPAGANDAS EM MIDIAS DIGITAIS
     "08.02.18": ("fixo", 0.0),         # CORREIOS E MALOTES
     "08.10.01": ("pct_liquida", -0.1248),  # FRETES VENDAS = 12,48% da receita liquida
     "10.03.02": ("fixo", 0.0),         # IOF
     "08.03.02": ("fixo", -200.0),      # MANUTENCAO EDIFICACOES
 }
-# Despesas de um fornecedor do e-commerce que, na base, saem de uma conta e vao
-# para outra (so na projecao; o "ano anterior" continua como realizado).
-# (conta de origem, conta de destino, trecho do nome do fornecedor)
-MOVER_FORNECEDOR_ECOMMERCE = ("08.02.20", "08.05.02", "GOOGLE BRASIL INTERNET")
-_cache_mover = {}  # periodo -> (timestamp, valor)
-TTL_MOVER = 1800
-
-
-def _valor_fornecedor_mes(periodo):
-    """Soma (positiva) das duplicatas do e-commerce (120) na conta de origem,
-    do fornecedor indicado, no mes (mesmo criterio da DRE: dt_emissao)."""
-    agora = time.time()
-    c = _cache_mover.get(periodo)
-    if c and agora - c[0] < TTL_MOVER:
-        return c[1]
-    origem, _, nome = MOVER_FORNECEDOR_ECOMMERCE
-    r = dre_mod._buscar_duplicatas_unificada(origem, periodo, CCUSTO_ECOMMERCE, campo_data_despesa="dt_emissao")
-    v = sum(float(d.get("valor") or 0) for d in (r.get("duplicatas") or []) if nome in (d.get("nmFornecedor") or "").upper())
-    _cache_mover[periodo] = (agora, v)
-    return v
-
-
 META_LUCRO = 10.0  # % de lucro liquido sobre a receita liquida do cenario "meta"
 
 _cache_ipca = {"valor": None, "em": 0.0}
@@ -248,29 +227,6 @@ def _projetar(inicio, cenario, inflacao, crescimentoReceita, filtro, forcar, ctx
         def val(codigo, periodo):
             return float((valores.get(codigo) or {}).get(periodo, 0) or 0)
 
-        # Base da projecao: no e-commerce (filtro 120, consolidado ou lojas com ele),
-        # a parcela do fornecedor sai da conta de origem e entra na de destino.
-        mover = {}
-        partes_f = [x.strip() for x in filtro.split(",")]
-        if ajustes and (filtro == "consolidado" or CCUSTO_ECOMMERCE in partes_f):
-            from concurrent.futures import ThreadPoolExecutor
-            with ThreadPoolExecutor(max_workers=6) as pool:
-                mover = dict(zip(base, pool.map(_valor_fornecedor_mes, base)))
-        org, dst, _n = MOVER_FORNECEDOR_ECOMMERCE
-        if any(mover.values()) and dst not in folhas:
-            folhas.append(dst)
-
-        def val_proj(codigo, periodo):
-            v = val(codigo, periodo)
-            m = mover.get(periodo, 0.0)
-            if not m:
-                return v
-            if codigo == org or codigo.startswith(org + "."):
-                return v + m  # despesa e negativa: tirar o valor da origem
-            if codigo == dst:
-                return v - m
-            return v
-
         receita_base = {p: val("01", p) for p in base}
         receita_proj = {pj: receita_base[pb] * (1 + g_rec / 100) for pj, pb in zip(proj, base)}
 
@@ -282,7 +238,7 @@ def _projetar(inicio, cenario, inflacao, crescimentoReceita, filtro, forcar, ctx
             tipos[c] = tipo
             linha = {"total": 0.0}
             for pj, pb in zip(proj, base):
-                b = val_proj(c, pb)
+                b = val(c, pb)
                 if tipo == "receita":
                     v = b * (1 + g_rec / 100)
                 elif tipo == "variavel":
