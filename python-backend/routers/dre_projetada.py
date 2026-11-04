@@ -46,7 +46,7 @@ AJUSTES_ECOMMERCE = {
     "08.01.07": ("fixo", -120.0),      # TAXAS E EMOLUMENTO - CO
     "08.02.20": ("fixo", -12000.0),    # MANUT DE SOFTWARE
     "08.02.18": ("fixo", 0.0),         # CORREIOS E MALOTES
-    "08.10.01": ("pct_liquida", -0.15),  # FRETES VENDAS = 15% da receita liquida
+    "08.10.01": ("pct_liquida", -0.1248),  # FRETES VENDAS = 12,48% da receita liquida
     "10.03.02": ("fixo", 0.0),         # IOF
     "08.03.02": ("fixo", -200.0),      # MANUTENCAO EDIFICACOES
 }
