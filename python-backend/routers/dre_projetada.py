@@ -41,15 +41,38 @@ LINHAS_MANUAIS = [
     {"codigo": "08.04.99", "nome": "SALARIO COMPLETO GERENTE (PROJECAO)", "valor": -13000.0},
 ]
 # Contas do e-commerce com projecao propria no lugar da regra padrao:
-# ("fixo", valor mensal - despesa negativa) ou ("pct_liquida", % negativo da receita liquida do mes).
+# ("fixo", valor mensal - despesa negativa), ("pct_liquida", % negativo da receita liquida do mes)
+# ou ("abate", valor mensal a abater da projecao padrao, sem passar de zero).
 AJUSTES_ECOMMERCE = {
     "08.01.07": ("fixo", -120.0),      # TAXAS E EMOLUMENTO - CO
-    "08.02.20": ("fixo", -12000.0),    # MANUT DE SOFTWARE
+    "08.02.20": ("abate", 3000.0),     # MANUT DE SOFTWARE: projecao padrao (sem o Google) abatida em R$ 3.000/mes
     "08.02.18": ("fixo", 0.0),         # CORREIOS E MALOTES
     "08.10.01": ("pct_liquida", -0.1248),  # FRETES VENDAS = 12,48% da receita liquida
     "10.03.02": ("fixo", 0.0),         # IOF
     "08.03.02": ("fixo", -200.0),      # MANUTENCAO EDIFICACOES
 }
+# Despesas de um fornecedor do e-commerce que, na base, saem de uma conta e vao
+# para outra (so na projecao; o "ano anterior" continua como realizado).
+# (conta de origem, conta de destino, trecho do nome do fornecedor)
+MOVER_FORNECEDOR_ECOMMERCE = ("08.02.20", "08.05.02", "GOOGLE BRASIL INTERNET")
+_cache_mover = {}  # periodo -> (timestamp, valor)
+TTL_MOVER = 1800
+
+
+def _valor_fornecedor_mes(periodo):
+    """Soma (positiva) das duplicatas do e-commerce (120) na conta de origem,
+    do fornecedor indicado, no mes (mesmo criterio da DRE: dt_emissao)."""
+    agora = time.time()
+    c = _cache_mover.get(periodo)
+    if c and agora - c[0] < TTL_MOVER:
+        return c[1]
+    origem, _, nome = MOVER_FORNECEDOR_ECOMMERCE
+    r = dre_mod._buscar_duplicatas_unificada(origem, periodo, CCUSTO_ECOMMERCE, campo_data_despesa="dt_emissao")
+    v = sum(float(d.get("valor") or 0) for d in (r.get("duplicatas") or []) if nome in (d.get("nmFornecedor") or "").upper())
+    _cache_mover[periodo] = (agora, v)
+    return v
+
+
 META_LUCRO = 10.0  # % de lucro liquido sobre a receita liquida do cenario "meta"
 
 _cache_ipca = {"valor": None, "em": 0.0}
@@ -225,6 +248,29 @@ def _projetar(inicio, cenario, inflacao, crescimentoReceita, filtro, forcar, ctx
         def val(codigo, periodo):
             return float((valores.get(codigo) or {}).get(periodo, 0) or 0)
 
+        # Base da projecao: no e-commerce (filtro 120, consolidado ou lojas com ele),
+        # a parcela do fornecedor sai da conta de origem e entra na de destino.
+        mover = {}
+        partes_f = [x.strip() for x in filtro.split(",")]
+        if ajustes and (filtro == "consolidado" or CCUSTO_ECOMMERCE in partes_f):
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=6) as pool:
+                mover = dict(zip(base, pool.map(_valor_fornecedor_mes, base)))
+        org, dst, _n = MOVER_FORNECEDOR_ECOMMERCE
+        if any(mover.values()) and dst not in folhas:
+            folhas.append(dst)
+
+        def val_proj(codigo, periodo):
+            v = val(codigo, periodo)
+            m = mover.get(periodo, 0.0)
+            if not m:
+                return v
+            if codigo == org or codigo.startswith(org + "."):
+                return v + m  # despesa e negativa: tirar o valor da origem
+            if codigo == dst:
+                return v - m
+            return v
+
         receita_base = {p: val("01", p) for p in base}
         receita_proj = {pj: receita_base[pb] * (1 + g_rec / 100) for pj, pb in zip(proj, base)}
 
@@ -236,7 +282,7 @@ def _projetar(inicio, cenario, inflacao, crescimentoReceita, filtro, forcar, ctx
             tipos[c] = tipo
             linha = {"total": 0.0}
             for pj, pb in zip(proj, base):
-                b = val(c, pb)
+                b = val_proj(c, pb)
                 if tipo == "receita":
                     v = b * (1 + g_rec / 100)
                 elif tipo == "variavel":
@@ -267,13 +313,17 @@ def _projetar(inicio, cenario, inflacao, crescimentoReceita, filtro, forcar, ctx
         # Ajustes do e-commerce. Filtro so 120: substitui a conta. Consolidado ou
         # varias lojas com o 120: soma a diferenca (ajuste - projecao padrao do
         # e-commerce), calculada com o mesmo crescimento de receita.
-        def _valor_ajuste(regra, liquida):
-            return regra[1] if regra[0] == "fixo" else regra[1] * liquida
+        def _valor_ajuste(regra, liquida, padrao=0.0):
+            if regra[0] == "fixo":
+                return regra[1]
+            if regra[0] == "abate":
+                return min(padrao + regra[1], 0.0)
+            return regra[1] * liquida
 
         partes = [x.strip() for x in filtro.split(",")]
         if ajustes and partes == [CCUSTO_ECOMMERCE]:
             for cod, regra in AJUSTES_ECOMMERCE.items():
-                v = {pj: _valor_ajuste(regra, liquida_proj[pj]) for pj in proj}
+                v = {pj: _valor_ajuste(regra, liquida_proj[pj], float((projetado.get(cod) or {}).get(pj, 0) or 0)) for pj in proj}
                 projetado[cod] = {**v, "total": sum(v.values())}
                 tipos[cod] = "manual"
         elif ajustes and (filtro == "consolidado" or CCUSTO_ECOMMERCE in partes):
@@ -281,7 +331,9 @@ def _projetar(inicio, cenario, inflacao, crescimentoReceita, filtro, forcar, ctx
             for cod, regra in AJUSTES_ECOMMERCE.items():
                 atual = projetado.get(cod) or {}
                 padrao = eco.get(cod) or {}
-                v = {pj: float(atual.get(pj, 0) or 0) + _valor_ajuste(regra, float((eco.get("03") or {}).get(pj, 0) or 0)) - float(padrao.get(pj, 0) or 0) for pj in proj}
+                v = {pj: float(atual.get(pj, 0) or 0)
+                     + _valor_ajuste(regra, float((eco.get("03") or {}).get(pj, 0) or 0), float(padrao.get(pj, 0) or 0))
+                     - float(padrao.get(pj, 0) or 0) for pj in proj}
                 projetado[cod] = {**v, "total": sum(v.values())}
                 tipos[cod] = "manual"
 
