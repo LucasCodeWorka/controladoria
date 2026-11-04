@@ -1,7 +1,7 @@
 """
 DRE projetada dos proximos 12 meses.
 
-Base: o MESMO mes do ano anterior (DRE consolidada/analitica ja existente, via
+Base: o MESMO mes do calendario na ocorrencia FECHADA mais recente (DRE consolidada/analitica ja existente, via
 dre_cache - mesma consulta e mesmo cache da tela de DRE). Cada conta folha vira:
   - receita (01.*): realizado do mes-base x (1 + crescimento da receita);
   - variavel (% da receita): percentual sobre a receita LIQUIDA do mes-base,
@@ -167,14 +167,22 @@ def _projetar(inicio, cenario, inflacao, crescimentoReceita, filtro, forcar, ctx
         else:
             raise HTTPException(status_code=400, detail="cenario invalido")
 
-        # 12 meses projetados e os 12 meses-base (mesmo mes, um ano antes)
+        # 12 meses projetados; a base de cada um e o mesmo mes do calendario na
+        # ocorrencia FECHADA mais recente (nunca o mes corrente/futuro, que esta
+        # parcial). Hoje (nov/26): dez/26..out/27 usam dez/25..out/26 e nov/27 usa nov/25.
+        primeiro_mes_aberto = (hoje.year, hoje.month)
         proj, base = [], []
         for n in range(12):
             a, m = _soma_meses(ano, mes, n)
             proj.append(f"{a}-{m:02d}")
-            base.append(f"{a - 1}-{m:02d}")
-        ini_base = f"{base[0]}-01"
-        a_fim, m_fim = _soma_meses(ano - 1, mes, 12)  # primeiro dia do mes seguinte ao ultimo mes-base
+            ab = a - 1
+            while (ab, m) >= primeiro_mes_aberto:
+                ab -= 1
+            base.append(f"{ab}-{m:02d}")
+        base_ord = sorted(base)
+        ini_base = f"{base_ord[0]}-01"
+        a_fim, m_fim = (int(x) for x in base_ord[-1].split("-"))
+        a_fim, m_fim = _soma_meses(a_fim, m_fim, 1)  # primeiro dia do mes seguinte ao ultimo mes-base
         ult = date(a_fim, m_fim, 1).toordinal() - 1
         fim_base = date.fromordinal(ult).isoformat()
 

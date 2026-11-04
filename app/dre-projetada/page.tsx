@@ -101,11 +101,15 @@ export default function DreProjetadaPage() {
 
   const buscarResumo = useCallback(async (forcar = false) => {
     const id = ++execResumo.current;
-    const empresas = [
+    const todas = [
       { filtro: 'consolidado', nome: 'CONSOLIDADO (TODAS)' },
       { filtro: 'fabrica', nome: 'FABRICA' },
       ...lojas.map((l) => ({ filtro: l.valor, nome: l.label })),
     ];
+    // O resumo acompanha o filtro da tela: consolidado = todas as empresas;
+    // senao so a fabrica ou as lojas selecionadas.
+    const selecionadas = filtro.split(',');
+    const empresas = filtro === 'consolidado' ? todas : todas.filter((e) => selecionadas.includes(e.filtro));
     setResumo(empresas.map((e) => ({ ...e, carregando: true })));
     const personalizado = cenario === 'personalizado' ? Number(crescimentoTxt.replace(',', '.')) : NaN;
     // 4 empresas por vez (o backend ainda calcula uma base pesada de cada vez,
@@ -134,7 +138,7 @@ export default function DreProjetadaPage() {
     }
     };
     await Promise.all(Array.from({ length: 4 }, processar));
-  }, [inicio, cenario, inflacaoTxt, crescimentoTxt, lojas]);
+  }, [inicio, cenario, filtro, inflacaoTxt, crescimentoTxt, lojas]);
 
   useEffect(() => {
     fetch('/api/dre/centros-custo', { cache: 'no-store' })
@@ -221,7 +225,7 @@ export default function DreProjetadaPage() {
               <p className="text-gray-600">Projeção do Resultado dos próximos 12 meses</p>
               {p && (
                 <p className="text-xs text-gray-400 mt-1">
-                  Base: mesmo mês do ano anterior ({p.baseInicio.split('-').reverse().join('/')} a {p.baseFim.split('-').reverse().join('/')}).
+                  Base: mesmo mês do calendário, sempre de meses fechados ({p.baseInicio.split('-').reverse().join('/')} a {p.baseFim.split('-').reverse().join('/')}).
                   Receita por crescimento %; variáveis mantêm o % sobre a receita; fixas repetem o valor do ano anterior (fixo/variável da classificação da DRE).
                 </p>
               )}
