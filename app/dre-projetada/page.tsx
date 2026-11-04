@@ -12,7 +12,8 @@ interface RespostaProjecao {
   periodos: { key: string; label: string; base: string }[];
   projetado: Record<string, Valores>;
   anoAnterior: Record<string, Valores>;
-  tipos: Record<string, 'receita' | 'variavel' | 'fixa'>;
+  tipos: Record<string, 'receita' | 'variavel' | 'fixa' | 'manual'>;
+  manuais?: { codigo: string; nome: string }[];
   parametros: {
     cenario: string; inflacao: number; inflacaoFixas: number; crescimentoReceita: number; adicionalOtimista: number;
     ipca: { valor: number; data: string | null; fonte: string }; baseInicio: string; baseFim: string;
@@ -156,7 +157,12 @@ export default function DreProjetadaPage() {
     const percorrer = (c: ContaDRE, prof: number) => {
       if (!dados.projetado[c.codigo] && !dados.anoAnterior[c.codigo]) return;
       saida.push({ conta: c, profundidade: prof });
-      if (c.filhos && abertos.has(c.codigo)) c.filhos.forEach((f) => percorrer(f, prof + 1));
+      if (c.filhos && abertos.has(c.codigo)) {
+        c.filhos.forEach((f) => percorrer(f, prof + 1));
+        // linhas projetadas manualmente (sem base no ano anterior) dentro do grupo
+        (dados.manuais || []).filter((m) => m.codigo.startsWith(c.codigo + '.') && m.codigo.split('.').length === c.codigo.split('.').length + 1)
+          .forEach((m) => saida.push({ conta: { codigo: m.codigo, nome: m.nome, nivel: 3, tipo: 'conta' } as ContaDRE, profundidade: prof + 1 }));
+      }
     };
     for (const c of PLANO_CONTAS_DRE_FABRICA) {
       if (!CODIGOS_EXIBIDOS.has(c.codigo)) continue;
@@ -507,7 +513,8 @@ export default function DreProjetadaPage() {
                   const filhos = 'filhos' in conta ? conta.filhos : undefined;
                   const temFilhos = !!filhos?.length;
                   const tipo = dados.tipos[conta.codigo];
-                  const corLinha = resultado ? 'bg-green-50 font-bold text-green-800' : CORES_NIVEL[Math.min(profundidade + 1, 4)];
+                  const manual = tipo === 'manual';
+                  const corLinha = manual ? 'bg-amber-100 text-amber-900 font-medium' : resultado ? 'bg-green-50 font-bold text-green-800' : CORES_NIVEL[Math.min(profundidade + 1, 4)];
                   const totalProj = proj?.total ?? 0;
                   const totalAnt = ant?.total ?? 0;
                   return (
@@ -520,8 +527,8 @@ export default function DreProjetadaPage() {
                           {!resultado && <span className="font-mono text-xs text-gray-500">{conta.codigo}</span>}
                           <span className={`text-sm ${resultado ? 'font-bold' : ''}`}>{conta.nome}</span>
                           {tipo && tipo !== 'receita' && (
-                            <span className={`px-1.5 py-0.5 text-[10px] rounded ${tipo === 'fixa' ? 'bg-slate-200 text-slate-700' : 'bg-amber-100 text-amber-800'}`}>
-                              {tipo === 'fixa' ? 'Fixa' : 'Variável'}
+                            <span className={`px-1.5 py-0.5 text-[10px] rounded ${tipo === 'fixa' ? 'bg-slate-200 text-slate-700' : tipo === 'manual' ? 'bg-amber-300 text-amber-950' : 'bg-amber-100 text-amber-800'}`}>
+                              {tipo === 'fixa' ? 'Fixa' : tipo === 'manual' ? 'Projeção manual' : 'Variável'}
                             </span>
                           )}
                         </div>

@@ -34,6 +34,12 @@ router = APIRouter()
 TOTALIZADORES = ("03", "05", "07", "09", "11", "14")
 INFLACAO_PADRAO = 4.5
 ADICIONAL_OTIMISTA = 5.0
+# Projecoes manuais (sem base no ano anterior), por empresa: (conta, nome, valor
+# mensal - despesa negativa, ccusto do e-commerce que ativa a linha).
+CCUSTO_ECOMMERCE = "120"
+LINHAS_MANUAIS = [
+    {"codigo": "08.04.99", "nome": "SALARIO COMPLETO GERENTE (PROJECAO)", "valor": -13000.0},
+]
 META_LUCRO = 10.0  # % de lucro liquido sobre a receita liquida do cenario "meta"
 
 _cache_ipca = {"valor": None, "em": 0.0}
@@ -239,6 +245,14 @@ def _projetar(inicio, cenario, inflacao, crescimentoReceita, filtro, forcar, ctx
             if not c.startswith(("01", "02")):
                 projetar(c, liquida_base, liquida_proj)
 
+        # Linhas manuais: so no e-commerce (filtro 120) e no consolidado, que o inclui
+        manuais = []
+        if filtro == "consolidado" or CCUSTO_ECOMMERCE in [x.strip() for x in filtro.split(",")]:
+            for lm in LINHAS_MANUAIS:
+                projetado[lm["codigo"]] = {**{pj: lm["valor"] for pj in proj}, "total": lm["valor"] * len(proj)}
+                tipos[lm["codigo"]] = "manual"
+                manuais.append({"codigo": lm["codigo"], "nome": lm["nome"]})
+
         projetado = dre_mod._somar_hierarquia(projetado, proj)
         projetado = dre_mod._calcular_totalizadores(projetado, proj)
 
@@ -258,6 +272,7 @@ def _projetar(inicio, cenario, inflacao, crescimentoReceita, filtro, forcar, ctx
             "projetado": projetado,
             "anoAnterior": base_reindex,
             "tipos": tipos,
+            "manuais": manuais,
             "parametros": {
                 "cenario": cenario, "inflacao": infl, "inflacaoFixas": infl_fixas, "crescimentoReceita": g_rec,
                 "adicionalOtimista": ADICIONAL_OTIMISTA, "ipca": ipca, "filtro": filtro,
