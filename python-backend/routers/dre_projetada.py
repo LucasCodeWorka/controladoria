@@ -332,4 +332,4 @@ def resumo(
         rec, luc = float((r["projetado"].get("03") or {}).get("total", 0) or 0), float((r["projetado"].get("14") or {}).get("total", 0) or 0)
         saida["equilibrio"] = {"receitaLiquida": rec, "lucro": luc, "percentual": (luc / rec * 100) if rec else None}
     necessario, receita_necessaria = alvo["necessario"], alvo["receitaNecessaria"]
-    return {"filtro": filtro, "anoAnterior": ano_anterior, "cenarios": saida, "crescimentoNecessario": necessario, "receitaNecessaria": receita_necessaria, "meta": meta}
+    return {"filtro": filtro, "anoAnterior": ano_anterior, "cenarios": saida, "crescimentoNecessario": necessario, "receitaNecessaria": receita_necessaria, "crescimentoNecessario0": alvo0["necessario"], "receitaNecessaria0": alvo0["receitaNecessaria"], "meta": meta}
