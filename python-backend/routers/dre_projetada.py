@@ -48,6 +48,7 @@ AJUSTES_ECOMMERCE = {
     "08.02.18": ("fixo", 0.0),         # CORREIOS E MALOTES
     "08.10.01": ("pct_liquida", -0.15),  # FRETES VENDAS = 15% da receita liquida
     "10.03.02": ("fixo", 0.0),         # IOF
+    "08.03.02": ("fixo", -200.0),      # MANUTENCAO EDIFICACOES
 }
 META_LUCRO = 10.0  # % de lucro liquido sobre a receita liquida do cenario "meta"
 
@@ -106,7 +107,7 @@ def _soma_meses(ano: int, mes: int, n: int):
     return idx // 12, idx % 12 + 1
 
 
-def _crescimento_meta(inicio, inflacao, filtro, meta, ctx=None):
+def _crescimento_meta(inicio, inflacao, filtro, meta, ctx=None, sem_gerente=False):
     """Crescimento da receita para atingir `meta`% de lucro liquido. Com fixas
     constantes e variaveis proporcionais a receita, receita liquida e lucro sao
     lineares no crescimento g; basta avaliar em g=0 e g=100 e resolver
@@ -114,7 +115,7 @@ def _crescimento_meta(inicio, inflacao, filtro, meta, ctx=None):
     anterior (nunca abaixo da inflacao); necessario = o que falta DEPOIS da
     inflacao. Sem solucao so com venda: tudo None."""
     def pontos(g):
-        r = _projetar(inicio, "personalizado", inflacao, g, filtro, False, ctx)
+        r = _projetar(inicio, "personalizado", inflacao, g, filtro, False, ctx, sem_gerente=sem_gerente)
         return (float((r["projetado"].get("03") or {}).get("total", 0) or 0),
                 float((r["projetado"].get("14") or {}).get("total", 0) or 0),
                 r["parametros"]["inflacao"])
@@ -145,11 +146,12 @@ def dre_projetada(
     crescimentoReceita: Optional[float] = Query(None, description="% de crescimento da receita (so no cenario personalizado)"),
     filtro: str = Query("consolidado"),
     forcar: bool = Query(False),
+    semGerente: bool = Query(False, description="Desconsidera a linha manual do salario completo do gerente (e-commerce)"),
 ):
-    return _projetar(inicio, cenario, inflacao, crescimentoReceita, filtro, forcar, None)
+    return _projetar(inicio, cenario, inflacao, crescimentoReceita, filtro, forcar, None, sem_gerente=semGerente)
 
 
-def _projetar(inicio, cenario, inflacao, crescimentoReceita, filtro, forcar, ctx, ajustes=True):
+def _projetar(inicio, cenario, inflacao, crescimentoReceita, filtro, forcar, ctx, ajustes=True, sem_gerente=False):
     """ctx (opcional): dict que guarda a base (cache da DRE) e a classificacao
     entre varias projecoes da mesma empresa - o resumo roda 6 por empresa e
     cada leitura do cache e uma ida ao banco."""
@@ -171,7 +173,7 @@ def _projetar(inicio, cenario, inflacao, crescimentoReceita, filtro, forcar, ctx
         elif cenario == "personalizado":
             g_rec = infl if crescimentoReceita is None else crescimentoReceita
         elif cenario in ("meta", "equilibrio"):
-            alvo = _crescimento_meta(inicio, inflacao, filtro, META_LUCRO if cenario == "meta" else 0.0, ctx)
+            alvo = _crescimento_meta(inicio, inflacao, filtro, META_LUCRO if cenario == "meta" else 0.0, ctx, sem_gerente)
             g_rec = alvo["gEfetivo"] if alvo["gEfetivo"] is not None else infl  # sem solucao: so inflacao
         else:
             raise HTTPException(status_code=400, detail="cenario invalido")
@@ -275,7 +277,7 @@ def _projetar(inicio, cenario, inflacao, crescimentoReceita, filtro, forcar, ctx
                 projetado[cod] = {**v, "total": sum(v.values())}
                 tipos[cod] = "manual"
         elif ajustes and (filtro == "consolidado" or CCUSTO_ECOMMERCE in partes):
-            eco = _projetar(inicio, "personalizado", inflacao, g_rec, CCUSTO_ECOMMERCE, False, ctx, ajustes=False)["projetado"]
+            eco = _projetar(inicio, "personalizado", inflacao, g_rec, CCUSTO_ECOMMERCE, False, ctx, ajustes=False, sem_gerente=sem_gerente)["projetado"]
             for cod, regra in AJUSTES_ECOMMERCE.items():
                 atual = projetado.get(cod) or {}
                 padrao = eco.get(cod) or {}
@@ -286,7 +288,7 @@ def _projetar(inicio, cenario, inflacao, crescimentoReceita, filtro, forcar, ctx
         # Linhas manuais: so no e-commerce (filtro 120) e no consolidado, que o inclui
         manuais = []
         if filtro == "consolidado" or CCUSTO_ECOMMERCE in [x.strip() for x in filtro.split(",")]:
-            for lm in LINHAS_MANUAIS:
+            for lm in ([] if sem_gerente else LINHAS_MANUAIS):
                 projetado[lm["codigo"]] = {**{pj: lm["valor"] for pj in proj}, "total": lm["valor"] * len(proj)}
                 tipos[lm["codigo"]] = "manual"
                 manuais.append({"codigo": lm["codigo"], "nome": lm["nome"]})
@@ -334,6 +336,7 @@ def resumo(
     filtro: str = Query("consolidado"),
     meta: float = Query(META_LUCRO, description="% de lucro liquido desejado sobre a receita liquida"),
     forcar: bool = Query(False),
+    semGerente: bool = Query(False, description="Desconsidera a linha manual do salario completo do gerente (e-commerce)"),
 ):
     """Receita liquida e lucro liquido (conta 14) projetados nos 12 meses, em
     cada cenario, para UM filtro (empresa). A base do ano anterior vem do
@@ -342,7 +345,7 @@ def resumo(
     ctx = {}
     saida, ano_anterior, periodo = {}, None, None
     for i, cen in enumerate(cenarios):
-        r = _projetar(inicio, cen, inflacao, crescimentoReceita, filtro, forcar and i == 0, ctx)
+        r = _projetar(inicio, cen, inflacao, crescimentoReceita, filtro, forcar and i == 0, ctx, sem_gerente=semGerente)
         def tot(d, c):
             return float((d.get(c) or {}).get("total", 0) or 0)
         rec, luc = tot(r["projetado"], "03"), tot(r["projetado"], "14")
@@ -351,14 +354,14 @@ def resumo(
             rec_a, luc_a = tot(r["anoAnterior"], "03"), tot(r["anoAnterior"], "14")
             ano_anterior = {"receitaLiquida": rec_a, "lucro": luc_a, "percentual": (luc_a / rec_a * 100) if rec_a else None}
 
-    alvo = _crescimento_meta(inicio, inflacao, filtro, meta, ctx)
+    alvo = _crescimento_meta(inicio, inflacao, filtro, meta, ctx, semGerente)
     if alvo["gEfetivo"] is not None:
-        r = _projetar(inicio, "personalizado", inflacao, alvo["gEfetivo"], filtro, False, ctx)
+        r = _projetar(inicio, "personalizado", inflacao, alvo["gEfetivo"], filtro, False, ctx, sem_gerente=semGerente)
         rec, luc = float((r["projetado"].get("03") or {}).get("total", 0) or 0), float((r["projetado"].get("14") or {}).get("total", 0) or 0)
         saida["meta"] = {"receitaLiquida": rec, "lucro": luc, "percentual": (luc / rec * 100) if rec else None}
-    alvo0 = _crescimento_meta(inicio, inflacao, filtro, 0.0, ctx)
+    alvo0 = _crescimento_meta(inicio, inflacao, filtro, 0.0, ctx, semGerente)
     if alvo0["gEfetivo"] is not None:
-        r = _projetar(inicio, "personalizado", inflacao, alvo0["gEfetivo"], filtro, False, ctx)
+        r = _projetar(inicio, "personalizado", inflacao, alvo0["gEfetivo"], filtro, False, ctx, sem_gerente=semGerente)
         rec, luc = float((r["projetado"].get("03") or {}).get("total", 0) or 0), float((r["projetado"].get("14") or {}).get("total", 0) or 0)
         saida["equilibrio"] = {"receitaLiquida": rec, "lucro": luc, "percentual": (luc / rec * 100) if rec else None}
     necessario, receita_necessaria = alvo["necessario"], alvo["receitaNecessaria"]

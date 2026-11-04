@@ -78,6 +78,8 @@ export default function DreProjetadaPage() {
   const [abertos, setAbertos] = useState<Set<string>>(new Set());
   const [resumo, setResumo] = useState<ResumoEmpresa[] | null>(null);
   const execResumo = useRef(0);
+  const [semGerente, setSemGerente] = useState(false);
+  const montou = useRef(false);
 
   const buscar = useCallback(async (forcar = false) => {
     setCarregando(true);
@@ -88,6 +90,7 @@ export default function DreProjetadaPage() {
       if (inflacaoTxt.trim() !== '' && !Number.isNaN(infl)) params.set('inflacao', String(infl));
       const cresc = Number(crescimentoTxt.replace(',', '.'));
       if (cenario === 'personalizado' && crescimentoTxt.trim() !== '' && !Number.isNaN(cresc)) params.set('crescimentoReceita', String(cresc));
+      if (semGerente) params.set('semGerente', 'true');
       if (forcar) params.set('forcar', 'true');
       const resp = await fetch(`/api/dre-projetada?${params.toString()}`, { cache: 'no-store' });
       const json = await resp.json();
@@ -98,7 +101,7 @@ export default function DreProjetadaPage() {
     } finally {
       setCarregando(false);
     }
-  }, [inicio, cenario, filtro, inflacaoTxt, crescimentoTxt]);
+  }, [inicio, cenario, filtro, inflacaoTxt, crescimentoTxt, semGerente]);
 
   const buscarResumo = useCallback(async (forcar = false) => {
     const id = ++execResumo.current;
@@ -125,6 +128,7 @@ export default function DreProjetadaPage() {
         const infl = Number(inflacaoTxt.replace(',', '.'));
         if (inflacaoTxt.trim() !== '' && !Number.isNaN(infl)) params.set('inflacao', String(infl));
         if (!Number.isNaN(personalizado) && crescimentoTxt.trim() !== '') params.set('crescimentoReceita', String(personalizado));
+        if (semGerente) params.set('semGerente', 'true');
         if (forcar) params.set('forcar', 'true');
         const resp = await fetch(`/api/dre-projetada/resumo?${params.toString()}`, { cache: 'no-store' });
         const json = await resp.json();
@@ -139,7 +143,14 @@ export default function DreProjetadaPage() {
     }
     };
     await Promise.all(Array.from({ length: 4 }, processar));
-  }, [inicio, cenario, filtro, inflacaoTxt, crescimentoTxt, lojas]);
+  }, [inicio, cenario, filtro, inflacaoTxt, crescimentoTxt, lojas, semGerente]);
+
+  // Recalcula ao marcar/desmarcar o gerente (so depois da primeira consulta)
+  useEffect(() => {
+    if (!montou.current) { montou.current = true; return; }
+    if (dados || resumo) { buscar(); buscarResumo(); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [semGerente]);
 
   useEffect(() => {
     fetch('/api/dre/centros-custo', { cache: 'no-store' })
@@ -354,6 +365,10 @@ export default function DreProjetadaPage() {
           <div className="p-4 border-b-2 bg-gradient-to-r from-green-50 to-green-100 border-green-200">
             <h2 className="text-lg font-bold text-gray-800">Resumo por empresa - Lucro líquido e % sobre a receita líquida</h2>
             <p className="text-xs text-gray-600 mt-1">Total dos 12 meses projetados em cada cenário, comparado ao ano anterior.</p>
+            <label className="mt-2 inline-flex items-center gap-2 text-sm text-gray-800 cursor-pointer" title="Vale para o E-COMMERCE e para o consolidado/lojas que o incluem">
+              <input type="checkbox" checked={semGerente} onChange={(e) => setSemGerente(e.target.checked)} className="h-4 w-4 accent-green-600" />
+              Desconsiderar o salário completo do gerente (R$ 13.000/mês no e-commerce)
+            </label>
           </div>
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
