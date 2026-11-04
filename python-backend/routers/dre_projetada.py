@@ -40,6 +40,15 @@ CCUSTO_ECOMMERCE = "120"
 LINHAS_MANUAIS = [
     {"codigo": "08.04.99", "nome": "SALARIO COMPLETO GERENTE (PROJECAO)", "valor": -13000.0},
 ]
+# Contas do e-commerce com projecao propria no lugar da regra padrao:
+# ("fixo", valor mensal - despesa negativa) ou ("pct_liquida", % negativo da receita liquida do mes).
+AJUSTES_ECOMMERCE = {
+    "08.01.07": ("fixo", -120.0),      # TAXAS E EMOLUMENTO - CO
+    "08.02.20": ("fixo", -12000.0),    # MANUT DE SOFTWARE
+    "08.02.18": ("fixo", 0.0),         # CORREIOS E MALOTES
+    "08.10.01": ("pct_liquida", -0.15),  # FRETES VENDAS = 15% da receita liquida
+    "10.03.02": ("fixo", 0.0),         # IOF
+}
 META_LUCRO = 10.0  # % de lucro liquido sobre a receita liquida do cenario "meta"
 
 _cache_ipca = {"valor": None, "em": 0.0}
@@ -140,7 +149,7 @@ def dre_projetada(
     return _projetar(inicio, cenario, inflacao, crescimentoReceita, filtro, forcar, None)
 
 
-def _projetar(inicio, cenario, inflacao, crescimentoReceita, filtro, forcar, ctx):
+def _projetar(inicio, cenario, inflacao, crescimentoReceita, filtro, forcar, ctx, ajustes=True):
     """ctx (opcional): dict que guarda a base (cache da DRE) e a classificacao
     entre varias projecoes da mesma empresa - o resumo roda 6 por empresa e
     cada leitura do cache e uma ida ao banco."""
@@ -252,6 +261,27 @@ def _projetar(inicio, cenario, inflacao, crescimentoReceita, filtro, forcar, ctx
         for c in folhas:
             if not c.startswith(("01", "02")):
                 projetar(c, liquida_base, liquida_proj)
+
+        # Ajustes do e-commerce. Filtro so 120: substitui a conta. Consolidado ou
+        # varias lojas com o 120: soma a diferenca (ajuste - projecao padrao do
+        # e-commerce), calculada com o mesmo crescimento de receita.
+        def _valor_ajuste(regra, liquida):
+            return regra[1] if regra[0] == "fixo" else regra[1] * liquida
+
+        partes = [x.strip() for x in filtro.split(",")]
+        if ajustes and partes == [CCUSTO_ECOMMERCE]:
+            for cod, regra in AJUSTES_ECOMMERCE.items():
+                v = {pj: _valor_ajuste(regra, liquida_proj[pj]) for pj in proj}
+                projetado[cod] = {**v, "total": sum(v.values())}
+                tipos[cod] = "manual"
+        elif ajustes and (filtro == "consolidado" or CCUSTO_ECOMMERCE in partes):
+            eco = _projetar(inicio, "personalizado", inflacao, g_rec, CCUSTO_ECOMMERCE, False, ctx, ajustes=False)["projetado"]
+            for cod, regra in AJUSTES_ECOMMERCE.items():
+                atual = projetado.get(cod) or {}
+                padrao = eco.get(cod) or {}
+                v = {pj: float(atual.get(pj, 0) or 0) + _valor_ajuste(regra, float((eco.get("03") or {}).get(pj, 0) or 0)) - float(padrao.get(pj, 0) or 0) for pj in proj}
+                projetado[cod] = {**v, "total": sum(v.values())}
+                tipos[cod] = "manual"
 
         # Linhas manuais: so no e-commerce (filtro 120) e no consolidado, que o inclui
         manuais = []
