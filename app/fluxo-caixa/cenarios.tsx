@@ -615,24 +615,6 @@ function ModalGraficoVariacao({ titulo, bloco, itens, tipo, onFechar }: {
                   </BarChart>
                 </ResponsiveContainer>
               </div>
-              <table className="w-full text-xs mt-3">
-                <thead className="bg-gray-50 border-b border-gray-200">
-                  <tr>
-                    <th className="text-left px-3 py-1.5 font-medium text-black">{modo === 'fornecedor' ? 'Fornecedor' : 'Despesa'}</th>
-                    <th className="text-right px-3 py-1.5 font-medium text-black">Itens</th>
-                    <th className="text-right px-3 py-1.5 font-medium text-black">Variação</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {grupos.map((g, i) => (
-                    <tr key={g.chave} onClick={() => setGrupoSel(g.chave === grupoSel ? null : g.chave)} className={`cursor-pointer hover:bg-rose-50 ${g.chave === grupoSel ? 'bg-sky-50' : i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}`}>
-                      <td className="px-3 py-1 text-black">{g.nome}</td>
-                      <td className="px-3 py-1 text-right text-black tabular-nums">{g.qtd}</td>
-                      <td className={`px-3 py-1 text-right tabular-nums font-semibold ${g.variacao > 0.005 ? 'text-red-700' : g.variacao < -0.005 ? 'text-green-700' : 'text-black'}`}>{fmtSinal(g.variacao)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
               {selecionado && (
                 <div className="mt-3 border border-sky-200 rounded-lg overflow-hidden">
                   <div className="flex items-center justify-between px-3 py-2 bg-sky-50 text-xs font-semibold text-black">
@@ -674,6 +656,24 @@ function ModalGraficoVariacao({ titulo, bloco, itens, tipo, onFechar }: {
                   </div>
                 </div>
               )}
+              <table className="w-full text-xs mt-3">
+                <thead className="bg-gray-50 border-b border-gray-200">
+                  <tr>
+                    <th className="text-left px-3 py-1.5 font-medium text-black">{modo === 'fornecedor' ? 'Fornecedor' : 'Despesa'}</th>
+                    <th className="text-right px-3 py-1.5 font-medium text-black">Itens</th>
+                    <th className="text-right px-3 py-1.5 font-medium text-black">Variação</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {grupos.map((g, i) => (
+                    <tr key={g.chave} onClick={() => setGrupoSel(g.chave === grupoSel ? null : g.chave)} className={`cursor-pointer hover:bg-rose-50 ${g.chave === grupoSel ? 'bg-sky-50' : i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}`}>
+                      <td className="px-3 py-1 text-black">{g.nome}</td>
+                      <td className="px-3 py-1 text-right text-black tabular-nums">{g.qtd}</td>
+                      <td className={`px-3 py-1 text-right tabular-nums font-semibold ${g.variacao > 0.005 ? 'text-red-700' : g.variacao < -0.005 ? 'text-green-700' : 'text-black'}`}>{fmtSinal(g.variacao)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </>
           )}
         </div>
