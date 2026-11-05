@@ -5,7 +5,7 @@ import {
   Scale, ChevronDown, ChevronRight, RefreshCw, FileDown, Wallet, Landmark, Users,
   Building2, CalendarDays, SlidersHorizontal, RotateCcw, ArrowDownLeft,
   ArrowUpRight, TrendingUp, Layers3, Droplets, Gauge, Target, Clock3,
-  CheckCircle2, AlertCircle, MinusCircle, Boxes, Receipt, Sigma, Info, X, type LucideIcon,
+  CheckCircle2, AlertCircle, MinusCircle, Boxes, Receipt, Sigma, Info, X, ListTree, type LucideIcon,
 } from 'lucide-react';
 import { formatarValor } from '../utils/formatters';
 import { carregarFiltro } from '../utils/persistirFiltro';
@@ -132,9 +132,10 @@ interface TabelaBalancoProps {
   toggleExpansao: (codigo: string) => void;
   ordenacao: Ordenacao;
   alternarOrdenacao: (campo: Campo) => void;
+  onDetalhar?: (conta: ContaBalanco) => void;
 }
 
-function TabelaBalanco({ titulo, plano, valores, mostrarPercentual, contasExpandidas, toggleExpansao, ordenacao, alternarOrdenacao }: TabelaBalancoProps) {
+function TabelaBalanco({ titulo, plano, valores, mostrarPercentual, contasExpandidas, toggleExpansao, ordenacao, alternarOrdenacao, onDetalhar }: TabelaBalancoProps) {
   const total = totalGeral(plano, valores);
   const ativo = titulo === 'Ativos';
   const tema = ativo ? TEMAS.ativo : TEMAS.passivo;
@@ -246,6 +247,7 @@ function TabelaBalanco({ titulo, plano, valores, mostrarPercentual, contasExpand
                       <React.Fragment key={conta.codigo}>
                         <tr className="group">
                           <td className={`px-4 py-3 pl-7 font-medium group-hover:bg-[#faf3f5] border-b border-[#eef0f2] ${idx % 2 === 1 ? 'bg-[#fafafb]' : 'bg-white'} ${valor === 0 && !temDetalhes ? 'text-[#6b7280]' : 'text-[#1d1d1d]'}`}>
+                            <div className="flex items-center justify-between gap-2">
                             {temDetalhes ? (
                               <button type="button" aria-expanded={detalhesAbertos} onClick={() => toggleExpansao(conta.codigo)} className="flex w-full items-center gap-2.5 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#b3838c]">
                                 {detalhesAbertos ? <ChevronDown aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-[#8e5e68]" /> : <ChevronRight aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-[#8e5e68]" />}
@@ -255,6 +257,18 @@ function TabelaBalanco({ titulo, plano, valores, mostrarPercentual, contasExpand
                             ) : (
                               <div className="flex items-center gap-2.5 pl-6"><IconeConta aria-hidden="true" className={`h-4 w-4 shrink-0 ${tema.texto} opacity-70`} /><span>{conta.nome}</span></div>
                             )}
+                            {onDetalhar && CONTAS_DETALHAVEIS.has(conta.codigo) && (
+                              <button
+                                type="button"
+                                onClick={() => onDetalhar(conta)}
+                                title="Detalhar por fornecedor, despesa e mês"
+                                aria-label={`Detalhar ${conta.nome}`}
+                                className="shrink-0 rounded-md border border-[#d1d5db] bg-white px-1.5 py-1 text-[#8e5e68] hover:bg-[#f5ecef] print:hidden"
+                              >
+                                <ListTree aria-hidden="true" className="h-3.5 w-3.5" />
+                              </button>
+                            )}
+                            </div>
                           </td>
                           <td className={`px-4 py-3 text-right whitespace-nowrap font-medium group-hover:bg-[#faf3f5] border-b border-[#eef0f2] ${idx % 2 === 1 ? 'bg-[#fafafb]' : 'bg-white'} ${corValor(valor)}`}>
                             {formatarValor(valor)}
@@ -294,6 +308,135 @@ function TabelaBalanco({ titulo, plano, valores, mostrarPercentual, contasExpand
         </tbody>
       </table>
     </DualScroll>
+  );
+}
+
+// Contas do Passivo que tem detalhe (fornecedor x despesa x mes) no backend.
+const CONTAS_DETALHAVEIS = new Set(['PC.1', 'PNC.7', 'PC.2', 'PC.3', 'PNC.8', 'PC.IMV', 'PNC.IMV', 'PC.5', 'PNC.9', 'PC.6', 'PNC.10']);
+
+type LinhaDetalhe = { cdFornecedor: number | null; fornecedor: string; cdDespesa: string; despesa: string; mes: string; valor: number; qtd: number };
+type VisaoDetalhe = 'fornecedor' | 'despesa' | 'mes';
+
+const rotuloMes = (m: string) => `${m.slice(5)}/${m.slice(0, 4)}`;
+
+function ModalDetalhePassivo({ conta, onFechar }: { conta: ContaBalanco; onFechar: () => void }) {
+  const [linhas, setLinhas] = useState<LinhaDetalhe[] | null>(null);
+  const [erro, setErro] = useState<string | null>(null);
+  const [visao, setVisao] = useState<VisaoDetalhe>('fornecedor');
+  const [mesFiltro, setMesFiltro] = useState('');
+  const [busca, setBusca] = useState('');
+  const [aberto, setAberto] = useState<string | null>(null);
+
+  useEffect(() => {
+    let vivo = true;
+    fetch(`/api/balanco-patrimonial/detalhe-passivo?conta=${encodeURIComponent(conta.codigo)}`, { cache: 'no-store' })
+      .then((r) => r.json().then((d) => ({ ok: r.ok, d })))
+      .then(({ ok, d }) => { if (!vivo) return; if (!ok || !Array.isArray(d.linhas)) throw new Error(d.detail || d.error || 'Erro ao buscar o detalhe'); setLinhas(d.linhas); })
+      .catch((e) => { if (vivo) setErro(e instanceof Error ? e.message : 'Erro ao buscar o detalhe'); });
+    return () => { vivo = false; };
+  }, [conta.codigo]);
+
+  const meses = useMemo(() => Array.from(new Set((linhas ?? []).map((l) => l.mes))).sort(), [linhas]);
+  const filtradas = useMemo(() => {
+    const q = busca.trim().toLowerCase();
+    return (linhas ?? []).filter((l) => (!mesFiltro || l.mes === mesFiltro) && (!q || l.fornecedor.toLowerCase().includes(q) || l.despesa.toLowerCase().includes(q)));
+  }, [linhas, mesFiltro, busca]);
+  const total = filtradas.reduce((s, l) => s + l.valor, 0);
+
+  const chaveDe = (l: LinhaDetalhe, v: VisaoDetalhe) => (v === 'fornecedor' ? `${l.cdFornecedor ?? l.fornecedor}` : v === 'despesa' ? l.cdDespesa : l.mes);
+  const nomeDe = (l: LinhaDetalhe, v: VisaoDetalhe) => (v === 'fornecedor' ? l.fornecedor : v === 'despesa' ? l.despesa : rotuloMes(l.mes));
+  const agrupar = (base: LinhaDetalhe[], v: VisaoDetalhe) => {
+    const m = new Map<string, { chave: string; nome: string; valor: number; qtd: number }>();
+    for (const l of base) {
+      const k = chaveDe(l, v);
+      const g = m.get(k) ?? { chave: k, nome: nomeDe(l, v), valor: 0, qtd: 0 };
+      g.valor += l.valor; g.qtd += l.qtd; m.set(k, g);
+    }
+    const arr = Array.from(m.values());
+    return v === 'mes' ? arr.sort((a, b) => a.chave.localeCompare(b.chave)) : arr.sort((a, b) => b.valor - a.valor);
+  };
+  const grupos = useMemo(() => agrupar(filtradas, visao), [filtradas, visao]); // eslint-disable-line react-hooks/exhaustive-deps
+  const subDe = visao === 'mes' ? 'fornecedor' : 'mes';
+  const abas: { k: VisaoDetalhe; rot: string }[] = [{ k: 'fornecedor', rot: 'Por fornecedor' }, { k: 'despesa', rot: 'Por despesa' }, { k: 'mes', rot: 'Por mês' }];
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 print:hidden" onClick={onFechar}>
+      <div className="flex max-h-[90vh] w-full max-w-4xl flex-col rounded-lg bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#e5e7eb] px-5 py-3">
+          <div>
+            <h2 className="text-base font-semibold text-[#1d1d1d]">{conta.nome}</h2>
+            <p className="text-xs text-[#4b5563]">Títulos em aberto que compõem o saldo · total {formatarValor(total)}{mesFiltro ? ` em ${rotuloMes(mesFiltro)}` : ''}</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="inline-flex overflow-hidden rounded-md border border-[#d1d5db] text-xs">
+              {abas.map((a) => (
+                <button key={a.k} type="button" onClick={() => { setVisao(a.k); setAberto(null); }} className={`px-3 py-1 ${visao === a.k ? 'bg-[#b3838c] text-white' : 'bg-white text-[#1d1d1d] hover:bg-[#f5ecef]'}`}>{a.rot}</button>
+              ))}
+            </div>
+            <button type="button" onClick={onFechar} aria-label="Fechar"><X className="h-5 w-5" /></button>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-3 border-b border-[#e5e7eb] px-5 py-2 text-xs text-[#1d1d1d]">
+          <label htmlFor="detalhe-mes" className="font-semibold">Mês de vencimento</label>
+          <select id="detalhe-mes" value={mesFiltro} onChange={(e) => { setMesFiltro(e.target.value); setAberto(null); }} className="rounded border border-[#d1d5db] bg-white px-2 py-1">
+            <option value="">Todos os meses</option>
+            {meses.map((m) => <option key={m} value={m}>{rotuloMes(m)}</option>)}
+          </select>
+          <input value={busca} onChange={(e) => { setBusca(e.target.value); setAberto(null); }} placeholder="Buscar fornecedor ou despesa" aria-label="Buscar" className="min-w-[200px] flex-1 rounded border border-[#d1d5db] px-2 py-1" />
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-4">
+          {erro && <p className="py-10 text-center text-sm text-[#b91c1c]">{erro}</p>}
+          {!erro && linhas === null && <p className="py-10 text-center text-sm text-[#4b5563]">Carregando...</p>}
+          {!erro && linhas !== null && grupos.length === 0 && <p className="py-10 text-center text-sm text-[#4b5563]">Nenhum título para o filtro.</p>}
+          {grupos.length > 0 && (
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 bg-[#f3f4f6]">
+                <tr>
+                  <th className="px-3 py-1.5 text-left font-semibold uppercase tracking-wide text-[#4b5563]">{visao === 'fornecedor' ? 'Fornecedor' : visao === 'despesa' ? 'Despesa' : 'Mês de vencimento'}</th>
+                  <th className="px-3 py-1.5 text-right font-semibold uppercase tracking-wide text-[#4b5563]">Títulos</th>
+                  <th className="px-3 py-1.5 text-right font-semibold uppercase tracking-wide text-[#4b5563]">Valor (R$)</th>
+                  <th className="px-3 py-1.5 text-right font-semibold uppercase tracking-wide text-[#4b5563]">%</th>
+                </tr>
+              </thead>
+              <tbody>
+                {grupos.map((g, i) => {
+                  const expandido = aberto === g.chave;
+                  const sub = expandido ? agrupar(filtradas.filter((l) => chaveDe(l, visao) === g.chave), subDe) : [];
+                  return (
+                    <React.Fragment key={g.chave}>
+                      <tr onClick={() => setAberto(expandido ? null : g.chave)} className={`cursor-pointer hover:bg-[#f5ecef] ${expandido ? 'bg-[#f5ecef]' : i % 2 ? 'bg-[#fafafb]' : 'bg-white'}`}>
+                        <td className="px-3 py-1.5 text-[#1d1d1d]">
+                          <span className="inline-flex items-center gap-1.5">{expandido ? <ChevronDown aria-hidden="true" className="h-3 w-3" /> : <ChevronRight aria-hidden="true" className="h-3 w-3" />}{g.nome}</span>
+                        </td>
+                        <td className="px-3 py-1.5 text-right tabular-nums text-[#1d1d1d]">{g.qtd}</td>
+                        <td className="px-3 py-1.5 text-right font-semibold tabular-nums text-[#1d1d1d]">{formatarValor(g.valor)}</td>
+                        <td className="px-3 py-1.5 text-right tabular-nums text-[#4b5563]">{total ? `${((g.valor / total) * 100).toFixed(1)}%` : '-'}</td>
+                      </tr>
+                      {sub.map((sg) => (
+                        <tr key={`${g.chave}-${sg.chave}`} className="bg-[#fcfcfd]">
+                          <td className="py-1 pl-9 pr-3 text-[#4b5563]">{sg.nome}</td>
+                          <td className="px-3 py-1 text-right tabular-nums text-[#4b5563]">{sg.qtd}</td>
+                          <td className="px-3 py-1 text-right tabular-nums text-[#4b5563]">{formatarValor(sg.valor)}</td>
+                          <td />
+                        </tr>
+                      ))}
+                    </React.Fragment>
+                  );
+                })}
+              </tbody>
+              <tfoot>
+                <tr className="border-t-2 border-[#d1d5db] bg-[#f3f4f6] font-bold">
+                  <td className="px-3 py-1.5">Total</td>
+                  <td className="px-3 py-1.5 text-right tabular-nums">{grupos.reduce((s, g) => s + g.qtd, 0)}</td>
+                  <td className="px-3 py-1.5 text-right tabular-nums">{formatarValor(total)}</td>
+                  <td />
+                </tr>
+              </tfoot>
+            </table>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -409,6 +552,7 @@ export default function BalancoPatrimonialPage() {
   const [valoresPassivo, setValoresPassivo] = useState<Record<string, number>>(() => valoresZerados(PLANO_PASSIVO));
   const [bens, setBens] = useState<{ codigo: string; linha: string; nome: string; valor: number }[]>([]);
   const [carregando, setCarregando] = useState(false);
+  const [contaDetalhe, setContaDetalhe] = useState<ContaBalanco | null>(null);
   const [caixaInfo, setCaixaInfo] = useState<{ disponivel: number; chequeEspecial: number } | null>(null);
   const [indicadoresDre, setIndicadoresDre] = useState<{ lucroLiquido12m: number; ebitda12m: number; inicio: string; fim: string } | null>(null);
 
@@ -829,10 +973,12 @@ export default function BalancoPatrimonialPage() {
               toggleExpansao={toggleExpansao}
               ordenacao={ordenacao}
               alternarOrdenacao={alternarOrdenacao}
+              onDetalhar={(c) => setContaDetalhe(c)}
             />
           </div>
         </>
       )}
+      {contaDetalhe && <ModalDetalhePassivo conta={contaDetalhe} onFechar={() => setContaDetalhe(null)} />}
     </div>
   );
 }

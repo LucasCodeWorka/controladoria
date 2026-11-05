@@ -766,6 +766,68 @@ def get_balanco_patrimonial(
         raise HTTPException(status_code=500, detail=f"Erro ao buscar balanco patrimonial: {str(e)}")
 
 
+# Detalhe de uma conta do Passivo (fornecedor x despesa x mes de vencimento).
+# Mesmos filtros das contas em /dados: em aberto, nada pago, vencimento de hoje
+# em diante, sem filtro de empresa; "ate_12m" / "apos_12m" = corte do CP/LP.
+_DETALHE_PASSIVO = {
+    "PC.1": (lambda: DESPESAITENS_FORNECEDORES, "ate"), "PNC.7": (lambda: DESPESAITENS_FORNECEDORES, "apos"),
+    "PC.2": (lambda: DESPESAITENS_MATERIA_PRIMA, None),
+    "PC.3": (lambda: ("114", "137"), "ate"), "PNC.8": (lambda: ("114", "137"), "apos"),
+    "PC.IMV": (lambda: DESPESAITENS_IMOVEIS, "ate"), "PNC.IMV": (lambda: DESPESAITENS_IMOVEIS, "apos"),
+    "PC.5": (lambda: DESPESAITENS_TRIBUTOS, "ate"), "PNC.9": (lambda: DESPESAITENS_TRIBUTOS, "apos"),
+    "PC.6": (lambda: DESPESAITENS_IR_CSLL, "ate"), "PNC.10": (lambda: DESPESAITENS_IR_CSLL, "apos"),
+}
+
+
+@router.get("/api/balanco-patrimonial/detalhe-passivo")
+def get_detalhe_passivo(conta: str = Query(..., description="Codigo da conta do Passivo, ex: PC.1")):
+    """Linhas agregadas (fornecedor, despesa, mes de vencimento) que compoem uma
+    conta do Passivo. O front agrupa por fornecedor, por despesa ou por mes."""
+    if conta not in _DETALHE_PASSIVO:
+        raise HTTPException(status_code=400, detail="Conta sem detalhamento")
+    itens_fn, janela = _DETALHE_PASSIVO[conta]
+    corte = ""
+    if janela == "ate":
+        corte = "AND d.dt_vencimento < CURRENT_DATE + INTERVAL '12 months'"
+    elif janela == "apos":
+        corte = "AND d.dt_vencimento >= CURRENT_DATE + INTERVAL '12 months'"
+    try:
+        rows = execute_query(
+            f"""SELECT d.cd_fornecedor,
+                       CASE WHEN p.nm_fantasia IS NULL OR TRIM(p.nm_fantasia) = '' OR p.nm_fantasia ~ '^\\*+$'
+                            THEN COALESCE(p.nm_pessoa, pf.nm_pessoa, 'Fornecedor ' || d.cd_fornecedor::text)
+                            ELSE p.nm_fantasia END AS fornecedor,
+                       d.cd_despesaitem::text AS cd_despesa,
+                       COALESCE(i.ds_despesaitem, 'Despesa ' || d.cd_despesaitem::text) AS despesa,
+                       to_char(d.dt_vencimento, 'YYYY-MM') AS mes,
+                       SUM(d.vl_rateio) AS valor,
+                       COUNT(*) AS qtd
+                FROM public.vr_fcp_despduplicatai d
+                LEFT JOIN vr_pes_pessoa p ON p.cd_pessoa = d.cd_fornecedor
+                LEFT JOIN vr_pes_pesfisica pf ON pf.cd_pessoa = d.cd_fornecedor
+                LEFT JOIN public.vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
+                WHERE d.cd_despesaitem IN %s
+                  AND d.dt_vencimento >= CURRENT_DATE
+                  AND d.tp_situacao = 'N'
+                  AND d.vl_pago = 0
+                  {corte}
+                GROUP BY 1, 2, 3, 4, 5
+                ORDER BY 5, 2""",
+            (tuple(itens_fn()),),
+        ) or []
+        return {
+            "conta": conta,
+            "linhas": [
+                {"cdFornecedor": r["cd_fornecedor"], "fornecedor": r["fornecedor"], "cdDespesa": r["cd_despesa"],
+                 "despesa": r["despesa"], "mes": r["mes"], "valor": float(r["valor"] or 0), "qtd": int(r["qtd"])}
+                for r in rows
+            ],
+        }
+    except Exception as e:
+        print(f"[ERROR] detalhe-passivo {conta}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/api/classificacao-despesas-balanco")
 def listar_classificacao_despesas_balanco():
     """Lista todas as despesas com a classificacao do Balanco (se houver) -
