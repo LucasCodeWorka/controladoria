@@ -560,7 +560,15 @@ def get_balanco_patrimonial(
         # depende do mes de referencia: e a posicao de HOJE.
         def _caixa():
             # Sem posicao de hoje, vale o ultimo saldo de cada conta.
-            return {"AC.1": _obter_saldos_bancarios(somente_hoje=False)["total"]}
+            saldos = _obter_saldos_bancarios(somente_hoje=False)
+            # _CAIXA_POS / _CHEQUE_ESP: usados so no indicador de divida (caixa
+            # disponivel = saldos positivos; saldo negativo = cheque especial
+            # utilizado, que e divida). Saem de "valores" antes da resposta.
+            return {
+                "AC.1": saldos["total"],
+                "_CAIXA_POS": sum(c["vlSaldo"] for c in saldos["contas"] if c["vlSaldo"] > 0),
+                "_CHEQUE_ESP": -sum(c["vlSaldo"] for c in saldos["contas"] if c["vlSaldo"] < 0),
+            }
 
         # AC.2 Contas a receber = boletos + cartoes + cheques do Fluxo de Caixa (colunas
         # Boleto e Cartao), na janela configurada da conta (default 12 meses) e
@@ -745,7 +753,10 @@ def get_balanco_patrimonial(
                 bens = _listar_bens()
             except Exception as e:
                 print(f"[BALANCO] detalhe de bens indisponivel: {e}")
-        return {"valores": valores, "bens": bens, "mesReferencia": mesReferencia}
+        caixa_disponivel = valores.pop("_CAIXA_POS", None)
+        cheque_especial = valores.pop("_CHEQUE_ESP", None)
+        return {"valores": valores, "bens": bens, "mesReferencia": mesReferencia,
+                "caixaDisponivel": caixa_disponivel, "chequeEspecial": cheque_especial}
     except HTTPException:
         raise
     except Exception as e:

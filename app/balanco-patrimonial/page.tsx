@@ -388,9 +388,6 @@ const mesAno = (iso: string) => `${iso.slice(5, 7)}/${iso.slice(2, 4)}`;
 
 const fmtIndice = (v: number) => v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-// 'financeira' = empréstimos + compra de imóveis; 'ampla' = financeira + fornecedores/matéria-prima.
-const CRITERIO_DIVIDA: 'financeira' | 'ampla' = 'financeira';
-
 export default function BalancoPatrimonialPage() {
   const [mesReferencia, setMesReferencia] = useState(primeiroDiaMesAtual());
   const [empresasDisponiveis, setEmpresasDisponiveis] = useState<EmpresaOpcao[]>([]);
@@ -412,6 +409,7 @@ export default function BalancoPatrimonialPage() {
   const [valoresPassivo, setValoresPassivo] = useState<Record<string, number>>(() => valoresZerados(PLANO_PASSIVO));
   const [bens, setBens] = useState<{ codigo: string; linha: string; nome: string; valor: number }[]>([]);
   const [carregando, setCarregando] = useState(false);
+  const [caixaInfo, setCaixaInfo] = useState<{ disponivel: number; chequeEspecial: number } | null>(null);
   const [indicadoresDre, setIndicadoresDre] = useState<{ lucroLiquido12m: number; ebitda12m: number; inicio: string; fim: string } | null>(null);
 
   function alternarOrdenacao(campo: Campo) {
@@ -498,6 +496,7 @@ export default function BalancoPatrimonialPage() {
     setErro(null);
     setIndicadoresDre(null);
     setBens([]);
+    setCaixaInfo(null);
     // Reseta pro zerado antes de aplicar o que a API devolver - linhas sem
     // consulta ligada ainda ficam em 0.
     setValoresAtivos(valoresZerados(PLANO_ATIVOS));
@@ -523,6 +522,7 @@ export default function BalancoPatrimonialPage() {
       const data = await response.json();
       if (!response.ok || data.error || !data.valores) throw new Error(data.error || data.detail || 'Erro ao buscar o balanço patrimonial');
       setBens(Array.isArray(data.bens) ? data.bens : []);
+      if (typeof data.caixaDisponivel === 'number') setCaixaInfo({ disponivel: data.caixaDisponivel, chequeEspecial: Number(data.chequeEspecial ?? 0) });
       setValoresAtivos((prev) => ({ ...prev, ...filtrarPorPlano(data.valores, PLANO_ATIVOS) }));
       setValoresPassivo((prev) => ({ ...prev, ...filtrarPorPlano(data.valores, PLANO_PASSIVO) }));
     } catch (error) {
@@ -558,22 +558,47 @@ export default function BalancoPatrimonialPage() {
   const caixa = valoresAtivos['AC.1'] ?? 0;
   const estoques = valoresAtivos['AC.3'] ?? 0;
   const patrimonioLiquido = totalAtivos - Math.abs(totalPassivo);
-  // Divida financeira = emprestimos (PC.3 e PNC.8) + compra de imoveis (PC.IMV e PNC.IMV), curto e longo prazo.
-  // Divida ampla = financeira + fornecedores/alugueis (PC.1 e PNC.7) + materia-prima e servicos (PC.2).
-  // Para voltar ao criterio antigo no card, troque CRITERIO_DIVIDA para 'ampla' (antes era PC.1+PC.2+PC.3+PNC.8, sem PNC.7 e sem imoveis).
+  // Divida Liquida / EBITDA (alavancagem financeira tradicional):
+  //   bruta = emprestimos e financiamentos (PC.3 + PNC.8) + cheque especial utilizado;
+  //   caixa = so saldos bancarios positivos (saldo negativo ja entra como cheque especial na bruta, sem dupla contagem);
+  //   fornecedores, materia-prima, tributos e salarios ficam fora.
+  // Alavancagem ajustada = o mesmo + obrigacoes de compra de imoveis (PC.IMV e PNC.IMV), mostrada a parte.
   const somaPassivo = (codigos: string[]) => Math.abs(codigos.reduce((s, c) => s + (valoresPassivo[c] ?? 0), 0));
-  const dividaFinanceiraBruta = somaPassivo(['PC.3', 'PNC.8', 'PC.IMV', 'PNC.IMV']);
-  const dividaAmplaBruta = dividaFinanceiraBruta + somaPassivo(['PC.1', 'PNC.7', 'PC.2']);
-  const dividaFinanceiraLiquida = dividaFinanceiraBruta - caixa;
-  const dividaAmplaLiquida = dividaAmplaBruta - caixa;
-  const dividaLiquida = CRITERIO_DIVIDA === 'financeira' ? dividaFinanceiraLiquida : dividaAmplaLiquida;
-  const dividaLiquidaOutra = CRITERIO_DIVIDA === 'financeira' ? dividaAmplaLiquida : dividaFinanceiraLiquida;
+  const emprestimosCP = somaPassivo(['PC.3']);
+  const emprestimosLP = somaPassivo(['PNC.8']);
+  const imoveisCP = somaPassivo(['PC.IMV']);
+  const imoveisLP = somaPassivo(['PNC.IMV']);
+  const chequeEspecial = caixaInfo?.chequeEspecial ?? 0;
+  const caixaDisponivel = caixaInfo?.disponivel ?? caixa;
+  const dividaBruta = emprestimosCP + emprestimosLP + chequeEspecial;
+  const dividaLiquida = dividaBruta - caixaDisponivel;
+  const dividaAjustadaBruta = dividaBruta + imoveisCP + imoveisLP;
+  const dividaAjustadaLiquida = dividaAjustadaBruta - caixaDisponivel;
+
+  const statusAlavancagem = (x: number): Status => (x <= 2.5 ? 'ok' : x <= 3 ? 'atencao' : 'ruim');
+  const memoriaDivida = (ajustada: boolean): LinhaMemoria[] => [
+    { t: 'Empréstimos curto prazo (PC.3)', v: formatarValor(emprestimosCP) },
+    { t: 'Empréstimos longo prazo (PNC.8)', v: formatarValor(emprestimosLP) },
+    { t: 'Cheque especial utilizado', v: formatarValor(chequeEspecial) },
+    { t: 'Dívida financeira bruta', v: formatarValor(dividaBruta), forte: true },
+    ...(ajustada ? [
+      { t: '(+) Compra de imóveis curto prazo', v: formatarValor(imoveisCP) },
+      { t: '(+) Compra de imóveis longo prazo', v: formatarValor(imoveisLP) },
+      { t: 'Dívida ajustada bruta', v: formatarValor(dividaAjustadaBruta), forte: true },
+    ] : []),
+    { t: '(−) Caixa disponível (saldos positivos)', v: formatarValor(caixaDisponivel) },
+    { t: ajustada ? 'Dívida ajustada líquida' : 'Dívida financeira líquida', v: formatarValor(ajustada ? dividaAjustadaLiquida : dividaLiquida), forte: true },
+    { t: 'EBITDA 12m', v: indicadoresDre ? formatarValor(indicadoresDre.ebitda12m) : '...' },
+    { t: ajustada ? 'Líquida ajustada ÷ EBITDA' : 'Líquida ÷ EBITDA', v: (ajustada ? alavancagemAjustada : dividaEbitda) === null ? 'exige análise' : `${fmtIndice((ajustada ? alavancagemAjustada : dividaEbitda)!)}x`, forte: true },
+  ];
 
   const liqImediata = passivoCirculante > 0 ? caixa / passivoCirculante : null;
   const liqSeca = passivoCirculante > 0 ? (ativoCirculante - estoques) / passivoCirculante : null;
   const liqCorrente = passivoCirculante > 0 ? ativoCirculante / passivoCirculante : null;
   const roe = indicadoresDre && patrimonioLiquido > 0 ? (indicadoresDre.lucroLiquido12m / patrimonioLiquido) * 100 : null;
-  const dividaEbitda = indicadoresDre && indicadoresDre.ebitda12m > 0 ? dividaLiquida / indicadoresDre.ebitda12m : null;
+  const ebitdaValido = !!indicadoresDre && indicadoresDre.ebitda12m > 0;
+  const dividaEbitda = ebitdaValido ? dividaLiquida / indicadoresDre!.ebitda12m : null;
+  const alavancagemAjustada = ebitdaValido ? dividaAjustadaLiquida / indicadoresDre!.ebitda12m : null;
 
   // "Quanto mais proximo de 1 melhor": >= 0,8 ok, >= 0,5 atencao.
   const statusProximoDe1 = (v: number | null): Status => (v === null ? 'neutro' : v >= 0.8 ? 'ok' : v >= 0.5 ? 'atencao' : 'ruim');
@@ -708,7 +733,7 @@ export default function BalancoPatrimonialPage() {
             <CardTotal rotulo="Ativos − Passivo" valor={totalAtivos - Math.abs(totalPassivo)} tom="patrimonio" icone={Scale} nota="Ativo total menos o valor absoluto do passivo" />
           </div>
           <div className="flex items-center gap-2 text-xs font-bold tracking-[.08em] text-[#6e4b59]"><Target aria-hidden="true" className="h-4 w-4" />Indicadores financeiros</div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-6 gap-3">
             <CardIndicador
               rotulo="Liquidez imediata"
               icone={Wallet}
@@ -767,25 +792,20 @@ export default function BalancoPatrimonialPage() {
             <CardIndicador
               rotulo="Dívida líquida ÷ EBITDA"
               icone={Landmark}
-              valor={dividaEbitda === null ? (indicadoresDre ? 'n/d' : 'Carregando...') : `${fmtIndice(dividaEbitda)}x`}
-              meta="não pode passar de 3"
-              detalhe={indicadoresDre ? `Dív. ${CRITERIO_DIVIDA === 'financeira' ? 'financeira' : 'ampla'} líq. ${formatarValor(dividaLiquida)} (${CRITERIO_DIVIDA === 'financeira' ? 'com fornecedores' : 'só financeira'}: ${formatarValor(dividaLiquidaOutra)}) · EBITDA 12m (${mesAno(indicadoresDre.inicio)} a ${mesAno(indicadoresDre.fim)}): ${formatarValor(indicadoresDre.ebitda12m)}` : (CRITERIO_DIVIDA === 'financeira' ? 'Empréstimos + compra de imóveis − caixa' : 'Fornecedores + empréstimos + imóveis − caixa')}
-              memoria={[
-                { t: 'Empréstimos curto prazo (PC.3)', v: formatarValor(somaPassivo(['PC.3'])) },
-                { t: 'Empréstimos longo prazo (PNC.8)', v: formatarValor(somaPassivo(['PNC.8'])) },
-                { t: 'Compra de imóveis curto prazo', v: formatarValor(somaPassivo(['PC.IMV'])) },
-                { t: 'Compra de imóveis longo prazo', v: formatarValor(somaPassivo(['PNC.IMV'])) },
-                ...(CRITERIO_DIVIDA === 'ampla' ? [
-                  { t: 'Fornecedores/aluguéis (PC.1 + PNC.7)', v: formatarValor(somaPassivo(['PC.1', 'PNC.7'])) },
-                  { t: 'Matéria-prima e serviços (PC.2)', v: formatarValor(somaPassivo(['PC.2'])) },
-                ] : []),
-                { t: 'Dívida bruta', v: formatarValor(CRITERIO_DIVIDA === 'financeira' ? dividaFinanceiraBruta : dividaAmplaBruta), forte: true },
-                { t: '(−) Caixa', v: formatarValor(caixa) },
-                { t: 'Dívida líquida', v: formatarValor(dividaLiquida), forte: true },
-                { t: 'EBITDA 12m', v: indicadoresDre ? formatarValor(indicadoresDre.ebitda12m) : '...' },
-                { t: 'Dívida líquida ÷ EBITDA', v: dividaEbitda === null ? 'n/d' : `${fmtIndice(dividaEbitda)}x`, forte: true },
-              ]}
-              status={dividaEbitda === null ? (indicadoresDre ? 'ruim' : 'neutro') : dividaEbitda <= 2.5 ? 'ok' : dividaEbitda <= 3 ? 'atencao' : 'ruim'}
+              valor={dividaEbitda === null ? (indicadoresDre ? 'Exige análise' : 'Carregando...') : `${fmtIndice(dividaEbitda)}x`}
+              meta="máximo de 3,00x"
+              detalhe={indicadoresDre ? `Bruta ${formatarValor(dividaBruta)} − caixa ${formatarValor(caixaDisponivel)} = líquida ${formatarValor(dividaLiquida)} · EBITDA 12m (${mesAno(indicadoresDre.inicio)} a ${mesAno(indicadoresDre.fim)}): ${formatarValor(indicadoresDre.ebitda12m)}${ebitdaValido ? '' : ' (zero ou negativo: índice exige análise específica)'}` : 'Empréstimos e financiamentos − caixa disponível'}
+              memoria={memoriaDivida(false)}
+              status={dividaEbitda === null ? 'neutro' : statusAlavancagem(dividaEbitda)}
+            />
+            <CardIndicador
+              rotulo="Alavancagem ajustada"
+              icone={Landmark}
+              valor={alavancagemAjustada === null ? (indicadoresDre ? 'Exige análise' : 'Carregando...') : `${fmtIndice(alavancagemAjustada)}x`}
+              meta="inclui compra de imóveis · gerencial"
+              detalhe={indicadoresDre ? `Dívida financeira ${formatarValor(dividaBruta)} + imóveis ${formatarValor(imoveisCP + imoveisLP)} − caixa ${formatarValor(caixaDisponivel)} = ${formatarValor(dividaAjustadaLiquida)}` : 'Dívida financeira + imóveis − caixa disponível'}
+              memoria={memoriaDivida(true)}
+              status={alavancagemAjustada === null ? 'neutro' : statusAlavancagem(alavancagemAjustada)}
             />
           </div>
           <div className="flex items-center gap-2 text-xs font-bold tracking-[.08em] text-[#6e4b59]"><Receipt aria-hidden="true" className="h-4 w-4" />Detalhamento das contas</div>
