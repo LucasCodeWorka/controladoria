@@ -355,6 +355,9 @@ const mesAno = (iso: string) => `${iso.slice(5, 7)}/${iso.slice(2, 4)}`;
 
 const fmtIndice = (v: number) => v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+// 'financeira' = empréstimos + compra de imóveis; 'ampla' = financeira + fornecedores/matéria-prima.
+const CRITERIO_DIVIDA: 'financeira' | 'ampla' = 'financeira';
+
 export default function BalancoPatrimonialPage() {
   const [mesReferencia, setMesReferencia] = useState(primeiroDiaMesAtual());
   const [empresasDisponiveis, setEmpresasDisponiveis] = useState<EmpresaOpcao[]>([]);
@@ -522,9 +525,16 @@ export default function BalancoPatrimonialPage() {
   const caixa = valoresAtivos['AC.1'] ?? 0;
   const estoques = valoresAtivos['AC.3'] ?? 0;
   const patrimonioLiquido = totalAtivos - Math.abs(totalPassivo);
-  // Divida = emprestimos (PC.3 e PNC.8, curto e longo prazo) + fornecedores (PC.1 aluguéis/fornecedores e PC.2 MP e servicos), menos o caixa.
-  const dividaBruta = Math.abs((valoresPassivo['PC.1'] ?? 0) + (valoresPassivo['PC.2'] ?? 0) + (valoresPassivo['PC.3'] ?? 0) + (valoresPassivo['PNC.8'] ?? 0));
-  const dividaLiquida = dividaBruta - caixa;
+  // Divida financeira = emprestimos (PC.3 e PNC.8) + compra de imoveis (PC.IMV e PNC.IMV), curto e longo prazo.
+  // Divida ampla = financeira + fornecedores/alugueis (PC.1 e PNC.7) + materia-prima e servicos (PC.2).
+  // Para voltar ao criterio antigo no card, troque CRITERIO_DIVIDA para 'ampla' (antes era PC.1+PC.2+PC.3+PNC.8, sem PNC.7 e sem imoveis).
+  const somaPassivo = (codigos: string[]) => Math.abs(codigos.reduce((s, c) => s + (valoresPassivo[c] ?? 0), 0));
+  const dividaFinanceiraBruta = somaPassivo(['PC.3', 'PNC.8', 'PC.IMV', 'PNC.IMV']);
+  const dividaAmplaBruta = dividaFinanceiraBruta + somaPassivo(['PC.1', 'PNC.7', 'PC.2']);
+  const dividaFinanceiraLiquida = dividaFinanceiraBruta - caixa;
+  const dividaAmplaLiquida = dividaAmplaBruta - caixa;
+  const dividaLiquida = CRITERIO_DIVIDA === 'financeira' ? dividaFinanceiraLiquida : dividaAmplaLiquida;
+  const dividaLiquidaOutra = CRITERIO_DIVIDA === 'financeira' ? dividaAmplaLiquida : dividaFinanceiraLiquida;
 
   const liqImediata = passivoCirculante > 0 ? caixa / passivoCirculante : null;
   const liqSeca = passivoCirculante > 0 ? (ativoCirculante - estoques) / passivoCirculante : null;
@@ -703,7 +713,7 @@ export default function BalancoPatrimonialPage() {
               icone={Landmark}
               valor={dividaEbitda === null ? (indicadoresDre ? 'n/d' : 'Carregando...') : `${fmtIndice(dividaEbitda)}x`}
               meta="não pode passar de 3"
-              detalhe={indicadoresDre ? `Dív. líq. ${formatarValor(dividaLiquida)} · EBITDA 12m (${mesAno(indicadoresDre.inicio)} a ${mesAno(indicadoresDre.fim)}): ${formatarValor(indicadoresDre.ebitda12m)}` : 'Fornecedores + empréstimos − caixa'}
+              detalhe={indicadoresDre ? `Dív. ${CRITERIO_DIVIDA === 'financeira' ? 'financeira' : 'ampla'} líq. ${formatarValor(dividaLiquida)} (${CRITERIO_DIVIDA === 'financeira' ? 'com fornecedores' : 'só financeira'}: ${formatarValor(dividaLiquidaOutra)}) · EBITDA 12m (${mesAno(indicadoresDre.inicio)} a ${mesAno(indicadoresDre.fim)}): ${formatarValor(indicadoresDre.ebitda12m)}` : (CRITERIO_DIVIDA === 'financeira' ? 'Empréstimos + compra de imóveis − caixa' : 'Fornecedores + empréstimos + imóveis − caixa')}
               status={dividaEbitda === null ? (indicadoresDre ? 'ruim' : 'neutro') : dividaEbitda <= 2.5 ? 'ok' : dividaEbitda <= 3 ? 'atencao' : 'ruim'}
             />
           </div>
