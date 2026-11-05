@@ -418,6 +418,7 @@ export default function DREPage() {
   // restaurado do localStorage (useEffect acima) com os valores padrao.
   const primeiraRenderizacaoFiltroRef = useRef(true);
   const chavesAuditoriaSolicitadasRef = useRef<Set<string>>(new Set());
+  const seqAlertasAuditoriaRef = useRef(0);
   // Cache em memoria por aba/periodo/filtro - trocar de periodo e voltar
   // (ex: analisar 2025, depois 2026, depois 2025 de novo) nao precisa
   // esperar a consulta rodar de novo. "Consultar" usa o cache; "Atualizar"
@@ -821,7 +822,7 @@ export default function DREPage() {
     }));
 
     try {
-      await fetch('/api/dre/auditoria/validar', {
+      const resposta = await fetch('/api/dre/auditoria/validar', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -830,9 +831,12 @@ export default function DREPage() {
           usuario: 'dre_analitica',
         }),
       });
+      if (!resposta.ok) throw new Error(`HTTP ${resposta.status}`);
       buscarAlertasAuditoria();
     } catch (error) {
       console.error('Erro ao validar auditoria fornecedor-despesa:', error);
+      // Nao gravou: volta o alerta pra nao parecer validado so na tela.
+      setAuditoriaCache((prev) => ({ ...prev, [chave]: atual }));
     }
   }
 
@@ -840,13 +844,18 @@ export default function DREPage() {
   // padrao do fornecedor, pra sinalizar antes mesmo de abrir o modal. Roda em
   // paralelo com a carga principal e nao bloqueia a grade se falhar/demorar.
   async function buscarAlertasAuditoria() {
+    // So a ultima consulta vale: a da carga da grade (lenta) podia terminar depois
+    // da feita apos validar e devolver o alerta ja validado de volta pra tela.
+    const seq = ++seqAlertasAuditoriaRef.current;
     try {
       const params = new URLSearchParams({ dataInicio, dataFim, filtro });
       const response = await fetch(`/api/dre/auditoria/alertas?${params.toString()}`, {
         cache: 'no-store',
       });
       const data = await response.json();
-      const celulas: string[] = data.celulasAlertadas || [];
+      if (seq !== seqAlertasAuditoriaRef.current) return;
+      if (!response.ok || !Array.isArray(data.celulasAlertadas)) throw new Error(data.detail || data.error || `HTTP ${response.status}`);
+      const celulas: string[] = data.celulasAlertadas;
 
       const expandido = new Set<string>();
       for (const chave of celulas) {
