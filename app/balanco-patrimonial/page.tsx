@@ -5,7 +5,7 @@ import {
   Scale, ChevronDown, ChevronRight, RefreshCw, FileDown, Wallet, Landmark, Users,
   Building2, CalendarDays, SlidersHorizontal, RotateCcw, ArrowDownLeft,
   ArrowUpRight, TrendingUp, Layers3, Droplets, Gauge, Target, Clock3,
-  CheckCircle2, AlertCircle, MinusCircle, Boxes, Receipt, Sigma, type LucideIcon,
+  CheckCircle2, AlertCircle, MinusCircle, Boxes, Receipt, Sigma, Info, X, type LucideIcon,
 } from 'lucide-react';
 import { formatarValor } from '../utils/formatters';
 import { carregarFiltro } from '../utils/persistirFiltro';
@@ -327,14 +327,47 @@ const ESTILOS_STATUS = {
   neutro: { texto: 'text-slate-600', fundo: 'bg-slate-100', borda: 'border-slate-200', rotulo: 'Informativo', icone: MinusCircle },
 };
 
-function CardIndicador({ rotulo, valor, meta, detalhe, status, icone: Icone }: {
-  rotulo: string; valor: string; meta: string; detalhe: string; status: Status; icone: LucideIcon;
+type LinhaMemoria = { t: string; v: string; forte?: boolean };
+
+function CardIndicador({ rotulo, valor, meta, detalhe, status, icone: Icone, memoria }: {
+  rotulo: string; valor: string; meta: string; detalhe: string; status: Status; icone: LucideIcon; memoria?: LinhaMemoria[];
 }) {
+  const [aberto, setAberto] = useState(false);
   const estilo = ESTILOS_STATUS[status];
   const IconeStatus = estilo.icone;
   return (
-    <div className="flex min-w-0 flex-col rounded-xl border border-[#e5e7eb] bg-white p-4 shadow-sm print:shadow-none">
-      <div className="mb-3 flex items-center gap-2.5">
+    <div className="relative flex min-w-0 flex-col rounded-xl border border-[#e5e7eb] bg-white p-4 shadow-sm print:shadow-none">
+      {memoria && (
+        <button
+          type="button"
+          onClick={() => setAberto((a) => !a)}
+          aria-label={`Memória de cálculo: ${rotulo}`}
+          aria-expanded={aberto}
+          title="Memória de cálculo"
+          className="absolute right-2 top-2 rounded-full p-1 text-[#6b7280] hover:bg-[#f3f4f6] hover:text-[#1d1d1d] print:hidden"
+        >
+          <Info aria-hidden="true" className="h-4 w-4" />
+        </button>
+      )}
+      {memoria && aberto && (
+        <div className="absolute right-2 top-9 z-20 w-72 max-w-[calc(100%-1rem)] rounded-lg border border-[#d1d5db] bg-white p-3 text-[11px] text-[#1d1d1d] shadow-lg print:hidden">
+          <div className="mb-2 flex items-center justify-between font-bold">
+            <span>Memória de cálculo</span>
+            <button type="button" onClick={() => setAberto(false)} aria-label="Fechar"><X aria-hidden="true" className="h-3.5 w-3.5" /></button>
+          </div>
+          <table className="w-full">
+            <tbody>
+              {memoria.map((l, i) => (
+                <tr key={i} className={l.forte ? 'border-t border-[#d1d5db] font-bold' : ''}>
+                  <td className="py-0.5 pr-2 text-[#4b5563]">{l.t}</td>
+                  <td className="py-0.5 text-right tabular-nums">{l.v}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div className="mb-3 flex items-center gap-2.5 pr-6">
         <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${estilo.fundo} ${estilo.texto}`}>
           <Icone aria-hidden="true" className="h-[18px] w-[18px]" />
         </span>
@@ -682,6 +715,11 @@ export default function BalancoPatrimonialPage() {
               valor={liqImediata === null ? '-' : fmtIndice(liqImediata)}
               meta="quanto mais perto de 1, melhor"
               detalhe="Caixa ÷ Passivo Circulante"
+              memoria={[
+                { t: 'Caixa (saldos bancários)', v: formatarValor(caixa) },
+                { t: 'Passivo circulante', v: formatarValor(passivoCirculante) },
+                { t: 'Caixa ÷ Passivo circulante', v: liqImediata === null ? '-' : fmtIndice(liqImediata), forte: true },
+              ]}
               status={statusProximoDe1(liqImediata)}
             />
             <CardIndicador
@@ -690,6 +728,12 @@ export default function BalancoPatrimonialPage() {
               valor={liqSeca === null ? '-' : fmtIndice(liqSeca)}
               meta="quanto mais perto de 1, melhor"
               detalhe="(Ativo Circ. − Estoques) ÷ Passivo Circ."
+              memoria={[
+                { t: 'Ativo circulante', v: formatarValor(ativoCirculante) },
+                { t: '(−) Estoques', v: formatarValor(estoques) },
+                { t: 'Passivo circulante', v: formatarValor(passivoCirculante) },
+                { t: '(AC − Estoques) ÷ PC', v: liqSeca === null ? '-' : fmtIndice(liqSeca), forte: true },
+              ]}
               status={statusProximoDe1(liqSeca)}
             />
             <CardIndicador
@@ -698,6 +742,11 @@ export default function BalancoPatrimonialPage() {
               valor={liqCorrente === null ? '-' : fmtIndice(liqCorrente)}
               meta="sempre acima de 1"
               detalhe="Ativo Circulante ÷ Passivo Circulante"
+              memoria={[
+                { t: 'Ativo circulante', v: formatarValor(ativoCirculante) },
+                { t: 'Passivo circulante', v: formatarValor(passivoCirculante) },
+                { t: 'AC ÷ PC', v: liqCorrente === null ? '-' : fmtIndice(liqCorrente), forte: true },
+              ]}
               status={liqCorrente === null ? 'neutro' : liqCorrente >= 1 ? 'ok' : liqCorrente >= 0.9 ? 'atencao' : 'ruim'}
             />
             <CardIndicador
@@ -706,6 +755,13 @@ export default function BalancoPatrimonialPage() {
               valor={roe === null ? (indicadoresDre ? '-' : 'Carregando...') : `${fmtIndice(roe)}%`}
               meta="lucro 12 meses ÷ patrimônio líquido"
               detalhe={indicadoresDre ? `Lucro 12m (${mesAno(indicadoresDre.inicio)} a ${mesAno(indicadoresDre.fim)}): ${formatarValor(indicadoresDre.lucroLiquido12m)}` : 'Lucro líquido da DRE consolidada'}
+              memoria={[
+                { t: `Lucro líquido 12m${indicadoresDre ? ` (${mesAno(indicadoresDre.inicio)} a ${mesAno(indicadoresDre.fim)})` : ''}`, v: indicadoresDre ? formatarValor(indicadoresDre.lucroLiquido12m) : '...' },
+                { t: 'Ativos totais', v: formatarValor(totalAtivos) },
+                { t: '(−) Passivo total', v: formatarValor(Math.abs(totalPassivo)) },
+                { t: 'Patrimônio líquido', v: formatarValor(patrimonioLiquido) },
+                { t: 'Lucro 12m ÷ PL', v: roe === null ? '-' : `${fmtIndice(roe)}%`, forte: true },
+              ]}
               status="neutro"
             />
             <CardIndicador
@@ -714,6 +770,21 @@ export default function BalancoPatrimonialPage() {
               valor={dividaEbitda === null ? (indicadoresDre ? 'n/d' : 'Carregando...') : `${fmtIndice(dividaEbitda)}x`}
               meta="não pode passar de 3"
               detalhe={indicadoresDre ? `Dív. ${CRITERIO_DIVIDA === 'financeira' ? 'financeira' : 'ampla'} líq. ${formatarValor(dividaLiquida)} (${CRITERIO_DIVIDA === 'financeira' ? 'com fornecedores' : 'só financeira'}: ${formatarValor(dividaLiquidaOutra)}) · EBITDA 12m (${mesAno(indicadoresDre.inicio)} a ${mesAno(indicadoresDre.fim)}): ${formatarValor(indicadoresDre.ebitda12m)}` : (CRITERIO_DIVIDA === 'financeira' ? 'Empréstimos + compra de imóveis − caixa' : 'Fornecedores + empréstimos + imóveis − caixa')}
+              memoria={[
+                { t: 'Empréstimos curto prazo (PC.3)', v: formatarValor(somaPassivo(['PC.3'])) },
+                { t: 'Empréstimos longo prazo (PNC.8)', v: formatarValor(somaPassivo(['PNC.8'])) },
+                { t: 'Compra de imóveis curto prazo', v: formatarValor(somaPassivo(['PC.IMV'])) },
+                { t: 'Compra de imóveis longo prazo', v: formatarValor(somaPassivo(['PNC.IMV'])) },
+                ...(CRITERIO_DIVIDA === 'ampla' ? [
+                  { t: 'Fornecedores/aluguéis (PC.1 + PNC.7)', v: formatarValor(somaPassivo(['PC.1', 'PNC.7'])) },
+                  { t: 'Matéria-prima e serviços (PC.2)', v: formatarValor(somaPassivo(['PC.2'])) },
+                ] : []),
+                { t: 'Dívida bruta', v: formatarValor(CRITERIO_DIVIDA === 'financeira' ? dividaFinanceiraBruta : dividaAmplaBruta), forte: true },
+                { t: '(−) Caixa', v: formatarValor(caixa) },
+                { t: 'Dívida líquida', v: formatarValor(dividaLiquida), forte: true },
+                { t: 'EBITDA 12m', v: indicadoresDre ? formatarValor(indicadoresDre.ebitda12m) : '...' },
+                { t: 'Dívida líquida ÷ EBITDA', v: dividaEbitda === null ? 'n/d' : `${fmtIndice(dividaEbitda)}x`, forte: true },
+              ]}
               status={dividaEbitda === null ? (indicadoresDre ? 'ruim' : 'neutro') : dividaEbitda <= 2.5 ? 'ok' : dividaEbitda <= 3 ? 'atencao' : 'ruim'}
             />
           </div>
