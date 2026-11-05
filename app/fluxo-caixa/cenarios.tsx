@@ -385,24 +385,38 @@ function rotuloCompacto(v: number): string {
 type ModoGrafico = 'mensal' | 'semanal' | 'fornecedor' | 'despesa';
 const TOP_GRUPOS = 15;
 
-interface GrupoVariacao { chave: string; nome: string; variacao: number; qtd: number; itens: ItemComp[] }
+interface GrupoVariacao { chave: string; nome: string; variacao: number; qtd: number; itens: ItemComp[]; valores: Map<ItemComp, number> }
 
-// Agrupa a variacao dos itens que mudaram por fornecedor ou por despesa.
-function agruparItens(itens: ItemComp[], dim: 'fornecedor' | 'despesa'): GrupoVariacao[] {
+// Variacao do item dentro de um mes (YYYY-MM): o valor de agora entra no mes do
+// dia atual e o da foto sai do mes do dia da foto - mesma regra das barras por mes.
+function variacaoNoMes(i: ItemComp, mes: string | null): number {
+  if (!mes) return i.valorAtual - i.valorCenario;
+  return (i.diaAtual?.startsWith(mes) ? i.valorAtual : 0) - (i.diaCenario?.startsWith(mes) ? i.valorCenario : 0);
+}
+
+// Agrupa a variacao dos itens que mudaram por fornecedor ou por despesa
+// (opcionalmente so a parte que cai em um mes).
+function agruparItens(itens: ItemComp[], dim: 'fornecedor' | 'despesa', mes: string | null = null): GrupoVariacao[] {
   const acc: Record<string, GrupoVariacao> = {};
   const somar = (nome: string, valor: number, item: ItemComp) => {
-    const g = acc[nome] ?? { chave: nome, nome, variacao: 0, qtd: 0, itens: [] };
+    const g = acc[nome] ?? { chave: nome, nome, variacao: 0, qtd: 0, itens: [], valores: new Map<ItemComp, number>() };
     g.variacao += valor;
+    g.valores.set(item, (g.valores.get(item) ?? 0) + valor);
     if (!g.itens.includes(item)) { g.itens.push(item); g.qtd += 1; }
     acc[nome] = g;
   };
   itens.forEach((i) => {
     const delta = i.valorAtual - i.valorCenario;
-    if (Math.abs(delta) < 0.005) return;
-    if (dim === 'fornecedor') somar(i.fornecedor || 'Sem fornecedor', delta, i);
-    else (i.despesas?.length ? i.despesas : [{ despesa: 'Sem despesa', valor: delta }]).forEach((d) => somar(d.despesa, d.valor, i));
+    const v = variacaoNoMes(i, mes);
+    if (Math.abs(v) < 0.005) return;
+    if (dim === 'fornecedor') somar(i.fornecedor || 'Sem fornecedor', v, i);
+    else {
+      const ds = i.despesas?.length ? i.despesas : [{ despesa: 'Sem despesa', valor: delta }];
+      // no mes, a parte do item que cai nele e dividida pelo mesmo rateio da variacao total
+      ds.forEach((d) => somar(d.despesa, mes ? (Math.abs(delta) > 0.005 ? (d.valor / delta) * v : v / ds.length) : d.valor, i));
+    }
   });
-  return Object.values(acc).sort((x, y) => Math.abs(y.variacao) - Math.abs(x.variacao));
+  return Object.values(acc).filter((g) => Math.abs(g.variacao) >= 0.005 || g.itens.length).sort((x, y) => Math.abs(y.variacao) - Math.abs(x.variacao));
 }
 
 function ModalGraficoVariacao({ titulo, bloco, itens, tipo, onFechar }: {
@@ -410,9 +424,12 @@ function ModalGraficoVariacao({ titulo, bloco, itens, tipo, onFechar }: {
 }) {
   const [modo, setModo] = useState<ModoGrafico>('mensal');
   const [grupoSel, setGrupoSel] = useState<string | null>(null);
+  const [mesFiltro, setMesFiltro] = useState<string | null>(null);
   const porTempo = modo === 'mensal' || modo === 'semanal';
+  // meses em que ha variacao (so os do tipo mostrado), para o filtro de mes
+  const meses = Array.from(new Set(Object.keys(bloco).map((d) => d.slice(0, 7)))).sort();
   const dados = porTempo ? agregarVariacao(bloco, modo) : [];
-  const grupos = !porTempo ? agruparItens(itens.filter((i) => i.tipo === tipo), modo) : [];
+  const grupos = !porTempo ? agruparItens(itens.filter((i) => i.tipo === tipo), modo, mesFiltro) : [];
   const total = porTempo ? dados.reduce((s, d) => s + d.variacao, 0) : grupos.reduce((s, g) => s + g.variacao, 0);
   const compacto = (v: number) => `${v < 0 ? '−' : ''}${Math.abs(v) >= 1_000_000 ? `${(Math.abs(v) / 1_000_000).toFixed(1)} mi` : Math.abs(v) >= 1000 ? `${Math.round(Math.abs(v) / 1000)} mil` : Math.abs(v).toFixed(0)}`;
   const cor = (v: number) => (v > 0.005 ? '#dc2626' : v < -0.005 ? '#16a34a' : '#9ca3af');
@@ -523,6 +540,26 @@ function ModalGraficoVariacao({ titulo, bloco, itens, tipo, onFechar }: {
             </>
           )}
 
+          {!porTempo && (
+            <div className="flex items-center gap-2 mb-2 text-xs text-black">
+              <label htmlFor="filtro-mes-variacao" className="font-semibold">Mês</label>
+              <select
+                id="filtro-mes-variacao"
+                value={mesFiltro ?? ''}
+                onChange={(e) => { setMesFiltro(e.target.value || null); setGrupoSel(null); }}
+                className="border border-gray-300 rounded px-2 py-1 bg-white text-black"
+              >
+                <option value="">Todos os meses</option>
+                {meses.map((m) => <option key={m} value={m}>{`${m.slice(5)}/${m.slice(0, 4)}`}</option>)}
+              </select>
+              {mesFiltro && <button onClick={() => { setMesFiltro(null); setGrupoSel(null); }} className="underline">Limpar</button>}
+            </div>
+          )}
+
+          {!porTempo && grupos.length === 0 && (
+            <p className="text-xs text-black">Nenhuma variação {mesFiltro ? 'neste mês' : 'nos itens'}.</p>
+          )}
+
           {!porTempo && grupos.length > 0 && (
             <>
               <p className="text-xs text-black mb-1">
@@ -610,9 +647,7 @@ function ModalGraficoVariacao({ titulo, bloco, itens, tipo, onFechar }: {
                       </thead>
                       <tbody>
                         {selecionado.itens.map((i, idx) => {
-                          const v = modo === 'despesa'
-                            ? (i.despesas?.find((d) => d.despesa === selecionado.nome)?.valor ?? i.valorAtual - i.valorCenario)
-                            : i.valorAtual - i.valorCenario;
+                          const v = selecionado.valores.get(i) ?? 0;
                           return (
                             <tr key={`${i.documento}-${idx}`} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
                               <td className="px-3 py-1 whitespace-nowrap"><span className={`px-1.5 py-0.5 rounded text-[11px] font-semibold ${COR_ITEM[i.categoria] ?? 'bg-gray-100 text-black'}`}>{ROTULO_ITEM[i.categoria] ?? i.categoria}</span></td>
