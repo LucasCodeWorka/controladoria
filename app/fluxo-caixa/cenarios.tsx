@@ -571,7 +571,7 @@ function ModalGraficoVariacao({ titulo, bloco, itens, tipo, onFechar }: {
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={topo} layout="vertical" margin={{ top: 8, right: 110, left: 8, bottom: 8 }}>
                     <CartesianGrid strokeDasharray="3 3" horizontal={false} />
-                    <XAxis type="number" tickFormatter={compacto} tick={{ fontSize: 11, fill: '#000' }} />
+                    <XAxis type="number" tickFormatter={compacto} tick={{ fontSize: 11, fill: '#000' }} padding={{ left: topo.some((g) => g.variacao < -0.005) ? 100 : 0, right: 0 }} />
                     <YAxis type="category" dataKey="nome" width={220} tick={{ fontSize: 11, fill: '#000' }} tickFormatter={(v: string) => (v.length > 32 ? `${v.slice(0, 31)}…` : v)} interval={0} />
                     <ReferenceLine x={0} stroke="#6b7280" />
                     <Tooltip

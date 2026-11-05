@@ -353,12 +353,19 @@ def _comparar_duplicatas(cen: dict, snap: list) -> tuple:
     if novos:
         # Nome do fornecedor so dos itens novos (um lote).
         forn_ids = list({k[1] for k, *_ in novos})
-        nomes_sql = _NOME_FORNECEDOR.replace("d.cd_fornecedor", "p.cd_pessoa")
+        # Pessoa fisica (ex: DESPESAS FABRICA) so existe em vr_pes_pesfisica, entao a
+        # lista de ids sai das duas tabelas - partir so de vr_pes_pessoa deixava esses sem nome.
+        nomes_sql = _NOME_FORNECEDOR.replace("d.cd_fornecedor", "x.cd_pessoa")
         nomes_rows = execute_query(f"""
-            SELECT p.cd_pessoa, {nomes_sql} AS nome
-            FROM vr_pes_pessoa p LEFT JOIN vr_pes_pesfisica pf ON pf.cd_pessoa = p.cd_pessoa
-            WHERE p.cd_pessoa = ANY(%s)
-        """, (forn_ids,)) or []
+            SELECT x.cd_pessoa, {nomes_sql} AS nome
+            FROM (
+                SELECT cd_pessoa FROM vr_pes_pessoa WHERE cd_pessoa = ANY(%s)
+                UNION
+                SELECT cd_pessoa FROM vr_pes_pesfisica WHERE cd_pessoa = ANY(%s)
+            ) x
+            LEFT JOIN vr_pes_pessoa p ON p.cd_pessoa = x.cd_pessoa
+            LEFT JOIN vr_pes_pesfisica pf ON pf.cd_pessoa = x.cd_pessoa
+        """, (forn_ids, forn_ids)) or []
         nomes = {r["cd_pessoa"]: r["nome"] for r in nomes_rows}
         for k, r, cat, dia_r, saldo, total, estado in novos:
             item(cat, k, {"fornecedor": nomes.get(k[1]) or f"Fornecedor {k[1]}"}, r, None, dia_r, 0.0, total, saldo, round(total - saldo, 2), estado)
