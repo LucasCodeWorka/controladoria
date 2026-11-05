@@ -596,8 +596,16 @@ function ModalGraficoVariacao({ titulo, bloco, itens, tipo, onFechar }: {
                           const x = Number(props.x ?? 0), y = Number(props.y ?? 0), w = Number(props.width ?? 0), h = Number(props.height ?? 0);
                           const v = Number(props.value ?? 0);
                           const esq = Math.min(x, x + w), dir = Math.max(x, x + w);
+                          // barra negativa comprida: rotulo dentro dela (em branco), para nao
+                          // passar por cima dos nomes do eixo vertical
+                          const dentro = v < 0 && Math.abs(w) >= 110;
                           return (
-                            <text x={v >= 0 ? dir + 6 : esq - 6} y={y + h / 2 + 4} textAnchor={v >= 0 ? 'start' : 'end'} fontSize={11} fontWeight={600} fill={corTexto(v)}>
+                            <text
+                              x={v >= 0 ? dir + 6 : dentro ? esq + 6 : esq - 6}
+                              y={y + h / 2 + 4}
+                              textAnchor={v >= 0 || dentro ? 'start' : 'end'}
+                              fontSize={11} fontWeight={600} fill={dentro ? '#fff' : corTexto(v)}
+                            >
                               {fmtSinal(v)}
                             </text>
                           );
