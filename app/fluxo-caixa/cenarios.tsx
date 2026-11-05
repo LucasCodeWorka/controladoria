@@ -38,7 +38,7 @@ interface ItemComp {
   documento: string;
   empresa: number;
   cdFornecedor?: number | null;
-  despesas?: { despesa: string; valor: number }[];
+  despesas?: { despesa: string; valor: number; peso?: number }[];
   fornecedor: string | null;
   diaCenario: string | null;
   diaAtual: string | null;
@@ -411,9 +411,9 @@ function agruparItens(itens: ItemComp[], dim: 'fornecedor' | 'despesa', mes: str
     if (Math.abs(v) < 0.005) return;
     if (dim === 'fornecedor') somar(i.fornecedor || 'Sem fornecedor', v, i);
     else {
-      const ds = i.despesas?.length ? i.despesas : [{ despesa: 'Sem despesa', valor: delta }];
+      const ds = i.despesas?.length ? i.despesas : [{ despesa: 'Sem despesa', valor: delta, peso: 1 }];
       // no mes, a parte do item que cai nele e dividida pelo mesmo rateio da variacao total
-      ds.forEach((d) => somar(d.despesa, mes ? (Math.abs(delta) > 0.005 ? (d.valor / delta) * v : v / ds.length) : d.valor, i));
+      ds.forEach((d) => somar(d.despesa, mes ? (d.peso ?? 1 / ds.length) * v : d.valor, i));
     }
   });
   return Object.values(acc).filter((g) => Math.abs(g.variacao) >= 0.005 || g.itens.length).sort((x, y) => Math.abs(y.variacao) - Math.abs(x.variacao));

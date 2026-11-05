@@ -379,7 +379,9 @@ def _anexar_despesas(itens: list):
     mudou entre as despesas do rateio (vr_fcp_despduplicatai), na proporcao do
     rateio de agora - pro grafico "por despesa". Duplicata sem rateio vai pra
     "Sem despesa". Nao altera os valores, so acrescenta item["despesas"]."""
-    alvo = [i for i in itens if abs(i["valorAtual"] - i["valorCenario"]) >= 0.005 and i.get("cdFornecedor") is not None]
+    # todos os itens com fornecedor (nao so os que mudaram de valor): o filtro por mes
+    # tambem precisa do rateio dos que so trocaram de dia
+    alvo = [i for i in itens if i.get("cdFornecedor") is not None]
     rateios: dict = {}
     if alvo:
         chaves = []
@@ -401,16 +403,17 @@ def _anexar_despesas(itens: list):
             )
     for i in itens:
         delta = i["valorAtual"] - i["valorCenario"]
-        if abs(delta) < 0.005:
-            i["despesas"] = []
+        if i.get("cdFornecedor") is None:
+            i["despesas"] = [] if abs(delta) < 0.005 else [{"despesa": "Sem despesa", "valor": round(delta, 2), "peso": 1.0}]
             continue
         doc, parc = i["documento"].split("/")
         partes = rateios.get((i["empresa"], i["cdFornecedor"], int(doc), int(parc))) or []
         soma = sum(v for _, v in partes)
+        # peso = fatia da despesa no rateio (usada pelo filtro por mes)
         if not partes or soma <= 0:
-            i["despesas"] = [{"despesa": "Sem despesa", "valor": round(delta, 2)}]
+            i["despesas"] = [{"despesa": "Sem despesa", "valor": round(delta, 2), "peso": 1.0}]
         else:
-            i["despesas"] = [{"despesa": nome, "valor": round(delta * v / soma, 2)} for nome, v in partes]
+            i["despesas"] = [{"despesa": nome, "valor": round(delta * v / soma, 2), "peso": v / soma} for nome, v in partes]
 
 
 def _comparar_pedidos(cen: dict, snap: list) -> tuple:
