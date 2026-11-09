@@ -1939,11 +1939,12 @@ REGRA_KISS_ME_30 = 7
 REGRA_KISS_ME_0 = 8
 REGRA_SEM_MESES_FL = 9
 REGRA_SEM_GIRO = 10
+REGRA_MINIMO_50_APOS_12M = 11
 
 PERCENTUAL_POR_REGRA = {
     REGRA_GIRO_MENOR_4: 0, REGRA_GIRO_4_A_6: 30, REGRA_GIRO_MAIOR_6: 50, REGRA_APOS_12_MESES: 60,
     REGRA_APOS_24_MESES: 70, REGRA_EXCECAO_30_FIXO: 30, REGRA_KISS_ME_30: 30, REGRA_KISS_ME_0: 0,
-    REGRA_SEM_MESES_FL: 0, REGRA_SEM_GIRO: 0,
+    REGRA_SEM_MESES_FL: 0, REGRA_SEM_GIRO: 0, REGRA_MINIMO_50_APOS_12M: 50,
 }
 
 # Regras da "escadinha" por giro > 6 (3, 4 e 5): o percentual final deixa de
@@ -1969,6 +1970,14 @@ def _identificar_regra_campanha(
         if giro_total is not None and giro_total > 6 and meses_oportunidade is not None and meses_oportunidade > 18:
             return REGRA_KISS_ME_30
         return REGRA_KISS_ME_0
+
+    # Referencia NAO mista com mais de 12 meses como FL: minimo de 50% de
+    # desconto, independente do giro (pedido explicito do usuario). Giro > 6
+    # com promocao ativa segue as regras 4/5 (60/70%, e a escadinha nunca
+    # devolve menos de 50% nelas); todo o resto vira 50% fixo.
+    if meses_oportunidade is not None and meses_oportunidade >= 12:
+        if giro_total is None or giro_total <= 6 or not tem_promo_ativa:
+            return REGRA_MINIMO_50_APOS_12M
 
     if giro_total is None:
         return REGRA_SEM_GIRO
@@ -2031,7 +2040,8 @@ def _percentual_campanha_canal(
         atual = round(
             desconto_referencia if desconto_referencia is not None else _desconto_atual_canal(preco_cadastro, promo_canal, fallback), 2
         )
-        if atual <= 10.99:
+        # Regras 4/5 (mais de 12 meses como FL): minimo de 50%, nunca 30%.
+        if atual <= 10.99 and regra == REGRA_GIRO_MAIOR_6:
             return 30
         if atual <= 30:
             return 50

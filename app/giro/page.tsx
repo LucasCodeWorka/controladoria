@@ -388,6 +388,7 @@ const REGRA_KISS_ME_30 = 7;
 const REGRA_KISS_ME_0 = 8;
 const REGRA_SEM_MESES_FL = 9;
 const REGRA_SEM_GIRO = 10;
+const REGRA_MINIMO_50_APOS_12M = 11;
 
 const PERCENTUAL_POR_REGRA: Record<number, number> = {
   [REGRA_GIRO_MENOR_4]: 0,
@@ -400,6 +401,7 @@ const PERCENTUAL_POR_REGRA: Record<number, number> = {
   [REGRA_KISS_ME_0]: 0,
   [REGRA_SEM_MESES_FL]: 0,
   [REGRA_SEM_GIRO]: 0,
+  [REGRA_MINIMO_50_APOS_12M]: 50,
 };
 
 function identificarRegraCampanha(
@@ -423,6 +425,14 @@ function identificarRegraCampanha(
       return REGRA_KISS_ME_30;
     }
     return REGRA_KISS_ME_0;
+  }
+
+  // Referencia NAO mista com mais de 12 meses como FL: minimo de 50% de
+  // desconto, independente do giro (pedido explicito do usuario). Giro > 6
+  // com promocao ativa segue as regras 4/5 (60/70%, e a escadinha nunca
+  // devolve menos de 50% nelas); todo o resto vira 50% fixo.
+  if (mesesOportunidade !== null && mesesOportunidade !== undefined && mesesOportunidade >= 12) {
+    if (giroTotal === null || giroTotal <= 6 || !temPromoAtiva) return REGRA_MINIMO_50_APOS_12M;
   }
 
   if (giroTotal === null) return REGRA_SEM_GIRO;
@@ -491,7 +501,8 @@ function percentualCampanhaCanal(
 ): number {
   if (REGRAS_ESCADA_GIRO_ALTO.has(regra)) {
     const atual = Math.round((descontoReferencia ?? descontoAtualCanal(precoCadastro, promo, fallback)) * 100) / 100;
-    if (atual <= 10.99) return 30;
+    // Regras 4/5 (mais de 12 meses como FL): minimo de 50%, nunca 30%.
+    if (atual <= 10.99 && regra === REGRA_GIRO_MAIOR_6) return 30;
     if (atual <= 30) return 50;
   }
   return PERCENTUAL_POR_REGRA[regra];
@@ -510,6 +521,7 @@ const DESCRICAO_REGRA_CAMPANHA: Record<number, string> = {
   [REGRA_KISS_ME_0]: 'Regra 8 (exceção referência mista): fora da condição da regra 7 → 0%',
   [REGRA_SEM_MESES_FL]: 'Regra 9: sem Meses FL (nunca virou oportunidade) → sem sugestão',
   [REGRA_SEM_GIRO]: 'Regra 10: sem giro (sem estoque e sem venda) → sem sugestão',
+  [REGRA_MINIMO_50_APOS_12M]: 'Regra 11: referência não mista com mais de 12 meses como FL, independente do giro → mínimo 50%',
 };
 
 // Cor do badge de cada regra - bem distintas entre si de proposito, pra
@@ -526,6 +538,7 @@ const COR_BADGE_REGRA: Record<number, string> = {
   [REGRA_KISS_ME_0]: 'bg-red-200 text-red-800',
   [REGRA_SEM_MESES_FL]: 'bg-cyan-200 text-cyan-800',
   [REGRA_SEM_GIRO]: 'bg-indigo-200 text-indigo-800',
+  [REGRA_MINIMO_50_APOS_12M]: 'bg-teal-200 text-teal-800',
 };
 
 // Se a referencia tem alguma promocao Atacado/Varejo ativa agora - usado na
@@ -2902,6 +2915,13 @@ export default function GiroPage() {
                       (não se combinam com ela nem com a regra {REGRA_EXCECAO_30_FIXO}): regra {REGRA_KISS_ME_30} —
                       Giro {'>'} 6 e Meses FL {' > '}18 → 30%; regra {REGRA_KISS_ME_0} — fora dessa condição → 0%
                       (sem sugestão de desconto). Sem produto nesses status em linha, a referência não é mista — segue a escada normal.
+                    </p>
+                    <p className="text-xs text-black mt-2">
+                      <strong>Regra {REGRA_MINIMO_50_APOS_12M} (referência não mista, mais de 12 meses como FL):</strong> independente do
+                      giro (inclusive sem giro) o desconto sugerido é de <strong>no mínimo 50%</strong>. Giro {'>'} 6 com promoção
+                      ativa continua nas regras 4/5 (60/70%), mas a escadinha por desconto atual nunca devolve menos de 50% nelas;
+                      todos os outros casos (giro {'≤'} 6, sem giro ou sem promoção ativa) ficam em 50% fixo. Vale antes das
+                      regras 1, 2, 6 e 10. Não vale para referência mista (regras {REGRA_KISS_ME_30}/{REGRA_KISS_ME_0}).
                     </p>
                     <p className="text-xs text-black mt-2">
                       <strong>Regra {REGRA_SEM_MESES_FL}:</strong> sem Meses FL preenchido (referência nunca virou
