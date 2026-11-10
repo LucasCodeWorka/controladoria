@@ -1,7 +1,8 @@
 'use client';
 
 import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { Loader2, ChevronRight, ArrowUp, ArrowDown, Minus } from 'lucide-react';
+import { Loader2, ChevronRight, ArrowUp, ArrowDown, Minus, CheckCircle2, AlertCircle, MinusCircle } from 'lucide-react';
+import { calcularIndicadoresBalanco, montarValoresBalanco, type EntradaIndicadoresBalanco, type StatusIndicador } from '../balanco-patrimonial/indicadoresBalanco';
 
 interface GiroLojas {
   giro: number;
@@ -121,6 +122,13 @@ function fmtMoeda(n: number) {
 }
 
 const LIMITE_VOLUME = 13.5;
+
+const ESTILOS_STATUS: Record<StatusIndicador, { valor: string; badge: string; rotulo: string; icone: typeof CheckCircle2 }> = {
+  ok: { valor: 'text-teal-700', badge: 'bg-teal-50 border-teal-200 text-teal-700', rotulo: 'Dentro da referência', icone: CheckCircle2 },
+  atencao: { valor: 'text-amber-800', badge: 'bg-amber-50 border-amber-200 text-amber-800', rotulo: 'Atenção', icone: AlertCircle },
+  ruim: { valor: 'text-rose-700', badge: 'bg-rose-50 border-rose-200 text-rose-700', rotulo: 'Atenção', icone: AlertCircle },
+  neutro: { valor: 'text-black', badge: 'bg-slate-100 border-slate-200 text-black', rotulo: 'Informativo', icone: MinusCircle },
+};
 
 // Cada linha da tabela. valor(h) = numero do indicador naquele mes (null = sem
 // dado); formatar() mostra o numero; detalhes() sao os apoios que antes ficavam
@@ -362,6 +370,11 @@ export default function IndicadoresControladoriaPage() {
   const [carregando, setCarregando] = useState(true);
   const [sincAuto, setSincAuto] = useState(false);
   const [expandido, setExpandido] = useState<string | null>(null);
+  const [expandidoBalanco, setExpandidoBalanco] = useState<string | null>(null);
+  const [entradaBalanco, setEntradaBalanco] = useState<EntradaIndicadoresBalanco | null>(null);
+  const [erroBalanco, setErroBalanco] = useState<string | null>(null);
+  const [prazosDfc, setPrazosDfc] = useState<{ pmr: number | null; pmp: number | null; pme: number | null; inicio: string; fim: string } | null>(null);
+  const [erroDfc, setErroDfc] = useState<string | null>(null);
 
   const mesAtualISO = (() => {
     const h = new Date();
@@ -428,6 +441,100 @@ export default function IndicadoresControladoriaPage() {
     : [];
 
   const COLUNAS = 7;
+
+  // Indicadores financeiros do balanco: mesmas consultas da tela do Balanco
+  // Patrimonial (todas as empresas), pro mes selecionado. E uma foto da
+  // posicao atual - nao ha historico mensal desses indicadores, por isso nao
+  // tem grafico de linha (ao clicar abre a memoria de calculo).
+  const mesBalanco = dadosMes?.mes?.slice(0, 7) ?? null;
+  useEffect(() => {
+    if (!mesBalanco) return;
+    let vivo = true;
+    setEntradaBalanco(null);
+    setErroBalanco(null);
+    const dre = fetch(`/api/balanco-patrimonial/indicadores-dre?mesReferencia=${mesBalanco}`, { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((d) => (typeof d.lucroLiquido12m === 'number'
+        ? { lucroLiquido12m: d.lucroLiquido12m, ebitda12m: d.ebitda12m, inicio: d.inicio, fim: d.fim }
+        : null))
+      .catch(() => null);
+    fetch(`/api/balanco-patrimonial/dados?mesReferencia=${mesBalanco}`, { cache: 'no-store' })
+      .then(async (r) => {
+        const d = await r.json();
+        if (!r.ok || d.error || !d.valores) throw new Error(d.error || d.detail || 'Erro ao buscar o balanço patrimonial');
+        return d;
+      })
+      .then(async (d) => {
+        const dreVal = await dre;
+        if (!vivo) return;
+        setEntradaBalanco({
+          valores: montarValoresBalanco(d.valores),
+          caixaDisponivel: typeof d.caixaDisponivel === 'number' ? d.caixaDisponivel : null,
+          chequeEspecial: Number(d.chequeEspecial ?? 0),
+          dre: dreVal,
+        });
+      })
+      .catch((e) => { if (vivo) setErroBalanco(e instanceof Error ? e.message : 'Erro ao buscar o balanço patrimonial'); });
+    return () => { vivo = false; };
+  }, [mesBalanco]);
+
+  // Prazos medios da DFC (mesma consulta da tela da DFC, visao mensal
+  // consolidada): periodo = mes selecionado inteiro; se for o mes corrente
+  // (ainda aberto), usa o ultimo mes fechado - igual ao padrao da tela da DFC.
+  const periodoDfc = (() => {
+    if (!mesBalanco) return null;
+    let [a, m] = mesBalanco.split('-').map(Number);
+    const hoje = new Date();
+    if (a === hoje.getFullYear() && m === hoje.getMonth() + 1) {
+      m -= 1;
+      if (m === 0) { m = 12; a -= 1; }
+    }
+    const ultimo = new Date(a, m, 0).getDate();
+    const mm = String(m).padStart(2, '0');
+    return { inicio: `${a}-${mm}-01`, fim: `${a}-${mm}-${String(ultimo).padStart(2, '0')}` };
+  })();
+  const inicioDfc = periodoDfc?.inicio ?? null;
+  const fimDfc = periodoDfc?.fim ?? null;
+  useEffect(() => {
+    if (!inicioDfc || !fimDfc) return;
+    let vivo = true;
+    setPrazosDfc(null);
+    setErroDfc(null);
+    const controller = new AbortController();
+    const params = new URLSearchParams({ dataInicio: inicioDfc, dataFim: fimDfc, filtro: 'consolidado', semAntecipacao: 'false' });
+    fetch(`/api/dfc/unificada?${params.toString()}`, { cache: 'no-store', signal: controller.signal })
+      .then((r) => r.json())
+      .then((d) => {
+        if (!vivo) return;
+        if (d.error || !d.metadata) throw new Error(d.error || 'Erro ao buscar os prazos médios da DFC');
+        setPrazosDfc({
+          pmr: d.metadata.prazoMedioRecebimento ?? null,
+          pmp: d.metadata.prazoMedioPagamento ?? null,
+          pme: d.metadata.prazoMedioEstocagem ?? null,
+          inicio: inicioDfc,
+          fim: fimDfc,
+        });
+      })
+      .catch((e) => { if (vivo && e?.name !== 'AbortError') setErroDfc(e instanceof Error ? e.message : 'Erro ao buscar os prazos médios da DFC'); });
+    return () => { vivo = false; controller.abort(); };
+  }, [inicioDfc, fimDfc]);
+
+  const cicloFinanceiro =
+    prazosDfc && prazosDfc.pmr !== null && prazosDfc.pme !== null && prazosDfc.pmp !== null
+      ? prazosDfc.pmr + prazosDfc.pme - prazosDfc.pmp
+      : null;
+  const fmtDias = (n: number | null | undefined) => (n === null || n === undefined ? '-' : `${n.toFixed(1)} dias`);
+  const linhasDfc: { id: string; titulo: string; valor: string; calculo: string; verde?: boolean }[] = prazosDfc ? [
+    { id: 'pmr', titulo: 'Prazo Médio de Recebimento', valor: fmtDias(prazosDfc.pmr), calculo: 'Prazo médio, em dias, entre a venda e o recebimento dos clientes no período.' },
+    { id: 'pmp', titulo: 'Prazo Médio de Pagamento', valor: fmtDias(prazosDfc.pmp), calculo: 'Prazo médio, em dias, entre a compra e o pagamento aos fornecedores no período.' },
+    { id: 'pme', titulo: 'Prazo Médio de Estocagem', valor: fmtDias(prazosDfc.pme), calculo: 'Quantidade média em estoque (1º dia + último dia do último mês, dividido por 2) sobre a quantidade faturada no mesmo mês (todas as lojas), multiplicado pelos dias do mês.' },
+    {
+      id: 'ciclo', titulo: 'Ciclo Financeiro', valor: fmtDias(cicloFinanceiro), verde: cicloFinanceiro !== null && cicloFinanceiro < 0,
+      calculo: `PMR + PME − PMP${cicloFinanceiro !== null ? ` = ${prazosDfc.pmr!.toFixed(1)} + ${prazosDfc.pme!.toFixed(1)} − ${prazosDfc.pmp!.toFixed(1)}` : ''}. Quantos dias, em média, a empresa financia a operação com capital próprio antes de recuperar o dinheiro em caixa.`,
+    },
+  ] : [];
+
+  const indicadoresBalanco = entradaBalanco ? calcularIndicadoresBalanco(entradaBalanco) : [];
 
   return (
     <div className="max-w-[98%] mx-auto py-6 px-4 space-y-6">
@@ -566,6 +673,122 @@ export default function IndicadoresControladoriaPage() {
             )}
           </tbody>
         </table>
+      </div>
+
+      <div className="space-y-2">
+        <h2 className="text-lg font-bold text-black">Indicadores financeiros — Balanço Patrimonial</h2>
+        <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-gray-600 text-white text-left">
+                <th className="w-10 px-3 py-3" />
+                <th className="px-4 py-3 font-semibold">Indicador</th>
+                <th className="px-4 py-3 font-semibold text-right whitespace-nowrap">Realizado</th>
+                <th className="px-4 py-3 font-semibold">Meta</th>
+                <th className="px-4 py-3 font-semibold">Cálculo</th>
+                <th className="px-4 py-3 font-semibold text-center">Situação</th>
+              </tr>
+            </thead>
+            <tbody>
+              {erroBalanco ? (
+                <tr><td colSpan={6} className="py-10 text-center text-black">{erroBalanco}</td></tr>
+              ) : !entradaBalanco ? (
+                <tr>
+                  <td colSpan={6} className="py-10 text-center text-black">
+                    <Loader2 className="w-5 h-5 animate-spin inline mr-2" />
+                    Carregando...
+                  </td>
+                </tr>
+              ) : (
+                indicadoresBalanco.map((ind) => {
+                  const aberto = expandidoBalanco === ind.id;
+                  const st = ESTILOS_STATUS[ind.status];
+                  const IconeSt = st.icone;
+                  return (
+                    <React.Fragment key={ind.id}>
+                      <tr
+                        onClick={() => setExpandidoBalanco(aberto ? null : ind.id)}
+                        className={`border-t border-gray-100 cursor-pointer transition ${aberto ? 'bg-gray-50' : 'hover:bg-gray-50'}`}
+                      >
+                        <td className="px-3 py-4 text-black">
+                          <ChevronRight className={`w-4 h-4 transition-transform ${aberto ? 'rotate-90' : ''}`} />
+                        </td>
+                        <td className="px-4 py-4 font-semibold text-black whitespace-nowrap">{ind.titulo}</td>
+                        <td className={`px-4 py-4 text-right font-semibold text-base whitespace-nowrap ${st.valor}`}>{ind.valor}</td>
+                        <td className="px-4 py-4 text-black">{ind.meta}</td>
+                        <td className="px-4 py-4 text-xs text-black max-w-[520px]">{ind.detalhe}</td>
+                        <td className="px-4 py-4 text-center">
+                          <span className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-semibold ${st.badge}`}>
+                            <IconeSt className="w-3.5 h-3.5" />{st.rotulo}
+                          </span>
+                        </td>
+                      </tr>
+                      {aberto && (
+                        <tr className="bg-gray-50 border-t border-gray-100">
+                          <td colSpan={6} className="px-6 py-4">
+                            <p className="text-sm font-semibold text-black mb-2">Memória de cálculo — {ind.titulo}</p>
+                            <table className="text-sm max-w-xl">
+                              <tbody>
+                                {ind.memoria.map((l) => (
+                                  <tr key={l.t} className={l.forte ? 'font-bold border-t border-gray-300' : ''}>
+                                    <td className="py-1 pr-8 text-black">{l.t}</td>
+                                    <td className="py-1 text-right text-black whitespace-nowrap">{l.v}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <h2 className="text-lg font-bold text-black">
+          Indicadores financeiros — DFC
+          {periodoDfc && (
+            <span className="ml-2 text-sm font-normal text-black">
+              (período {periodoDfc.inicio.split('-').reverse().join('/')} a {periodoDfc.fim.split('-').reverse().join('/')} · consolidado)
+            </span>
+          )}
+        </h2>
+        <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-gray-600 text-white text-left">
+                <th className="px-4 py-3 font-semibold">Indicador</th>
+                <th className="px-4 py-3 font-semibold text-right whitespace-nowrap">Realizado</th>
+                <th className="px-4 py-3 font-semibold">Cálculo</th>
+              </tr>
+            </thead>
+            <tbody>
+              {erroDfc ? (
+                <tr><td colSpan={3} className="py-10 text-center text-black">{erroDfc}</td></tr>
+              ) : !prazosDfc ? (
+                <tr>
+                  <td colSpan={3} className="py-10 text-center text-black">
+                    <Loader2 className="w-5 h-5 animate-spin inline mr-2" />
+                    Carregando...
+                  </td>
+                </tr>
+              ) : (
+                linhasDfc.map((l) => (
+                  <tr key={l.id} className="border-t border-gray-100">
+                    <td className="px-4 py-4 font-semibold text-black whitespace-nowrap">{l.titulo}</td>
+                    <td className={`px-4 py-4 text-right font-semibold text-base whitespace-nowrap ${l.verde ? 'text-green-600' : 'text-black'}`}>{l.valor}</td>
+                    <td className="px-4 py-4 text-xs text-black max-w-[640px]">{l.calculo}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );
