@@ -2454,6 +2454,11 @@ def totais_desconto_giro(
         }
         total_acrescimo_atacado = 0.0
         total_acrescimo_varejo = 0.0
+        # Pecas em estoque cujo percentual de campanha (colunas Camp Atac /
+        # Camp Var da tabela) e maior que zero - Maraponga pro atacado, o
+        # resto das lojas pro varejo (mesma separacao do estoque acima).
+        estoque_com_campanha_atacado = 0.0
+        estoque_com_campanha_varejo = 0.0
         hoje = date.today()
 
         # Mesmos filtros da tabela, avaliados JUNTOS e POR COR (ver
@@ -2539,6 +2544,10 @@ def totais_desconto_giro(
                 desconto_varejo_cor = estoque_resto_cor * ganho_varejo_cor
                 total_desconto_atacado += desconto_atacado_cor
                 total_desconto_varejo += desconto_varejo_cor
+                if pct_atacado_cor > 0:
+                    estoque_com_campanha_atacado += estoque_maraponga_cor
+                if pct_varejo_cor > 0:
+                    estoque_com_campanha_varejo += estoque_resto_cor
                 grupo_desconto = desconto_por_grupo["mistas" if tem_cor_sem_meses_fl_item else "naoMistas"]
                 grupo_desconto["atacado"] += desconto_atacado_cor
                 grupo_desconto["varejo"] += desconto_varejo_cor
@@ -2575,6 +2584,8 @@ def totais_desconto_giro(
             "totalEstoqueVarejoNaoMistas": desconto_por_grupo["naoMistas"]["estoqueVarejo"],
             "totalAcrescimoAtacado": total_acrescimo_atacado,
             "totalAcrescimoVarejo": total_acrescimo_varejo,
+            "totalEstoqueAtacadoComCampanha": estoque_com_campanha_atacado,
+            "totalEstoqueVarejoComCampanha": estoque_com_campanha_varejo,
             "totalReferencias": total_referencias,
             "totalReferenciasMistas": sum(1 for i in dados_incluidos if mista_dict.get(i["referencia"], False)),
             "totalReferenciasNaoMistas": sum(1 for i in dados_incluidos if not mista_dict.get(i["referencia"], False)),

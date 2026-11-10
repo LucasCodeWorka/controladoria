@@ -562,6 +562,8 @@ interface TotaisDescontoGiro {
   totalDescontoVarejo: number;
   totalAcrescimoAtacado: number;
   totalAcrescimoVarejo: number;
+  totalEstoqueAtacadoComCampanha?: number;
+  totalEstoqueVarejoComCampanha?: number;
   totalReferencias: number;
   totalReferenciasMistas?: number;
   totalDescontoAtacadoMistas?: number;
@@ -2393,6 +2395,28 @@ export default function GiroPage() {
                     </p>
                   </div>
                 </div>
+              </div>
+              <div className="bg-white rounded-lg shadow-lg p-4">
+                <p className="text-xs font-medium text-black uppercase tracking-wide" title="Peças em estoque cujo percentual nas colunas Camp Atac / Camp Var é maior que 0%. Atacado = estoque da Maraponga; Varejo = estoque das demais lojas.">
+                  Estoque com campanha aplicada (filtro inteiro)
+                </p>
+                <div className="flex items-center gap-6 mt-1">
+                  {([
+                    ['Atacado (Maraponga)', totaisDescontoGiro?.totalEstoqueAtacadoComCampanha, totaisDescontoGiro?.totalEstoqueAtacado],
+                    ['Varejo (demais lojas)', totaisDescontoGiro?.totalEstoqueVarejoComCampanha, totaisDescontoGiro?.totalEstoqueVarejo],
+                  ] as [string, number | undefined, number | undefined][]).map(([rotulo, comCamp, total]) => (
+                    <div key={rotulo}>
+                      <p className="text-[10px] text-black uppercase tracking-wide">{rotulo}</p>
+                      <p className="text-xl font-bold text-black">
+                        {totaisDescontoCarregando ? '...' : `${formatarQtd(comCamp ?? 0)} un.`}
+                      </p>
+                      <p className="text-xs text-black">
+                        {totaisDescontoCarregando ? '' : `${total ? (((comCamp ?? 0) / total) * 100).toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) : '0,0'}% do estoque do canal`}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-xs text-black mt-1">Camp Atac / Camp Var maior que 0%</p>
               </div>
               <div className="bg-white rounded-lg shadow-lg p-4">
                 <p className="text-xs font-medium text-black uppercase tracking-wide" title="Mista: tem produto em linha/nova coleção junto com oportunidade (regras 7/8). Não mista: decidida pelo giro da referência inteira e pelo menor Meses FL.">
