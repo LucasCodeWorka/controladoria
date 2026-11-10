@@ -254,7 +254,7 @@ const INDICADORES: Indicador[] = [
 // Mini grafico da coluna "Tendência": ultimos 5 meses ate o mes selecionado.
 function Tendencia({ pontos, cor }: { pontos: { rotulo: string; valor: number | null; selecionado: boolean }[]; cor: string }) {
   const validos = pontos.filter((p) => p.valor != null) as { valor: number }[];
-  if (validos.length < 2) return <span className="text-xs text-gray-300">—</span>;
+  if (validos.length < 2) return <span className="text-xs text-black">—</span>;
   const W = 150, H = 34, PX = 10, PY = 5;
   const min = Math.min(...validos.map((p) => p.valor));
   const max = Math.max(...validos.map((p) => p.valor));
@@ -269,7 +269,7 @@ function Tendencia({ pontos, cor }: { pontos: { rotulo: string; valor: number | 
         <circle key={i} cx={xs(i)} cy={ys(p.valor)} r={p.selecionado ? 4 : 3} fill={cor} fillOpacity={p.selecionado ? 1 : 0.55} />
       ))}
       {pontos.map((p, i) => (
-        <text key={i} x={xs(i)} y={H + 11} textAnchor="middle" fontSize={9} fill="#6b7280" fontWeight={p.selecionado ? 700 : 400}>
+        <text key={i} x={xs(i)} y={H + 11} textAnchor="middle" fontSize={9} fill="#000000" fontWeight={p.selecionado ? 700 : 400}>
           {p.rotulo.split('/')[0]}
         </text>
       ))}
@@ -292,7 +292,7 @@ function GraficoLinha({ ind, historico, indiceSelecionado }: { ind: Indicador; h
   const pontos = historico.map((h, i) => ({ rotulo: fmtMesLabel(h.mes), valor: ind.valor(h) ?? null, i }));
   const validos = pontos.filter((p) => p.valor != null) as { rotulo: string; valor: number; i: number }[];
   if (validos.length < 2) {
-    return <p className="text-sm text-gray-400 py-6 text-center">Histórico insuficiente para o gráfico (precisa de pelo menos 2 meses).</p>;
+    return <p className="text-sm text-black py-6 text-center">Histórico insuficiente para o gráfico (precisa de pelo menos 2 meses).</p>;
   }
 
   const H = 240, PL = 52, PR = 24, PT = 24, PB = 30;
@@ -311,7 +311,7 @@ function GraficoLinha({ ind, historico, indiceSelecionado }: { ind: Indicador; h
         {ticks.map((t, k) => (
           <g key={k}>
             <line x1={PL} x2={W - PR} y1={y(t)} y2={y(t)} stroke="#e5e7eb" strokeWidth={1} />
-            <text x={PL - 8} y={y(t) + 3} textAnchor="end" fontSize={10} fill="#9ca3af">{ind.formatar(t)}</text>
+            <text x={PL - 8} y={y(t) + 3} textAnchor="end" fontSize={10} fill="#000000">{ind.formatar(t)}</text>
           </g>
         ))}
         {ind.limite && (
@@ -328,14 +328,14 @@ function GraficoLinha({ ind, historico, indiceSelecionado }: { ind: Indicador; h
           return (
             <g key={p.i}>
               <circle cx={x(p.i)} cy={y(p.valor)} r={sel ? 6 : 4} fill={ind.cor} stroke="white" strokeWidth={2} />
-              <text x={x(p.i)} y={y(p.valor) - 11} textAnchor="middle" fontSize={11} fill="#374151" fontWeight={sel ? 700 : 500}>
+              <text x={x(p.i)} y={y(p.valor) - 11} textAnchor="middle" fontSize={11} fill="#000000" fontWeight={sel ? 700 : 500}>
                 {ind.formatar(p.valor)}
               </text>
             </g>
           );
         })}
         {pontos.map((p) => (
-          <text key={p.i} x={x(p.i)} y={H - 8} textAnchor="middle" fontSize={11} fill="#6b7280" fontWeight={p.i === indiceSelecionado ? 700 : 400}>
+          <text key={p.i} x={x(p.i)} y={H - 8} textAnchor="middle" fontSize={11} fill="#000000" fontWeight={p.i === indiceSelecionado ? 700 : 400}>
             {p.rotulo}
           </text>
         ))}
@@ -345,11 +345,11 @@ function GraficoLinha({ ind, historico, indiceSelecionado }: { ind: Indicador; h
 }
 
 function Variacao({ atual, anterior, ind }: { atual: number | null | undefined; anterior: number | null | undefined; ind: Indicador }) {
-  if (atual == null || anterior == null) return <span className="text-gray-300">—</span>;
+  if (atual == null || anterior == null) return <span className="text-black">—</span>;
   const d = atual - anterior;
   const Icone = Math.abs(d) < 0.005 ? Minus : d > 0 ? ArrowUp : ArrowDown;
   return (
-    <span className="inline-flex items-center gap-1 text-gray-600">
+    <span className="inline-flex items-center gap-1 text-black">
       <Icone className="w-3.5 h-3.5" />
       {ind.formatar(Math.abs(d))}
     </span>
@@ -435,7 +435,7 @@ export default function IndicadoresControladoriaPage() {
         <div>
           <h1 className="text-3xl font-bold text-brand-dark">INDICADORES DE CONTROLADORIA</h1>
           {dadosMes?.atualizado_em && (
-            <p className="text-xs text-gray-400 mt-1">
+            <p className="text-xs text-black mt-1">
               Dados atualizados em: {new Date(dadosMes.atualizado_em).toLocaleString('pt-BR')}
             </p>
           )}
@@ -455,8 +455,8 @@ export default function IndicadoresControladoriaPage() {
                   selecionado
                     ? 'bg-brand-primary text-white border-brand-primary'
                     : temCache
-                    ? 'bg-white text-gray-600 border-gray-200 hover:border-brand-primary hover:text-brand-primary'
-                    : 'bg-gray-50 text-gray-300 border-gray-100 cursor-not-allowed'
+                    ? 'bg-white text-black border-gray-200 hover:border-brand-primary hover:text-brand-primary'
+                    : 'bg-gray-50 text-black border-gray-100 cursor-not-allowed'
                 }`}
               >
                 {fmtMesLabel(iso)}
@@ -491,14 +491,14 @@ export default function IndicadoresControladoriaPage() {
           <tbody>
             {carregando && !dadosMes ? (
               <tr>
-                <td colSpan={COLUNAS} className="py-12 text-center text-gray-400">
+                <td colSpan={COLUNAS} className="py-12 text-center text-black">
                   <Loader2 className="w-5 h-5 animate-spin inline mr-2" />
                   Carregando...
                 </td>
               </tr>
             ) : !dadosMes ? (
               <tr>
-                <td colSpan={COLUNAS} className="py-12 text-center text-gray-400">Sem dados — clique em Atualizar Dados para gerar.</td>
+                <td colSpan={COLUNAS} className="py-12 text-center text-black">Sem dados — clique em Atualizar Dados para gerar.</td>
               </tr>
             ) : (
               INDICADORES.map((ind) => {
@@ -517,20 +517,20 @@ export default function IndicadoresControladoriaPage() {
                       onClick={() => setExpandido(aberto ? null : ind.id)}
                       className={`border-t border-gray-100 cursor-pointer transition ${aberto ? 'bg-gray-50' : 'hover:bg-gray-50'}`}
                     >
-                      <td className="px-3 py-4 text-gray-500">
+                      <td className="px-3 py-4 text-black">
                         <ChevronRight className={`w-4 h-4 transition-transform ${aberto ? 'rotate-90' : ''}`} />
                       </td>
                       <td className="px-4 py-4 max-w-[420px]">
-                        <p className="font-semibold text-gray-900">{ind.titulo}</p>
-                        <p className="text-xs text-gray-500 mt-0.5">{ind.descricao}</p>
+                        <p className="font-semibold text-black">{ind.titulo}</p>
+                        <p className="text-xs text-black mt-0.5">{ind.descricao}</p>
                       </td>
                       <td className="px-4 py-4 text-right whitespace-nowrap">
-                        <p className={`font-semibold text-base ${acimaLimite ? 'text-orange-700' : 'text-gray-900'}`}>
+                        <p className={`font-semibold text-base ${acimaLimite ? 'text-orange-700' : 'text-black'}`}>
                           {atual != null ? ind.formatar(atual) : '—'}{acimaLimite ? ' ⚠' : ''}
                         </p>
-                        <p className="text-xs text-gray-400">{ind.unidade}</p>
+                        <p className="text-xs text-black">{ind.unidade}</p>
                       </td>
-                      <td className="px-4 py-4 text-right whitespace-nowrap text-gray-700">
+                      <td className="px-4 py-4 text-right whitespace-nowrap text-black">
                         {anterior != null ? ind.formatar(anterior) : '—'}
                       </td>
                       <td className="px-4 py-4 text-right whitespace-nowrap">
@@ -540,8 +540,8 @@ export default function IndicadoresControladoriaPage() {
                         <div className="space-y-0.5">
                           {ind.detalhes(dadosMes).map((d) => (
                             <div key={d.label} className="flex justify-between gap-6 text-xs">
-                              <span className="text-gray-500">{d.label}</span>
-                              <span className="font-medium text-gray-800 whitespace-nowrap">{d.valor}</span>
+                              <span className="text-black">{d.label}</span>
+                              <span className="font-medium text-black whitespace-nowrap">{d.valor}</span>
                             </div>
                           ))}
                         </div>
@@ -553,8 +553,8 @@ export default function IndicadoresControladoriaPage() {
                     {aberto && (
                       <tr className="bg-gray-50 border-t border-gray-100">
                         <td colSpan={COLUNAS} className="px-6 py-4">
-                          <p className="text-sm font-semibold text-gray-700 mb-2">
-                            {ind.titulo} — evolução mensal <span className="font-normal text-gray-400">({ind.unidade})</span>
+                          <p className="text-sm font-semibold text-black mb-2">
+                            {ind.titulo} — evolução mensal <span className="font-normal text-black">({ind.unidade})</span>
                           </p>
                           <GraficoLinha ind={ind} historico={historico} indiceSelecionado={indiceSelecionado} />
                         </td>
