@@ -69,6 +69,11 @@ function formatarPercentual(valor: number, total: number): string {
 type Campo = 'conta' | 'valor' | 'pct';
 type Ordenacao = { campo: Campo; dir: 'asc' | 'desc' } | null;
 
+const EMPRESAS_DONAS_DE_BENS: EmpresaOpcao[] = [
+  { cdEmpresa: 110, nome: 'CB EMP.', tipo: 'loja' },
+  { cdEmpresa: 100, nome: 'CAIRO EIRELLI', tipo: 'loja' },
+  { cdEmpresa: 50, nome: 'CORPO SEXY', tipo: 'loja' },
+];
 const CHAVE_FILTROS = 'balanco_patrimonial_filtros';
 
 const TEMAS = {
@@ -564,7 +569,9 @@ export default function BalancoPatrimonialPage() {
     fetch('/api/cmv-detalhado/empresas', { cache: 'no-store' })
       .then((r) => r.json())
       .then((data) => {
-        const lista: EmpresaOpcao[] = data.empresas || [];
+        // Outras empresas do grupo (empresa/centro de custo reais do ERP); os bens
+        // delas usam os mesmos codigos (CD_EMPRESA_BENS no backend).
+        const lista: EmpresaOpcao[] = [...(data.empresas || []), ...EMPRESAS_DONAS_DE_BENS];
         setEmpresasDisponiveis(lista);
         // Cookie (padrao LIEBE) primeiro; cai no localStorage antigo pra quem
         // ja tinha filtro salvo antes da mudanca.
@@ -577,7 +584,12 @@ export default function BalancoPatrimonialPage() {
         if (salvo) {
           if (salvo.mesReferencia) mes = salvo.mesReferencia;
           const empresasValidas = (salvo.empresas || []).filter((cd) => validas.has(cd));
-          if (empresasValidas.length > 0) empresas = new Set(empresasValidas);
+          if (empresasValidas.length > 0) {
+            empresas = new Set(empresasValidas);
+            // Filtro salvo com "todas as lojas" antes de existirem as novas empresas: inclui elas.
+            const antigas = lista.filter((e) => !EMPRESAS_DONAS_DE_BENS.some((x) => x.cdEmpresa === e.cdEmpresa));
+            if (antigas.every((e) => empresas.has(e.cdEmpresa))) EMPRESAS_DONAS_DE_BENS.forEach((e) => empresas.add(e.cdEmpresa));
+          }
           if (salvo.ordenacao && ['conta', 'valor', 'pct'].includes(salvo.ordenacao.campo)) setOrdenacao(salvo.ordenacao);
           setSalvoAtivo(true);
         }

@@ -414,8 +414,7 @@ async def loop_cache_estoque_lojas() -> None:
 # Lancamento manual por enquanto: fcp_balanco_bens, criada ja com os bens da
 # planilha de patrimonio (valor da planilha, sem depreciacao - balanco
 # gerencial). linha_balanco = conta do plano (ANC.5 Investimentos, ANC.6
-# Imobilizado). NAO depende do filtro de empresas da tela (sao bens de CB
-# Empreendimentos, Cairo Benevides e Pacifico Holding) nem do mes de
+# Imobilizado). Filtra pelo cd_empresa (LIEBE=1, CB EMP.=110, CAIRO EIRELLI=100), mas nao depende do mes de
 # referencia (foto atual). saldo_devedor fica guardado, mas ainda nao entra no
 # Passivo.
 BENS_INICIAIS = [
@@ -437,6 +436,20 @@ BENS_INICIAIS = [
 ]
 
 
+# Codigos do filtro de empresas do balanco: LIEBE = empresa 001 (fabrica); as
+# demais usam a empresa/centro de custo real do ERP (CB EMP. 110, CAIRO EIRELLI
+# 100, CORPO SEXY 50 - esta ainda sem bens), o que faz contas a pagar/receber
+# tambem respeitarem o filtro.
+CD_EMPRESA_BENS = {"LIEBE": 1, "CB EMP.": 110, "CAIRO EIRELLI": 100}
+
+
+def _filtro_bens(empresas: Optional[str]):
+    """Clausula/params do filtro de empresas aplicado aos bens (sem filtro = todos)."""
+    if not empresas:
+        return "", ()
+    return " AND cd_empresa = ANY(%s)", (_parse_empresas(empresas),)
+
+
 def _criar_tabela_bens():
     execute_insert("""
         CREATE TABLE IF NOT EXISTS fcp_balanco_bens (
@@ -453,6 +466,7 @@ def _criar_tabela_bens():
             dt_atualizacao TIMESTAMP DEFAULT NOW()
         )
     """, ())
+    execute_insert("ALTER TABLE fcp_balanco_bens ADD COLUMN IF NOT EXISTS cd_empresa INTEGER", ())
     if not (execute_query("SELECT 1 FROM fcp_balanco_bens LIMIT 1", ()) or []):
         valores_sql = ",".join(["(%s,%s,%s,%s,%s,%s,%s,%s)"] * len(BENS_INICIAIS))
         params = [p for b in BENS_INICIAIS for p in b]
@@ -461,22 +475,27 @@ def _criar_tabela_bens():
             f"VALUES {valores_sql}",
             tuple(params),
         )
+    # Bens sem codigo de empresa (lancados antes do filtro ou a mao) herdam do nome.
+    for nome, cd in CD_EMPRESA_BENS.items():
+        execute_insert("UPDATE fcp_balanco_bens SET cd_empresa = %s WHERE cd_empresa IS NULL AND empresa = %s", (cd, nome))
 
 
-def _total_bens_por_linha() -> dict:
-    """{'ANC.5': total, 'ANC.6': total} dos bens ativos."""
+def _total_bens_por_linha(empresas: Optional[str] = None) -> dict:
+    """{'ANC.5': total, 'ANC.6': total} dos bens ativos das empresas filtradas."""
     _criar_tabela_bens()
+    clausula, params = _filtro_bens(empresas)
     rows = execute_query(
-        "SELECT linha_balanco, COALESCE(SUM(valor), 0) AS total FROM fcp_balanco_bens WHERE ativo GROUP BY linha_balanco", ()
+        f"SELECT linha_balanco, COALESCE(SUM(valor), 0) AS total FROM fcp_balanco_bens WHERE ativo{clausula} GROUP BY linha_balanco", params
     ) or []
     return {r["linha_balanco"]: float(r["total"]) for r in rows}
 
 
-def _listar_bens() -> list:
+def _listar_bens(empresas: Optional[str] = None) -> list:
     """Bens ativos (um por linha) para abrir ANC.5/ANC.6 no balanco."""
     _criar_tabela_bens()
+    clausula, params = _filtro_bens(empresas)
     rows = execute_query(
-        "SELECT id, linha_balanco, descricao, empresa, valor FROM fcp_balanco_bens WHERE ativo ORDER BY linha_balanco, valor DESC, id", ()
+        f"SELECT id, linha_balanco, descricao, empresa, valor FROM fcp_balanco_bens WHERE ativo{clausula} ORDER BY linha_balanco, valor DESC, id", params
     ) or []
     return [
         {
@@ -593,7 +612,7 @@ def get_balanco_patrimonial(
 
         # ANC.5 Investimentos e ANC.6 Imobilizado = bens cadastrados (fixos).
         def _bens():
-            return _total_bens_por_linha()
+            return _total_bens_por_linha(empresas)
 
         # Emprestimos = principal (despesaitem 114) + juros (137) em aberto (nada
         # pago), sem filtro de empresa, igual a consulta passada pelo usuario.
@@ -750,7 +769,7 @@ def get_balanco_patrimonial(
         bens = []
         if "Bens" in resultados:
             try:
-                bens = _listar_bens()
+                bens = _listar_bens(empresas)
             except Exception as e:
                 print(f"[BALANCO] detalhe de bens indisponivel: {e}")
         caixa_disponivel = valores.pop("_CAIXA_POS", None)
