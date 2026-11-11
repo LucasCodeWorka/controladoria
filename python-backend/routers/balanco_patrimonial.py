@@ -104,6 +104,163 @@ def _janela_proximo_mes(mes_referencia: str) -> tuple:
     return date(a1, m1, 1).isoformat(), (date(a2, m2, 1) - timedelta(days=1)).isoformat()
 
 
+# ── Rescisao de aluguel (shoppings) ──────────────────────────────────────
+# Multa por devolver o salao antes do fim do contrato (art. 4o Lei 8.245/91):
+# pct_multa (20%) x aluguel mensal minimo x meses ate o fim do contrato. Casos
+# cadastrados um a um em fcp_balanco_rescisoes (centro de custo, despesa do
+# aluguel minimo, fim do contrato). Valor mensal de referencia = parcela do
+# mes de referencia da despesa/centro de custo, MAS em dezembro e janeiro
+# (13o dobra o aluguel) usa novembro. Meses = os que faltam depois do mes de
+# referencia ate o fim do contrato (mes do fim proporcional ao dia). Soma de
+# verdade em PC.1 (aberta como "Rescisao de alugueis"). Respeita o filtro:
+# so entra se o centro de custo do caso esta nas empresas escolhidas.
+# Casos com reducao (ex: Porto Alegre, CC 20): dt_inicio_contrato + a cada
+# reducao_a_cada_pct % do prazo transcorrido (meses de inicio ate o mes de
+# referencia, inclusive / meses totais do contrato) a multa cai reducao_pct %.
+# Casos com piso (ex: Shopping CC 3): multa = MAIOR entre pct_multa % dos
+# alugueis restantes e multa_min_meses x aluguel mensal (15 alugueis).
+# Casos com devolucao de investimento do shopping (ex: CC 21): investimento x
+# meses restantes / meses totais do contrato (inicio..fim), somado a multa.
+# Correcao monetaria e juros (0,5% a.m.) NAO entram: correm depois da rescisao.
+# multa_proporcional: o valor de multa_min_meses x aluguel e reduzido pela fracao
+# do contrato que resta (dias do 1o dia do mes seguinte ao de referencia ate o
+# fim / dias totais inicio..fim) - ex: CC 15 (10 alugueis proporcionais).
+# aluguel_fixo (opcional): aluguel mensal do contrato, usado no lugar das parcelas
+# lancadas (ex: CC 21, que nao tem parcela lancada em varios meses).
+RESCISOES_INICIAIS = [
+    # (descricao, cd_ccusto, cd_despesaitem, dt_fim_contrato, pct_multa, dt_inicio_contrato, reducao_pct, reducao_a_cada_pct, multa_min_meses, investimento, multa_proporcional)
+    ("ALUGUEL MINIMO - SHOPPING CC 8", 8, 85, "2029-07-19", 20, None, 0, 0, 0, 0, False),
+    ("ALUGUEL MINIMO - SHOPPING PORTO ALEGRE CC 20", 20, 85, "2031-05-31", 80, "2026-06-01", 5, 20, 0, 0, False),
+    ("ALUGUEL MINIMO - SHOPPING RIOMAR RECIFE CC 17 (LOJA 1110)", 17, 85, "2030-08-09", 20, None, 0, 0, 0, 0, False),
+    ("ALUGUEL MINIMO - SHOPPING CC 3 (CLAUSULA 18.3)", 3, 85, "2031-01-10", 80, None, 0, 0, 15, 0, False),
+    # CC 5 (clausula 10.3): multa fixa de 3 alugueis minimos (pct 0 + piso de 3 meses).
+    ("ALUGUEL MINIMO - SHOPPING CC 5 (CLAUSULA 10.3)", 5, 85, "2029-02-28", 0, None, 0, 0, 3, 0, False),
+    # CC 2 e CC 4: multa de 1 aluguel minimo (sem data de fim informada: 9999-12-31 = sem encerramento).
+    ("ALUGUEL MINIMO - SHOPPING CC 2 (1 ALUGUEL)", 2, 85, "9999-12-31", 0, None, 0, 0, 1, 0, False),
+    ("ALUGUEL MINIMO - SHOPPING CC 4 (1 ALUGUEL)", 4, 85, "9999-12-31", 0, None, 0, 0, 1, 0, False),
+    ("ALUGUEL MINIMO - SHOPPING CC 21 (CLAUSULA 12)", 21, 85, "2031-06-30", 20, "2026-07-01", 0, 0, 0, 200000, False),
+    ("ALUGUEL MINIMO - SHOPPING CC 14 (CLAUSULA 6.2)", 14, 85, "2030-01-01", 20, None, 0, 0, 0, 0),
+    # CC 15 (clausula 11a, par. 1o, contrato de 2020): 10 alugueis proporcionais ao periodo restante da renovacao vigente (20/06/2025 a 19/06/2030).
+    ("ALUGUEL MINIMO - SHOPPING CC 15 (CLAUSULA 11)", 15, 85, "2030-06-19", 0, "2025-06-20", 0, 0, 10, 0, True),
+    # CC 19 (item 10.5 do Quadro de Informacoes Basicas): 5 alugueis proporcionais ao prazo restante.
+    ("ALUGUEL MINIMO - SHOPPING CC 19 (ITEM 10.5)", 19, 85, "2027-07-30", 0, "2022-07-31", 0, 0, 5, 0, True),
+    # E-commerce (CC 120; o 49 vem junto no filtro): multa de 3 alugueis minimos, sem data de fim informada.
+    ("ALUGUEL MINIMO - ECOMMERCE CC 120 (3 ALUGUEIS)", 120, 85, "9999-12-31", 0, None, 0, 0, 3, 0, False),
+    # CC 22 (clausula 18.3): maior entre 10 alugueis e 80% dos alugueis vincendos (contrato 01/12/2022 a 30/11/2027).
+    ("ALUGUEL MINIMO - SHOPPING CC 22 (CLAUSULA 18.3)", 22, 85, "2027-11-30", 80, "2022-12-01", 0, 0, 10, 0, False),
+    # CC 7: multa limitada a 3 alugueis minimos (contrato 26/04/2024 a 25/05/2029).
+    ("ALUGUEL MINIMO - SHOPPING CC 7 (3 ALUGUEIS)", 7, 85, "2029-05-25", 0, "2024-04-26", 0, 0, 3, 0, False),
+]
+
+
+def _criar_tabela_rescisoes():
+    execute_insert("""
+        CREATE TABLE IF NOT EXISTS fcp_balanco_rescisoes (
+            id SERIAL PRIMARY KEY,
+            descricao TEXT NOT NULL,
+            cd_ccusto INTEGER NOT NULL,
+            cd_despesaitem INTEGER NOT NULL,
+            dt_fim_contrato DATE NOT NULL,
+            pct_multa NUMERIC(6, 2) NOT NULL DEFAULT 20,
+            ativo BOOLEAN NOT NULL DEFAULT TRUE
+        )
+    """, ())
+    execute_insert("ALTER TABLE fcp_balanco_rescisoes ADD COLUMN IF NOT EXISTS dt_inicio_contrato DATE", ())
+    execute_insert("ALTER TABLE fcp_balanco_rescisoes ADD COLUMN IF NOT EXISTS reducao_pct NUMERIC(6, 2) NOT NULL DEFAULT 0", ())
+    execute_insert("ALTER TABLE fcp_balanco_rescisoes ADD COLUMN IF NOT EXISTS reducao_a_cada_pct NUMERIC(6, 2) NOT NULL DEFAULT 0", ())
+    execute_insert("ALTER TABLE fcp_balanco_rescisoes ADD COLUMN IF NOT EXISTS multa_min_meses NUMERIC(6, 2) NOT NULL DEFAULT 0", ())
+    execute_insert("ALTER TABLE fcp_balanco_rescisoes ADD COLUMN IF NOT EXISTS investimento NUMERIC(16, 2) NOT NULL DEFAULT 0", ())
+    execute_insert("ALTER TABLE fcp_balanco_rescisoes ADD COLUMN IF NOT EXISTS aluguel_fixo NUMERIC(16, 2) NOT NULL DEFAULT 0", ())
+    execute_insert("ALTER TABLE fcp_balanco_rescisoes ADD COLUMN IF NOT EXISTS multa_proporcional BOOLEAN NOT NULL DEFAULT FALSE", ())
+    # CC 21: aluguel do contrato (clausula 12a, par.1o).
+    execute_insert("UPDATE fcp_balanco_rescisoes SET aluguel_fixo = 10685 WHERE cd_ccusto = 21 AND cd_despesaitem = 85 AND aluguel_fixo = 0", ())
+    # Casos de RESCISOES_INICIAIS entram se ainda nao existem (centro de custo + despesa).
+    for r in RESCISOES_INICIAIS:
+        if not (execute_query("SELECT 1 FROM fcp_balanco_rescisoes WHERE cd_ccusto = %s AND cd_despesaitem = %s", (r[1], r[2])) or []):
+            execute_insert(
+                "INSERT INTO fcp_balanco_rescisoes (descricao, cd_ccusto, cd_despesaitem, dt_fim_contrato, pct_multa, "
+                "dt_inicio_contrato, reducao_pct, reducao_a_cada_pct, multa_min_meses, investimento, multa_proporcional) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", r
+            )
+
+
+def _mes_base_rescisao(mes_referencia: str) -> tuple:
+    """(ano, mes) do aluguel usado no calculo: o do mes de referencia, exceto
+    dezembro/janeiro (13o em dobro) que usam novembro."""
+    ano, mes = (int(p) for p in mes_referencia.split("-"))
+    if mes == 12:
+        return ano, 11
+    if mes == 1:
+        return ano - 1, 11
+    return ano, mes
+
+
+def _meses_ate_fim(mes_referencia: str, fim: date) -> float:
+    """Meses depois do mes de referencia ate o fim do contrato (o mes do fim
+    entra proporcional: dia do fim / dias do mes)."""
+    ano, mes = (int(p) for p in mes_referencia.split("-"))
+    total = 0.0
+    a, m = _somar_meses(ano, mes, 1)
+    while (a, m) <= (fim.year, fim.month):
+        dias_mes = (date(*_somar_meses(a, m, 1), 1) - date(a, m, 1)).days
+        total += 1.0 if (a, m) < (fim.year, fim.month) else fim.day / dias_mes
+        a, m = _somar_meses(a, m, 1)
+    return total
+
+
+def _reducao_rescisao(mes_referencia: str, caso: dict) -> float:
+    """Fracao (0 a 1) de reducao da multa: reducao_pct % a cada reducao_a_cada_pct %
+    do prazo contratual transcorrido (meses de dt_inicio_contrato ate o mes de
+    referencia, inclusive, sobre o total de meses do contrato)."""
+    inicio, fim = caso.get("dt_inicio_contrato"), caso["dt_fim_contrato"]
+    passo, red = float(caso.get("reducao_a_cada_pct") or 0), float(caso.get("reducao_pct") or 0)
+    if not inicio or passo <= 0 or red <= 0:
+        return 0.0
+    ano, mes = (int(p) for p in mes_referencia.split("-"))
+    total_meses = (fim.year - inicio.year) * 12 + fim.month - inicio.month + 1
+    transcorridos = max(0, min(total_meses, (ano - inicio.year) * 12 + mes - inicio.month + 1))
+    degraus = int((transcorridos / total_meses * 100) // passo)
+    return min(1.0, degraus * red / 100)
+
+
+def _calcular_rescisoes(mes_referencia: str, empresas: Optional[str]) -> float:
+    """Total (positivo) das multas de rescisao dos casos cadastrados."""
+    _criar_tabela_rescisoes()
+    casos = execute_query("SELECT * FROM fcp_balanco_rescisoes WHERE ativo", ()) or []
+    selecionados = set(_expandir_empresas_para_ccustos(_parse_empresas(empresas))) if empresas else None
+    total = 0.0
+    for c in casos:
+        if selecionados is not None and c["cd_ccusto"] not in selecionados:
+            continue
+        ab, mb = _mes_base_rescisao(mes_referencia)
+        ini = date(ab, mb, 1)
+        fim_mes = date(*_somar_meses(ab, mb, 1), 1) - timedelta(days=1)
+        r = execute_query(
+            """SELECT COALESCE(SUM(vl_rateio), 0) AS v FROM public.vr_fcp_despduplicatai
+               WHERE cd_despesaitem = %s AND cd_ccusto = %s AND tp_situacao <> 'C'
+                 AND dt_vencimento BETWEEN %s AND %s""",
+            (c["cd_despesaitem"], c["cd_ccusto"], ini, fim_mes),
+        ) or [{"v": 0}]
+        aluguel = float(c.get("aluguel_fixo") or 0) or float(r[0]["v"] or 0)
+        if tuple(int(p) for p in mes_referencia.split("-")) >= (c["dt_fim_contrato"].year, c["dt_fim_contrato"].month):
+            continue  # contrato encerrado (ou no mes do fim): sem multa
+        pct = float(c["pct_multa"])
+        multa = pct / 100 * aluguel * _meses_ate_fim(mes_referencia, c["dt_fim_contrato"]) if pct > 0 else 0.0
+        piso = float(c.get("multa_min_meses") or 0) * aluguel
+        if c.get("multa_proporcional") and c.get("dt_inicio_contrato"):
+            ini_c, fim_c = c["dt_inicio_contrato"], c["dt_fim_contrato"]
+            a1, m1 = _somar_meses(*(int(p) for p in mes_referencia.split("-")), 1)
+            restante = max(0, (fim_c - date(a1, m1, 1)).days + 1)
+            piso *= min(1.0, restante / ((fim_c - ini_c).days + 1))
+        multa = max(multa, piso)
+        total += multa * (1 - _reducao_rescisao(mes_referencia, c))
+        invest = float(c.get("investimento") or 0)
+        if invest > 0 and c.get("dt_inicio_contrato"):
+            ini_c, fim_c = c["dt_inicio_contrato"], c["dt_fim_contrato"]
+            total_meses = (fim_c.year - ini_c.year) * 12 + fim_c.month - ini_c.month + 1
+            total += invest * min(1.0, _meses_ate_fim(mes_referencia, fim_c) / total_meses)
+    return round(total, 2)
+
+
 def _expandir_empresas_para_ccustos(lista_empresas: list) -> list:
     """Expande os codigos escolhidos no filtro de empresas da tela (1 por
     loja + 1 pra fabrica) pros centros de custo REAIS de
@@ -729,7 +886,9 @@ def get_balanco_patrimonial(
                      AND tp_situacao = 'N'
                      AND vl_pago = 0{cc}""", (DESPESAITENS_FORNECEDORES, ini, fim, *prm)
             ) or []
-            return {"PC.1": -float(rows[0]["total"]) if rows else 0.0}
+            proximo = float(rows[0]["total"]) if rows else 0.0
+            rescisao = _calcular_rescisoes(mesReferencia, empresas)
+            return {"PC.1": -(proximo + rescisao), "PC.1.1": -proximo, "PC.1.2": -rescisao}
 
         # PC.5 = tributos a recolher que vencem em ate 12 meses (de hoje); PNC.9 =
         # os que vencem depois disso. Em aberto, nada pago, sem filtro de empresa.

@@ -63,7 +63,15 @@ export const PLANO_PASSIVO: ContaBalanco[] = [
     nome: 'CIRCULANTE',
     nivel: 1,
     filhos: [
-      { codigo: 'PC.1', nome: '1 - FORNECEDORES E ALUGUÉIS A PAGAR (PRÓXIMO MÊS)', nivel: 2 },
+      {
+        codigo: 'PC.1',
+        nome: '1 - FORNECEDORES E ALUGUÉIS A PAGAR (PRÓXIMO MÊS)',
+        nivel: 2,
+        detalhes: [
+          { codigo: 'PC.1.1', nome: 'PRÓXIMO MÊS' },
+          { codigo: 'PC.1.2', nome: 'RESCISÃO DE ALUGUÉIS (SHOPPING)' },
+        ],
+      },
       { codigo: 'PC.2', nome: '2 - OBRIGAÇÕES DE COMPRA DE MP. E SERV.', nivel: 2 },
       {
         codigo: 'PC.3',
