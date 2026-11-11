@@ -285,13 +285,28 @@ function TabelaBalanco({ titulo, plano, valores, mostrarPercentual, contasExpand
                           )}
                         </tr>
                         {detalhesAbertos &&
-                          conta.detalhes!.map((d) => {
+                          conta.detalhes!.map((d, i, lista) => {
+                            // Subitens (sub) pertencem ao detalhe anterior e abrem/fecham nele.
+                            let pai = i;
+                            while (d.sub && pai > 0 && lista[pai].sub) pai--;
+                            if (d.sub && !contasExpandidas.has(lista[pai].codigo)) return null;
+                            const temSub = !d.sub && !!lista[i + 1]?.sub;
+                            const subAberto = temSub && contasExpandidas.has(d.codigo);
                             const vd = valores[d.codigo] ?? 0;
                             return (
                               <tr key={d.codigo} className="group">
                                 <td className={`px-4 py-2.5 ${d.sub ? 'pl-20 text-[13px]' : 'pl-14'} text-[#4b5563] bg-[#fcfcfd] group-hover:bg-[#faf3f5] border-b border-[#eef0f2]`}>
-                                  <span className={`inline-block mr-2 rounded-full bg-[#c5949d] align-middle ${d.sub ? 'w-1 h-1' : 'w-1.5 h-1.5'}`} />
-                                  {d.nome}
+                                  {temSub ? (
+                                    <button type="button" aria-expanded={subAberto} onClick={() => toggleExpansao(d.codigo)} className="flex w-full items-center gap-2 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#b3838c]">
+                                      {subAberto ? <ChevronDown aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-[#8e5e68]" /> : <ChevronRight aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-[#8e5e68]" />}
+                                      {d.nome}
+                                    </button>
+                                  ) : (
+                                    <>
+                                      <span className={`inline-block mr-2 rounded-full bg-[#c5949d] align-middle ${d.sub ? 'w-1 h-1' : 'w-1.5 h-1.5'}`} />
+                                      {d.nome}
+                                    </>
+                                  )}
                                 </td>
                                 <td className={`px-4 py-2.5 text-right whitespace-nowrap bg-[#fcfcfd] group-hover:bg-[#faf3f5] border-b border-[#eef0f2] ${corValor(vd)}`}>
                                   {formatarValor(vd)}
@@ -543,7 +558,7 @@ export default function BalancoPatrimonialPage() {
   const [filtroLojasAberto, setFiltroLojasAberto] = useState(false);
   const [consultaExecutada, setConsultaExecutada] = useState(false);
   const [contasExpandidas, setContasExpandidas] = useState<Set<string>>(
-    new Set([...PLANO_ATIVOS, ...PLANO_PASSIVO].flatMap((g) => [g.codigo, ...(g.filhos || []).filter((f) => f.detalhes).map((f) => f.codigo)]))
+    new Set([...PLANO_ATIVOS, ...PLANO_PASSIVO].flatMap((g) => [g.codigo, ...(g.filhos || []).filter((f) => f.detalhes).flatMap((f) => [f.codigo, ...f.detalhes!.filter((d, i, l) => l[i + 1]?.sub && !d.sub).map((d) => d.codigo)])]))
   );
   const [ordenacao, setOrdenacao] = useState<Ordenacao>(null);
   const [salvoAtivo, setSalvoAtivo] = useState(false);
