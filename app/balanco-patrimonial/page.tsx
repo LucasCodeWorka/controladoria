@@ -289,8 +289,8 @@ function TabelaBalanco({ titulo, plano, valores, mostrarPercentual, contasExpand
                             const vd = valores[d.codigo] ?? 0;
                             return (
                               <tr key={d.codigo} className="group">
-                                <td className="px-4 py-2.5 pl-14 text-[#4b5563] bg-[#fcfcfd] group-hover:bg-[#faf3f5] border-b border-[#eef0f2]">
-                                  <span className="inline-block w-1.5 h-1.5 mr-2 rounded-full bg-[#c5949d] align-middle" />
+                                <td className={`px-4 py-2.5 ${d.sub ? 'pl-20 text-[13px]' : 'pl-14'} text-[#4b5563] bg-[#fcfcfd] group-hover:bg-[#faf3f5] border-b border-[#eef0f2]`}>
+                                  <span className={`inline-block mr-2 rounded-full bg-[#c5949d] align-middle ${d.sub ? 'w-1 h-1' : 'w-1.5 h-1.5'}`} />
                                   {d.nome}
                                 </td>
                                 <td className={`px-4 py-2.5 text-right whitespace-nowrap bg-[#fcfcfd] group-hover:bg-[#faf3f5] border-b border-[#eef0f2] ${corValor(vd)}`}>
