@@ -96,6 +96,37 @@ def _janela_vencimento(mes_referencia: str, meses_janela: int) -> tuple:
     return data_inicio.isoformat(), data_fim.isoformat()
 
 
+# ── Ajustes manuais do passivo ───────────────────────────────────────────
+# Valores lancados a mao por conta (ex: rescisao de funcionarios em PC.4),
+# somados a conta. Para mudar o valor, atualize a linha (ou desative e insira outra).
+AJUSTES_INICIAIS = [
+    # (conta, descricao, valor)
+    ("PC.4", "RESCISAO DE FUNCIONARIOS", 1961644.14),
+]
+
+
+def _criar_tabela_ajustes():
+    execute_insert("""
+        CREATE TABLE IF NOT EXISTS fcp_balanco_ajustes (
+            id SERIAL PRIMARY KEY,
+            conta TEXT NOT NULL,
+            descricao TEXT NOT NULL,
+            valor NUMERIC(16, 2) NOT NULL,
+            ativo BOOLEAN NOT NULL DEFAULT TRUE,
+            dt_atualizacao TIMESTAMP DEFAULT NOW()
+        )
+    """, ())
+    for conta, desc, valor in AJUSTES_INICIAIS:
+        if not (execute_query("SELECT 1 FROM fcp_balanco_ajustes WHERE conta = %s AND descricao = %s", (conta, desc)) or []):
+            execute_insert("INSERT INTO fcp_balanco_ajustes (conta, descricao, valor) VALUES (%s,%s,%s)", (conta, desc, valor))
+
+
+def _total_ajustes(conta: str) -> float:
+    _criar_tabela_ajustes()
+    r = execute_query("SELECT COALESCE(SUM(valor), 0) AS v FROM fcp_balanco_ajustes WHERE conta = %s AND ativo", (conta,)) or [{"v": 0}]
+    return float(r[0]["v"] or 0)
+
+
 def _janela_proximo_mes(mes_referencia: str) -> tuple:
     """(primeiro, ultimo dia) do mes seguinte ao de referencia (YYYY-MM)."""
     ano, mes = (int(p) for p in mes_referencia.split("-"))
@@ -150,6 +181,10 @@ RESCISOES_INICIAIS = [
     ("ALUGUEL MINIMO - SHOPPING CC 22 (CLAUSULA 18.3)", 22, 85, "2027-11-30", 80, "2022-12-01", 0, 0, 10, 0, False),
     # CC 7: multa limitada a 3 alugueis minimos (contrato 26/04/2024 a 25/05/2029).
     ("ALUGUEL MINIMO - SHOPPING CC 7 (3 ALUGUEIS)", 7, 85, "2029-05-25", 0, "2024-04-26", 0, 0, 3, 0, False),
+    # CC 6 (nova vigencia 10/04/2027 a 09/04/2032): 3 alugueis, reduzidos proporcionalmente ao tempo cumprido (antes do inicio da vigencia vale cheio).
+    ("ALUGUEL MINIMO - SHOPPING CC 6 (NOVA VIGENCIA)", 6, 85, "2032-04-09", 0, "2027-04-10", 0, 0, 3, 0, True),
+    # CC 10 (clausula 11a, par. 1o): 10 alugueis proporcionais ao periodo restante da renovacao (12/06/2026 a 11/06/2031).
+    ("ALUGUEL MINIMO - SHOPPING CC 10 (CLAUSULA 11)", 10, 85, "2031-06-11", 0, "2026-06-12", 0, 0, 10, 0, True),
 ]
 
 
@@ -174,6 +209,8 @@ def _criar_tabela_rescisoes():
     execute_insert("ALTER TABLE fcp_balanco_rescisoes ADD COLUMN IF NOT EXISTS multa_proporcional BOOLEAN NOT NULL DEFAULT FALSE", ())
     # CC 21: aluguel do contrato (clausula 12a, par.1o).
     execute_insert("UPDATE fcp_balanco_rescisoes SET aluguel_fixo = 10685 WHERE cd_ccusto = 21 AND cd_despesaitem = 85 AND aluguel_fixo = 0", ())
+    # CC 6: novembro/2026 tem duas parcelas lancadas (03/11 e 30/11), o que dobrava a base.
+    execute_insert("UPDATE fcp_balanco_rescisoes SET aluguel_fixo = 18724 WHERE cd_ccusto = 6 AND cd_despesaitem = 85 AND aluguel_fixo = 0", ())
     # Casos de RESCISOES_INICIAIS entram se ainda nao existem (centro de custo + despesa).
     for r in RESCISOES_INICIAIS:
         if not (execute_query("SELECT 1 FROM fcp_balanco_rescisoes WHERE cd_ccusto = %s AND cd_despesaitem = %s", (r[1], r[2])) or []):
@@ -943,12 +980,16 @@ def get_balanco_patrimonial(
             return {"PC.IMV": -float(r["ate_12m"]), "PNC.IMV": -float(r["apos_12m"])}
 
         # PC.4 Salarios e encargos a pagar = custo_total da competencia mais
-        # recente de fato_custo_mensal. Passivo = negativo.
+        # recente de fato_custo_mensal (PC.4.1) + lancamentos manuais da conta em
+        # fcp_balanco_ajustes (PC.4.2, ex: rescisao de funcionarios), sem filtro
+        # de empresa. Passivo = negativo.
         def _salarios():
             rows = execute_query(
                 "SELECT competencia, custo_total FROM fato_custo_mensal ORDER BY competencia DESC LIMIT 1", ()
             ) or []
-            return {"PC.4": -float(rows[0]["custo_total"] or 0) if rows else 0.0}
+            salarios = float(rows[0]["custo_total"] or 0) if rows else 0.0
+            extras = _total_ajustes("PC.4")
+            return {"PC.4": -(salarios + extras), "PC.4.1": -salarios, "PC.4.2": -extras}
 
         with ThreadPoolExecutor(max_workers=6) as pool:
             f_opcionais = {

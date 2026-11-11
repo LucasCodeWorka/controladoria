@@ -83,7 +83,15 @@ export const PLANO_PASSIVO: ContaBalanco[] = [
         ],
       },
       { codigo: 'PC.IMV', nome: '4 - OBRIGAÇÕES POR COMPRA DE IMÓVEIS', nivel: 2 },
-      { codigo: 'PC.4', nome: '5 - SALÁRIOS E ENCARGOS A PAGAR', nivel: 2 },
+      {
+        codigo: 'PC.4',
+        nome: '5 - SALÁRIOS E ENCARGOS A PAGAR',
+        nivel: 2,
+        detalhes: [
+          { codigo: 'PC.4.1', nome: 'SALÁRIOS E ENCARGOS' },
+          { codigo: 'PC.4.2', nome: 'RESCISÃO DE FUNCIONÁRIOS' },
+        ],
+      },
       { codigo: 'PC.5', nome: '6 - TRIBUTOS A RECOLHER', nivel: 2 },
       { codigo: 'PC.6', nome: '7 - IMPOSTO DE RENDA E CONTRIBUIÇÃO SOCIAL DIFERIDOS', nivel: 2 },
     ],
