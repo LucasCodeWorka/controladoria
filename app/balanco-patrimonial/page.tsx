@@ -85,8 +85,8 @@ const TEMAS = {
 const ICONES_CONTAS: Record<string, LucideIcon> = {
   'AC.1': Wallet, 'AC.2': Receipt, 'AC.3': Boxes,
   'ANC.4': Receipt, 'ANC.5': TrendingUp, 'ANC.6': Building2,
-  'PC.1': Building2, 'PC.2': Boxes, 'PC.3': Landmark, 'PC.IMV': Building2, 'PC.4': Users,
-  'PNC.8': Landmark, 'PNC.IMV': Building2,
+  'PC.1': Building2, 'PC.2': Boxes, 'PC.3': Landmark, 'PC.ETR': Landmark, 'PC.IMV': Building2, 'PC.4': Users,
+  'PNC.8': Landmark, 'PNC.ETR': Landmark, 'PNC.IMV': Building2,
 };
 
 // Barra de rolagem acima e abaixo da tabela, sincronizadas (padrao LIEBE).
@@ -302,10 +302,21 @@ function TabelaBalanco({ titulo, plano, valores, mostrarPercentual, contasExpand
                                       {d.nome}
                                     </button>
                                   ) : (
-                                    <>
-                                      <span className={`inline-block mr-2 rounded-full bg-[#c5949d] align-middle ${d.sub ? 'w-1 h-1' : 'w-1.5 h-1.5'}`} />
-                                      {d.nome}
-                                    </>
+                                    <div className="flex items-center gap-2">
+                                      <span className={`inline-block mr-0 rounded-full bg-[#c5949d] align-middle ${d.sub ? 'w-1 h-1' : 'w-1.5 h-1.5'}`} />
+                                      <span>{d.nome}</span>
+                                      {onDetalhar && SUBDETALHAVEIS.has(d.codigo) && (
+                                        <button
+                                          type="button"
+                                          onClick={() => onDetalhar({ codigo: d.codigo, nome: d.nome, nivel: 2 })}
+                                          title="Ver detalhamento"
+                                          aria-label={`Detalhar ${d.nome}`}
+                                          className="shrink-0 rounded-md border border-[#d1d5db] bg-white px-1.5 py-1 text-[#8e5e68] hover:bg-[#f5ecef] print:hidden"
+                                        >
+                                          <ListTree aria-hidden="true" className="h-3.5 w-3.5" />
+                                        </button>
+                                      )}
+                                    </div>
                                   )}
                                 </td>
                                 <td className={`px-4 py-2.5 text-right whitespace-nowrap bg-[#fcfcfd] group-hover:bg-[#faf3f5] border-b border-[#eef0f2] ${corValor(vd)}`}>
@@ -332,12 +343,70 @@ function TabelaBalanco({ titulo, plano, valores, mostrarPercentual, contasExpand
 }
 
 // Contas do Passivo que tem detalhe (fornecedor x despesa x mes) no backend.
-const CONTAS_DETALHAVEIS = new Set(['PC.1', 'PC.2', 'PC.3', 'PNC.8', 'PC.IMV', 'PNC.IMV', 'PC.5', 'PNC.9', 'PC.6', 'PNC.10']);
+// Aberturas (detalhes) que tambem abrem detalhamento: PC.1.1 = titulos de fornecedores/alugueis
+// (mesmo detalhe da PC.1); PC.1.2 = rescisoes de aluguel e PC.4.2 = rescisao de funcionarios.
+const SUBDETALHAVEIS = new Set(['PC.1.1', 'PC.1.2', 'PC.4.2']);
+const CONTAS_DETALHAVEIS = new Set(['PC.1', 'PC.2', 'PC.3', 'PNC.8', 'PC.ETR', 'PNC.ETR', 'PC.IMV', 'PNC.IMV', 'PC.5', 'PC.6', 'PNC.10']);
 
 type LinhaDetalhe = { cdFornecedor: number | null; fornecedor: string; cdDespesa: string; despesa: string; mes: string; valor: number; qtd: number };
 type VisaoDetalhe = 'fornecedor' | 'despesa' | 'mes';
 
 const rotuloMes = (m: string) => `${m.slice(5)}/${m.slice(0, 4)}`;
+
+type ItemLancamento = { descricao: string; informacao: string; valor: number };
+
+// Detalhe das aberturas calculadas/lancadas a mao (rescisoes de aluguel e de funcionarios).
+function ModalDetalheLancamentos({ conta, empresas, mes, onFechar }: { conta: ContaBalanco; empresas: string; mes: string; onFechar: () => void }) {
+  const [itens, setItens] = useState<ItemLancamento[] | null>(null);
+  const [erro, setErro] = useState<string | null>(null);
+  useEffect(() => {
+    let vivo = true;
+    fetch(`/api/balanco-patrimonial/detalhe-lancamentos?conta=${encodeURIComponent(conta.codigo)}${empresas ? `&empresas=${empresas}` : ''}&mesReferencia=${mes}`, { cache: 'no-store' })
+      .then((r) => r.json().then((d) => ({ ok: r.ok, d })))
+      .then(({ ok, d }) => { if (!vivo) return; if (!ok || !Array.isArray(d.itens)) throw new Error(d.detail || d.error || 'Erro ao buscar o detalhe'); setItens(d.itens); })
+      .catch((e) => { if (vivo) setErro(e instanceof Error ? e.message : 'Erro ao buscar o detalhe'); });
+    return () => { vivo = false; };
+  }, [conta.codigo, empresas, mes]);
+  const total = (itens ?? []).reduce((s, i) => s + i.valor, 0);
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 print:hidden" onClick={onFechar}>
+      <div className="flex max-h-[90vh] w-full max-w-4xl flex-col rounded-lg bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between gap-3 border-b border-[#e5e7eb] px-5 py-3">
+          <div>
+            <h2 className="text-base font-semibold text-[#1d1d1d]">{conta.nome}</h2>
+            <p className="text-xs text-[#4b5563]">Composição do valor · total {formatarValor(total)}</p>
+          </div>
+          <button type="button" onClick={onFechar} aria-label="Fechar"><X className="h-5 w-5" /></button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-4">
+          {erro && <p className="py-10 text-center text-sm text-[#b91c1c]">{erro}</p>}
+          {!erro && itens === null && <p className="py-10 text-center text-sm text-[#4b5563]">Carregando...</p>}
+          {!erro && itens !== null && itens.length === 0 && <p className="py-10 text-center text-sm text-[#4b5563]">Nenhum item para o filtro.</p>}
+          {itens !== null && itens.length > 0 && (
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 bg-[#f3f4f6]">
+                <tr>
+                  <th className="px-3 py-1.5 text-left font-semibold uppercase tracking-wide text-[#4b5563]">Item</th>
+                  <th className="px-3 py-1.5 text-left font-semibold uppercase tracking-wide text-[#4b5563]">Como foi calculado</th>
+                  <th className="px-3 py-1.5 text-right font-semibold uppercase tracking-wide text-[#4b5563]">Valor (R$)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {itens.map((i, idx) => (
+                  <tr key={`${i.descricao}-${idx}`} className={idx % 2 ? 'bg-[#fafafb]' : 'bg-white'}>
+                    <td className="px-3 py-1.5 text-[#1d1d1d]">{i.descricao}</td>
+                    <td className="px-3 py-1.5 text-[#4b5563]">{i.informacao}</td>
+                    <td className="px-3 py-1.5 text-right font-semibold tabular-nums text-[#1d1d1d]">{formatarValor(i.valor)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function ModalDetalhePassivo({ conta, empresas, mes, onFechar }: { conta: ContaBalanco; empresas: string; mes: string; onFechar: () => void }) {
   const [linhas, setLinhas] = useState<LinhaDetalhe[] | null>(null);
@@ -1009,7 +1078,11 @@ export default function BalancoPatrimonialPage() {
           </div>
         </>
       )}
-      {contaDetalhe && <ModalDetalhePassivo conta={contaDetalhe} empresas={empresasConsultadas} mes={mesConsultado} onFechar={() => setContaDetalhe(null)} />}
+      {contaDetalhe && (contaDetalhe.codigo === 'PC.1.2' || contaDetalhe.codigo === 'PC.4.2' ? (
+        <ModalDetalheLancamentos conta={contaDetalhe} empresas={empresasConsultadas} mes={mesConsultado} onFechar={() => setContaDetalhe(null)} />
+      ) : (
+        <ModalDetalhePassivo conta={contaDetalhe.codigo === 'PC.1.1' ? { ...contaDetalhe, codigo: 'PC.1' } : contaDetalhe} empresas={empresasConsultadas} mes={mesConsultado} onFechar={() => setContaDetalhe(null)} />
+      ))}
     </div>
   );
 }

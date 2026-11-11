@@ -65,10 +65,10 @@ export const PLANO_PASSIVO: ContaBalanco[] = [
     filhos: [
       {
         codigo: 'PC.1',
-        nome: '1 - FORNECEDORES E ALUGUÉIS A PAGAR (PRÓXIMO MÊS)',
+        nome: '1 - FORNECEDORES E ALUGUÉIS A PAGAR',
         nivel: 2,
         detalhes: [
-          { codigo: 'PC.1.1', nome: 'PRÓXIMO MÊS' },
+          { codigo: 'PC.1.1', nome: 'FORNECEDORES E ALUGUÉIS A PAGAR' },
           { codigo: 'PC.1.2', nome: 'RESCISÃO DE ALUGUÉIS (SHOPPING)' },
         ],
       },
@@ -82,18 +82,19 @@ export const PLANO_PASSIVO: ContaBalanco[] = [
           { codigo: 'PC.3.2', nome: 'JUROS' },
         ],
       },
-      { codigo: 'PC.IMV', nome: '4 - OBRIGAÇÕES POR COMPRA DE IMÓVEIS', nivel: 2 },
+      { codigo: 'PC.ETR', nome: '4 - ENDIVIDAMENTO TRIBUTÁRIO', nivel: 2 },
+      { codigo: 'PC.IMV', nome: '5 - OBRIGAÇÕES POR COMPRA DE IMÓVEIS', nivel: 2 },
       {
         codigo: 'PC.4',
-        nome: '5 - SALÁRIOS E ENCARGOS A PAGAR',
+        nome: '6 - SALÁRIOS E ENCARGOS A PAGAR',
         nivel: 2,
         detalhes: [
           { codigo: 'PC.4.1', nome: 'SALÁRIOS E ENCARGOS' },
           { codigo: 'PC.4.2', nome: 'RESCISÃO DE FUNCIONÁRIOS' },
         ],
       },
-      { codigo: 'PC.5', nome: '6 - TRIBUTOS A RECOLHER', nivel: 2 },
-      { codigo: 'PC.6', nome: '7 - IMPOSTO DE RENDA E CONTRIBUIÇÃO SOCIAL DIFERIDOS', nivel: 2 },
+      { codigo: 'PC.5', nome: '7 - TRIBUTOS A RECOLHER', nivel: 2 },
+      { codigo: 'PC.6', nome: '8 - IMPOSTO DE RENDA E CONTRIBUIÇÃO SOCIAL DIFERIDOS', nivel: 2 },
     ],
   },
   {
@@ -103,16 +104,16 @@ export const PLANO_PASSIVO: ContaBalanco[] = [
     filhos: [
       {
         codigo: 'PNC.8',
-        nome: '8 - EMPRÉSTIMOS, FINANCIAMENTOS E DEBÊNTURES',
+        nome: '9 - EMPRÉSTIMOS, FINANCIAMENTOS E DEBÊNTURES',
         nivel: 2,
         detalhes: [
           { codigo: 'PNC.8.1', nome: 'PRINCIPAL' },
           { codigo: 'PNC.8.2', nome: 'JUROS' },
         ],
       },
-      { codigo: 'PNC.IMV', nome: '9 - OBRIGAÇÕES POR COMPRA DE IMÓVEIS', nivel: 2 },
-      { codigo: 'PNC.9', nome: '10 - TRIBUTOS A RECOLHER', nivel: 2 },
-      { codigo: 'PNC.10', nome: '11 - IMPOSTO DE RENDA E CONTRIBUIÇÃO SOCIAL DIFERIDOS', nivel: 2 },
+      { codigo: 'PNC.ETR', nome: '10 - ENDIVIDAMENTO TRIBUTÁRIO', nivel: 2 },
+      { codigo: 'PNC.IMV', nome: '11 - OBRIGAÇÕES POR COMPRA DE IMÓVEIS', nivel: 2 },
+      { codigo: 'PNC.10', nome: '12 - IMPOSTO DE RENDA E CONTRIBUIÇÃO SOCIAL DIFERIDOS', nivel: 2 },
     ],
   },
 ];

@@ -39,9 +39,14 @@ DESPESAITENS_FORNECEDORES = (
     227, 228, 229, 231, 259, 262, 263, 264, 271, 280, 287, 488, 539, 543, 544, 546,
 )
 
-# PC.5 / PNC.9 Tributos a recolher: despesaitens indicados pelo usuario (15 codigos;
+# PC.5 Tributos a recolher: despesaitens indicados pelo usuario (15 codigos;
 # inclui 158 Multas SEFAZ, 123 ISS ret. fonte e 230 IRRF outros servicos).
-DESPESAITENS_TRIBUTOS = (111, 112, 113, 116, 117, 118, 119, 120, 123, 126, 127, 158, 230, 250, 285)
+DESPESAITENS_TRIBUTOS = (111, 112, 113, 116, 117, 118, 119, 120, 123, 126, 127, 230, 250, 285)
+
+# PC.ETR / PNC.ETR Endividamento tributario: multas SEFAZ (despesa 158), tiradas de
+# Tributos a recolher. Ate 12 meses (inclui vencidas e nao pagas) = circulante;
+# depois disso = nao circulante.
+DESPESAITENS_ENDIVIDAMENTO_TRIBUTARIO = (158,)
 
 # PC.IMV / PNC.IMV Obrigacoes por compra de imoveis: contratos de compra de
 # imoveis (EDGE 700 e CASA MAUA 2101/2702/2703/2602).
@@ -259,15 +264,23 @@ def _reducao_rescisao(mes_referencia: str, caso: dict) -> float:
     return min(1.0, degraus * red / 100)
 
 
-def _calcular_rescisoes(mes_referencia: str, empresas: Optional[str]) -> float:
-    """Total (positivo) das multas de rescisao dos casos cadastrados."""
+def _fmt_brl(v: float) -> str:
+    return "R$ " + f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def _rescisoes_detalhadas(mes_referencia: str, empresas: Optional[str]) -> list:
+    """Um item por caso cadastrado com multa > 0: descricao, texto de memoria do
+    calculo e valor (multa + devolucao de investimento, ja com reducao)."""
     _criar_tabela_rescisoes()
-    casos = execute_query("SELECT * FROM fcp_balanco_rescisoes WHERE ativo", ()) or []
+    casos = execute_query("SELECT * FROM fcp_balanco_rescisoes WHERE ativo ORDER BY cd_ccusto", ()) or []
     selecionados = set(_expandir_empresas_para_ccustos(_parse_empresas(empresas))) if empresas else None
-    total = 0.0
+    ref = tuple(int(p) for p in mes_referencia.split("-"))
+    itens = []
     for c in casos:
         if selecionados is not None and c["cd_ccusto"] not in selecionados:
             continue
+        if ref >= (c["dt_fim_contrato"].year, c["dt_fim_contrato"].month):
+            continue  # contrato encerrado (ou no mes do fim): sem multa
         ab, mb = _mes_base_rescisao(mes_referencia)
         ini = date(ab, mb, 1)
         fim_mes = date(*_somar_meses(ab, mb, 1), 1) - timedelta(days=1)
@@ -277,25 +290,49 @@ def _calcular_rescisoes(mes_referencia: str, empresas: Optional[str]) -> float:
                  AND dt_vencimento BETWEEN %s AND %s""",
             (c["cd_despesaitem"], c["cd_ccusto"], ini, fim_mes),
         ) or [{"v": 0}]
-        aluguel = float(c.get("aluguel_fixo") or 0) or float(r[0]["v"] or 0)
-        if tuple(int(p) for p in mes_referencia.split("-")) >= (c["dt_fim_contrato"].year, c["dt_fim_contrato"].month):
-            continue  # contrato encerrado (ou no mes do fim): sem multa
+        fixo = float(c.get("aluguel_fixo") or 0)
+        aluguel = fixo or float(r[0]["v"] or 0)
+        meses = _meses_ate_fim(mes_referencia, c["dt_fim_contrato"]) if float(c["pct_multa"]) > 0 else 0.0
         pct = float(c["pct_multa"])
-        multa = pct / 100 * aluguel * _meses_ate_fim(mes_referencia, c["dt_fim_contrato"]) if pct > 0 else 0.0
+        multa = pct / 100 * aluguel * meses if pct > 0 else 0.0
         piso = float(c.get("multa_min_meses") or 0) * aluguel
+        fracao = 1.0
         if c.get("multa_proporcional") and c.get("dt_inicio_contrato"):
             ini_c, fim_c = c["dt_inicio_contrato"], c["dt_fim_contrato"]
-            a1, m1 = _somar_meses(*(int(p) for p in mes_referencia.split("-")), 1)
+            a1, m1 = _somar_meses(*ref, 1)
             restante = max(0, (fim_c - date(a1, m1, 1)).days + 1)
-            piso *= min(1.0, restante / ((fim_c - ini_c).days + 1))
+            fracao = min(1.0, restante / ((fim_c - ini_c).days + 1))
+            piso *= fracao
         multa = max(multa, piso)
-        total += multa * (1 - _reducao_rescisao(mes_referencia, c))
+        reducao = _reducao_rescisao(mes_referencia, c)
+        valor = multa * (1 - reducao)
+        partes = [f"Aluguel base {mb:02d}/{ab}: {_fmt_brl(aluguel)}" + (" (fixo do contrato)" if fixo else "")]
+        if pct > 0:
+            partes.append(f"{pct:g}% x {meses:.2f} meses restantes".replace(".", ","))
+        if float(c.get("multa_min_meses") or 0) > 0:
+            partes.append(f"{float(c['multa_min_meses']):g} alugueis" + (f" x {fracao:.1%} do prazo restante".replace(".", ",") if c.get("multa_proporcional") else ""))
+        if reducao > 0:
+            partes.append(f"reducao de {reducao:.0%}")
+        if pct > 0 and float(c.get("multa_min_meses") or 0) > 0:
+            partes.append("vale o maior")
         invest = float(c.get("investimento") or 0)
         if invest > 0 and c.get("dt_inicio_contrato"):
             ini_c, fim_c = c["dt_inicio_contrato"], c["dt_fim_contrato"]
             total_meses = (fim_c.year - ini_c.year) * 12 + fim_c.month - ini_c.month + 1
-            total += invest * min(1.0, _meses_ate_fim(mes_referencia, fim_c) / total_meses)
-    return round(total, 2)
+            dev = invest * min(1.0, _meses_ate_fim(mes_referencia, fim_c) / total_meses)
+            valor += dev
+            partes.append(f"devolucao do investimento {_fmt_brl(dev)}")
+        itens.append({
+            "descricao": f"CC {c['cd_ccusto']} - {c['descricao']}",
+            "informacao": " | ".join(partes) + f" | contrato ate {c['dt_fim_contrato'].strftime('%d/%m/%Y') if c['dt_fim_contrato'].year < 9999 else 'sem data de fim'}",
+            "valor": round(valor, 2),
+        })
+    return itens
+
+
+def _calcular_rescisoes(mes_referencia: str, empresas: Optional[str]) -> float:
+    """Total (positivo) das multas de rescisao dos casos cadastrados."""
+    return round(sum(i["valor"] for i in _rescisoes_detalhadas(mes_referencia, empresas)), 2)
 
 
 def _expandir_empresas_para_ccustos(lista_empresas: list) -> list:
@@ -803,7 +840,7 @@ def get_balanco_patrimonial(
 ):
     """
     Valores do Balanco Patrimonial: Caixa, Contas a Receber (boletos e
-    cartoes), Estoques e Bens, e no Passivo Fornecedores (PC.1 = vencimentos do proximo mes ao de referencia), Salarios (PC.4), Tributos (PC.5 ate 12 meses e PNC.9 depois), IR e CSLL (PC.6 ate 12 meses e PNC.10 depois), Obrigacoes por compra de imoveis (PC.IMV ate 12 meses e PNC.IMV depois), Materia-prima (PC.2) e Emprestimos (PC.3 ate 12 meses e PNC.8 depois). As
+    cartoes), Estoques e Bens, e no Passivo Fornecedores (PC.1 = vencimentos do proximo mes ao de referencia), Salarios (PC.4), Tributos (PC.5 = vencimentos do proximo mes ao de referencia), IR e CSLL (PC.6 ate 12 meses e PNC.10 depois), Obrigacoes por compra de imoveis (PC.IMV ate 12 meses e PNC.IMV depois), Materia-prima (PC.2) e Emprestimos (PC.3 ate 12 meses e PNC.8 depois). As
     demais contas do Passivo nao tem fonte ligada (a tela de classificacao de
     despesas foi descontinuada) e ficam zeradas.
     """
@@ -927,9 +964,26 @@ def get_balanco_patrimonial(
             rescisao = _calcular_rescisoes(mesReferencia, empresas)
             return {"PC.1": -(proximo + rescisao), "PC.1.1": -proximo, "PC.1.2": -rescisao}
 
-        # PC.5 = tributos a recolher que vencem em ate 12 meses (de hoje); PNC.9 =
-        # os que vencem depois disso. Em aberto, nada pago, sem filtro de empresa.
+        # PC.5 = tributos a recolher do PROXIMO MES FECHADO ao mes de referencia (mesmo
+        # conceito de PC.1): em aberto, nada pago, filtrado pelo centro de custo das
+        # empresas escolhidas. Nao ha mais PNC.9.
         def _tributos():
+            cc, prm = _filtro_ccusto_duplicatas(empresas)
+            ini, fim = _janela_proximo_mes(mesReferencia)
+            rows = execute_query(
+                f"""SELECT COALESCE(SUM(vl_rateio), 0) AS total
+                   FROM public.vr_fcp_despduplicatai
+                   WHERE cd_despesaitem IN %s
+                     AND dt_vencimento BETWEEN %s AND %s
+                     AND tp_situacao = 'N'
+                     AND vl_pago = 0{cc}""", (DESPESAITENS_TRIBUTOS, ini, fim, *prm)
+            ) or []
+            return {"PC.5": -float(rows[0]["total"]) if rows else 0.0}
+
+        # Endividamento tributario (multas SEFAZ): PC.ETR = vencidas + a vencer em
+        # ate 12 meses (de hoje); PNC.ETR = depois disso. Em aberto, nada pago,
+        # filtrado pelo centro de custo das empresas escolhidas.
+        def _endividamento_tributario():
             cc, prm = _filtro_ccusto_duplicatas(empresas)
             rows = execute_query(
                 f"""SELECT
@@ -937,12 +991,11 @@ def get_balanco_patrimonial(
                        COALESCE(SUM(CASE WHEN dt_vencimento >= CURRENT_DATE + INTERVAL '12 months' THEN vl_rateio END), 0) AS apos_12m
                    FROM public.vr_fcp_despduplicatai
                    WHERE cd_despesaitem IN %s
-                     AND dt_vencimento >= CURRENT_DATE
                      AND tp_situacao = 'N'
-                     AND vl_pago = 0{cc}""", (DESPESAITENS_TRIBUTOS, *prm)
+                     AND vl_pago = 0{cc}""", (DESPESAITENS_ENDIVIDAMENTO_TRIBUTARIO, *prm)
             ) or []
             r = rows[0] if rows else {"ate_12m": 0, "apos_12m": 0}
-            return {"PC.5": -float(r["ate_12m"]), "PNC.9": -float(r["apos_12m"])}
+            return {"PC.ETR": -float(r["ate_12m"]), "PNC.ETR": -float(r["apos_12m"])}
 
         # PC.6 = IR e CSLL que vencem em ate 12 meses (de hoje); PNC.10 = os que
         # vencem depois disso. Em aberto, nada pago, sem filtro de empresa.
@@ -1006,6 +1059,7 @@ def get_balanco_patrimonial(
                 "Tributos": pool.submit(_tributos),
                 "IR e CSLL": pool.submit(_ir_csll),
                 "Imoveis": pool.submit(_imoveis),
+                "Endividamento tributario": pool.submit(_endividamento_tributario),
             }
             resultados = {}
             for nome, f in f_opcionais.items():
@@ -1029,6 +1083,7 @@ def get_balanco_patrimonial(
         valores.update(resultados.get("Tributos", {}))
         valores.update(resultados.get("IR e CSLL", {}))
         valores.update(resultados.get("Imoveis", {}))
+        valores.update(resultados.get("Endividamento tributario", {}))
 
         bens = []
         if "Bens" in resultados:
@@ -1057,9 +1112,32 @@ _DETALHE_PASSIVO = {
     "PC.2": (lambda: DESPESAITENS_MATERIA_PRIMA, None),
     "PC.3": (lambda: ("114", "137"), "ate"), "PNC.8": (lambda: ("114", "137"), "apos"),
     "PC.IMV": (lambda: DESPESAITENS_IMOVEIS, "ate"), "PNC.IMV": (lambda: DESPESAITENS_IMOVEIS, "apos"),
-    "PC.5": (lambda: DESPESAITENS_TRIBUTOS, "ate"), "PNC.9": (lambda: DESPESAITENS_TRIBUTOS, "apos"),
+    "PC.ETR": (lambda: DESPESAITENS_ENDIVIDAMENTO_TRIBUTARIO, "ate_com_vencidos"), "PNC.ETR": (lambda: DESPESAITENS_ENDIVIDAMENTO_TRIBUTARIO, "apos"),
+    "PC.5": (lambda: DESPESAITENS_TRIBUTOS, "proximo_mes"),
     "PC.6": (lambda: DESPESAITENS_IR_CSLL, "ate"), "PNC.10": (lambda: DESPESAITENS_IR_CSLL, "apos"),
 }
+
+
+@router.get("/api/balanco-patrimonial/detalhe-lancamentos")
+def get_detalhe_lancamentos(conta: str = Query(..., description="PC.1.2 (rescisoes de aluguel) ou PC.4.2 (rescisao de funcionarios)"),
+                            empresas: Optional[str] = Query(None),
+                            mesReferencia: Optional[str] = Query(None)):
+    """Itens calculados/lancados a mao que compoem uma abertura do Passivo."""
+    try:
+        if conta == "PC.1.2":
+            itens = _rescisoes_detalhadas(mesReferencia or date.today().strftime("%Y-%m"), empresas)
+        elif conta == "PC.4.2":
+            _criar_tabela_ajustes()
+            rows = execute_query("SELECT descricao, valor FROM fcp_balanco_ajustes WHERE conta = 'PC.4' AND ativo ORDER BY id", ()) or []
+            itens = [{"descricao": r["descricao"], "informacao": "Lancamento manual", "valor": float(r["valor"])} for r in rows]
+        else:
+            raise HTTPException(status_code=400, detail="Abertura sem detalhamento")
+        return {"conta": conta, "itens": itens}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[ERROR] detalhe-lancamentos {conta}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/api/balanco-patrimonial/detalhe-passivo")
@@ -1072,12 +1150,12 @@ def get_detalhe_passivo(conta: str = Query(..., description="Codigo da conta do 
         raise HTTPException(status_code=400, detail="Conta sem detalhamento")
     itens_fn, janela = _DETALHE_PASSIVO[conta]
     corte = ""
-    if janela == "ate":
+    if janela in ("ate", "ate_com_vencidos"):
         corte = "AND d.dt_vencimento < CURRENT_DATE + INTERVAL '12 months'"
     elif janela == "apos":
         corte = "AND d.dt_vencimento >= CURRENT_DATE + INTERVAL '12 months'"
     prm_corte: tuple = ()
-    piso = "AND d.dt_vencimento >= CURRENT_DATE"
+    piso = "" if janela == "ate_com_vencidos" else "AND d.dt_vencimento >= CURRENT_DATE"
     if janela == "proximo_mes":
         ini, fim = _janela_proximo_mes(mesReferencia or date.today().strftime("%Y-%m"))
         corte = "AND d.dt_vencimento BETWEEN %s AND %s"
