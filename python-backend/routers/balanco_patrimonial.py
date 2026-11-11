@@ -215,6 +215,12 @@ def _somar_cheques_a_receber(data_inicio: str, data_fim: str, empresas: Optional
 # quando a materialized view foi atualizada depois do ultimo calculo.
 _lock_estoque_lojas = threading.Lock()
 
+# Produtos em LEVE DEFEITO ou OPORTUNIDADE (ate 1 ano, entre 1 e 2 anos, acima de
+# 2 anos) - status de mv_prd_referencia_produto (mesma fonte do Giro) - tem o
+# custo unitario reduzido em 50% no estoque PA (lojas e fabrica) do balanco.
+FATOR_STATUS_DESCONTO = 0.5
+VERSAO_CACHE_ESTOQUE = 2  # sobe quando a regra de valorizacao muda: invalida o cache
+
 SQL_ESTOQUE_LOJAS_DT_BASE = "SELECT MAX(dt_atualizacao) AS dt FROM mv_pcp_estoque_atual_lojas"
 
 SQL_ESTOQUE_LOJAS_VALORIZADO = """
@@ -225,13 +231,18 @@ SQL_ESTOQUE_LOJAS_VALORIZADO = """
         LEFT JOIN prd_produtoclas pc ON pc.cd_produto = e.cd_produto AND pc.cd_tipoclas = 20
         WHERE e.estoque_bruto > 0 AND e.cd_empresa = ANY(%s)
     ),
+    prod_desconto AS (
+        SELECT DISTINCT cd_produto FROM mv_prd_referencia_produto
+        WHERE btrim(upper(status)) = 'LEVE DEFEITO' OR btrim(upper(status)) LIKE 'OPORTUNIDADE%%'
+    ),
     com_valor AS (
         SELECT b.*,
-            CASE WHEN b.idmarca = ANY (ARRAY['0001','0002','0009'])
+            (CASE WHEN b.idmarca = ANY (ARRAY['0001','0002','0009'])
                  THEN COALESCE(NULLIF(f_prd_valor_produto2(1,1,'P',1,b.cd_produto,NULL),0), 21.9)
                  ELSE COALESCE(NULLIF(f_prd_valor_produto2(1,1,'C',2,b.cd_produto,NULL),0), 21.9)
-            END AS vl_unit
+            END) * CASE WHEN d.cd_produto IS NOT NULL THEN 0.5 ELSE 1 END AS vl_unit
         FROM base b
+        LEFT JOIN prod_desconto d ON d.cd_produto = b.cd_produto
     )
     SELECT cd_empresa, SUM(estoque_bruto) AS pecas,
            SUM(estoque_bruto * vl_unit * CASE WHEN cd_empresa = 2 THEN 0.7 ELSE 0.8 END) AS valor
@@ -249,6 +260,10 @@ def _criar_tabela_estoque_lojas():
             dt_calculado TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
     """, ())
+    # Regra de valorizacao nova (status c/ 50%): descarta o cache antigo das
+    # lojas/fabrica uma unica vez; MP (-1) nao muda.
+    execute_insert("ALTER TABLE fcp_balanco_estoque_lojas ADD COLUMN IF NOT EXISTS versao INTEGER NOT NULL DEFAULT 1", ())
+    execute_insert("DELETE FROM fcp_balanco_estoque_lojas WHERE cd_empresa > 0 AND versao < %s", (VERSAO_CACHE_ESTOQUE,))
 
 
 # Estoque PA da FABRICA (cd_empresa 1 no mesmo cache): mv_pcp_estoque_atual
@@ -260,12 +275,19 @@ ACRESCIMO_ESTOQUE_FABRICA = 1.10
 SQL_ESTOQUE_FABRICA_DT_BASE = "SELECT MAX(dt_atualizacao) AS dt FROM mv_pcp_estoque_atual"
 
 SQL_ESTOQUE_FABRICA_VALORIZADO = """
+    WITH
+    prod_desconto AS (
+        SELECT DISTINCT cd_produto FROM mv_prd_referencia_produto
+        WHERE btrim(upper(status)) = 'LEVE DEFEITO' OR btrim(upper(status)) LIKE 'OPORTUNIDADE%%'
+    )
     SELECT SUM(estoque_bruto) AS pecas,
            SUM(estoque_bruto * COALESCE(vl_unit, 0) * %s) AS valor
     FROM (
         SELECT e.estoque_bruto,
-               NULLIF(f_prd_valor_produto2(1, 1, 'C', 999, e.cd_produto, NULL), 0) AS vl_unit
+               NULLIF(f_prd_valor_produto2(1, 1, 'C', 999, e.cd_produto, NULL), 0)
+                   * CASE WHEN d.cd_produto IS NOT NULL THEN 0.5 ELSE 1 END AS vl_unit
         FROM mv_pcp_estoque_atual e
+        LEFT JOIN prod_desconto d ON d.cd_produto = e.cd_produto
         WHERE e.estoque_bruto > 0
     ) x
 """
@@ -321,10 +343,10 @@ def _garantir_cache_estoque_lojas() -> None:
             return
         execute_insert(f"DELETE FROM fcp_balanco_estoque_lojas WHERE {filtro}", ())
         if rows:
-            valores_sql = ",".join(["(%s,%s,%s,%s)"] * len(rows))
-            params = [p for r in rows for p in (r["cd_empresa"], float(r["pecas"]), round(float(r["valor"]), 2), base)]
+            valores_sql = ",".join(["(%s,%s,%s,%s,%s)"] * len(rows))
+            params = [p for r in rows for p in (r["cd_empresa"], float(r["pecas"]), round(float(r["valor"]), 2), base, VERSAO_CACHE_ESTOQUE)]
             execute_insert(
-                f"INSERT INTO fcp_balanco_estoque_lojas (cd_empresa, pecas, valor, dt_base) VALUES {valores_sql}",
+                f"INSERT INTO fcp_balanco_estoque_lojas (cd_empresa, pecas, valor, dt_base, versao) VALUES {valores_sql}",
                 tuple(params),
             )
         print(f"[BALANCO] Estoque PA das lojas recalculado: {len(rows)} empresa(s) em {time.time() - inicio:.1f}s")
@@ -342,8 +364,8 @@ def _garantir_cache_estoque_fabrica() -> None:
         r = (execute_query(SQL_ESTOQUE_FABRICA_VALORIZADO, (ACRESCIMO_ESTOQUE_FABRICA,)) or [{}])[0]
         execute_insert(f"DELETE FROM fcp_balanco_estoque_lojas WHERE {filtro}", ())
         execute_insert(
-            "INSERT INTO fcp_balanco_estoque_lojas (cd_empresa, pecas, valor, dt_base) VALUES (%s,%s,%s,%s)",
-            (CD_EMPRESA_CACHE_FABRICA, float(r.get("pecas") or 0), round(float(r.get("valor") or 0), 2), base),
+            "INSERT INTO fcp_balanco_estoque_lojas (cd_empresa, pecas, valor, dt_base, versao) VALUES (%s,%s,%s,%s,%s)",
+            (CD_EMPRESA_CACHE_FABRICA, float(r.get("pecas") or 0), round(float(r.get("valor") or 0), 2), base, VERSAO_CACHE_ESTOQUE),
         )
         print(f"[BALANCO] Estoque PA da fabrica recalculado em {time.time() - inicio:.1f}s")
 
