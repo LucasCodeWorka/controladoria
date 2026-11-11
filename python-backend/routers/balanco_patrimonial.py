@@ -117,6 +117,23 @@ def _expandir_empresas_para_ccustos(lista_empresas: list) -> list:
     return list(ccustos)
 
 
+def _filtro_ccusto_duplicatas(empresas: Optional[str], por_empresa_tambem: bool = False, alias: str = "") -> tuple:
+    """Clausula/params do filtro de empresas do Passivo nas duplicatas: respeita
+    o centro de custo (cd_ccusto = codigo da empresa; Fabrica expande pros
+    ccustos internos). Sem filtro = tudo. por_empresa_tambem tambem aceita a
+    empresa da duplicata (cd_empresa): usado nos imoveis, em que parte do
+    EDGE esta no ccusto 515 mas com empresa 110 (CB EMP.)."""
+    if not empresas:
+        return "", ()
+    lista = _parse_empresas(empresas)
+    if not lista:
+        return "", ()
+    a = f"{alias}." if alias else ""
+    if por_empresa_tambem:
+        return f" AND ({a}cd_ccusto = ANY(%s) OR {a}cd_empresa = ANY(%s))", (_expandir_empresas_para_ccustos(lista), lista)
+    return f" AND {a}cd_ccusto = ANY(%s)", (_expandir_empresas_para_ccustos(lista),)
+
+
 def _somar_duplicatas_por_vencimento(despesaitens: list, data_inicio: str, data_fim: str, empresas: Optional[str]) -> float:
     """Soma ABS(vl_rateio) das duplicatas (tp_situacao = 'N') de uma lista
     de cd_despesaitem, com VENCIMENTO na janela dada - respeita o filtro de
@@ -619,16 +636,17 @@ def get_balanco_patrimonial(
         # PC.3 = vence em ate 12 meses (de hoje); PNC.8 = vence depois disso.
         # .1 = principal e .2 = juros (aberturas so de exibicao). Passivo = negativo.
         def _emprestimos():
+            cc, prm = _filtro_ccusto_duplicatas(empresas)
             rows = execute_query(
-                """SELECT cd_despesaitem::text AS item,
+                f"""SELECT cd_despesaitem::text AS item,
                           COALESCE(SUM(CASE WHEN dt_vencimento < CURRENT_DATE + INTERVAL '12 months' THEN vl_rateio END), 0) AS ate_12m,
                           COALESCE(SUM(CASE WHEN dt_vencimento >= CURRENT_DATE + INTERVAL '12 months' THEN vl_rateio END), 0) AS apos_12m
                    FROM public.vr_fcp_despduplicatai
                    WHERE cd_despesaitem IN ('114', '137')
                      AND dt_vencimento >= CURRENT_DATE
                      AND tp_situacao = 'N'
-                     AND vl_pago = '0'
-                   GROUP BY 1""", ()
+                     AND vl_pago = '0'{cc}
+                   GROUP BY 1""", tuple(prm)
             ) or []
             por_item = {r["item"]: r for r in rows}
             def v(item, col):
@@ -641,31 +659,33 @@ def get_balanco_patrimonial(
             }
 
         # PC.2 = materia-prima a pagar (vencimento de hoje em diante, em aberto,
-        # nada pago), sem filtro de empresa e sem separacao por prazo.
+        # nada pago), filtrada pelo centro de custo das empresas escolhidas e sem separacao por prazo.
         def _materia_prima():
+            cc, prm = _filtro_ccusto_duplicatas(empresas)
             rows = execute_query(
-                """SELECT COALESCE(SUM(vl_rateio), 0) AS total
+                f"""SELECT COALESCE(SUM(vl_rateio), 0) AS total
                    FROM public.vr_fcp_despduplicatai
                    WHERE cd_despesaitem IN %s
                      AND dt_vencimento >= CURRENT_DATE
                      AND tp_situacao = 'N'
-                     AND vl_pago = 0""", (DESPESAITENS_MATERIA_PRIMA,)
+                     AND vl_pago = 0{cc}""", (DESPESAITENS_MATERIA_PRIMA, *prm)
             ) or []
             return {"PC.2": -float(rows[0]["total"]) if rows else 0.0}
 
         # PC.1 = fornecedores e alugueis a pagar que vencem em ate 12 meses (de
-        # hoje); PNC.7 = os que vencem depois disso. Em aberto, nada pago, sem
-        # filtro de empresa.
+        # hoje); PNC.7 = os que vencem depois disso. Em aberto, nada pago, filtrado pelo
+        # centro de custo das empresas escolhidas.
         def _fornecedores():
+            cc, prm = _filtro_ccusto_duplicatas(empresas)
             rows = execute_query(
-                """SELECT
+                f"""SELECT
                        COALESCE(SUM(CASE WHEN dt_vencimento < CURRENT_DATE + INTERVAL '12 months' THEN vl_rateio END), 0) AS ate_12m,
                        COALESCE(SUM(CASE WHEN dt_vencimento >= CURRENT_DATE + INTERVAL '12 months' THEN vl_rateio END), 0) AS apos_12m
                    FROM public.vr_fcp_despduplicatai
                    WHERE cd_despesaitem IN %s
                      AND dt_vencimento >= CURRENT_DATE
                      AND tp_situacao = 'N'
-                     AND vl_pago = 0""", (DESPESAITENS_FORNECEDORES,)
+                     AND vl_pago = 0{cc}""", (DESPESAITENS_FORNECEDORES, *prm)
             ) or []
             r = rows[0] if rows else {"ate_12m": 0, "apos_12m": 0}
             return {"PC.1": -float(r["ate_12m"]), "PNC.7": -float(r["apos_12m"])}
@@ -673,15 +693,16 @@ def get_balanco_patrimonial(
         # PC.5 = tributos a recolher que vencem em ate 12 meses (de hoje); PNC.9 =
         # os que vencem depois disso. Em aberto, nada pago, sem filtro de empresa.
         def _tributos():
+            cc, prm = _filtro_ccusto_duplicatas(empresas)
             rows = execute_query(
-                """SELECT
+                f"""SELECT
                        COALESCE(SUM(CASE WHEN dt_vencimento < CURRENT_DATE + INTERVAL '12 months' THEN vl_rateio END), 0) AS ate_12m,
                        COALESCE(SUM(CASE WHEN dt_vencimento >= CURRENT_DATE + INTERVAL '12 months' THEN vl_rateio END), 0) AS apos_12m
                    FROM public.vr_fcp_despduplicatai
                    WHERE cd_despesaitem IN %s
                      AND dt_vencimento >= CURRENT_DATE
                      AND tp_situacao = 'N'
-                     AND vl_pago = 0""", (DESPESAITENS_TRIBUTOS,)
+                     AND vl_pago = 0{cc}""", (DESPESAITENS_TRIBUTOS, *prm)
             ) or []
             r = rows[0] if rows else {"ate_12m": 0, "apos_12m": 0}
             return {"PC.5": -float(r["ate_12m"]), "PNC.9": -float(r["apos_12m"])}
@@ -689,15 +710,16 @@ def get_balanco_patrimonial(
         # PC.6 = IR e CSLL que vencem em ate 12 meses (de hoje); PNC.10 = os que
         # vencem depois disso. Em aberto, nada pago, sem filtro de empresa.
         def _ir_csll():
+            cc, prm = _filtro_ccusto_duplicatas(empresas)
             rows = execute_query(
-                """SELECT
+                f"""SELECT
                        COALESCE(SUM(CASE WHEN dt_vencimento < CURRENT_DATE + INTERVAL '12 months' THEN vl_rateio END), 0) AS ate_12m,
                        COALESCE(SUM(CASE WHEN dt_vencimento >= CURRENT_DATE + INTERVAL '12 months' THEN vl_rateio END), 0) AS apos_12m
                    FROM public.vr_fcp_despduplicatai
                    WHERE cd_despesaitem IN %s
                      AND dt_vencimento >= CURRENT_DATE
                      AND tp_situacao = 'N'
-                     AND vl_pago = 0""", (DESPESAITENS_IR_CSLL,)
+                     AND vl_pago = 0{cc}""", (DESPESAITENS_IR_CSLL, *prm)
             ) or []
             r = rows[0] if rows else {"ate_12m": 0, "apos_12m": 0}
             return {"PC.6": -float(r["ate_12m"]), "PNC.10": -float(r["apos_12m"])}
@@ -706,15 +728,16 @@ def get_balanco_patrimonial(
         # disso = PNC.IMV. A vencer, em aberto, nada pago (vencidos nao entram),
         # sem filtro de empresa.
         def _imoveis():
+            cc, prm = _filtro_ccusto_duplicatas(empresas, por_empresa_tambem=True)
             rows = execute_query(
-                """SELECT
+                f"""SELECT
                        COALESCE(SUM(CASE WHEN dt_vencimento < CURRENT_DATE + INTERVAL '12 months' THEN vl_rateio END), 0) AS ate_12m,
                        COALESCE(SUM(CASE WHEN dt_vencimento >= CURRENT_DATE + INTERVAL '12 months' THEN vl_rateio END), 0) AS apos_12m
                    FROM public.vr_fcp_despduplicatai
                    WHERE cd_despesaitem IN %s
                      AND dt_vencimento >= CURRENT_DATE
                      AND tp_situacao = 'N'
-                     AND vl_pago = 0""", (DESPESAITENS_IMOVEIS,)
+                     AND vl_pago = 0{cc}""", (DESPESAITENS_IMOVEIS, *prm)
             ) or []
             r = rows[0] if rows else {"ate_12m": 0, "apos_12m": 0}
             return {"PC.IMV": -float(r["ate_12m"]), "PNC.IMV": -float(r["apos_12m"])}
@@ -799,7 +822,8 @@ _DETALHE_PASSIVO = {
 
 
 @router.get("/api/balanco-patrimonial/detalhe-passivo")
-def get_detalhe_passivo(conta: str = Query(..., description="Codigo da conta do Passivo, ex: PC.1")):
+def get_detalhe_passivo(conta: str = Query(..., description="Codigo da conta do Passivo, ex: PC.1"),
+                        empresas: Optional[str] = Query(None, description="Empresas do filtro (cd_empresa/ccusto, virgula)")):
     """Linhas agregadas (fornecedor, despesa, mes de vencimento) que compoem uma
     conta do Passivo. O front agrupa por fornecedor, por despesa ou por mes."""
     if conta not in _DETALHE_PASSIVO:
@@ -810,6 +834,7 @@ def get_detalhe_passivo(conta: str = Query(..., description="Codigo da conta do 
         corte = "AND d.dt_vencimento < CURRENT_DATE + INTERVAL '12 months'"
     elif janela == "apos":
         corte = "AND d.dt_vencimento >= CURRENT_DATE + INTERVAL '12 months'"
+    cc, prm = _filtro_ccusto_duplicatas(empresas, por_empresa_tambem=conta in ("PC.IMV", "PNC.IMV"), alias="d")
     try:
         rows = execute_query(
             f"""SELECT d.cd_fornecedor,
@@ -829,10 +854,10 @@ def get_detalhe_passivo(conta: str = Query(..., description="Codigo da conta do 
                   AND d.dt_vencimento >= CURRENT_DATE
                   AND d.tp_situacao = 'N'
                   AND d.vl_pago = 0
-                  {corte}
+                  {corte}{cc}
                 GROUP BY 1, 2, 3, 4, 5
                 ORDER BY 5, 2""",
-            (tuple(itens_fn()),),
+            (tuple(itens_fn()), *prm),
         ) or []
         return {
             "conta": conta,

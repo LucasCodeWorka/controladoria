@@ -324,7 +324,7 @@ type VisaoDetalhe = 'fornecedor' | 'despesa' | 'mes';
 
 const rotuloMes = (m: string) => `${m.slice(5)}/${m.slice(0, 4)}`;
 
-function ModalDetalhePassivo({ conta, onFechar }: { conta: ContaBalanco; onFechar: () => void }) {
+function ModalDetalhePassivo({ conta, empresas, onFechar }: { conta: ContaBalanco; empresas: string; onFechar: () => void }) {
   const [linhas, setLinhas] = useState<LinhaDetalhe[] | null>(null);
   const [erro, setErro] = useState<string | null>(null);
   const [visao, setVisao] = useState<VisaoDetalhe>('fornecedor');
@@ -334,12 +334,12 @@ function ModalDetalhePassivo({ conta, onFechar }: { conta: ContaBalanco; onFecha
 
   useEffect(() => {
     let vivo = true;
-    fetch(`/api/balanco-patrimonial/detalhe-passivo?conta=${encodeURIComponent(conta.codigo)}`, { cache: 'no-store' })
+    fetch(`/api/balanco-patrimonial/detalhe-passivo?conta=${encodeURIComponent(conta.codigo)}${empresas ? `&empresas=${empresas}` : ''}`, { cache: 'no-store' })
       .then((r) => r.json().then((d) => ({ ok: r.ok, d })))
       .then(({ ok, d }) => { if (!vivo) return; if (!ok || !Array.isArray(d.linhas)) throw new Error(d.detail || d.error || 'Erro ao buscar o detalhe'); setLinhas(d.linhas); })
       .catch((e) => { if (vivo) setErro(e instanceof Error ? e.message : 'Erro ao buscar o detalhe'); });
     return () => { vivo = false; };
-  }, [conta.codigo]);
+  }, [conta.codigo, empresas]);
 
   const meses = useMemo(() => Array.from(new Set((linhas ?? []).map((l) => l.mes))).sort(), [linhas]);
   const filtradas = useMemo(() => {
@@ -548,6 +548,7 @@ export default function BalancoPatrimonialPage() {
   const [ordenacao, setOrdenacao] = useState<Ordenacao>(null);
   const [salvoAtivo, setSalvoAtivo] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
+  const [empresasConsultadas, setEmpresasConsultadas] = useState('');
   const [infoConsulta, setInfoConsulta] = useState<{ mes: string; empresas: string } | null>(null);
 
   // Valores zerados por padrao - linhas com consulta real ja ligada (ex:
@@ -669,6 +670,7 @@ export default function BalancoPatrimonialPage() {
       if (totalEmpresas > 0 && empresas.size < totalEmpresas) {
         params.set('empresas', Array.from(empresas).join(','));
       }
+      setEmpresasConsultadas(params.get('empresas') ?? '');
       // Lucro e EBITDA dos ultimos 12 meses (DRE) - nao trava o balanco se falhar.
       fetch(`/api/balanco-patrimonial/indicadores-dre?mesReferencia=${mes}`, { cache: 'no-store' })
         .then((r) => r.json())
@@ -990,7 +992,7 @@ export default function BalancoPatrimonialPage() {
           </div>
         </>
       )}
-      {contaDetalhe && <ModalDetalhePassivo conta={contaDetalhe} onFechar={() => setContaDetalhe(null)} />}
+      {contaDetalhe && <ModalDetalhePassivo conta={contaDetalhe} empresas={empresasConsultadas} onFechar={() => setContaDetalhe(null)} />}
     </div>
   );
 }
