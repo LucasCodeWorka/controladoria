@@ -458,7 +458,7 @@ _lock_estoque_lojas = threading.Lock()
 # 2 anos) - status de mv_prd_referencia_produto (mesma fonte do Giro) - tem o
 # custo unitario reduzido em 50% no estoque PA (lojas e fabrica) do balanco.
 FATOR_STATUS_DESCONTO = 0.5
-VERSAO_CACHE_ESTOQUE = 4  # sobe quando a regra de valorizacao muda: invalida o cache
+VERSAO_CACHE_ESTOQUE = 5  # sobe quando a regra de valorizacao muda: invalida o cache
 
 SQL_ESTOQUE_LOJAS_DT_BASE = "SELECT MAX(dt_atualizacao) AS dt FROM mv_pcp_estoque_atual_lojas"
 
@@ -547,13 +547,15 @@ TTL_ESTOQUE_MP_SEG = 2 * 3600
 
 # Desconto por classificacao: tipo 113 = 2 ou 8 E tipo 110 = 0011/0001/0008 -> 50% de
 # desconto (custo x 0,5); 113 = 2 ou 8 com qualquer outra 110 -> 80% de desconto
-# (custo x 0,2); fora de 113 = 2/8 o custo e normal.
+# (custo x 0,2); fora de 113 = 2/8 o custo e normal. Fora de linha (MP) = 113 = 2 ou 8.
 SQL_ESTOQUE_MP_VALORIZADO = """
     SELECT SUM(estoque_bruto) AS pecas,
-           SUM(estoque_bruto * COALESCE(vl_unit, 0) * fator) AS valor
+           SUM(estoque_bruto * COALESCE(vl_unit, 0) * fator) AS valor,
+           COALESCE(SUM(estoque_bruto * COALESCE(vl_unit, 0) * fator) FILTER (WHERE fora_linha), 0) AS valor_fora
     FROM (
         SELECT s.estoque_bruto,
                NULLIF(f_prd_valor_produto2(1, 1, 'C', 2, s.cd_produto, NULL), 0) AS vl_unit,
+               (btrim(c113.cd_classificacao::text) IN ('2', '8')) AS fora_linha,
                CASE WHEN btrim(c113.cd_classificacao::text) IN ('2', '8')
                     THEN CASE WHEN btrim(c110.cd_classificacao::text) IN ('0011', '0001', '0008') THEN 0.5 ELSE 0.2 END
                     ELSE 1 END AS fator
@@ -644,23 +646,24 @@ def _garantir_cache_estoque_mp() -> None:
         r = (execute_query(SQL_ESTOQUE_MP_VALORIZADO, ()) or [{}])[0]
         execute_insert(f"DELETE FROM fcp_balanco_estoque_lojas WHERE cd_empresa = {CD_EMPRESA_CACHE_MP}", ())
         execute_insert(
-            "INSERT INTO fcp_balanco_estoque_lojas (cd_empresa, pecas, valor, dt_base, versao) VALUES (%s,%s,%s,NOW(),%s)",
-            (CD_EMPRESA_CACHE_MP, float(r.get("pecas") or 0), round(float(r.get("valor") or 0), 2), VERSAO_CACHE_ESTOQUE),
+            "INSERT INTO fcp_balanco_estoque_lojas (cd_empresa, pecas, valor, dt_base, versao, valor_fora) VALUES (%s,%s,%s,NOW(),%s,%s)",
+            (CD_EMPRESA_CACHE_MP, float(r.get("pecas") or 0), round(float(r.get("valor") or 0), 2), VERSAO_CACHE_ESTOQUE,
+             round(float(r.get("valor_fora") or 0), 2)),
         )
         print(f"[BALANCO] Estoque MP da fabrica recalculado em {time.time() - inicio:.1f}s")
 
 
-def _estoque_mp_fabrica(empresas: Optional[str]) -> float:
+def _estoque_mp_fabrica(empresas: Optional[str]) -> tuple:
     """Estoque de materia-prima da fabrica: entra se nao ha filtro de empresas
     ou se a fabrica (empresa 1) esta entre as selecionadas."""
     if empresas and CD_EMPRESA_CACHE_FABRICA not in _parse_empresas(empresas):
-        return 0.0
+        return 0.0, 0.0
     _criar_tabela_estoque_lojas()
     _garantir_cache_estoque_mp()
     rows = execute_query(
-        f"SELECT COALESCE(SUM(valor), 0) AS total FROM fcp_balanco_estoque_lojas WHERE cd_empresa = {CD_EMPRESA_CACHE_MP}", ()
-    ) or [{"total": 0}]
-    return float(rows[0]["total"] or 0)
+        f"SELECT COALESCE(SUM(valor), 0) AS total, COALESCE(SUM(valor_fora), 0) AS fora FROM fcp_balanco_estoque_lojas WHERE cd_empresa = {CD_EMPRESA_CACHE_MP}", ()
+    ) or [{"total": 0, "fora": 0}]
+    return float(rows[0]["total"] or 0), float(rows[0]["fora"] or 0)
 
 
 def _estoque_pa_lojas(empresas: Optional[str]) -> tuple:
@@ -900,12 +903,12 @@ def get_balanco_patrimonial(
         # AC.3 Estoques = Estoque PA lojas + PA fabrica + MP fabrica (foto atual -
         # nao depende do mes de referencia; filtro de empresas vale).
         def _estoques():
-            (lojas, lojas_fora), (fabrica, fabrica_fora), mp = _estoque_pa_lojas(empresas), _estoque_pa_fabrica(empresas), _estoque_mp_fabrica(empresas)
+            (lojas, lojas_fora), (fabrica, fabrica_fora), (mp, mp_fora) = _estoque_pa_lojas(empresas), _estoque_pa_fabrica(empresas), _estoque_mp_fabrica(empresas)
             # .1/.2 = em linha / fora de linha (LEVE DEFEITO e OPORTUNIDADE) - so exibicao.
             return {"AC.3": lojas + fabrica + mp,
                     "AC.3.1": lojas, "AC.3.1.1": lojas - lojas_fora, "AC.3.1.2": lojas_fora,
                     "AC.3.2": fabrica, "AC.3.2.1": fabrica - fabrica_fora, "AC.3.2.2": fabrica_fora,
-                    "AC.3.3": mp}
+                    "AC.3.3": mp, "AC.3.3.1": mp - mp_fora, "AC.3.3.2": mp_fora}
 
         # ANC.5 Investimentos e ANC.6 Imobilizado = bens cadastrados (fixos).
         def _bens():

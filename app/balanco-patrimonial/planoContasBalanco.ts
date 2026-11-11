@@ -41,6 +41,8 @@ export const PLANO_ATIVOS: ContaBalanco[] = [
           { codigo: 'AC.3.2.1', nome: 'EM LINHA', sub: true },
           { codigo: 'AC.3.2.2', nome: 'FORA DE LINHA', sub: true },
           { codigo: 'AC.3.3', nome: 'ESTOQUE MP (FÁBRICA)' },
+          { codigo: 'AC.3.3.1', nome: 'EM LINHA', sub: true },
+          { codigo: 'AC.3.3.2', nome: 'FORA DE LINHA', sub: true },
         ],
       },
     ],
