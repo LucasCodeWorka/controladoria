@@ -30,7 +30,7 @@ router = APIRouter()
 
 MESES_JANELA_PADRAO = 12
 
-# PC.1 / PNC.7 Fornecedores e alugueis a pagar: despesaitens validados pelo
+# PC.1 Fornecedores e alugueis a pagar: despesaitens validados pelo
 # usuario (72 codigos).
 DESPESAITENS_FORNECEDORES = (
     4, 11, 16, 17, 18, 20, 22, 24, 26, 28, 29, 31, 37, 38, 39, 40, 41, 45, 49, 50,
@@ -94,6 +94,14 @@ def _janela_vencimento(mes_referencia: str, meses_janela: int) -> tuple:
     ano_fim, mes_fim = _somar_meses(ano_ref, mes_ref, meses_janela)
     data_fim = date(ano_fim, mes_fim, 1) - timedelta(days=1)
     return data_inicio.isoformat(), data_fim.isoformat()
+
+
+def _janela_proximo_mes(mes_referencia: str) -> tuple:
+    """(primeiro, ultimo dia) do mes seguinte ao de referencia (YYYY-MM)."""
+    ano, mes = (int(p) for p in mes_referencia.split("-"))
+    a1, m1 = _somar_meses(ano, mes, 1)
+    a2, m2 = _somar_meses(ano, mes, 2)
+    return date(a1, m1, 1).isoformat(), (date(a2, m2, 1) - timedelta(days=1)).isoformat()
 
 
 def _expandir_empresas_para_ccustos(lista_empresas: list) -> list:
@@ -601,7 +609,7 @@ def get_balanco_patrimonial(
 ):
     """
     Valores do Balanco Patrimonial: Caixa, Contas a Receber (boletos e
-    cartoes), Estoques e Bens, e no Passivo Fornecedores (PC.1 ate 12 meses e PNC.7 depois), Salarios (PC.4), Tributos (PC.5 ate 12 meses e PNC.9 depois), IR e CSLL (PC.6 ate 12 meses e PNC.10 depois), Obrigacoes por compra de imoveis (PC.IMV ate 12 meses e PNC.IMV depois), Materia-prima (PC.2) e Emprestimos (PC.3 ate 12 meses e PNC.8 depois). As
+    cartoes), Estoques e Bens, e no Passivo Fornecedores (PC.1 = vencimentos do proximo mes ao de referencia), Salarios (PC.4), Tributos (PC.5 ate 12 meses e PNC.9 depois), IR e CSLL (PC.6 ate 12 meses e PNC.10 depois), Obrigacoes por compra de imoveis (PC.IMV ate 12 meses e PNC.IMV depois), Materia-prima (PC.2) e Emprestimos (PC.3 ate 12 meses e PNC.8 depois). As
     demais contas do Passivo nao tem fonte ligada (a tela de classificacao de
     despesas foi descontinuada) e ficam zeradas.
     """
@@ -705,23 +713,23 @@ def get_balanco_patrimonial(
             ) or []
             return {"PC.2": -float(rows[0]["total"]) if rows else 0.0}
 
-        # PC.1 = fornecedores e alugueis a pagar que vencem em ate 12 meses (de
-        # hoje); PNC.7 = os que vencem depois disso. Em aberto, nada pago, filtrado pelo
-        # centro de custo das empresas escolhidas.
+        # PC.1 = fornecedores e alugueis a pagar do PROXIMO MES FECHADO ao mes de
+        # referencia (filtro novembro -> vencimentos de dezembro): as previsoes de
+        # fornecedor ja estao lancadas, entao o mes seguinte vem inteiro e nada
+        # do mes atual/vencido entra. Em aberto, nada pago, filtrado pelo centro
+        # de custo das empresas escolhidas. Nao ha mais PNC.7.
         def _fornecedores():
             cc, prm = _filtro_ccusto_duplicatas(empresas)
+            ini, fim = _janela_proximo_mes(mesReferencia)
             rows = execute_query(
-                f"""SELECT
-                       COALESCE(SUM(CASE WHEN dt_vencimento < CURRENT_DATE + INTERVAL '12 months' THEN vl_rateio END), 0) AS ate_12m,
-                       COALESCE(SUM(CASE WHEN dt_vencimento >= CURRENT_DATE + INTERVAL '12 months' THEN vl_rateio END), 0) AS apos_12m
+                f"""SELECT COALESCE(SUM(vl_rateio), 0) AS total
                    FROM public.vr_fcp_despduplicatai
                    WHERE cd_despesaitem IN %s
-                     AND dt_vencimento >= CURRENT_DATE
+                     AND dt_vencimento BETWEEN %s AND %s
                      AND tp_situacao = 'N'
-                     AND vl_pago = 0{cc}""", (DESPESAITENS_FORNECEDORES, *prm)
+                     AND vl_pago = 0{cc}""", (DESPESAITENS_FORNECEDORES, ini, fim, *prm)
             ) or []
-            r = rows[0] if rows else {"ate_12m": 0, "apos_12m": 0}
-            return {"PC.1": -float(r["ate_12m"]), "PNC.7": -float(r["apos_12m"])}
+            return {"PC.1": -float(rows[0]["total"]) if rows else 0.0}
 
         # PC.5 = tributos a recolher que vencem em ate 12 meses (de hoje); PNC.9 =
         # os que vencem depois disso. Em aberto, nada pago, sem filtro de empresa.
@@ -845,7 +853,7 @@ def get_balanco_patrimonial(
 # Mesmos filtros das contas em /dados: em aberto, nada pago, vencimento de hoje
 # em diante, sem filtro de empresa; "ate_12m" / "apos_12m" = corte do CP/LP.
 _DETALHE_PASSIVO = {
-    "PC.1": (lambda: DESPESAITENS_FORNECEDORES, "ate"), "PNC.7": (lambda: DESPESAITENS_FORNECEDORES, "apos"),
+    "PC.1": (lambda: DESPESAITENS_FORNECEDORES, "proximo_mes"),
     "PC.2": (lambda: DESPESAITENS_MATERIA_PRIMA, None),
     "PC.3": (lambda: ("114", "137"), "ate"), "PNC.8": (lambda: ("114", "137"), "apos"),
     "PC.IMV": (lambda: DESPESAITENS_IMOVEIS, "ate"), "PNC.IMV": (lambda: DESPESAITENS_IMOVEIS, "apos"),
@@ -856,7 +864,8 @@ _DETALHE_PASSIVO = {
 
 @router.get("/api/balanco-patrimonial/detalhe-passivo")
 def get_detalhe_passivo(conta: str = Query(..., description="Codigo da conta do Passivo, ex: PC.1"),
-                        empresas: Optional[str] = Query(None, description="Empresas do filtro (cd_empresa/ccusto, virgula)")):
+                        empresas: Optional[str] = Query(None, description="Empresas do filtro (cd_empresa/ccusto, virgula)"),
+                        mesReferencia: Optional[str] = Query(None, description="Mes de referencia YYYY-MM (PC.1 = mes seguinte)")):
     """Linhas agregadas (fornecedor, despesa, mes de vencimento) que compoem uma
     conta do Passivo. O front agrupa por fornecedor, por despesa ou por mes."""
     if conta not in _DETALHE_PASSIVO:
@@ -867,6 +876,13 @@ def get_detalhe_passivo(conta: str = Query(..., description="Codigo da conta do 
         corte = "AND d.dt_vencimento < CURRENT_DATE + INTERVAL '12 months'"
     elif janela == "apos":
         corte = "AND d.dt_vencimento >= CURRENT_DATE + INTERVAL '12 months'"
+    prm_corte: tuple = ()
+    piso = "AND d.dt_vencimento >= CURRENT_DATE"
+    if janela == "proximo_mes":
+        ini, fim = _janela_proximo_mes(mesReferencia or date.today().strftime("%Y-%m"))
+        corte = "AND d.dt_vencimento BETWEEN %s AND %s"
+        prm_corte = (ini, fim)
+        piso = ""
     cc, prm = _filtro_ccusto_duplicatas(empresas, por_empresa_tambem=conta in ("PC.IMV", "PNC.IMV"), alias="d")
     try:
         rows = execute_query(
@@ -884,13 +900,13 @@ def get_detalhe_passivo(conta: str = Query(..., description="Codigo da conta do 
                 LEFT JOIN vr_pes_pesfisica pf ON pf.cd_pessoa = d.cd_fornecedor
                 LEFT JOIN public.vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
                 WHERE d.cd_despesaitem IN %s
-                  AND d.dt_vencimento >= CURRENT_DATE
+                  {piso}
                   AND d.tp_situacao = 'N'
                   AND d.vl_pago = 0
                   {corte}{cc}
                 GROUP BY 1, 2, 3, 4, 5
                 ORDER BY 5, 2""",
-            (tuple(itens_fn()), *prm),
+            (tuple(itens_fn()), *prm_corte, *prm),
         ) or []
         return {
             "conta": conta,

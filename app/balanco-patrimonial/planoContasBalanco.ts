@@ -63,7 +63,7 @@ export const PLANO_PASSIVO: ContaBalanco[] = [
     nome: 'CIRCULANTE',
     nivel: 1,
     filhos: [
-      { codigo: 'PC.1', nome: '1 - FORNECEDORES E ALUGUÉIS A PAGAR', nivel: 2 },
+      { codigo: 'PC.1', nome: '1 - FORNECEDORES E ALUGUÉIS A PAGAR (PRÓXIMO MÊS)', nivel: 2 },
       { codigo: 'PC.2', nome: '2 - OBRIGAÇÕES DE COMPRA DE MP. E SERV.', nivel: 2 },
       {
         codigo: 'PC.3',
@@ -85,19 +85,18 @@ export const PLANO_PASSIVO: ContaBalanco[] = [
     nome: 'NÃO CIRCULANTE',
     nivel: 1,
     filhos: [
-      { codigo: 'PNC.7', nome: '8 - FORNECEDORES E ALUGUÉIS A PAGAR', nivel: 2 },
       {
         codigo: 'PNC.8',
-        nome: '9 - EMPRÉSTIMOS, FINANCIAMENTOS E DEBÊNTURES',
+        nome: '8 - EMPRÉSTIMOS, FINANCIAMENTOS E DEBÊNTURES',
         nivel: 2,
         detalhes: [
           { codigo: 'PNC.8.1', nome: 'PRINCIPAL' },
           { codigo: 'PNC.8.2', nome: 'JUROS' },
         ],
       },
-      { codigo: 'PNC.IMV', nome: '10 - OBRIGAÇÕES POR COMPRA DE IMÓVEIS', nivel: 2 },
-      { codigo: 'PNC.9', nome: '11 - TRIBUTOS A RECOLHER', nivel: 2 },
-      { codigo: 'PNC.10', nome: '12 - IMPOSTO DE RENDA E CONTRIBUIÇÃO SOCIAL DIFERIDOS', nivel: 2 },
+      { codigo: 'PNC.IMV', nome: '9 - OBRIGAÇÕES POR COMPRA DE IMÓVEIS', nivel: 2 },
+      { codigo: 'PNC.9', nome: '10 - TRIBUTOS A RECOLHER', nivel: 2 },
+      { codigo: 'PNC.10', nome: '11 - IMPOSTO DE RENDA E CONTRIBUIÇÃO SOCIAL DIFERIDOS', nivel: 2 },
     ],
   },
 ];

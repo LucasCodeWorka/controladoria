@@ -9,8 +9,9 @@ export async function GET(request: NextRequest) {
     const params = new URL(request.url).searchParams;
     const conta = params.get('conta') || '';
     const empresas = params.get('empresas');
+    const mes = params.get('mesReferencia');
     const response = await fetch(
-      `${PYTHON_API_URL}/api/balanco-patrimonial/detalhe-passivo?conta=${encodeURIComponent(conta)}${empresas ? `&empresas=${encodeURIComponent(empresas)}` : ''}`,
+      `${PYTHON_API_URL}/api/balanco-patrimonial/detalhe-passivo?conta=${encodeURIComponent(conta)}${empresas ? `&empresas=${encodeURIComponent(empresas)}` : ''}${mes ? `&mesReferencia=${encodeURIComponent(mes)}` : ''}`,
       { method: 'GET', cache: 'no-store' }
     );
     const data = await response.json();

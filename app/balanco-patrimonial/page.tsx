@@ -86,7 +86,7 @@ const ICONES_CONTAS: Record<string, LucideIcon> = {
   'AC.1': Wallet, 'AC.2': Receipt, 'AC.3': Boxes,
   'ANC.4': Receipt, 'ANC.5': TrendingUp, 'ANC.6': Building2,
   'PC.1': Building2, 'PC.2': Boxes, 'PC.3': Landmark, 'PC.IMV': Building2, 'PC.4': Users,
-  'PNC.7': Building2, 'PNC.8': Landmark, 'PNC.IMV': Building2,
+  'PNC.8': Landmark, 'PNC.IMV': Building2,
 };
 
 // Barra de rolagem acima e abaixo da tabela, sincronizadas (padrao LIEBE).
@@ -332,14 +332,14 @@ function TabelaBalanco({ titulo, plano, valores, mostrarPercentual, contasExpand
 }
 
 // Contas do Passivo que tem detalhe (fornecedor x despesa x mes) no backend.
-const CONTAS_DETALHAVEIS = new Set(['PC.1', 'PNC.7', 'PC.2', 'PC.3', 'PNC.8', 'PC.IMV', 'PNC.IMV', 'PC.5', 'PNC.9', 'PC.6', 'PNC.10']);
+const CONTAS_DETALHAVEIS = new Set(['PC.1', 'PC.2', 'PC.3', 'PNC.8', 'PC.IMV', 'PNC.IMV', 'PC.5', 'PNC.9', 'PC.6', 'PNC.10']);
 
 type LinhaDetalhe = { cdFornecedor: number | null; fornecedor: string; cdDespesa: string; despesa: string; mes: string; valor: number; qtd: number };
 type VisaoDetalhe = 'fornecedor' | 'despesa' | 'mes';
 
 const rotuloMes = (m: string) => `${m.slice(5)}/${m.slice(0, 4)}`;
 
-function ModalDetalhePassivo({ conta, empresas, onFechar }: { conta: ContaBalanco; empresas: string; onFechar: () => void }) {
+function ModalDetalhePassivo({ conta, empresas, mes, onFechar }: { conta: ContaBalanco; empresas: string; mes: string; onFechar: () => void }) {
   const [linhas, setLinhas] = useState<LinhaDetalhe[] | null>(null);
   const [erro, setErro] = useState<string | null>(null);
   const [visao, setVisao] = useState<VisaoDetalhe>('fornecedor');
@@ -349,12 +349,12 @@ function ModalDetalhePassivo({ conta, empresas, onFechar }: { conta: ContaBalanc
 
   useEffect(() => {
     let vivo = true;
-    fetch(`/api/balanco-patrimonial/detalhe-passivo?conta=${encodeURIComponent(conta.codigo)}${empresas ? `&empresas=${empresas}` : ''}`, { cache: 'no-store' })
+    fetch(`/api/balanco-patrimonial/detalhe-passivo?conta=${encodeURIComponent(conta.codigo)}${empresas ? `&empresas=${empresas}` : ''}&mesReferencia=${mes}`, { cache: 'no-store' })
       .then((r) => r.json().then((d) => ({ ok: r.ok, d })))
       .then(({ ok, d }) => { if (!vivo) return; if (!ok || !Array.isArray(d.linhas)) throw new Error(d.detail || d.error || 'Erro ao buscar o detalhe'); setLinhas(d.linhas); })
       .catch((e) => { if (vivo) setErro(e instanceof Error ? e.message : 'Erro ao buscar o detalhe'); });
     return () => { vivo = false; };
-  }, [conta.codigo, empresas]);
+  }, [conta.codigo, empresas, mes]);
 
   const meses = useMemo(() => Array.from(new Set((linhas ?? []).map((l) => l.mes))).sort(), [linhas]);
   const filtradas = useMemo(() => {
@@ -564,6 +564,7 @@ export default function BalancoPatrimonialPage() {
   const [salvoAtivo, setSalvoAtivo] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
   const [empresasConsultadas, setEmpresasConsultadas] = useState('');
+  const [mesConsultado, setMesConsultado] = useState('');
   const [infoConsulta, setInfoConsulta] = useState<{ mes: string; empresas: string } | null>(null);
 
   // Valores zerados por padrao - linhas com consulta real ja ligada (ex:
@@ -656,6 +657,7 @@ export default function BalancoPatrimonialPage() {
     const empresas = sobrescrever?.empresas ?? empresasSelecionadas;
     const totalEmpresas = sobrescrever?.total ?? empresasDisponiveis.length;
     setConsultaExecutada(true);
+    setMesConsultado(mes);
     const [anoRef, mesRef] = mes.split('-');
     setInfoConsulta({
       mes: `${mesRef}/${anoRef}`,
@@ -1007,7 +1009,7 @@ export default function BalancoPatrimonialPage() {
           </div>
         </>
       )}
-      {contaDetalhe && <ModalDetalhePassivo conta={contaDetalhe} empresas={empresasConsultadas} onFechar={() => setContaDetalhe(null)} />}
+      {contaDetalhe && <ModalDetalhePassivo conta={contaDetalhe} empresas={empresasConsultadas} mes={mesConsultado} onFechar={() => setContaDetalhe(null)} />}
     </div>
   );
 }
