@@ -458,7 +458,7 @@ _lock_estoque_lojas = threading.Lock()
 # 2 anos) - status de mv_prd_referencia_produto (mesma fonte do Giro) - tem o
 # custo unitario reduzido em 50% no estoque PA (lojas e fabrica) do balanco.
 FATOR_STATUS_DESCONTO = 0.5
-VERSAO_CACHE_ESTOQUE = 3  # sobe quando a regra de valorizacao muda: invalida o cache
+VERSAO_CACHE_ESTOQUE = 4  # sobe quando a regra de valorizacao muda: invalida o cache
 
 SQL_ESTOQUE_LOJAS_DT_BASE = "SELECT MAX(dt_atualizacao) AS dt FROM mv_pcp_estoque_atual_lojas"
 
@@ -502,10 +502,10 @@ def _criar_tabela_estoque_lojas():
         )
     """, ())
     # Regra de valorizacao nova (status c/ 50%): descarta o cache antigo das
-    # lojas/fabrica uma unica vez; MP (-1) nao muda.
+    # lojas/fabrica/MP uma unica vez.
     execute_insert("ALTER TABLE fcp_balanco_estoque_lojas ADD COLUMN IF NOT EXISTS versao INTEGER NOT NULL DEFAULT 1", ())
     execute_insert("ALTER TABLE fcp_balanco_estoque_lojas ADD COLUMN IF NOT EXISTS valor_fora NUMERIC(16, 2) NOT NULL DEFAULT 0", ())
-    execute_insert("DELETE FROM fcp_balanco_estoque_lojas WHERE cd_empresa > 0 AND versao < %s", (VERSAO_CACHE_ESTOQUE,))
+    execute_insert("DELETE FROM fcp_balanco_estoque_lojas WHERE cd_empresa <> 0 AND versao < %s", (VERSAO_CACHE_ESTOQUE,))
 
 
 # Estoque PA da FABRICA (cd_empresa 1 no mesmo cache): mv_pcp_estoque_atual
@@ -545,18 +545,26 @@ SQL_ESTOQUE_FABRICA_VALORIZADO = """
 CD_EMPRESA_CACHE_MP = -1
 TTL_ESTOQUE_MP_SEG = 2 * 3600
 
+# Desconto por classificacao: tipo 113 = 2 ou 8 E tipo 110 = 0011/0001/0008 -> 50% de
+# desconto (custo x 0,5); 113 = 2 ou 8 com qualquer outra 110 -> 80% de desconto
+# (custo x 0,2); fora de 113 = 2/8 o custo e normal.
 SQL_ESTOQUE_MP_VALORIZADO = """
     SELECT SUM(estoque_bruto) AS pecas,
-           SUM(estoque_bruto * COALESCE(vl_unit, 0)) AS valor
+           SUM(estoque_bruto * COALESCE(vl_unit, 0) * fator) AS valor
     FROM (
         SELECT s.estoque_bruto,
-               NULLIF(f_prd_valor_produto2(1, 1, 'C', 2, s.cd_produto, NULL), 0) AS vl_unit
+               NULLIF(f_prd_valor_produto2(1, 1, 'C', 2, s.cd_produto, NULL), 0) AS vl_unit,
+               CASE WHEN btrim(c113.cd_classificacao::text) IN ('2', '8')
+                    THEN CASE WHEN btrim(c110.cd_classificacao::text) IN ('0011', '0001', '0008') THEN 0.5 ELSE 0.2 END
+                    ELSE 1 END AS fator
         FROM (
             SELECT DISTINCT ON (s.cd_produto) s.cd_produto, s.qt_saldo AS estoque_bruto
             FROM prd_prdsaldo s
             WHERE s.cd_empresa = 1 AND s.cd_saldo = 1 AND s.cd_produto > 1000000 AND s.cd_produto < 5000000
             ORDER BY s.cd_produto, s.dt_saldo DESC
         ) s
+        LEFT JOIN prd_produtoclas c113 ON c113.cd_produto = s.cd_produto AND c113.cd_tipoclas = 113
+        LEFT JOIN prd_produtoclas c110 ON c110.cd_produto = s.cd_produto AND c110.cd_tipoclas = 110
         WHERE s.estoque_bruto > 0
     ) x
 """
@@ -636,8 +644,8 @@ def _garantir_cache_estoque_mp() -> None:
         r = (execute_query(SQL_ESTOQUE_MP_VALORIZADO, ()) or [{}])[0]
         execute_insert(f"DELETE FROM fcp_balanco_estoque_lojas WHERE cd_empresa = {CD_EMPRESA_CACHE_MP}", ())
         execute_insert(
-            "INSERT INTO fcp_balanco_estoque_lojas (cd_empresa, pecas, valor, dt_base) VALUES (%s,%s,%s,NOW())",
-            (CD_EMPRESA_CACHE_MP, float(r.get("pecas") or 0), round(float(r.get("valor") or 0), 2)),
+            "INSERT INTO fcp_balanco_estoque_lojas (cd_empresa, pecas, valor, dt_base, versao) VALUES (%s,%s,%s,NOW(),%s)",
+            (CD_EMPRESA_CACHE_MP, float(r.get("pecas") or 0), round(float(r.get("valor") or 0), 2), VERSAO_CACHE_ESTOQUE),
         )
         print(f"[BALANCO] Estoque MP da fabrica recalculado em {time.time() - inicio:.1f}s")
 
