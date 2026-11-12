@@ -32,11 +32,11 @@ MESES_JANELA_PADRAO = 12
 
 # PC.1 Fornecedores e alugueis a pagar: despesaitens validados pelo
 # usuario (72 codigos) + comissao representante (35), rescisao representantes
-# (489) e fretes vendas (27).
+# (489), fretes vendas (27) e fundo de promocao (145).
 DESPESAITENS_FORNECEDORES = (
     4, 11, 16, 17, 18, 20, 22, 24, 26, 27, 28, 29, 31, 35, 37, 38, 39, 40, 41, 45, 49, 50,
     51, 52, 53, 55, 56, 58, 60, 61, 63, 64, 70, 73, 74, 76, 79, 82, 83, 84, 85, 87,
-    110, 146, 149, 152, 159, 160, 161, 167, 218, 219, 220, 221, 222, 224, 225, 226,
+    110, 145, 146, 149, 152, 159, 160, 161, 167, 218, 219, 220, 221, 222, 224, 225, 226,
     227, 228, 229, 231, 259, 262, 263, 264, 271, 280, 287, 488, 489, 539, 543, 544, 546,
 )
 
