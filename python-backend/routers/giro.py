@@ -101,6 +101,68 @@ def _criar_tabela_giro():
     """, ())
 
 
+# ---------------------------------------------------------------------------
+# Unificacao de referencias (de-para): referencias que sao o MESMO produto com
+# codigos diferentes no ERP (ex: 103606 -> 103605). So vale no Giro: a view
+# giro_prd_referencia e igual a mv_prd_referencia_produto, mas troca a
+# referencia pela de destino e, onde a MESMA COR existe na referencia de
+# destino, os SKUs da origem assumem as classificacoes dela (status, colecao,
+# familia, linha, grupo, continuidade, mix). Pares novos = INSERT na tabela
+# giro_referencia_unificada (sem mexer no codigo).
+# ---------------------------------------------------------------------------
+_REFERENCIAS_UNIFICADAS_INICIAIS = [("103606", "103605")]
+_COLUNAS_MV_REFERENCIA = [
+    "cd_produto", "cd_seqgrupo", "referencia", "produto", "ds_cor", "ds_tamanho", "colecao", "familia", "linha",
+    "continuidade", "status", "grupo", "mix", "marca", "dt_atualizacao",
+]
+_COLUNAS_HERDADAS_DO_DESTINO = ("colecao", "familia", "linha", "continuidade", "status", "grupo", "mix")
+
+
+def garantir_unificacao_referencias():
+    execute_insert("""
+        CREATE TABLE IF NOT EXISTS giro_referencia_unificada (
+            referencia_origem VARCHAR(30) PRIMARY KEY,
+            referencia_destino VARCHAR(30) NOT NULL,
+            ativo BOOLEAN NOT NULL DEFAULT TRUE,
+            dt_criacao TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+    """, ())
+    for origem, destino in _REFERENCIAS_UNIFICADAS_INICIAIS:
+        execute_insert(
+            "INSERT INTO giro_referencia_unificada (referencia_origem, referencia_destino) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+            (origem, destino),
+        )
+    colunas = []
+    for c in _COLUNAS_MV_REFERENCIA:
+        if c == "referencia":
+            colunas.append("COALESCE(m.referencia_destino, mv.referencia) AS referencia")
+        elif c in _COLUNAS_HERDADAS_DO_DESTINO:
+            colunas.append(f"CASE WHEN d.cd_produto IS NOT NULL THEN d.{c} ELSE mv.{c} END AS {c}")
+        else:
+            colunas.append(f"mv.{c} AS {c}")
+    colunas.append("mv.referencia AS referencia_original")
+    execute_insert(f"""
+        CREATE OR REPLACE VIEW giro_prd_referencia AS
+        SELECT {", ".join(colunas)}
+        FROM mv_prd_referencia_produto mv
+        LEFT JOIN giro_referencia_unificada m ON m.referencia_origem = mv.referencia AND m.ativo
+        LEFT JOIN LATERAL (
+            SELECT x.* FROM mv_prd_referencia_produto x
+            WHERE m.referencia_destino IS NOT NULL AND x.referencia = m.referencia_destino
+              AND x.ds_cor IS NOT DISTINCT FROM mv.ds_cor
+            ORDER BY (x.ds_tamanho IS NOT DISTINCT FROM mv.ds_tamanho) DESC, x.cd_produto
+            LIMIT 1
+        ) d ON TRUE
+    """, ())
+
+
+def _referencias_unificadas_de(referencia: str) -> list:
+    rows = execute_query(
+        "SELECT referencia_origem FROM giro_referencia_unificada WHERE ativo AND referencia_destino = %s", (referencia,)
+    ) or []
+    return [r["referencia_origem"] for r in rows]
+
+
 def _mes_atual() -> str:
     hoje = date.today()
     return f"{hoje.year:04d}-{hoje.month:02d}"
@@ -189,14 +251,14 @@ def _produtos_sem_status_e_marca() -> list:
     esta nela, entao so chama a funcao pros produtos sem status (bem menos
     que o catalogo inteiro - ~950 contra ~40 mil)."""
     sem_status = execute_query(
-        "SELECT cd_produto FROM mv_prd_referencia_produto WHERE status IS NULL AND cd_produto < 1000000", ()
+        "SELECT cd_produto FROM giro_prd_referencia WHERE status IS NULL AND cd_produto < 1000000", ()
     ) or []
     ids = [r["cd_produto"] for r in sem_status]
     if not ids:
         return []
     linhas = execute_query(
         """
-            SELECT cd_produto FROM (SELECT DISTINCT cd_produto FROM mv_prd_referencia_produto WHERE cd_produto = ANY(%s)) t
+            SELECT cd_produto FROM (SELECT DISTINCT cd_produto FROM giro_prd_referencia WHERE cd_produto = ANY(%s)) t
             WHERE f_dic_prd_classificacao(cd_produto, 'DS', 20) IS NULL
         """,
         (ids,)
@@ -212,7 +274,7 @@ _QUERY_ESTOQUE_ATUAL = """
     FROM (
         SELECT DISTINCT ON (s.cd_empresa, s.cd_produto) s.cd_empresa, s.cd_produto, s.qt_saldo
         FROM prd_prdsaldo s
-        LEFT JOIN mv_prd_referencia_produto p ON p.cd_produto = s.cd_produto
+        LEFT JOIN giro_prd_referencia p ON p.cd_produto = s.cd_produto
         LEFT JOIN (SELECT unnest(%s::int[]) AS cd_produto) excl ON excl.cd_produto = s.cd_produto
         WHERE s.cd_saldo = 1 AND s.dt_saldo < %s
           AND s.cd_empresa = ANY(%s)
@@ -238,7 +300,7 @@ _QUERY_QTD_VENDIDA = """
         ) AS qt_vendida
     FROM vr_tra_transacao t
     JOIN vr_tra_transitem i ON t.nr_transacao = i.nr_transacao AND t.cd_empresa = i.cd_empresa
-    LEFT JOIN mv_prd_referencia_produto p ON p.cd_produto = i.cd_produto
+    LEFT JOIN giro_prd_referencia p ON p.cd_produto = i.cd_produto
     LEFT JOIN (SELECT unnest(%s::int[]) AS cd_produto) excl ON excl.cd_produto = i.cd_produto
     WHERE t.tp_situacao = 4
       AND t.cd_empresa = ANY(%s)
@@ -305,7 +367,7 @@ def _calcular_giro(mes_referencia: str, cd_empresas: list) -> dict:
     if produtos_todos:
         linhas_status = execute_query("""
             SELECT cd_produto, referencia
-            FROM mv_prd_referencia_produto
+            FROM giro_prd_referencia
             WHERE cd_produto = ANY(%s) AND status ILIKE 'OPORTUNIDADE%%'
         """, (produtos_todos,)) or []
         for r in linhas_status:
@@ -451,7 +513,7 @@ def _eh_variante_preco_desconsiderada(status: Optional[str], familia: Optional[s
 
 
 def _nome_base_referencia(produto: Optional[str], ds_cor: Optional[str], ds_tamanho: Optional[str]) -> Optional[str]:
-    """O nome cadastrado (mv_prd_referencia_produto.produto) e do SKU, nao da
+    """O nome cadastrado (giro_prd_referencia.produto) e do SKU, nao da
     referencia - sempre termina com "COR TAMANHO" (ex: "SUTIA MINI CHOCOLATE
     U"; confirmado em ~99% dos produtos com cor e tamanho cadastrados). Tira
     esse sufixo pra sobrar so a descricao comum a referencia toda ("SUTIA
@@ -485,9 +547,10 @@ def _calcular_matriz_agregada(mes_referencia: str, cd_empresas: list, status_fil
     linhas = execute_query(f"""
         SELECT g.cd_empresa, g.cd_produto, g.estoque_atual, g.venda_media_3m,
             COALESCE(p.referencia, g.cd_produto::text) AS referencia, p.produto AS nome,
-            p.ds_cor, p.ds_tamanho, p.status, p.familia, p.grupo, p.linha, p.colecao
+            p.ds_cor, p.ds_tamanho, p.status, p.familia, p.grupo, p.linha, p.colecao,
+            p.referencia_original
         FROM giro_produto_snapshot g
-        LEFT JOIN mv_prd_referencia_produto p ON p.cd_produto = g.cd_produto
+        LEFT JOIN giro_prd_referencia p ON p.cd_produto = g.cd_produto
         WHERE g.mes_referencia = %s AND g.cd_empresa IN ({placeholders}){clausula_status}
     """, (mes_referencia, *cd_empresas, *params_status)) or []
 
@@ -499,8 +562,14 @@ def _calcular_matriz_agregada(mes_referencia: str, cd_empresas: list, status_fil
                 "nomeBase": None, "nomeBaseFallback": None, "porLoja": {}, "estoqueTotal": 0.0, "vendaTotal": 0.0,
                 "cdProdutoPreco": None, "cdProdutoFallback": None, "temLeveDefeito": False,
                 "categorias": None, "categoriasFallback": None, "cores": set(), "porCor": {},
+                "unificadas": set(), "_preco_origem": False,
             }
         d = por_ref[ref]
+        # Referencia unificada (de-para): SKU que veio de outra referencia.
+        ref_original = r["referencia_original"] or ref
+        sku_de_origem = ref_original != ref
+        if sku_de_origem:
+            d["unificadas"].add(ref_original)
         nome_sem_variante = _nome_base_referencia(r["nome"], r["ds_cor"], r["ds_tamanho"])
         variante_desconsiderada = _eh_variante_preco_desconsiderada(r["status"], r["familia"])
         if r["status"] == "LEVE DEFEITO":
@@ -543,8 +612,10 @@ def _calcular_matriz_agregada(mes_referencia: str, cd_empresas: list, status_fil
         # que nao for leve defeito/doacao (preco "normal"). Se a referencia
         # so tiver variantes assim, usa qualquer uma como ultimo recurso (pra
         # nao ficar sem preco nenhum).
-        if d["cdProdutoPreco"] is None and not variante_desconsiderada:
+        # Preco: prefere um SKU da propria referencia (nao o que veio da unificada).
+        if not variante_desconsiderada and (d["cdProdutoPreco"] is None or (d["_preco_origem"] and not sku_de_origem)):
             d["cdProdutoPreco"] = r["cd_produto"]
+            d["_preco_origem"] = sku_de_origem
         if d["cdProdutoFallback"] is None:
             d["cdProdutoFallback"] = r["cd_produto"]
         estoque = float(r["estoque_atual"] or 0)
@@ -566,12 +637,17 @@ def _calcular_matriz_agregada(mes_referencia: str, cd_empresas: list, status_fil
             d["porCor"][cor_chave] = {
                 "porLoja": {}, "estoqueTotal": 0.0, "vendaTotal": 0.0,
                 "cdProdutoPreco": None, "cdProdutoFallback": None, "temLeveDefeito": False,
+                "origens": {}, "_preco_origem": False,
             }
         dc = d["porCor"][cor_chave]
+        origem_cor = dc["origens"].setdefault(ref_original, {"estoque": 0.0, "venda": 0.0})
+        origem_cor["estoque"] += float(r["estoque_atual"] or 0)
+        origem_cor["venda"] += float(r["venda_media_3m"] or 0)
         if r["status"] == "LEVE DEFEITO":
             dc["temLeveDefeito"] = True
-        if dc["cdProdutoPreco"] is None and not variante_desconsiderada:
+        if not variante_desconsiderada and (dc["cdProdutoPreco"] is None or (dc["_preco_origem"] and not sku_de_origem)):
             dc["cdProdutoPreco"] = r["cd_produto"]
+            dc["_preco_origem"] = sku_de_origem
         if dc["cdProdutoFallback"] is None:
             dc["cdProdutoFallback"] = r["cd_produto"]
         estoque_cor_prev, venda_cor_prev = dc["porLoja"].get(r["cd_empresa"], (0.0, 0.0))
@@ -601,6 +677,7 @@ def _calcular_matriz_agregada(mes_referencia: str, cd_empresas: list, status_fil
             "temLeveDefeito": d["temLeveDefeito"],
             "categorias": d["categorias"] or d["categoriasFallback"] or {},
             "cores": sorted(d["cores"]),
+            "referenciasUnificadas": sorted(d["unificadas"]),
             "porCor": [
                 {
                     "cor": cor,
@@ -637,9 +714,9 @@ def _obter_matriz_agregada_por_cor(mes_referencia: str, cd_empresas: list, refer
     clausula_status, params_status = _clausula_status(status_filtro)
     linhas = execute_query(f"""
         SELECT g.cd_empresa, g.cd_produto, g.estoque_atual, g.venda_media_3m,
-            p.ds_cor, p.ds_tamanho, p.status, p.familia, p.linha, p.produto AS nome
+            p.ds_cor, p.ds_tamanho, p.status, p.familia, p.linha, p.produto AS nome, p.referencia_original
         FROM giro_produto_snapshot g
-        LEFT JOIN mv_prd_referencia_produto p ON p.cd_produto = g.cd_produto
+        LEFT JOIN giro_prd_referencia p ON p.cd_produto = g.cd_produto
         WHERE g.mes_referencia = %s AND g.cd_empresa IN ({placeholders})
           AND COALESCE(p.referencia, g.cd_produto::text) = %s{clausula_status}
     """, (mes_referencia, *cd_empresas, referencia, *params_status)) or []
@@ -667,13 +744,20 @@ def _obter_matriz_agregada_por_cor(mes_referencia: str, cd_empresas: list, refer
                 "cdProdutoPreco": None, "cdProdutoFallback": None, "temLeveDefeito": False,
                 "familia": None, "familiaFallback": None,
                 "linha": None, "linhaFallback": None,
+                "origens": {}, "_preco_origem": False,
             }
         d = por_cor[cor]
         variante_desconsiderada = _eh_variante_preco_desconsiderada(r["status"], r["familia"])
+        ref_original = r["referencia_original"] or referencia
+        sku_de_origem = ref_original != referencia
+        origem_cor = d["origens"].setdefault(ref_original, {"estoque": 0.0, "venda": 0.0})
+        origem_cor["estoque"] += float(r["estoque_atual"] or 0)
+        origem_cor["venda"] += float(r["venda_media_3m"] or 0)
         if r["status"] == "LEVE DEFEITO":
             d["temLeveDefeito"] = True
-        if d["cdProdutoPreco"] is None and not variante_desconsiderada:
+        if not variante_desconsiderada and (d["cdProdutoPreco"] is None or (d["_preco_origem"] and not sku_de_origem)):
             d["cdProdutoPreco"] = r["cd_produto"]
+            d["_preco_origem"] = sku_de_origem
         if d["cdProdutoFallback"] is None:
             d["cdProdutoFallback"] = r["cd_produto"]
         if d["familia"] is None and r["familia"] and not variante_desconsiderada:
@@ -705,6 +789,7 @@ def _obter_matriz_agregada_por_cor(mes_referencia: str, cd_empresas: list, refer
             "temLeveDefeito": d["temLeveDefeito"],
             "familia": d["familia"] or d["familiaFallback"],
             "linha": d["linha"] or d["linhaFallback"],
+            "origens": d["origens"] if len(d["origens"]) > 1 else {},
         }
         for cor, d in por_cor.items()
         # Cor sem estoque e sem venda nas lojas filtradas nao precisa
@@ -1003,10 +1088,10 @@ def _cd_produtos_cor_com_oportunidade(dados: list, primeiras_por_cor: dict) -> l
 
 
 def _status_produto_disponiveis() -> list:
-    """Valores distintos de status de produto (mv_prd_referencia_produto) -
+    """Valores distintos de status de produto (giro_prd_referencia) -
     pro filtro de status do Giro. Rapida (materialized view)."""
     rows = execute_query(
-        "SELECT DISTINCT status FROM mv_prd_referencia_produto WHERE status IS NOT NULL ORDER BY 1", ()
+        "SELECT DISTINCT status FROM giro_prd_referencia WHERE status IS NOT NULL ORDER BY 1", ()
     ) or []
     return [r["status"] for r in rows]
 
@@ -1043,7 +1128,11 @@ def _aplicar_filtros_categoria(
         dados_completos = [i for i in dados_completos if i["categorias"].get("colecao") in colecao_filtro]
     if referencia_busca and referencia_busca.strip():
         termo = referencia_busca.strip().upper()
-        dados_completos = [i for i in dados_completos if termo in str(i["referencia"]).upper()]
+        # Achar tambem pela referencia que foi unificada nela (ex: 103606 -> 103605).
+        dados_completos = [
+            i for i in dados_completos
+            if termo in str(i["referencia"]).upper() or any(termo in str(u).upper() for u in i.get("referenciasUnificadas") or [])
+        ]
     return dados_completos
 
 
@@ -1070,7 +1159,7 @@ def _top_produtos_giro(mes_referencia: str, cd_empresas: list, status_filtro: Op
         SELECT g.cd_produto, p.referencia, p.produto AS nome,
             SUM(g.estoque_atual) AS estoque_atual, SUM(g.venda_media_3m) AS venda_media_3m
         FROM giro_produto_snapshot g
-        LEFT JOIN mv_prd_referencia_produto p ON p.cd_produto = g.cd_produto
+        LEFT JOIN giro_prd_referencia p ON p.cd_produto = g.cd_produto
         WHERE g.mes_referencia = %s AND g.cd_empresa IN ({placeholders}){clausula_status}
         GROUP BY 1, 2, 3
     """, (mes_referencia, *cd_empresas, *params_status)) or []
@@ -1127,7 +1216,7 @@ def _montar_resposta(mes_referencia: str, cd_empresas: list, status_filtro: Opti
         linhas_status = execute_query(f"""
             SELECT g.cd_empresa, SUM(g.estoque_atual) AS estoque_atual, SUM(g.venda_media_3m) AS venda_media_3m
             FROM giro_produto_snapshot g
-            LEFT JOIN mv_prd_referencia_produto p ON p.cd_produto = g.cd_produto
+            LEFT JOIN giro_prd_referencia p ON p.cd_produto = g.cd_produto
             WHERE g.mes_referencia = %s AND g.cd_empresa IN ({placeholders}){clausula_status}
             GROUP BY 1
         """, (mes_referencia, *cd_empresas, *params_status)) or []
@@ -1185,13 +1274,13 @@ def listar_status_produtos():
 
 @router.get("/api/giro/opcoes-filtro")
 def listar_opcoes_filtro_giro():
-    """Valores distintos de linha/familia/grupo/colecao (mv_prd_referencia_produto)
+    """Valores distintos de linha/familia/grupo/colecao (giro_prd_referencia)
     pros dropdowns de filtro adicionais da tela de Giro, junto do filtro de
     status ja existente."""
     try:
         def _distintos(coluna: str) -> list:
             rows = execute_query(
-                f"SELECT DISTINCT {coluna} FROM mv_prd_referencia_produto WHERE {coluna} IS NOT NULL ORDER BY 1", ()
+                f"SELECT DISTINCT {coluna} FROM giro_prd_referencia WHERE {coluna} IS NOT NULL ORDER BY 1", ()
             ) or []
             return [r[coluna] for r in rows]
 
@@ -1549,6 +1638,7 @@ def matriz_produtos_giro(
                 "promocoes": _promos_ativas_lista(promo),
                 "temLeveDefeito": item["temLeveDefeito"],
                 "cores": item["cores"],
+                "referenciasUnificadas": item.get("referenciasUnificadas") or [],
                 "dtPrimeiraOportunidade": dt_primeira_oportunidade.isoformat() if dt_primeira_oportunidade else None,
                 "mesesOportunidade": meses_oportunidade,
                 "familia": (item.get("categorias") or {}).get("familia"),
@@ -1676,6 +1766,7 @@ def matriz_produtos_giro_por_cor(
                 "promocoes": _promos_ativas_lista(promo),
                 "temLeveDefeito": item["temLeveDefeito"],
                 "cores": None,
+                "origens": item.get("origens") or {},
                 "dtPrimeiraOportunidade": dt_primeira_oportunidade.isoformat() if dt_primeira_oportunidade else None,
                 "mesesOportunidade": meses_oportunidade,
                 "familia": item.get("familia"),
@@ -1737,7 +1828,7 @@ def giro_por_dimensao(
             SELECT COALESCE(p.{coluna}, 'SEM CLASSIFICACAO') AS chave,
                 SUM(g.estoque_atual) AS estoque, SUM(g.venda_media_3m) AS venda
             FROM giro_produto_snapshot g
-            LEFT JOIN mv_prd_referencia_produto p ON p.cd_produto = g.cd_produto
+            LEFT JOIN giro_prd_referencia p ON p.cd_produto = g.cd_produto
             WHERE g.mes_referencia = %s AND g.cd_empresa IN ({placeholders})
             GROUP BY 1
         """, (mes_ref, *cd_empresas)) or []
@@ -1800,7 +1891,7 @@ def giro_por_loja(
         rows = execute_query(f"""
             SELECT g.cd_empresa, SUM(g.estoque_atual) AS estoque, SUM(g.venda_media_3m) AS venda
             FROM giro_produto_snapshot g
-            LEFT JOIN mv_prd_referencia_produto p ON p.cd_produto = g.cd_produto
+            LEFT JOIN giro_prd_referencia p ON p.cd_produto = g.cd_produto
             WHERE g.mes_referencia = %s AND g.cd_empresa IN ({placeholders}){clausula_dimensao}
             GROUP BY 1
         """, (mes_ref, *cd_empresas, *params_dimensao)) or []
@@ -1879,7 +1970,7 @@ def venda_mensal_referencias(
                 ) AS qt_vendida
             FROM vr_tra_transacao t
             JOIN vr_tra_transitem i ON t.nr_transacao = i.nr_transacao AND t.cd_empresa = i.cd_empresa
-            JOIN mv_prd_referencia_produto p ON p.cd_produto = i.cd_produto
+            JOIN giro_prd_referencia p ON p.cd_produto = i.cd_produto
             WHERE t.tp_situacao = 4
               AND t.cd_empresa = ANY(%s)
               AND t.dt_transacao >= %s AND t.dt_transacao <= %s
@@ -2316,7 +2407,7 @@ def _todas_referencias_mistas(mes_referencia: str, cd_empresas: tuple) -> set:
         placeholders_emp = ",".join(["%s"] * len(cd_empresas))
         rows = execute_query(f"""
             SELECT p.referencia
-            FROM mv_prd_referencia_produto p
+            FROM giro_prd_referencia p
             JOIN giro_produto_snapshot g ON g.cd_produto = p.cd_produto
             WHERE (p.status = ANY(%s) OR p.status ILIKE 'OPORTUNIDADE%%')
               AND g.mes_referencia = %s AND g.cd_empresa IN ({placeholders_emp})

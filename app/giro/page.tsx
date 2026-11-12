@@ -111,6 +111,9 @@ interface ItemMatrizGiro {
   promocoes?: { tipo: 'Fábrica' | 'Atacado' | 'Varejo'; precoPromo: number; precoAnterior: number | null }[];
   temLeveDefeito?: boolean;
   cores?: string[];
+  // Referencias unificadas nesta (de-para, ex: 103606 -> 103605) e, na abertura por cor, o estoque/venda de cada origem.
+  referenciasUnificadas?: string[];
+  origens?: Record<string, { estoque: number; venda: number }>;
   dtPrimeiraOportunidade?: string | null;
   mesesOportunidade?: number | null;
   cor?: string | null;
@@ -1762,6 +1765,14 @@ export default function GiroPage() {
                   LD
                 </span>
               )}
+              {item.referenciasUnificadas && item.referenciasUnificadas.length > 0 && (
+                <span
+                  className="px-1 py-0.5 text-[9px] font-medium bg-sky-100 text-sky-800 rounded cursor-help"
+                  title={`Referência unificada: estoque e venda de ${item.referenciasUnificadas.join(', ')} estão somados aqui (mesmo produto, código diferente no ERP). Onde a cor é a mesma, valem as classificações desta referência.`}
+                >
+                  +{item.referenciasUnificadas.join(', ')}
+                </span>
+              )}
             </div>
             </div>
           ) : (
@@ -1783,6 +1794,11 @@ export default function GiroPage() {
               <span className="ml-1.5 px-1 py-0.5 text-[9px] font-medium bg-orange-100 text-orange-700 rounded" title="Classificado como Leve Defeito">
                 LD
               </span>
+            )}
+            {nivel === 1 && item.origens && Object.keys(item.origens).length > 1 && (
+              <div className="text-[10px] font-normal text-sky-800">
+                {Object.entries(item.origens).map(([ref, o]) => `${ref}: ${formatarQtd(o.estoque)} un.`).join(' · ')}
+              </div>
             )}
           </div>
           {item.cores && item.cores.length > 0 && (

@@ -62,6 +62,11 @@ async def startup_event():
     # Recalculo automatico do giro em background (so pro mes atual, so
     # empresas desatualizadas - ver loop_recalculo_automatico_giro) - fica
     # rodando pra sempre em paralelo, sem bloquear a API.
+    try:
+        from routers.giro import garantir_unificacao_referencias
+        garantir_unificacao_referencias()
+    except Exception as e:
+        print(f"[ERROR] unificacao de referencias do giro: {e}")
     asyncio.create_task(loop_recalculo_automatico_giro())
     # Cache da DRE (Analitica/Sintetica/Por Empresa) - mantem prontos os
     # periodos usados na tela pra abrir na hora em qualquer computador (ver
