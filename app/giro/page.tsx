@@ -564,6 +564,7 @@ interface TotaisDescontoGiro {
   totalAcrescimoVarejo: number;
   totalEstoqueAtacadoComCampanha?: number;
   totalEstoqueVarejoComCampanha?: number;
+  faixasPromoVarejo?: { atual: Record<string, number>; novo: Record<string, number> };
   totalReferencias: number;
   totalReferenciasMistas?: number;
   totalDescontoAtacadoMistas?: number;
@@ -2417,6 +2418,55 @@ export default function GiroPage() {
                   ))}
                 </div>
                 <p className="text-xs text-black mt-1">Camp Atac / Camp Var maior que 0%</p>
+              </div>
+              <div className="bg-white rounded-lg shadow-lg p-4">
+                <p className="text-xs font-medium text-black uppercase tracking-wide" title="Estoque do Varejo (demais lojas) por faixa de promoção. Atual = desconto que a cor já tem ativo; Novo = percentual sugerido pela campanha (Camp Var). Arredondado pra dezena. Segue os filtros da tela.">
+                  Análise por % — Varejo (filtro inteiro)
+                </p>
+                {(() => {
+                  const fx = totaisDescontoGiro?.faixasPromoVarejo;
+                  const faixas = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100].filter((f) => f <= 70 || (fx?.atual[String(f)] ?? 0) > 0 || (fx?.novo[String(f)] ?? 0) > 0);
+                  const novo = (f: number) => fx?.novo[String(f)] ?? 0;
+                  const atual = (f: number) => fx?.atual[String(f)] ?? 0;
+                  const totNovo = faixas.reduce((a, f) => a + novo(f), 0);
+                  const totAtual = faixas.reduce((a, f) => a + atual(f), 0);
+                  const corDif = (d: number) => (d > 0 ? 'bg-green-100 text-green-800' : d < 0 ? 'bg-red-100 text-red-800' : '');
+                  const dif = (d: number) => `${d > 0 ? '+' : ''}${formatarQtd(d)}`;
+                  return (
+                    <table className="mt-2 w-full text-sm border-collapse">
+                      <thead>
+                        <tr className="text-[11px] uppercase text-black">
+                          <th className="border border-slate-300 bg-green-100 px-2 py-1 text-left">Promoção %</th>
+                          <th className="border border-slate-300 bg-green-100 px-2 py-1 text-right">Qtd novo</th>
+                          <th className="border border-slate-300 bg-sky-100 px-2 py-1 text-right">Qtd atual</th>
+                          <th className="border border-slate-300 bg-sky-100 px-2 py-1 text-right">Diferença</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {faixas.map((f) => (
+                          <tr key={f}>
+                            <td className="border border-slate-300 px-2 py-1 text-center text-black">{f}%</td>
+                            <td className="border border-slate-300 px-2 py-1 text-right text-black">{totaisDescontoCarregando ? '...' : formatarQtd(novo(f))}</td>
+                            <td className="border border-slate-300 px-2 py-1 text-right text-black">{totaisDescontoCarregando ? '...' : formatarQtd(atual(f))}</td>
+                            <td className={`border border-slate-300 px-2 py-1 text-right ${corDif(novo(f) - atual(f))}`}>{totaisDescontoCarregando ? '...' : dif(novo(f) - atual(f))}</td>
+                          </tr>
+                        ))}
+                        <tr className="font-bold bg-yellow-200 text-black">
+                          <td className="border border-slate-300 px-2 py-1 text-center">Total</td>
+                          <td className="border border-slate-300 px-2 py-1 text-right">{formatarQtd(totNovo)}</td>
+                          <td className="border border-slate-300 px-2 py-1 text-right">{formatarQtd(totAtual)}</td>
+                          <td className={`border border-slate-300 px-2 py-1 text-right ${corDif(totNovo - totAtual)}`}>{dif(totNovo - totAtual)}</td>
+                        </tr>
+                        <tr className="text-black">
+                          <td className="border border-slate-300 px-2 py-1 text-center">Sem promoção</td>
+                          <td className="border border-slate-300 px-2 py-1 text-right">{formatarQtd(novo(0))}</td>
+                          <td className="border border-slate-300 px-2 py-1 text-right">{formatarQtd(atual(0))}</td>
+                          <td className={`border border-slate-300 px-2 py-1 text-right ${corDif(novo(0) - atual(0))}`}>{dif(novo(0) - atual(0))}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  );
+                })()}
               </div>
               <div className="bg-white rounded-lg shadow-lg p-4">
                 <p className="text-xs font-medium text-black uppercase tracking-wide" title="Mista: tem produto em linha/nova coleção junto com oportunidade (regras 7/8). Não mista: decidida pelo giro da referência inteira e pelo menor Meses FL.">
