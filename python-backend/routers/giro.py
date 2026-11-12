@@ -2572,6 +2572,12 @@ def totais_desconto_giro(
         # resto das lojas pro varejo (mesma separacao do estoque acima).
         estoque_com_campanha_atacado = 0.0
         estoque_com_campanha_varejo = 0.0
+        # Valor do desconto APLICADO pela campanha (R$) nas pecas com Camp > 0%: estoque x (preco
+        # cheio - preco de campanha ja arredondado) - desconto total contra o preco cheio (nao o
+        # ganho sobre a promocao atual, que e o card "Valor do desconto sugerido"). "base" = o mesmo
+        # estoque a preco cheio, pra mostrar o % do valor.
+        desconto_aplicado = {"atacado": 0.0, "varejo": 0.0}
+        base_cheio_campanha = {"atacado": 0.0, "varejo": 0.0}
         # Estoque do VAREJO por faixa de promocao (arredondada pra dezena): "atual" =
         # desconto que a cor ja tem ativo; "novo" = percentual sugerido pela campanha.
         faixas_varejo = {"atual": {}, "novo": {}}
@@ -2667,6 +2673,15 @@ def totais_desconto_giro(
                     estoque_com_campanha_atacado += estoque_maraponga_cor
                 if pct_varejo_cor > 0:
                     estoque_com_campanha_varejo += estoque_resto_cor
+                for canal, est_canal, pct_canal, chave_preco in (
+                    ("atacado", estoque_maraponga_cor, pct_atacado_cor, "precoAtacado"),
+                    ("varejo", estoque_resto_cor, pct_varejo_cor, "precoVarejo"),
+                ):
+                    cheio_canal = _preco_cheio_canal(preco_cor.get(chave_preco), promo_cor.get(canal), fb_ref.get(canal))
+                    preco_camp = _calcular_preco_campanha(cheio_canal, pct_canal) if cheio_canal else None
+                    if preco_camp is not None:
+                        desconto_aplicado[canal] += est_canal * max(0.0, cheio_canal - preco_camp)
+                        base_cheio_campanha[canal] += est_canal * cheio_canal
                 faixa_atual = _faixa_dezena(_desconto_atual_canal(preco_cor.get("precoVarejo"), promo_cor.get("varejo"), fb_ref.get("varejo")))
                 faixa_novo = _faixa_dezena(pct_varejo_cor)
                 faixas_varejo["atual"][str(faixa_atual)] = faixas_varejo["atual"].get(str(faixa_atual), 0.0) + estoque_resto_cor
@@ -2709,6 +2724,10 @@ def totais_desconto_giro(
             "totalAcrescimoVarejo": total_acrescimo_varejo,
             "totalEstoqueAtacadoComCampanha": estoque_com_campanha_atacado,
             "totalEstoqueVarejoComCampanha": estoque_com_campanha_varejo,
+            "totalDescontoAplicadoAtacado": desconto_aplicado["atacado"],
+            "totalDescontoAplicadoVarejo": desconto_aplicado["varejo"],
+            "baseCheioCampanhaAtacado": base_cheio_campanha["atacado"],
+            "baseCheioCampanhaVarejo": base_cheio_campanha["varejo"],
             "faixasPromoVarejo": faixas_varejo,
             "totalReferencias": total_referencias,
             "totalReferenciasMistas": sum(1 for i in dados_incluidos if mista_dict.get(i["referencia"], False)),
