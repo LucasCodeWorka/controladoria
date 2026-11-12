@@ -508,6 +508,21 @@ function percentualCampanhaCanal(
   return PERCENTUAL_POR_REGRA[regra];
 }
 
+// Varejo com o checkbox "manter desconto alto": referencia NAO mista (desconto de referencia
+// informado), apos 12 meses como FL (regras 4/5/11) e desconto atual >= 70% mantem o desconto
+// que ja tem em vez de cair na escadinha. Mesma conta do backend (_percentual_campanha_varejo).
+function percentualCampanhaVarejo(
+  regra: number, precoCadastro: number | null, promo: { precoPromo: number; precoAnterior: number | null } | null | undefined,
+  fallback: number | null | undefined, descontoReferencia: number | null | undefined, manterDescontoAlto: boolean
+): number {
+  const pct = percentualCampanhaCanal(regra, precoCadastro, promo, fallback, descontoReferencia);
+  if (manterDescontoAlto && descontoReferencia !== null && descontoReferencia !== undefined
+      && (regra === 4 || regra === 5 || regra === 11) && descontoReferencia >= 70 && pct < descontoReferencia) {
+    return Math.round(descontoReferencia * 100) / 100;
+  }
+  return pct;
+}
+
 // Texto curto de cada regra, pro tooltip da celula Camp Atac/Camp Var -
 // mesma numeracao/descricao mostrada no modal "Regras".
 const DESCRICAO_REGRA_CAMPANHA: Record<number, string> = {
@@ -989,6 +1004,9 @@ export default function GiroPage() {
   // '' (nenhum), 'atacado', 'varejo' ou 'atacado,varejo'. A cor entra se
   // tiver ganho em pelo menos um dos canais marcados.
   const [canaisOportunidade, setCanaisOportunidade] = useState('');
+  const [manterDescontoAlto, setManterDescontoAlto] = useState(false);
+  // Ref pra buscas disparadas no mesmo clique do checkbox (o state ainda nao atualizou).
+  const manterDescontoAltoRef = useRef(false);
   // Filtro "Mistas" / "Não mistas" ('' = todas, 'mistas' ou 'naoMistas') - o ref
   // espelha o estado pra buscarMatriz ler o valor novo no mesmo clique.
   const [tipoReferencia, setTipoReferencia] = useState('');
@@ -1190,6 +1208,7 @@ export default function GiroPage() {
         params.set('mesesFLMinimo', String(mesesFLMinimoNum));
       }
       aplicarFiltrosCategoriaParams(params);
+      if (manterDescontoAltoRef.current) params.set('manterDescontoAlto', 'true');
       const response = await fetch(`/api/giro/matriz-produtos?${params.toString()}`, { cache: 'no-store' });
       const data = await response.json();
       if (!response.ok || data.error) {
@@ -1249,6 +1268,7 @@ export default function GiroPage() {
         params.set('mesesFLMinimo', String(mesesFLMinimoNum));
       }
       aplicarFiltrosCategoriaParams(params);
+      if (manterDescontoAltoRef.current) params.set('manterDescontoAlto', 'true');
       const response = await fetch(`/api/giro/totais-desconto?${params.toString()}`, { cache: 'no-store' });
       const data = await response.json();
       if (response.ok && !data.error) {
@@ -1329,6 +1349,7 @@ export default function GiroPage() {
         params.set('oportunidadeDesconto', 'true');
         params.set('canaisDesconto', canaisOportunidade);
       }
+      if (manterDescontoAltoRef.current) params.set('manterDescontoAlto', 'true');
       const response = await fetch(`/api/giro/matriz-produtos/cores?${params.toString()}`, { cache: 'no-store' });
       const data = await response.json();
       if (response.ok && !data.error) {
@@ -1473,6 +1494,7 @@ export default function GiroPage() {
         const mesesFLNum = Number(matrizMesesFLMinimo.trim());
         if (matrizMesesFLMinimo.trim() !== '' && !Number.isNaN(mesesFLNum)) params.set('mesesFLMinimo', String(mesesFLNum));
         aplicarFiltrosCategoriaParams(params);
+        if (manterDescontoAltoRef.current) params.set('manterDescontoAlto', 'true');
         const resp = await fetch(`/api/giro/matriz-produtos?${params.toString()}`, { cache: 'no-store' });
         const data = await resp.json();
         if (!resp.ok || data.error) throw new Error(data.detail || data.error || 'Erro ao buscar a matriz');
@@ -1499,6 +1521,7 @@ export default function GiroPage() {
             params.set('oportunidadeDesconto', 'true');
             params.set('canaisDesconto', canaisOportunidade);
           }
+          if (manterDescontoAltoRef.current) params.set('manterDescontoAlto', 'true');
           const resp = await fetch(`/api/giro/matriz-produtos/cores?${params.toString()}`, { cache: 'no-store' });
           const data = await resp.json();
           if (!resp.ok || data.error) throw new Error(data.detail || data.error || `Erro ao buscar as cores de ${ref.referencia}`);
@@ -1525,7 +1548,7 @@ export default function GiroPage() {
           const promoAtac = item.promocoes?.find((p) => p.tipo === 'Atacado');
           const promoVar = item.promocoes?.find((p) => p.tipo === 'Varejo');
           const pctAtac = percentualCampanhaCanal(regra, item.precoAtacado, promoAtac, item.precoCheioFallbackAtacado, item.temCorSemMesesFL ? null : item.descontoAtualRegraAtacado);
-          const pctVar = percentualCampanhaCanal(regra, item.precoVarejo, promoVar, item.precoCheioFallbackVarejo, item.temCorSemMesesFL ? null : item.descontoAtualRegraVarejo);
+          const pctVar = percentualCampanhaVarejo(regra, item.precoVarejo, promoVar, item.precoCheioFallbackVarejo, item.temCorSemMesesFL ? null : item.descontoAtualRegraVarejo, manterDescontoAlto);
           const cheioAtac = precoCheioCanal(item.precoAtacado, promoAtac, item.precoCheioFallbackAtacado);
           const cheioVar = precoCheioCanal(item.precoVarejo, promoVar, item.precoCheioFallbackVarejo);
           const campAtac = calcularPrecoCampanha(cheioAtac, pctAtac);
@@ -1811,7 +1834,7 @@ export default function GiroPage() {
           const pctPromoAtacado = promoAtacado ? variacaoPercentual(cheioAtacado, promoAtacado.precoPromo) : null;
           const pctPromoVarejo = promoVarejo ? variacaoPercentual(cheioVarejo, promoVarejo.precoPromo) : null;
           const pctCampanhaAtacado = percentualCampanhaCanal(regraCampanha, item.precoAtacado, promoAtacado, item.precoCheioFallbackAtacado, item.temCorSemMesesFL ? null : item.descontoAtualRegraAtacado);
-          const pctCampanhaVarejo = percentualCampanhaCanal(regraCampanha, item.precoVarejo, promoVarejo, item.precoCheioFallbackVarejo, item.temCorSemMesesFL ? null : item.descontoAtualRegraVarejo);
+          const pctCampanhaVarejo = percentualCampanhaVarejo(regraCampanha, item.precoVarejo, promoVarejo, item.precoCheioFallbackVarejo, item.temCorSemMesesFL ? null : item.descontoAtualRegraVarejo, manterDescontoAlto);
           const escadaPorDesconto = REGRAS_ESCADA_GIRO_ALTO.has(regraCampanha);
           // Preco cheio vindo de outra cor (a cor nao tem preco proprio): avisa no tooltip.
           const usaFallbackAtacado = !(item.precoAtacado !== null && item.precoAtacado > 0) && !((promoAtacado?.precoAnterior ?? 0) > 0) && cheioAtacado !== null;
@@ -2599,6 +2622,20 @@ export default function GiroPage() {
                   {canal === 'atacado' ? 'Atacado' : 'Varejo'}
                 </label>
               ))}
+              <label className="flex items-center gap-1.5 text-sm text-black cursor-pointer ml-2" title="Varejo: referências não mistas, com mais de 12 meses como FL e desconto atual de 70% ou mais mantêm o desconto que já têm, em vez de a campanha reduzir.">
+                <input
+                  type="checkbox"
+                  checked={manterDescontoAlto}
+                  disabled={matrizCarregando}
+                  onChange={(e) => {
+                    manterDescontoAltoRef.current = e.target.checked;
+                    setManterDescontoAlto(e.target.checked);
+                    setCoresPorReferencia({});
+                    buscarMatriz(mesReferencia, empresasParaMatriz(), 1, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','), filtroDimensaoMatriz, canaisOportunidade);
+                  }}
+                />
+                Manter desconto ≥ 70% (varejo, não mistas, FL &gt; 12 meses)
+              </label>
               <span className="text-sm text-black ml-2">Referências:</span>
               {([['mistas', 'Mistas'], ['naoMistas', 'Não mistas']] as const).map(([valor, rotulo]) => (
                 <label key={valor} className="flex items-center gap-1.5 text-sm text-black cursor-pointer">

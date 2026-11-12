@@ -15,6 +15,7 @@ export async function GET(request: NextRequest) {
     const categoriaFiltro = searchParams.get('categoriaFiltro');
     const oportunidadeDesconto = searchParams.get('oportunidadeDesconto');
     const canaisDesconto = searchParams.get('canaisDesconto');
+    const manterDescontoAlto = searchParams.get('manterDescontoAlto');
     const linha = searchParams.get('linha');
     const familia = searchParams.get('familia');
     const grupo = searchParams.get('grupo');
@@ -31,6 +32,7 @@ export async function GET(request: NextRequest) {
     if (categoriaFiltro) params.set('categoriaFiltro', categoriaFiltro);
     if (oportunidadeDesconto) params.set('oportunidadeDesconto', oportunidadeDesconto);
     if (canaisDesconto) params.set('canaisDesconto', canaisDesconto);
+    if (manterDescontoAlto) params.set('manterDescontoAlto', manterDescontoAlto);
     if (linha) params.set('linha', linha);
     if (familia) params.set('familia', familia);
     if (grupo) params.set('grupo', grupo);
