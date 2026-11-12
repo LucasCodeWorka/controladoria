@@ -1338,7 +1338,7 @@ def matriz_produtos_giro(
     colecao: Optional[str] = Query(None, description="Lista de colecao separadas por virgula (default: todas)"),
     referenciaBusca: Optional[str] = Query(None, description="Busca por referencia (contains, case-insensitive)"),
     mesesFLMinimo: Optional[int] = Query(None, description="So retorna referencias com Meses FL maior que esse valor (referencias sem Meses FL ficam de fora) - filtra a base INTEIRA antes de paginar"),
-    manterDescontoAlto: bool = Query(False, description="Varejo: referencias nao mistas, apos 12 meses como FL, com desconto atual >= 70% mantem o desconto que ja tem"),
+    manterDescontoAlto: bool = Query(False, description="Varejo: referencias nao mistas, apos 12 meses como FL, com desconto atual >= 50% mantem o desconto que ja tem"),
 ):
     """
     Giro por REFERENCIA (nao por SKU/cor/tamanho individual) e empresa, numa
@@ -1592,7 +1592,7 @@ def matriz_produtos_giro_por_cor(
     mesesFLMinimo: Optional[int] = Query(None, description="Mesmo filtro 'Meses FL maior que' da tabela - aplicado ao Meses FL DA COR"),
     oportunidadeDesconto: bool = Query(False, description="Mesmo checkbox da tabela - so as cores que, sozinhas, podem ganhar ou aumentar desconto"),
     canaisDesconto: Optional[str] = Query(None, description="Canais dos flags de oportunidade: atacado, varejo ou atacado,varejo (default: os dois)"),
-    manterDescontoAlto: bool = Query(False, description="Varejo: referencias nao mistas, apos 12 meses como FL, com desconto atual >= 70% mantem o desconto que ja tem"),
+    manterDescontoAlto: bool = Query(False, description="Varejo: referencias nao mistas, apos 12 meses como FL, com desconto atual >= 50% mantem o desconto que ja tem"),
 ):
     """
     Abre UMA referencia por cor - mesma estrutura da matriz principal
@@ -2024,7 +2024,7 @@ def _desconto_atual_canal(preco_cadastro: Optional[float], promo_canal: Optional
 
 
 # Checkbox "manter desconto alto" (so varejo): referencia NAO mista, apos 12 meses como FL
-# (regras 4/5/11) e com desconto atual de varejo >= 70% mantem o desconto que ja tem em
+# (regras 4/5/11) e com desconto atual de varejo >= 50% mantem o desconto que ja tem em
 # vez de cair pra escadinha (60/50%). Setada no inicio de cada endpoint da tela.
 import contextvars
 _MANTER_DESCONTO_ALTO_VAREJO: contextvars.ContextVar = contextvars.ContextVar("manter_desconto_alto_varejo", default=False)
@@ -2034,7 +2034,7 @@ _REGRAS_APOS_12_MESES = (4, 5, 11)
 def _percentual_campanha_varejo(regra, preco_cadastro, promo_canal, fallback=None, desconto_referencia=None) -> float:
     pct = _percentual_campanha_canal(regra, preco_cadastro, promo_canal, fallback, desconto_referencia)
     if (_MANTER_DESCONTO_ALTO_VAREJO.get() and desconto_referencia is not None
-            and regra in _REGRAS_APOS_12_MESES and desconto_referencia >= 70 and pct < desconto_referencia):
+            and regra in _REGRAS_APOS_12_MESES and desconto_referencia >= 50 and pct < desconto_referencia):
         return round(desconto_referencia, 2)
     return pct
 
@@ -2429,7 +2429,7 @@ def totais_desconto_giro(
     colecao: Optional[str] = Query(None, description="Mesmo filtro de colecao da tabela"),
     referenciaBusca: Optional[str] = Query(None, description="Mesma busca por referencia da tabela"),
     mesesFLMinimo: Optional[int] = Query(None, description="Mesmo filtro 'Meses FL maior que' da tabela"),
-    manterDescontoAlto: bool = Query(False, description="Varejo: referencias nao mistas, apos 12 meses como FL, com desconto atual >= 70% mantem o desconto que ja tem"),
+    manterDescontoAlto: bool = Query(False, description="Varejo: referencias nao mistas, apos 12 meses como FL, com desconto atual >= 50% mantem o desconto que ja tem"),
 ):
     """
     Totais pros 2 cards acima da tabela "Giro por referencia e loja"

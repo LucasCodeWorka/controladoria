@@ -509,7 +509,7 @@ function percentualCampanhaCanal(
 }
 
 // Varejo com o checkbox "manter desconto alto": referencia NAO mista (desconto de referencia
-// informado), apos 12 meses como FL (regras 4/5/11) e desconto atual >= 70% mantem o desconto
+// informado), apos 12 meses como FL (regras 4/5/11) e desconto atual >= 50% mantem o desconto
 // que ja tem em vez de cair na escadinha. Mesma conta do backend (_percentual_campanha_varejo).
 function percentualCampanhaVarejo(
   regra: number, precoCadastro: number | null, promo: { precoPromo: number; precoAnterior: number | null } | null | undefined,
@@ -517,7 +517,7 @@ function percentualCampanhaVarejo(
 ): number {
   const pct = percentualCampanhaCanal(regra, precoCadastro, promo, fallback, descontoReferencia);
   if (manterDescontoAlto && descontoReferencia !== null && descontoReferencia !== undefined
-      && (regra === 4 || regra === 5 || regra === 11) && descontoReferencia >= 70 && pct < descontoReferencia) {
+      && (regra === 4 || regra === 5 || regra === 11) && descontoReferencia >= 50 && pct < descontoReferencia) {
     return Math.round(descontoReferencia * 100) / 100;
   }
   return pct;
@@ -2622,7 +2622,7 @@ export default function GiroPage() {
                   {canal === 'atacado' ? 'Atacado' : 'Varejo'}
                 </label>
               ))}
-              <label className="flex items-center gap-1.5 text-sm text-black cursor-pointer ml-2" title="Varejo: referências não mistas, com mais de 12 meses como FL e desconto atual de 70% ou mais mantêm o desconto que já têm, em vez de a campanha reduzir.">
+              <label className="flex items-center gap-1.5 text-sm text-black cursor-pointer ml-2" title="Varejo: referências não mistas, com mais de 12 meses como FL e desconto atual de 50% ou mais mantêm o desconto que já têm, em vez de a campanha reduzir.">
                 <input
                   type="checkbox"
                   checked={manterDescontoAlto}
@@ -2634,7 +2634,7 @@ export default function GiroPage() {
                     buscarMatriz(mesReferencia, empresasParaMatriz(), 1, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','), filtroDimensaoMatriz, canaisOportunidade);
                   }}
                 />
-                Manter desconto ≥ 70% (varejo, não mistas, FL &gt; 12 meses)
+                Manter desconto ≥ 50% (varejo, não mistas, FL &gt; 12 meses)
               </label>
               <span className="text-sm text-black ml-2">Referências:</span>
               {([['mistas', 'Mistas'], ['naoMistas', 'Não mistas']] as const).map(([valor, rotulo]) => (
