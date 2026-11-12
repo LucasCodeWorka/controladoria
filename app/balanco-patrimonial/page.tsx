@@ -345,7 +345,7 @@ function TabelaBalanco({ titulo, plano, valores, mostrarPercentual, contasExpand
 // Contas do Passivo que tem detalhe (fornecedor x despesa x mes) no backend.
 // Aberturas (detalhes) que tambem abrem detalhamento: PC.1.1 = titulos de fornecedores/alugueis
 // (mesmo detalhe da PC.1); PC.1.2 = rescisoes de aluguel e PC.4.2 = rescisao de funcionarios.
-const SUBDETALHAVEIS = new Set(['PC.1.1', 'PC.1.2', 'PC.4.2']);
+const SUBDETALHAVEIS = new Set(['PC.1.1', 'PC.1.2', 'PC.1.3', 'PC.4.2']);
 const CONTAS_DETALHAVEIS = new Set(['PC.1', 'PC.2', 'PC.3', 'PNC.8', 'PC.ETR', 'PNC.ETR', 'PC.IMV', 'PNC.IMV', 'PC.5', 'PC.6', 'PNC.10']);
 
 type LinhaDetalhe = { cdFornecedor: number | null; fornecedor: string; cdDespesa: string; despesa: string; mes: string; valor: number; qtd: number };

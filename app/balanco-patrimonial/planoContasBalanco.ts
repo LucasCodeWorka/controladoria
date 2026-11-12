@@ -72,6 +72,7 @@ export const PLANO_PASSIVO: ContaBalanco[] = [
         detalhes: [
           { codigo: 'PC.1.1', nome: 'FORNECEDORES E ALUGUÉIS A PAGAR' },
           { codigo: 'PC.1.2', nome: 'RESCISÃO DE ALUGUÉIS (SHOPPING)' },
+          { codigo: 'PC.1.3', nome: 'INVESTIMENTOS A PAGAR (REFORMAS, MÁQUINAS, MÓVEIS E IMÓVEIS)' },
         ],
       },
       { codigo: 'PC.2', nome: '2 - OBRIGAÇÕES DE COMPRA DE MP. E SERV.', nivel: 2 },

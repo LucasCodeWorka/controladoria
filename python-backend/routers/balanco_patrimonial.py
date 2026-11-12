@@ -40,6 +40,12 @@ DESPESAITENS_FORNECEDORES = (
     227, 228, 229, 231, 259, 262, 263, 264, 271, 280, 287, 488, 489, 539, 543, 544, 546,
 )
 
+# PC.1.3 Investimentos (CAPEX) a pagar: reformas e obras (150), maquinas e
+# equipamentos (138), moveis e utensilios (139) e imoveis (174). Entram na linha 1
+# SEM a regra do proximo mes: tudo o que esta lancado e em aberto (vencido ou a
+# vencer) e pagamento certo.
+DESPESAITENS_CAPEX = (150, 138, 139, 174)
+
 # PC.5 Tributos a recolher: despesaitens indicados pelo usuario (15 codigos;
 # inclui 158 Multas SEFAZ, 123 ISS ret. fonte e 230 IRRF outros servicos).
 DESPESAITENS_TRIBUTOS = (111, 112, 113, 116, 117, 118, 119, 120, 123, 126, 127, 230, 250, 285)
@@ -974,7 +980,15 @@ def get_balanco_patrimonial(
             ) or []
             proximo = float(rows[0]["total"]) if rows else 0.0
             rescisao = _calcular_rescisoes(mesReferencia, empresas)
-            return {"PC.1": -(proximo + rescisao), "PC.1.1": -proximo, "PC.1.2": -rescisao}
+            rows = execute_query(
+                f"""SELECT COALESCE(SUM(vl_rateio), 0) AS total
+                   FROM public.vr_fcp_despduplicatai
+                   WHERE cd_despesaitem IN %s
+                     AND tp_situacao = 'N'
+                     AND vl_pago = 0{cc}""", (DESPESAITENS_CAPEX, *prm)
+            ) or []
+            capex = float(rows[0]["total"]) if rows else 0.0
+            return {"PC.1": -(proximo + rescisao + capex), "PC.1.1": -proximo, "PC.1.2": -rescisao, "PC.1.3": -capex}
 
         # PC.5 = tributos a recolher do PROXIMO MES FECHADO ao mes de referencia (mesmo
         # conceito de PC.1): em aberto, nada pago, filtrado pelo centro de custo das
@@ -1121,6 +1135,7 @@ def get_balanco_patrimonial(
 # em diante, sem filtro de empresa; "ate_12m" / "apos_12m" = corte do CP/LP.
 _DETALHE_PASSIVO = {
     "PC.1": (lambda: DESPESAITENS_FORNECEDORES, "proximo_mes"),
+    "PC.1.3": (lambda: DESPESAITENS_CAPEX, "todos"),
     "PC.2": (lambda: DESPESAITENS_MATERIA_PRIMA, None),
     "PC.3": (lambda: ("114", "137"), "ate"), "PNC.8": (lambda: ("114", "137"), "apos"),
     "PC.IMV": (lambda: DESPESAITENS_IMOVEIS, "ate"), "PNC.IMV": (lambda: DESPESAITENS_IMOVEIS, "apos"),
@@ -1167,7 +1182,7 @@ def get_detalhe_passivo(conta: str = Query(..., description="Codigo da conta do 
     elif janela == "apos":
         corte = "AND d.dt_vencimento >= CURRENT_DATE + INTERVAL '12 months'"
     prm_corte: tuple = ()
-    piso = "" if janela == "ate_com_vencidos" else "AND d.dt_vencimento >= CURRENT_DATE"
+    piso = "" if janela in ("ate_com_vencidos", "todos") else "AND d.dt_vencimento >= CURRENT_DATE"
     if janela == "proximo_mes":
         ini, fim = _janela_proximo_mes(mesReferencia or date.today().strftime("%Y-%m"))
         corte = "AND d.dt_vencimento BETWEEN %s AND %s"
