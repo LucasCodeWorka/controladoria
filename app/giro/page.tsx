@@ -526,6 +526,9 @@ function percentualCampanhaVarejo(
   return pct;
 }
 
+// Atacado com o checkbox "manter desconto alto": mesma regra do varejo (ver acima).
+const percentualCampanhaAtacado = percentualCampanhaVarejo;
+
 // Texto curto de cada regra, pro tooltip da celula Camp Atac/Camp Var -
 // mesma numeracao/descricao mostrada no modal "Regras".
 const DESCRICAO_REGRA_CAMPANHA: Record<number, string> = {
@@ -586,6 +589,7 @@ interface TotaisDescontoGiro {
   totalDescontoAplicadoVarejo?: number;
   baseCheioCampanhaAtacado?: number;
   baseCheioCampanhaVarejo?: number;
+  faixasPromoAtacado?: { atual: Record<string, number>; novo: Record<string, number> };
   faixasPromoVarejo?: { atual: Record<string, number>; novo: Record<string, number> };
   totalReferencias: number;
   totalReferenciasMistas?: number;
@@ -1014,6 +1018,8 @@ export default function GiroPage() {
   const [manterDescontoAlto, setManterDescontoAlto] = useState(false);
   // Ref pra buscas disparadas no mesmo clique do checkbox (o state ainda nao atualizou).
   const manterDescontoAltoRef = useRef(false);
+  const [manterDescontoAltoAtacado, setManterDescontoAltoAtacado] = useState(false);
+  const manterDescontoAltoAtacadoRef = useRef(false);
   // Filtro "Mistas" / "Não mistas" ('' = todas, 'mistas' ou 'naoMistas') - o ref
   // espelha o estado pra buscarMatriz ler o valor novo no mesmo clique.
   const [tipoReferencia, setTipoReferencia] = useState('');
@@ -1216,6 +1222,7 @@ export default function GiroPage() {
       }
       aplicarFiltrosCategoriaParams(params);
       if (manterDescontoAltoRef.current) params.set('manterDescontoAlto', 'true');
+      if (manterDescontoAltoAtacadoRef.current) params.set('manterDescontoAltoAtacado', 'true');
       const response = await fetch(`/api/giro/matriz-produtos?${params.toString()}`, { cache: 'no-store' });
       const data = await response.json();
       if (!response.ok || data.error) {
@@ -1276,6 +1283,7 @@ export default function GiroPage() {
       }
       aplicarFiltrosCategoriaParams(params);
       if (manterDescontoAltoRef.current) params.set('manterDescontoAlto', 'true');
+      if (manterDescontoAltoAtacadoRef.current) params.set('manterDescontoAltoAtacado', 'true');
       const response = await fetch(`/api/giro/totais-desconto?${params.toString()}`, { cache: 'no-store' });
       const data = await response.json();
       if (response.ok && !data.error) {
@@ -1357,6 +1365,7 @@ export default function GiroPage() {
         params.set('canaisDesconto', canaisOportunidade);
       }
       if (manterDescontoAltoRef.current) params.set('manterDescontoAlto', 'true');
+      if (manterDescontoAltoAtacadoRef.current) params.set('manterDescontoAltoAtacado', 'true');
       const response = await fetch(`/api/giro/matriz-produtos/cores?${params.toString()}`, { cache: 'no-store' });
       const data = await response.json();
       if (response.ok && !data.error) {
@@ -1502,6 +1511,7 @@ export default function GiroPage() {
         if (matrizMesesFLMinimo.trim() !== '' && !Number.isNaN(mesesFLNum)) params.set('mesesFLMinimo', String(mesesFLNum));
         aplicarFiltrosCategoriaParams(params);
         if (manterDescontoAltoRef.current) params.set('manterDescontoAlto', 'true');
+        if (manterDescontoAltoAtacadoRef.current) params.set('manterDescontoAltoAtacado', 'true');
         const resp = await fetch(`/api/giro/matriz-produtos?${params.toString()}`, { cache: 'no-store' });
         const data = await resp.json();
         if (!resp.ok || data.error) throw new Error(data.detail || data.error || 'Erro ao buscar a matriz');
@@ -1529,6 +1539,7 @@ export default function GiroPage() {
             params.set('canaisDesconto', canaisOportunidade);
           }
           if (manterDescontoAltoRef.current) params.set('manterDescontoAlto', 'true');
+          if (manterDescontoAltoAtacadoRef.current) params.set('manterDescontoAltoAtacado', 'true');
           const resp = await fetch(`/api/giro/matriz-produtos/cores?${params.toString()}`, { cache: 'no-store' });
           const data = await resp.json();
           if (!resp.ok || data.error) throw new Error(data.detail || data.error || `Erro ao buscar as cores de ${ref.referencia}`);
@@ -1554,7 +1565,7 @@ export default function GiroPage() {
           const regra = regraDoItem(item);
           const promoAtac = item.promocoes?.find((p) => p.tipo === 'Atacado');
           const promoVar = item.promocoes?.find((p) => p.tipo === 'Varejo');
-          const pctAtac = percentualCampanhaCanal(regra, item.precoAtacado, promoAtac, item.precoCheioFallbackAtacado, item.temCorSemMesesFL ? null : item.descontoAtualRegraAtacado);
+          const pctAtac = percentualCampanhaAtacado(regra, item.precoAtacado, promoAtac, item.precoCheioFallbackAtacado, item.temCorSemMesesFL ? null : item.descontoAtualRegraAtacado, manterDescontoAltoAtacado);
           const pctVar = percentualCampanhaVarejo(regra, item.precoVarejo, promoVar, item.precoCheioFallbackVarejo, item.temCorSemMesesFL ? null : item.descontoAtualRegraVarejo, manterDescontoAlto);
           const cheioAtac = precoCheioCanal(item.precoAtacado, promoAtac, item.precoCheioFallbackAtacado);
           const cheioVar = precoCheioCanal(item.precoVarejo, promoVar, item.precoCheioFallbackVarejo);
@@ -1853,7 +1864,7 @@ export default function GiroPage() {
           const cheioVarejo = precoCheioCanal(item.precoVarejo, promoVarejo, item.precoCheioFallbackVarejo);
           const pctPromoAtacado = promoAtacado ? variacaoPercentual(cheioAtacado, promoAtacado.precoPromo) : null;
           const pctPromoVarejo = promoVarejo ? variacaoPercentual(cheioVarejo, promoVarejo.precoPromo) : null;
-          const pctCampanhaAtacado = percentualCampanhaCanal(regraCampanha, item.precoAtacado, promoAtacado, item.precoCheioFallbackAtacado, item.temCorSemMesesFL ? null : item.descontoAtualRegraAtacado);
+          const pctCampanhaAtacado = percentualCampanhaAtacado(regraCampanha, item.precoAtacado, promoAtacado, item.precoCheioFallbackAtacado, item.temCorSemMesesFL ? null : item.descontoAtualRegraAtacado, manterDescontoAltoAtacado);
           const pctCampanhaVarejo = percentualCampanhaVarejo(regraCampanha, item.precoVarejo, promoVarejo, item.precoCheioFallbackVarejo, item.temCorSemMesesFL ? null : item.descontoAtualRegraVarejo, manterDescontoAlto);
           const escadaPorDesconto = REGRAS_ESCADA_GIRO_ALTO.has(regraCampanha);
           // Preco cheio vindo de outra cor (a cor nao tem preco proprio): avisa no tooltip.
@@ -2512,6 +2523,55 @@ export default function GiroPage() {
                 })()}
               </div>
               <div className="bg-white rounded-lg shadow-lg p-4">
+                <p className="text-xs font-medium text-black uppercase tracking-wide" title="Estoque do Atacado (Maraponga) por faixa de promoção. Atual = desconto que a cor já tem ativo; Novo = percentual sugerido pela campanha (Camp Atac). Arredondado pra dezena. Segue os filtros da tela.">
+                  Análise por % — Atacado (filtro inteiro)
+                </p>
+                {(() => {
+                  const fx = totaisDescontoGiro?.faixasPromoAtacado;
+                  const faixas = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100].filter((f) => f <= 70 || (fx?.atual[String(f)] ?? 0) > 0 || (fx?.novo[String(f)] ?? 0) > 0);
+                  const novo = (f: number) => fx?.novo[String(f)] ?? 0;
+                  const atual = (f: number) => fx?.atual[String(f)] ?? 0;
+                  const totNovo = faixas.reduce((a, f) => a + novo(f), 0);
+                  const totAtual = faixas.reduce((a, f) => a + atual(f), 0);
+                  const corDif = (d: number) => (d > 0 ? 'bg-green-100 text-green-800' : d < 0 ? 'bg-red-100 text-red-800' : '');
+                  const dif = (d: number) => `${d > 0 ? '+' : ''}${formatarQtd(d)}`;
+                  return (
+                    <table className="mt-2 w-full text-sm border-collapse">
+                      <thead>
+                        <tr className="text-[11px] uppercase text-black">
+                          <th className="border border-slate-300 bg-green-100 px-2 py-1 text-left">Promoção %</th>
+                          <th className="border border-slate-300 bg-green-100 px-2 py-1 text-right">Qtd novo</th>
+                          <th className="border border-slate-300 bg-sky-100 px-2 py-1 text-right">Qtd atual</th>
+                          <th className="border border-slate-300 bg-sky-100 px-2 py-1 text-right">Diferença</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {faixas.map((f) => (
+                          <tr key={f}>
+                            <td className="border border-slate-300 px-2 py-1 text-center text-black">{f}%</td>
+                            <td className="border border-slate-300 px-2 py-1 text-right text-black">{totaisDescontoCarregando ? '...' : formatarQtd(novo(f))}</td>
+                            <td className="border border-slate-300 px-2 py-1 text-right text-black">{totaisDescontoCarregando ? '...' : formatarQtd(atual(f))}</td>
+                            <td className={`border border-slate-300 px-2 py-1 text-right ${corDif(novo(f) - atual(f))}`}>{totaisDescontoCarregando ? '...' : dif(novo(f) - atual(f))}</td>
+                          </tr>
+                        ))}
+                        <tr className="font-bold bg-yellow-200 text-black">
+                          <td className="border border-slate-300 px-2 py-1 text-center">Total</td>
+                          <td className="border border-slate-300 px-2 py-1 text-right">{formatarQtd(totNovo)}</td>
+                          <td className="border border-slate-300 px-2 py-1 text-right">{formatarQtd(totAtual)}</td>
+                          <td className={`border border-slate-300 px-2 py-1 text-right ${corDif(totNovo - totAtual)}`}>{dif(totNovo - totAtual)}</td>
+                        </tr>
+                        <tr className="text-black">
+                          <td className="border border-slate-300 px-2 py-1 text-center">Sem promoção</td>
+                          <td className="border border-slate-300 px-2 py-1 text-right">{formatarQtd(novo(0))}</td>
+                          <td className="border border-slate-300 px-2 py-1 text-right">{formatarQtd(atual(0))}</td>
+                          <td className={`border border-slate-300 px-2 py-1 text-right ${corDif(novo(0) - atual(0))}`}>{dif(novo(0) - atual(0))}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  );
+                })()}
+              </div>
+              <div className="bg-white rounded-lg shadow-lg p-4">
                 <p className="text-xs font-medium text-black uppercase tracking-wide" title="Desconto total que a campanha aplica contra o preço cheio, nas peças com Camp Atac / Camp Var maior que 0%: estoque × (preço cheio − preço de campanha já arredondado). Diferente do 'Valor do desconto sugerido', que mostra só o ganho sobre a promoção que a cor já tem. Atacado = Maraponga; Varejo = demais lojas.">
                   Desconto aplicado pela campanha (filtro inteiro)
                 </p>
@@ -2677,6 +2737,20 @@ export default function GiroPage() {
                   }}
                 />
                 Manter desconto ≥ 50% (varejo, não mistas, FL &gt; 12 meses)
+              </label>
+              <label className="flex items-center gap-1.5 text-sm text-black cursor-pointer ml-2" title="Atacado: referências não mistas, com mais de 12 meses como FL e desconto atual de 50% ou mais mantêm o desconto que já têm, em vez de a campanha reduzir.">
+                <input
+                  type="checkbox"
+                  checked={manterDescontoAltoAtacado}
+                  disabled={matrizCarregando}
+                  onChange={(e) => {
+                    manterDescontoAltoAtacadoRef.current = e.target.checked;
+                    setManterDescontoAltoAtacado(e.target.checked);
+                    setCoresPorReferencia({});
+                    buscarMatriz(mesReferencia, empresasParaMatriz(), 1, matrizOrdenarPor, matrizOrdem, matrizGiroMinimo, Array.from(statusSelecionados).join(','), filtroDimensaoMatriz, canaisOportunidade);
+                  }}
+                />
+                Manter desconto ≥ 50% (atacado, não mistas, FL &gt; 12 meses)
               </label>
               <span className="text-sm text-black ml-2">Referências:</span>
               {([['mistas', 'Mistas'], ['naoMistas', 'Não mistas']] as const).map(([valor, rotulo]) => (

@@ -1428,6 +1428,7 @@ def matriz_produtos_giro(
     referenciaBusca: Optional[str] = Query(None, description="Busca por referencia (contains, case-insensitive)"),
     mesesFLMinimo: Optional[int] = Query(None, description="So retorna referencias com Meses FL maior que esse valor (referencias sem Meses FL ficam de fora) - filtra a base INTEIRA antes de paginar"),
     manterDescontoAlto: bool = Query(False, description="Varejo: referencias nao mistas, apos 12 meses como FL, com desconto atual >= 50% mantem o desconto que ja tem"),
+    manterDescontoAltoAtacado: bool = Query(False, description="Atacado: referencias nao mistas, apos 12 meses como FL, com desconto atual >= 50% mantem o desconto que ja tem"),
 ):
     """
     Giro por REFERENCIA (nao por SKU/cor/tamanho individual) e empresa, numa
@@ -1449,6 +1450,7 @@ def matriz_produtos_giro(
     """
     try:
         _MANTER_DESCONTO_ALTO_VAREJO.set(manterDescontoAlto)
+        _MANTER_DESCONTO_ALTO_ATACADO.set(manterDescontoAltoAtacado)
         mes_ref = mesReferencia or _mes_atual()
         cd_empresas = _parse_empresas_giro(empresas)
         placeholders = ",".join(["%s"] * len(cd_empresas))
@@ -1683,6 +1685,7 @@ def matriz_produtos_giro_por_cor(
     oportunidadeDesconto: bool = Query(False, description="Mesmo checkbox da tabela - so as cores que, sozinhas, podem ganhar ou aumentar desconto"),
     canaisDesconto: Optional[str] = Query(None, description="Canais dos flags de oportunidade: atacado, varejo ou atacado,varejo (default: os dois)"),
     manterDescontoAlto: bool = Query(False, description="Varejo: referencias nao mistas, apos 12 meses como FL, com desconto atual >= 50% mantem o desconto que ja tem"),
+    manterDescontoAltoAtacado: bool = Query(False, description="Atacado: referencias nao mistas, apos 12 meses como FL, com desconto atual >= 50% mantem o desconto que ja tem"),
 ):
     """
     Abre UMA referencia por cor - mesma estrutura da matriz principal
@@ -1699,6 +1702,7 @@ def matriz_produtos_giro_por_cor(
     """
     try:
         _MANTER_DESCONTO_ALTO_VAREJO.set(manterDescontoAlto)
+        _MANTER_DESCONTO_ALTO_ATACADO.set(manterDescontoAltoAtacado)
         mes_ref = mesReferencia or _mes_atual()
         cd_empresas = _parse_empresas_giro(empresas)
         status_filtro = [s.strip() for s in status.split(",") if s.strip()] if status else None
@@ -2119,12 +2123,21 @@ def _desconto_atual_canal(preco_cadastro: Optional[float], promo_canal: Optional
 # vez de cair pra escadinha (60/50%). Setada no inicio de cada endpoint da tela.
 import contextvars
 _MANTER_DESCONTO_ALTO_VAREJO: contextvars.ContextVar = contextvars.ContextVar("manter_desconto_alto_varejo", default=False)
+_MANTER_DESCONTO_ALTO_ATACADO: contextvars.ContextVar = contextvars.ContextVar("manter_desconto_alto_atacado", default=False)
 _REGRAS_APOS_12_MESES = (4, 5, 11)
 
 
 def _percentual_campanha_varejo(regra, preco_cadastro, promo_canal, fallback=None, desconto_referencia=None) -> float:
     pct = _percentual_campanha_canal(regra, preco_cadastro, promo_canal, fallback, desconto_referencia)
     if (_MANTER_DESCONTO_ALTO_VAREJO.get() and desconto_referencia is not None
+            and regra in _REGRAS_APOS_12_MESES and desconto_referencia >= 50 and pct < desconto_referencia):
+        return round(desconto_referencia, 2)
+    return pct
+
+
+def _percentual_campanha_atacado(regra, preco_cadastro, promo_canal, fallback=None, desconto_referencia=None) -> float:
+    pct = _percentual_campanha_canal(regra, preco_cadastro, promo_canal, fallback, desconto_referencia)
+    if (_MANTER_DESCONTO_ALTO_ATACADO.get() and desconto_referencia is not None
             and regra in _REGRAS_APOS_12_MESES and desconto_referencia >= 50 and pct < desconto_referencia):
         return round(desconto_referencia, 2)
     return pct
@@ -2310,7 +2323,7 @@ def _tem_oportunidade_desconto(
         desc_ref_atacado, desc_ref_varejo = ctx_referencia["desc_atacado"], ctx_referencia["desc_varejo"]
     regra = _identificar_regra_campanha(giro_total, meses_oportunidade, tem_promo, familia, tem_cor_sem_meses_fl, linha)
     # Percentual por canal (nas regras 3/4/5 depende do desconto atual de cada canal).
-    pct_atacado = _percentual_campanha_canal(regra, preco_atacado, promo.get("atacado"), fb.get("atacado"), desc_ref_atacado)
+    pct_atacado = _percentual_campanha_atacado(regra, preco_atacado, promo.get("atacado"), fb.get("atacado"), desc_ref_atacado)
     pct_varejo = _percentual_campanha_varejo(regra, preco_varejo, promo.get("varejo"), fb.get("varejo"), desc_ref_varejo)
     if pct_atacado <= 0 and pct_varejo <= 0:
         return False
@@ -2521,6 +2534,7 @@ def totais_desconto_giro(
     referenciaBusca: Optional[str] = Query(None, description="Mesma busca por referencia da tabela"),
     mesesFLMinimo: Optional[int] = Query(None, description="Mesmo filtro 'Meses FL maior que' da tabela"),
     manterDescontoAlto: bool = Query(False, description="Varejo: referencias nao mistas, apos 12 meses como FL, com desconto atual >= 50% mantem o desconto que ja tem"),
+    manterDescontoAltoAtacado: bool = Query(False, description="Atacado: referencias nao mistas, apos 12 meses como FL, com desconto atual >= 50% mantem o desconto que ja tem"),
 ):
     """
     Totais pros 2 cards acima da tabela "Giro por referencia e loja"
@@ -2533,6 +2547,7 @@ def totais_desconto_giro(
     """
     try:
         _MANTER_DESCONTO_ALTO_VAREJO.set(manterDescontoAlto)
+        _MANTER_DESCONTO_ALTO_ATACADO.set(manterDescontoAltoAtacado)
         mes_ref = mesReferencia or _mes_atual()
         cd_empresas = _parse_empresas_giro(empresas)
         status_filtro = [s.strip() for s in status.split(",") if s.strip()] if status else None
@@ -2581,6 +2596,7 @@ def totais_desconto_giro(
         # Estoque do VAREJO por faixa de promocao (arredondada pra dezena): "atual" =
         # desconto que a cor ja tem ativo; "novo" = percentual sugerido pela campanha.
         faixas_varejo = {"atual": {}, "novo": {}}
+        faixas_atacado = {"atual": {}, "novo": {}}
 
         def _faixa_dezena(pct: float) -> int:
             return 0 if pct < 5 else min(100, int(round(pct / 10.0)) * 10)
@@ -2657,7 +2673,7 @@ def totais_desconto_giro(
                     desc_ref_atac, desc_ref_var = ctx_ref_item["desc_atacado"], ctx_ref_item["desc_varejo"]
                 regra_cor = _identificar_regra_campanha(giro_regra, meses_regra, tem_promo_cor, familia_item, tem_cor_sem_meses_fl_item, linha_item)
                 # Percentual por canal (regras 3/4/5 dependem do desconto atual de cada canal).
-                pct_atacado_cor = _percentual_campanha_canal(regra_cor, preco_cor.get("precoAtacado"), promo_cor.get("atacado"), fb_ref.get("atacado"), desc_ref_atac)
+                pct_atacado_cor = _percentual_campanha_atacado(regra_cor, preco_cor.get("precoAtacado"), promo_cor.get("atacado"), fb_ref.get("atacado"), desc_ref_atac)
                 pct_varejo_cor = _percentual_campanha_varejo(regra_cor, preco_cor.get("precoVarejo"), promo_cor.get("varejo"), fb_ref.get("varejo"), desc_ref_var)
                 ganho_atacado_cor = _ganho_desconto_canal(
                     preco_cor.get("precoAtacado"), promo_cor.get("atacado"), pct_atacado_cor, fb_ref.get("atacado")
@@ -2682,6 +2698,10 @@ def totais_desconto_giro(
                     if preco_camp is not None:
                         desconto_aplicado[canal] += est_canal * max(0.0, cheio_canal - preco_camp)
                         base_cheio_campanha[canal] += est_canal * cheio_canal
+                fa_atac = str(_faixa_dezena(_desconto_atual_canal(preco_cor.get("precoAtacado"), promo_cor.get("atacado"), fb_ref.get("atacado"))))
+                fn_atac = str(_faixa_dezena(pct_atacado_cor))
+                faixas_atacado["atual"][fa_atac] = faixas_atacado["atual"].get(fa_atac, 0.0) + estoque_maraponga_cor
+                faixas_atacado["novo"][fn_atac] = faixas_atacado["novo"].get(fn_atac, 0.0) + estoque_maraponga_cor
                 faixa_atual = _faixa_dezena(_desconto_atual_canal(preco_cor.get("precoVarejo"), promo_cor.get("varejo"), fb_ref.get("varejo")))
                 faixa_novo = _faixa_dezena(pct_varejo_cor)
                 faixas_varejo["atual"][str(faixa_atual)] = faixas_varejo["atual"].get(str(faixa_atual), 0.0) + estoque_resto_cor
@@ -2729,6 +2749,7 @@ def totais_desconto_giro(
             "baseCheioCampanhaAtacado": base_cheio_campanha["atacado"],
             "baseCheioCampanhaVarejo": base_cheio_campanha["varejo"],
             "faixasPromoVarejo": faixas_varejo,
+            "faixasPromoAtacado": faixas_atacado,
             "totalReferencias": total_referencias,
             "totalReferenciasMistas": sum(1 for i in dados_incluidos if mista_dict.get(i["referencia"], False)),
             "totalReferenciasNaoMistas": sum(1 for i in dados_incluidos if not mista_dict.get(i["referencia"], False)),
