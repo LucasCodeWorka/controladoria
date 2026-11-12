@@ -2473,6 +2473,64 @@ export default function GiroPage() {
                 </div>
                 <p className="text-xs text-black mt-1">Camp Atac / Camp Var maior que 0%</p>
               </div>
+              <div className="flex flex-col gap-4">
+                <div className="bg-white rounded-lg shadow-lg p-4">
+                  <p className="text-xs font-medium text-black uppercase tracking-wide" title="Desconto total que a campanha aplica contra o preço cheio, nas peças com Camp Atac / Camp Var maior que 0%: estoque × (preço cheio − preço de campanha já arredondado). Diferente do 'Valor do desconto sugerido', que mostra só o ganho sobre a promoção que a cor já tem. Atacado = Maraponga; Varejo = demais lojas.">
+                    Desconto aplicado pela campanha (filtro inteiro)
+                  </p>
+                  <div className="flex items-center gap-6 mt-1">
+                    {([
+                      ['Atacado (Maraponga)', totaisDescontoGiro?.totalDescontoAplicadoAtacado, totaisDescontoGiro?.baseCheioCampanhaAtacado],
+                      ['Varejo (demais lojas)', totaisDescontoGiro?.totalDescontoAplicadoVarejo, totaisDescontoGiro?.baseCheioCampanhaVarejo],
+                    ] as [string, number | undefined, number | undefined][]).map(([rotulo, valor, base]) => (
+                      <div key={rotulo}>
+                        <p className="text-[10px] text-black uppercase tracking-wide">{rotulo}</p>
+                        <p className="text-xl font-bold text-rose-700">
+                          {totaisDescontoCarregando ? '...' : formatarPreco(valor ?? 0)}
+                        </p>
+                        <p className="text-xs text-black">
+                          {totaisDescontoCarregando ? '' : `${base ? (((valor ?? 0) / base) * 100).toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) : '0,0'}% do valor a preço cheio`}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-xs text-black mt-1">Camp Atac / Camp Var maior que 0%</p>
+                </div>
+                <div className="bg-white rounded-lg shadow-lg p-4">
+                  <p className="text-xs font-medium text-black uppercase tracking-wide" title="Mista: tem produto em linha/nova coleção junto com oportunidade (regras 7/8). Não mista: decidida pelo giro da referência inteira e pelo menor Meses FL.">
+                    Referências mistas x não mistas (filtro inteiro)
+                  </p>
+                  <div className="mt-1 space-y-1.5">
+                    {([
+                      ['Mistas', totaisDescontoGiro?.totalReferenciasMistas, totaisDescontoGiro?.totalDescontoAtacadoMistas, totaisDescontoGiro?.totalDescontoVarejoMistas, totaisDescontoGiro?.totalEstoqueAtacadoMistas, totaisDescontoGiro?.totalEstoqueVarejoMistas, 'text-amber-700'],
+                      ['Não mistas', totaisDescontoGiro?.totalReferenciasNaoMistas, totaisDescontoGiro?.totalDescontoAtacadoNaoMistas, totaisDescontoGiro?.totalDescontoVarejoNaoMistas, totaisDescontoGiro?.totalEstoqueAtacadoNaoMistas, totaisDescontoGiro?.totalEstoqueVarejoNaoMistas, 'text-black'],
+                    ] as [string, number | undefined, number | undefined, number | undefined, number | undefined, number | undefined, string][]).map(([rotulo, qtd, descAtac, descVar, estAtac, estVar, cor]) => (
+                      <div key={rotulo} className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+                        <div className="w-24">
+                          <p className="text-[10px] text-black uppercase tracking-wide">{rotulo}</p>
+                          <p className={`text-xl font-bold ${cor}`}>{totaisDescontoCarregando ? '...' : formatarQtd(qtd ?? 0)}</p>
+                        </div>
+                        <div>
+                          <p className="text-[10px] text-black uppercase tracking-wide">Desconto Atacado</p>
+                          <p className="text-sm font-bold text-rose-700">{totaisDescontoCarregando ? '...' : formatarPreco(descAtac ?? 0)}</p>
+                        </div>
+                        <div>
+                          <p className="text-[10px] text-black uppercase tracking-wide">Desconto Varejo</p>
+                          <p className="text-sm font-bold text-rose-700">{totaisDescontoCarregando ? '...' : formatarPreco(descVar ?? 0)}</p>
+                        </div>
+                        <div>
+                          <p className="text-[10px] text-black uppercase tracking-wide">Estoque c/ desconto Atacado</p>
+                          <p className="text-sm font-bold text-black">{totaisDescontoCarregando ? '...' : `${formatarQtd(estAtac ?? 0)} un.`}</p>
+                        </div>
+                        <div>
+                          <p className="text-[10px] text-black uppercase tracking-wide">Estoque c/ desconto Varejo</p>
+                          <p className="text-sm font-bold text-black">{totaisDescontoCarregando ? '...' : `${formatarQtd(estVar ?? 0)} un.`}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
               <div className="bg-white rounded-lg shadow-lg p-4">
                 <p className="text-xs font-medium text-black uppercase tracking-wide" title="Estoque do Varejo (demais lojas) por faixa de promoção. Atual = desconto que a cor já tem ativo; Novo = percentual sugerido pela campanha (Camp Var). Arredondado pra dezena. Segue os filtros da tela.">
                   Análise por % — Varejo (filtro inteiro)
@@ -2570,62 +2628,6 @@ export default function GiroPage() {
                     </table>
                   );
                 })()}
-              </div>
-              <div className="bg-white rounded-lg shadow-lg p-4">
-                <p className="text-xs font-medium text-black uppercase tracking-wide" title="Desconto total que a campanha aplica contra o preço cheio, nas peças com Camp Atac / Camp Var maior que 0%: estoque × (preço cheio − preço de campanha já arredondado). Diferente do 'Valor do desconto sugerido', que mostra só o ganho sobre a promoção que a cor já tem. Atacado = Maraponga; Varejo = demais lojas.">
-                  Desconto aplicado pela campanha (filtro inteiro)
-                </p>
-                <div className="flex items-center gap-6 mt-1">
-                  {([
-                    ['Atacado (Maraponga)', totaisDescontoGiro?.totalDescontoAplicadoAtacado, totaisDescontoGiro?.baseCheioCampanhaAtacado],
-                    ['Varejo (demais lojas)', totaisDescontoGiro?.totalDescontoAplicadoVarejo, totaisDescontoGiro?.baseCheioCampanhaVarejo],
-                  ] as [string, number | undefined, number | undefined][]).map(([rotulo, valor, base]) => (
-                    <div key={rotulo}>
-                      <p className="text-[10px] text-black uppercase tracking-wide">{rotulo}</p>
-                      <p className="text-xl font-bold text-rose-700">
-                        {totaisDescontoCarregando ? '...' : formatarPreco(valor ?? 0)}
-                      </p>
-                      <p className="text-xs text-black">
-                        {totaisDescontoCarregando ? '' : `${base ? (((valor ?? 0) / base) * 100).toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) : '0,0'}% do valor a preço cheio`}
-                      </p>
-                    </div>
-                  ))}
-                </div>
-                <p className="text-xs text-black mt-1">Camp Atac / Camp Var maior que 0%</p>
-              </div>
-              <div className="bg-white rounded-lg shadow-lg p-4">
-                <p className="text-xs font-medium text-black uppercase tracking-wide" title="Mista: tem produto em linha/nova coleção junto com oportunidade (regras 7/8). Não mista: decidida pelo giro da referência inteira e pelo menor Meses FL.">
-                  Referências mistas x não mistas (filtro inteiro)
-                </p>
-                <div className="mt-1 space-y-1.5">
-                  {([
-                    ['Mistas', totaisDescontoGiro?.totalReferenciasMistas, totaisDescontoGiro?.totalDescontoAtacadoMistas, totaisDescontoGiro?.totalDescontoVarejoMistas, totaisDescontoGiro?.totalEstoqueAtacadoMistas, totaisDescontoGiro?.totalEstoqueVarejoMistas, 'text-amber-700'],
-                    ['Não mistas', totaisDescontoGiro?.totalReferenciasNaoMistas, totaisDescontoGiro?.totalDescontoAtacadoNaoMistas, totaisDescontoGiro?.totalDescontoVarejoNaoMistas, totaisDescontoGiro?.totalEstoqueAtacadoNaoMistas, totaisDescontoGiro?.totalEstoqueVarejoNaoMistas, 'text-black'],
-                  ] as [string, number | undefined, number | undefined, number | undefined, number | undefined, number | undefined, string][]).map(([rotulo, qtd, descAtac, descVar, estAtac, estVar, cor]) => (
-                    <div key={rotulo} className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
-                      <div className="w-24">
-                        <p className="text-[10px] text-black uppercase tracking-wide">{rotulo}</p>
-                        <p className={`text-xl font-bold ${cor}`}>{totaisDescontoCarregando ? '...' : formatarQtd(qtd ?? 0)}</p>
-                      </div>
-                      <div>
-                        <p className="text-[10px] text-black uppercase tracking-wide">Desconto Atacado</p>
-                        <p className="text-sm font-bold text-rose-700">{totaisDescontoCarregando ? '...' : formatarPreco(descAtac ?? 0)}</p>
-                      </div>
-                      <div>
-                        <p className="text-[10px] text-black uppercase tracking-wide">Desconto Varejo</p>
-                        <p className="text-sm font-bold text-rose-700">{totaisDescontoCarregando ? '...' : formatarPreco(descVar ?? 0)}</p>
-                      </div>
-                      <div>
-                        <p className="text-[10px] text-black uppercase tracking-wide">Estoque c/ desconto Atacado</p>
-                        <p className="text-sm font-bold text-black">{totaisDescontoCarregando ? '...' : `${formatarQtd(estAtac ?? 0)} un.`}</p>
-                      </div>
-                      <div>
-                        <p className="text-[10px] text-black uppercase tracking-wide">Estoque c/ desconto Varejo</p>
-                        <p className="text-sm font-bold text-black">{totaisDescontoCarregando ? '...' : `${formatarQtd(estVar ?? 0)} un.`}</p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
               </div>
             </div>
           )}
