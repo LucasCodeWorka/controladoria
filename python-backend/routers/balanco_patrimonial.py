@@ -46,6 +46,13 @@ DESPESAITENS_FORNECEDORES = (
 # vencer) e pagamento certo.
 DESPESAITENS_CAPEX = (150, 138, 139, 174)
 
+# PC.1.4 Marketing e comercial a pagar: sem previsao, entao o que esta lancado e o
+# real. Entra TODO o em aberto (vencido ou a vencer), sem a regra de proximo mes.
+DESPESAITENS_MARKETING = (
+    94, 95, 96, 97, 98, 99, 100, 102, 103, 104, 105, 155, 172, 168, 233, 234, 235, 236,
+    237, 238, 239, 240, 241, 242, 163, 165, 132, 542,
+)
+
 # PC.5 Tributos a recolher: despesaitens indicados pelo usuario (15 codigos;
 # inclui 158 Multas SEFAZ, 123 ISS ret. fonte e 230 IRRF outros servicos).
 DESPESAITENS_TRIBUTOS = (111, 112, 113, 116, 117, 118, 119, 120, 123, 126, 127, 230, 250, 285)
@@ -988,7 +995,16 @@ def get_balanco_patrimonial(
                      AND vl_pago = 0{cc}""", (DESPESAITENS_CAPEX, *prm)
             ) or []
             capex = float(rows[0]["total"]) if rows else 0.0
-            return {"PC.1": -(proximo + rescisao + capex), "PC.1.1": -proximo, "PC.1.2": -rescisao, "PC.1.3": -capex}
+            rows = execute_query(
+                f"""SELECT COALESCE(SUM(vl_rateio), 0) AS total
+                   FROM public.vr_fcp_despduplicatai
+                   WHERE cd_despesaitem IN %s
+                     AND tp_situacao = 'N'
+                     AND vl_pago = 0{cc}""", (DESPESAITENS_MARKETING, *prm)
+            ) or []
+            marketing = float(rows[0]["total"]) if rows else 0.0
+            return {"PC.1": -(proximo + rescisao + capex + marketing), "PC.1.1": -proximo, "PC.1.2": -rescisao,
+                    "PC.1.3": -capex, "PC.1.4": -marketing}
 
         # PC.5 = tributos a recolher do PROXIMO MES FECHADO ao mes de referencia (mesmo
         # conceito de PC.1): em aberto, nada pago, filtrado pelo centro de custo das
@@ -1136,6 +1152,7 @@ def get_balanco_patrimonial(
 _DETALHE_PASSIVO = {
     "PC.1": (lambda: DESPESAITENS_FORNECEDORES, "proximo_mes"),
     "PC.1.3": (lambda: DESPESAITENS_CAPEX, "todos"),
+    "PC.1.4": (lambda: DESPESAITENS_MARKETING, "todos"),
     "PC.2": (lambda: DESPESAITENS_MATERIA_PRIMA, None),
     "PC.3": (lambda: ("114", "137"), "ate"), "PNC.8": (lambda: ("114", "137"), "apos"),
     "PC.IMV": (lambda: DESPESAITENS_IMOVEIS, "ate"), "PNC.IMV": (lambda: DESPESAITENS_IMOVEIS, "apos"),
