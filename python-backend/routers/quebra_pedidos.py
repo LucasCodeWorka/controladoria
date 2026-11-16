@@ -16,7 +16,7 @@ situacao 4, sem representantes e operacoes excluidos).
 from fastapi import APIRouter, HTTPException, Query
 from typing import Optional
 from datetime import date, timedelta
-from database import execute_query
+from database import execute_query, execute_insert
 from routers.indicadores import OPERACOES_EXCLUIDAS, REPRESENTANTES_EXCLUIDOS
 
 router = APIRouter()
@@ -33,8 +33,131 @@ def _parse_data(valor: Optional[str], padrao: date) -> date:
         raise HTTPException(status_code=400, detail=f"Data invalida: {valor} (use AAAA-MM-DD)")
 
 
+def _parse_motivos(valor: Optional[str]) -> list:
+    if not valor:
+        return []
+    try:
+        return [int(v) for v in valor.split(",") if v.strip()]
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Motivos invalidos: {valor}")
+
+
 def _pct(parte: float, total: float) -> Optional[float]:
     return round(parte / total * 100, 2) if total else None
+
+
+# ── Cache mensal (meses fechados nao mudam) ──────────────────────────────
+
+def _criar_tabelas_cache():
+    execute_insert("""
+        CREATE TABLE IF NOT EXISTS quebra_pedidos_mes (
+            mes TEXT NOT NULL, cd_motivo INTEGER NOT NULL, motivo TEXT,
+            valor NUMERIC NOT NULL DEFAULT 0, qtd NUMERIC NOT NULL DEFAULT 0,
+            PRIMARY KEY (mes, cd_motivo)
+        )""", ())
+    execute_insert("""
+        CREATE TABLE IF NOT EXISTS quebra_pedidos_mes_calc (
+            mes TEXT PRIMARY KEY, faturamento NUMERIC NOT NULL DEFAULT 0,
+            calculado_em TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )""", ())
+
+
+def _calcular_mes(mes: str):
+    """Calcula (por motivo) e grava no cache o mes AAAA-MM."""
+    ano, m = (int(p) for p in mes.split("-"))
+    ini = date(ano, m, 1)
+    fim = date(ano + 1, 1, 1) if m == 12 else date(ano, m + 1, 1)
+    ops_fab = ", ".join(str(o) for o in OPERACOES_EXCLUIDAS)
+    reps_excl = ", ".join(str(r) for r in REPRESENTANTES_EXCLUIDOS)
+    rows = execute_query(
+        """
+        WITH ult AS (
+            SELECT a.*, ROW_NUMBER() OVER (
+                PARTITION BY a.cd_empresa, a.cd_pedido, a.cd_produto ORDER BY a.dt_cadastro DESC
+            ) AS rn
+            FROM vr_ped_pedidoicanc2 a
+            WHERE a.dt_cadastro >= %s::date AND a.dt_cadastro < %s::date
+        )
+        SELECT u.cd_motivocanc AS cd_motivo,
+               MAX(COALESCE(NULLIF(TRIM(u.ds_motivocanc), ''), 'Motivo ' || u.cd_motivocanc::text)) AS motivo,
+               COALESCE(SUM(b.vl_unitario * b.qt_cancelada), 0) AS valor,
+               COALESCE(SUM(b.qt_cancelada), 0) AS qtd
+        FROM ult u
+        JOIN vr_ped_pedidoi b
+          ON u.cd_pedido = b.cd_pedido AND u.cd_empresa = b.cd_empresa AND u.cd_produto = b.cd_produto
+        WHERE u.rn = 1 AND b.cd_operacao IN (52, 1) AND u.cd_motivocanc IS NOT NULL
+        GROUP BY u.cd_motivocanc
+        """,
+        (ini.isoformat(), fim.isoformat()),
+    ) or []
+    fat = execute_query(
+        f"""
+        SELECT COALESCE(SUM(CASE WHEN t.tp_operacao = 'S' THEN i.vl_totalliquido ELSE -i.vl_totalliquido END), 0) AS fat
+        FROM vr_tra_transacao t
+        LEFT JOIN vr_tra_transitem i
+          ON i.cd_empresa = t.cd_empresa AND i.dt_transacao = t.dt_transacao AND i.nr_transacao = t.nr_transacao
+        WHERE t.cd_empresa = 1 AND t.tp_situacao = 4 AND t.cd_representant IS NOT NULL
+          AND t.cd_representant <> ALL (ARRAY[{reps_excl}])
+          AND t.cd_operacao NOT IN ({ops_fab})
+          AND t.dt_transacao >= %s::date AND t.dt_transacao < %s::date
+          AND ((t.tp_modalidade IN ('4', '8') AND t.tp_operacao = 'S')
+               OR (t.tp_modalidade IN ('3') AND t.tp_operacao = 'E'))
+        """,
+        (ini.isoformat(), fim.isoformat()),
+    ) or [{"fat": 0}]
+    execute_insert("DELETE FROM quebra_pedidos_mes WHERE mes = %s", (mes,))
+    for r in rows:
+        execute_insert(
+            "INSERT INTO quebra_pedidos_mes (mes, cd_motivo, motivo, valor, qtd) VALUES (%s, %s, %s, %s, %s)",
+            (mes, r["cd_motivo"], r["motivo"], float(r["valor"] or 0), float(r["qtd"] or 0)),
+        )
+    execute_insert(
+        """INSERT INTO quebra_pedidos_mes_calc (mes, faturamento, calculado_em) VALUES (%s, %s, CURRENT_TIMESTAMP)
+           ON CONFLICT (mes) DO UPDATE SET faturamento = EXCLUDED.faturamento, calculado_em = CURRENT_TIMESTAMP""",
+        (mes, float(fat[0]["fat"] or 0)),
+    )
+
+
+def _meses_fechados(hoje: date) -> list:
+    return [f"{hoje.year}-{m:02d}" for m in range(1, hoje.month)]
+
+
+def garantir_meses_fechados():
+    """Calcula os meses fechados do ano que ainda nao estao no cache."""
+    _criar_tabelas_cache()
+    hoje = date.today()
+    prontos = {r["mes"] for r in (execute_query("SELECT mes FROM quebra_pedidos_mes_calc") or [])}
+    for mes in _meses_fechados(hoje):
+        if mes not in prontos:
+            _calcular_mes(mes)
+
+
+def _serie_mensal(hoje: date, motivos_filtro: list) -> list:
+    meses = _meses_fechados(hoje)
+    if not meses:
+        return []
+    garantir_meses_fechados()
+    calc = {r["mes"]: float(r["faturamento"] or 0) for r in (execute_query(
+        "SELECT mes, faturamento FROM quebra_pedidos_mes_calc WHERE mes IN %s", (tuple(meses),)) or [])}
+    linhas = execute_query(
+        "SELECT mes, cd_motivo, valor, qtd FROM quebra_pedidos_mes WHERE mes IN %s", (tuple(meses),)) or []
+    por_mes: dict = {m: {"valor": 0.0, "qtd": 0.0, "valorQuebra": 0.0} for m in meses}
+    for r in linhas:
+        if motivos_filtro and r["cd_motivo"] not in motivos_filtro:
+            continue
+        d = por_mes[r["mes"]]
+        d["valor"] += float(r["valor"])
+        d["qtd"] += float(r["qtd"])
+        if r["cd_motivo"] == MOTIVO_QUEBRA:
+            d["valorQuebra"] += float(r["valor"])
+    serie = []
+    for m in meses:
+        d = por_mes[m]
+        fat = calc.get(m, 0.0)
+        serie.append({"mes": m, "valor": round(d["valor"], 2), "qtd": round(d["qtd"], 2),
+                      "valorQuebra": round(d["valorQuebra"], 2), "faturamento": round(fat, 2),
+                      "pctFaturamento": _pct(d["valor"], fat)})
+    return serie
 
 
 @router.get("/api/quebra-pedidos")
@@ -42,6 +165,7 @@ def quebra_pedidos(
     dataInicio: Optional[str] = Query(None, description="Data inicial AAAA-MM-DD (default: 1o dia do mes atual)"),
     dataFim: Optional[str] = Query(None, description="Data final AAAA-MM-DD, inclusive (default: hoje)"),
     somenteQuebra: bool = Query(False, description="true = so o motivo 6 (QUEBRA DE PEDIDOS), igual ao indicador"),
+    motivos: Optional[str] = Query(None, description="Lista de cd_motivocanc separados por virgula (default: todos)"),
 ):
     try:
         hoje = date.today()
@@ -52,7 +176,12 @@ def quebra_pedidos(
         fim_exclusivo = fim + timedelta(days=1)
         ops_fab = ", ".join(str(o) for o in OPERACOES_EXCLUIDAS)
         reps_excl = ", ".join(str(r) for r in REPRESENTANTES_EXCLUIDOS)
-        filtro_motivo = f"AND u.cd_motivocanc = {MOTIVO_QUEBRA}" if somenteQuebra else ""
+        lista_motivos_filtro = _parse_motivos(motivos)
+        if somenteQuebra:
+            lista_motivos_filtro = [MOTIVO_QUEBRA]
+        filtro_motivo = (
+            f"AND u.cd_motivocanc IN ({', '.join(str(m) for m in lista_motivos_filtro)})" if lista_motivos_filtro else ""
+        )
 
         itens = execute_query(
             f"""
@@ -146,6 +275,11 @@ def quebra_pedidos(
                 "pctFaturamento": _pct(d["valor"], fat_dia),
             })
 
+        # Grafico mensal: meses do ano atual ate o ULTIMO MES FECHADO (nao depende das
+        # datas do filtro; respeita o filtro de motivo). Meses fechados ficam em cache
+        # no banco (calcular um mes leva dezenas de segundos).
+        por_mes = _serie_mensal(hoje, lista_motivos_filtro)
+
         quebra = por_motivo.get(MOTIVO_QUEBRA)
         return {
             "dataInicio": ini.isoformat(), "dataFim": fim.isoformat(), "somenteQuebra": somenteQuebra,
@@ -162,6 +296,7 @@ def quebra_pedidos(
             },
             "porMotivo": lista_motivos,
             "porData": lista_datas,
+            "porMes": por_mes,
         }
     except HTTPException:
         raise
@@ -170,3 +305,23 @@ def quebra_pedidos(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Erro ao calcular a quebra de pedidos: {str(e)}")
+
+
+@router.get("/api/quebra-pedidos/motivos")
+def motivos_disponiveis():
+    """Motivos de cancelamento existentes no ano atual (pro filtro da tela)."""
+    try:
+        rows = execute_query(
+            """
+            SELECT cd_motivocanc AS cd, MAX(COALESCE(NULLIF(TRIM(ds_motivocanc), ''), 'Motivo ' || cd_motivocanc::text)) AS motivo
+            FROM vr_ped_pedidoicanc2
+            WHERE dt_cadastro >= %s::date AND cd_motivocanc IS NOT NULL
+            GROUP BY cd_motivocanc
+            ORDER BY cd_motivocanc
+            """,
+            (date.today().replace(month=1, day=1).isoformat(),),
+        ) or []
+        return {"motivos": [{"cdMotivo": r["cd"], "motivo": r["motivo"], "ehQuebra": r["cd"] == MOTIVO_QUEBRA} for r in rows]}
+    except Exception as e:
+        print(f"[ERROR] Erro ao listar motivos da quebra de pedidos: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

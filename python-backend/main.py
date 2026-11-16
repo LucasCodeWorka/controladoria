@@ -58,6 +58,13 @@ app.include_router(dre_projetada.router)
 app.include_router(quebra_pedidos.router)
 
 
+async def _aquecer_quebra_pedidos():
+    try:
+        await asyncio.to_thread(quebra_pedidos.garantir_meses_fechados)
+    except Exception as e:
+        print(f"[ERROR] cache mensal da quebra de pedidos: {e}")
+
+
 @app.on_event("startup")
 async def startup_event():
     # Recalculo automatico do giro em background (so pro mes atual, so
@@ -76,6 +83,9 @@ async def startup_event():
     # Cache do estoque PA das lojas (balanco patrimonial) - valorizar o estoque
     # leva dezenas de segundos, entao fica pronto antes da tela pedir.
     asyncio.create_task(balanco_patrimonial.loop_cache_estoque_lojas())
+    # Meses fechados da Quebra de Pedidos (cada mes leva dezenas de segundos) -
+    # calcula em background pra tela abrir o grafico na hora.
+    asyncio.create_task(_aquecer_quebra_pedidos())
 
 
 @app.on_event("shutdown")

@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { PackageX, Loader2 } from 'lucide-react';
+import { PackageX, Loader2, ChevronDown } from 'lucide-react';
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
 interface MotivoQuebra {
@@ -26,6 +26,21 @@ interface DiaQuebra {
   pctFaturamento: number | null;
 }
 
+interface MesQuebra {
+  mes: string;
+  valor: number;
+  qtd: number;
+  valorQuebra: number;
+  faturamento: number;
+  pctFaturamento: number | null;
+}
+
+interface OpcaoMotivo {
+  cdMotivo: number;
+  motivo: string;
+  ehQuebra: boolean;
+}
+
 interface DadosQuebra {
   dataInicio: string;
   dataFim: string;
@@ -43,12 +58,15 @@ interface DadosQuebra {
   };
   porMotivo: MotivoQuebra[];
   porData: DiaQuebra[];
+  porMes: MesQuebra[];
 }
 
 const fmtMoeda = (n: number) => n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const fmtNum = (n: number) => n.toLocaleString('pt-BR', { maximumFractionDigits: 0 });
 const fmtPct = (n: number | null | undefined) => (n === null || n === undefined ? '-' : `${n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`);
 const fmtData = (iso: string) => new Date(`${iso}T00:00:00`).toLocaleDateString('pt-BR');
+const NOMES_MESES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+const rotuloMes = (mes: string) => `${NOMES_MESES[Number(mes.slice(5, 7)) - 1]}/${mes.slice(2, 4)}`;
 const isoHoje = () => {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -68,7 +86,9 @@ function Cartao({ rotulo, valor, detalhe, destaque }: { rotulo: string; valor: s
 export default function QuebraPedidosPage() {
   const [dataInicio, setDataInicio] = useState(isoPrimeiroDiaMes());
   const [dataFim, setDataFim] = useState(isoHoje());
-  const [somenteQuebra, setSomenteQuebra] = useState(false);
+  const [motivosDisponiveis, setMotivosDisponiveis] = useState<OpcaoMotivo[]>([]);
+  const [motivosSelecionados, setMotivosSelecionados] = useState<Set<number>>(new Set());
+  const [filtroMotivoAberto, setFiltroMotivoAberto] = useState(false);
   const [dados, setDados] = useState<DadosQuebra | null>(null);
   const [loading, setLoading] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
@@ -86,7 +106,10 @@ export default function QuebraPedidosPage() {
     setErro(null);
     try {
       const params = new URLSearchParams({ dataInicio, dataFim });
-      if (somenteQuebra) params.set('somenteQuebra', 'true');
+      // Todos marcados (ou nenhum) = sem filtro de motivo.
+      if (motivosSelecionados.size > 0 && motivosSelecionados.size < motivosDisponiveis.length) {
+        params.set('motivos', Array.from(motivosSelecionados).join(','));
+      }
       const response = await fetch(`/api/quebra-pedidos?${params.toString()}`, { cache: 'no-store' });
       const data = await response.json();
       if (!response.ok || data.error) {
@@ -102,13 +125,29 @@ export default function QuebraPedidosPage() {
     }
   }
 
+  // So a lista de motivos (pro filtro) carrega ao abrir; os dados so vem ao clicar em Consultar.
   useEffect(() => {
-    consultar();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    fetch('/api/quebra-pedidos/motivos', { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((d) => {
+        const lista: OpcaoMotivo[] = d.motivos || [];
+        setMotivosDisponiveis(lista);
+        setMotivosSelecionados(new Set(lista.map((m) => m.cdMotivo)));
+      })
+      .catch((e) => console.error('Erro ao buscar motivos:', e));
   }, []);
 
+  function toggleMotivo(cd: number) {
+    setMotivosSelecionados((atual) => {
+      const novo = new Set(atual);
+      if (novo.has(cd)) novo.delete(cd);
+      else novo.add(cd);
+      return novo;
+    });
+  }
+
   const c = dados?.consolidado;
-  const grafico = (dados?.porData ?? []).map((d) => ({ data: fmtData(d.data).slice(0, 5), valor: d.valor, valorQuebra: d.valorQuebra }));
+  const grafico = (dados?.porMes ?? []).map((m) => ({ mes: rotuloMes(m.mes), valor: m.valor, valorQuebra: m.valorQuebra, pct: m.pctFaturamento, faturamento: m.faturamento }));
   const totalDatas = (dados?.porData ?? []).reduce(
     (acc, d) => ({ itens: acc.itens + d.itens, qtd: acc.qtd + d.qtd, valor: acc.valor + d.valor, faturamento: acc.faturamento + d.faturamento }),
     { itens: 0, qtd: 0, valor: 0, faturamento: 0 },
@@ -142,10 +181,38 @@ export default function QuebraPedidosPage() {
             <span className="block text-xs font-medium mb-1">Data final</span>
             <input type="date" value={dataFim} onChange={(e) => setDataFim(e.target.value)} className="px-3 py-2 border border-gray-300 rounded-md text-sm" />
           </label>
-          <label className="flex items-center gap-2 text-sm text-gray-700 pb-2 cursor-pointer">
-            <input type="checkbox" checked={somenteQuebra} onChange={(e) => setSomenteQuebra(e.target.checked)} />
-            Somente o motivo &quot;Quebra de pedidos&quot; (igual ao indicador)
-          </label>
+          <div className="relative">
+            <span className="block text-xs font-medium mb-1 text-gray-600">Motivo</span>
+            <button
+              type="button"
+              onClick={() => setFiltroMotivoAberto((v) => !v)}
+              className="min-w-[220px] flex items-center justify-between gap-2 px-3 py-2 border border-gray-300 rounded-md text-sm bg-white hover:bg-gray-50"
+            >
+              {motivosSelecionados.size === motivosDisponiveis.length ? 'Todos os motivos' : `Motivos (${motivosSelecionados.size}/${motivosDisponiveis.length})`}
+              <ChevronDown className="w-4 h-4 text-gray-500" />
+            </button>
+            {filtroMotivoAberto && (
+              <div className="absolute z-30 mt-1 w-80 max-h-80 overflow-auto bg-white border border-gray-200 rounded-lg shadow-xl p-2">
+                <div className="flex justify-between px-1 pb-1 mb-1 border-b border-gray-100">
+                  <button type="button" className="text-xs font-medium text-purple-700 hover:text-purple-900" onClick={() => setMotivosSelecionados(new Set(motivosDisponiveis.map((m) => m.cdMotivo)))}>
+                    Todos
+                  </button>
+                  <button type="button" className="text-xs font-medium text-gray-600 hover:text-gray-900" onClick={() => setMotivosSelecionados(new Set(motivosDisponiveis.filter((m) => m.ehQuebra).map((m) => m.cdMotivo)))}>
+                    Só quebra de pedidos
+                  </button>
+                  <button type="button" className="text-xs font-medium text-gray-600 hover:text-gray-900" onClick={() => setMotivosSelecionados(new Set())}>
+                    Nenhum
+                  </button>
+                </div>
+                {motivosDisponiveis.map((m) => (
+                  <label key={m.cdMotivo} className="flex items-center gap-2 px-1 py-1 text-sm hover:bg-gray-50 rounded cursor-pointer">
+                    <input type="checkbox" checked={motivosSelecionados.has(m.cdMotivo)} onChange={() => toggleMotivo(m.cdMotivo)} />
+                    {m.cdMotivo} - {m.motivo}
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
           <button
             onClick={consultar}
             disabled={loading}
@@ -161,6 +228,12 @@ export default function QuebraPedidosPage() {
           O percentual usa o faturamento da fábrica no mesmo período.
         </p>
       </div>
+
+      {!dados && !loading && !erro && (
+        <div className="bg-white rounded-lg shadow-md p-8 text-center text-sm text-gray-500">
+          Escolha o período e o motivo e clique em Consultar.
+        </div>
+      )}
 
       {loading && !dados && (
         <div className="flex items-center justify-center py-16">
@@ -182,17 +255,24 @@ export default function QuebraPedidosPage() {
           </div>
 
           <div className="bg-white rounded-lg shadow-md p-4">
-            <h2 className="text-sm font-bold text-brand-dark mb-3">Valor cancelado por data</h2>
+            <h2 className="text-sm font-bold text-brand-dark">Valor cancelado por mês</h2>
+            <p className="text-xs text-gray-500 mb-3">Meses do ano atual até o último mês fechado (não depende das datas do filtro; respeita o filtro de motivo).</p>
             {grafico.length === 0 ? (
-              <p className="text-sm text-gray-500">Nenhum cancelamento no período.</p>
+              <p className="text-sm text-gray-500">Ainda não há mês fechado neste ano.</p>
             ) : (
               <div className="h-64">
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={grafico} margin={{ top: 8, right: 8, left: 8, bottom: 0 }}>
+                  <BarChart data={grafico} margin={{ top: 20, right: 8, left: 8, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                    <XAxis dataKey="data" tick={{ fontSize: 11 }} />
+                    <XAxis dataKey="mes" tick={{ fontSize: 12 }} />
                     <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `${Math.round(Number(v) / 1000)}k`} />
-                    <Tooltip formatter={(v, nome) => [fmtMoeda(Number(v)), nome === 'valorQuebra' ? 'Quebra de pedidos' : 'Total cancelado']} />
+                    <Tooltip
+                      formatter={(v, nome) => [fmtMoeda(Number(v)), nome === 'valorQuebra' ? 'Quebra de pedidos' : 'Total cancelado']}
+                      labelFormatter={(rotulo, itens) => {
+                        const p = itens?.[0]?.payload as { pct: number | null; faturamento: number } | undefined;
+                        return p ? `${rotulo} · ${fmtPct(p.pct)} do faturamento (${fmtMoeda(p.faturamento)})` : String(rotulo);
+                      }}
+                    />
                     <Bar dataKey="valor" fill="#c5949d" name="valor" />
                     <Bar dataKey="valorQuebra" fill="#8B6E5A" name="valorQuebra" />
                   </BarChart>
