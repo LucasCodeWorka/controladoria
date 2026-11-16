@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { PackageX, Loader2, ChevronDown } from 'lucide-react';
-import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Bar, BarChart, CartesianGrid, LabelList, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
 interface MotivoQuebra {
   cdMotivo: number;
@@ -65,6 +65,13 @@ const fmtMoeda = (n: number) => n.toLocaleString('pt-BR', { style: 'currency', c
 const fmtNum = (n: number) => n.toLocaleString('pt-BR', { maximumFractionDigits: 0 });
 const fmtPct = (n: number | null | undefined) => (n === null || n === undefined ? '-' : `${n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`);
 const fmtData = (iso: string) => new Date(`${iso}T00:00:00`).toLocaleDateString('pt-BR');
+const rotuloValor = (v: unknown) => {
+  const n = Number(v);
+  if (!n) return '';
+  if (Math.abs(n) >= 1_000_000) return `${(n / 1_000_000).toLocaleString('pt-BR', { maximumFractionDigits: 2 })} mi`;
+  if (Math.abs(n) >= 1_000) return `${(n / 1_000).toLocaleString('pt-BR', { maximumFractionDigits: 0 })} mil`;
+  return n.toLocaleString('pt-BR', { maximumFractionDigits: 0 });
+};
 const NOMES_MESES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
 const rotuloMes = (mes: string) => `${NOMES_MESES[Number(mes.slice(5, 7)) - 1]}/${mes.slice(2, 4)}`;
 const isoHoje = () => {
@@ -262,7 +269,7 @@ export default function QuebraPedidosPage() {
             ) : (
               <div className="h-64">
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={grafico} margin={{ top: 20, right: 8, left: 8, bottom: 0 }}>
+                  <BarChart data={grafico} margin={{ top: 24, right: 8, left: 8, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} />
                     <XAxis dataKey="mes" tick={{ fontSize: 12 }} />
                     <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `${Math.round(Number(v) / 1000)}k`} />
@@ -273,8 +280,12 @@ export default function QuebraPedidosPage() {
                         return p ? `${rotulo} · ${fmtPct(p.pct)} do faturamento (${fmtMoeda(p.faturamento)})` : String(rotulo);
                       }}
                     />
-                    <Bar dataKey="valor" fill="#c5949d" name="valor" />
-                    <Bar dataKey="valorQuebra" fill="#8B6E5A" name="valorQuebra" />
+                    <Bar dataKey="valor" fill="#c5949d" name="valor">
+                      <LabelList dataKey="valor" position="top" formatter={rotuloValor} style={{ fontSize: 11, fill: '#4b5563' }} />
+                    </Bar>
+                    <Bar dataKey="valorQuebra" fill="#8B6E5A" name="valorQuebra">
+                      <LabelList dataKey="valorQuebra" position="top" formatter={rotuloValor} style={{ fontSize: 11, fill: '#8B6E5A' }} />
+                    </Bar>
                   </BarChart>
                 </ResponsiveContainer>
               </div>
