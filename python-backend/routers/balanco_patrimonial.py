@@ -942,7 +942,7 @@ def get_balanco_patrimonial(
         def _bens():
             return _total_bens_por_linha(empresas)
 
-        # Emprestimos = principal (despesaitem 114) + juros (137) em aberto (nada
+        # Emprestimos = principal (despesaitem 114) + juros (137, 115, 121, 258) em aberto (nada
         # pago), sem filtro de empresa, igual a consulta passada pelo usuario.
         # PC.3 = vence em ate 12 meses (de hoje); PNC.8 = vence depois disso.
         # .1 = principal e .2 = juros (aberturas so de exibicao). Passivo = negativo.
@@ -953,17 +953,20 @@ def get_balanco_patrimonial(
                           COALESCE(SUM(CASE WHEN dt_vencimento < CURRENT_DATE + INTERVAL '12 months' THEN vl_rateio END), 0) AS ate_12m,
                           COALESCE(SUM(CASE WHEN dt_vencimento >= CURRENT_DATE + INTERVAL '12 months' THEN vl_rateio END), 0) AS apos_12m
                    FROM public.vr_fcp_despduplicatai
-                   WHERE cd_despesaitem IN ('114', '137')
+                   WHERE cd_despesaitem IN ('114', '137', '115', '121', '258')
                      AND dt_vencimento >= CURRENT_DATE
                      AND tp_situacao = 'N'
                      AND vl_pago = '0'{cc}
                    GROUP BY 1""", tuple(prm)
             ) or []
             por_item = {r["item"]: r for r in rows}
-            def v(item, col):
-                return -float(por_item[item][col]) if item in por_item else 0.0
-            pc_p, pc_j = v("114", "ate_12m"), v("137", "ate_12m")
-            pnc_p, pnc_j = v("114", "apos_12m"), v("137", "apos_12m")
+            def v(itens, col):
+                return -sum(float(por_item[i][col]) for i in itens if i in por_item)
+            # Juros = juros s/ emprestimos (137) + TAC (115), IOF s/ emprestimo (121) e
+            # seguro sobre emprestimos (258).
+            ITENS_JUROS = ("137", "115", "121", "258")
+            pc_p, pc_j = v(("114",), "ate_12m"), v(ITENS_JUROS, "ate_12m")
+            pnc_p, pnc_j = v(("114",), "apos_12m"), v(ITENS_JUROS, "apos_12m")
             return {
                 "PC.3": pc_p + pc_j, "PC.3.1": pc_p, "PC.3.2": pc_j,
                 "PNC.8": pnc_p + pnc_j, "PNC.8.1": pnc_p, "PNC.8.2": pnc_j,
@@ -1178,7 +1181,7 @@ def get_balanco_patrimonial(
 _DETALHE_PASSIVO = {
     "PC.1": (lambda: DESPESAITENS_FORNECEDORES, "proximo_mes"),
     "PC.2": (lambda: DESPESAITENS_MATERIA_PRIMA, None),
-    "PC.3": (lambda: ("114", "137"), "ate"), "PNC.8": (lambda: ("114", "137"), "apos"),
+    "PC.3": (lambda: ("114", "137", "115", "121", "258"), "ate"), "PNC.8": (lambda: ("114", "137", "115", "121", "258"), "apos"),
     "PC.IMV": (lambda: DESPESAITENS_IMOVEIS, "ate"), "PNC.IMV": (lambda: DESPESAITENS_IMOVEIS, "apos"),
     "PC.ETR": (lambda: DESPESAITENS_ENDIVIDAMENTO_TRIBUTARIO, "ate_com_vencidos"), "PNC.ETR": (lambda: DESPESAITENS_ENDIVIDAMENTO_TRIBUTARIO, "apos"),
     "PC.5": (lambda: DESPESAITENS_TRIBUTOS, "proximo_mes"),
