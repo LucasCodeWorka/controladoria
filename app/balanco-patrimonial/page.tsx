@@ -712,6 +712,28 @@ export default function BalancoPatrimonialPage() {
     });
   }
 
+  // Recolhedor por nivel: nivel 1 = grupos (Circulante/Nao circulante), nivel 2 = contas com
+  // aberturas, nivel 3 = aberturas com subitens. Se todos os codigos do nivel ja estao abertos,
+  // recolhe; senao abre todos.
+  const codigosPorNivel = useMemo(() => {
+    const planos = [...PLANO_ATIVOS, ...PLANO_PASSIVO];
+    return {
+      1: planos.map((g) => g.codigo),
+      2: planos.flatMap((g) => (g.filhos || []).filter((f) => f.detalhes?.length).map((f) => f.codigo)),
+      3: planos.flatMap((g) => (g.filhos || []).flatMap((f) => (f.detalhes || []).filter((d, i, l) => !d.sub && l[i + 1]?.sub).map((d) => d.codigo))),
+    } as Record<1 | 2 | 3, string[]>;
+  }, []);
+
+  function toggleNivel(nivel: 1 | 2 | 3) {
+    const codigos = codigosPorNivel[nivel];
+    setContasExpandidas((prev) => {
+      const novo = new Set(prev);
+      const todosAbertos = codigos.every((c) => novo.has(c));
+      codigos.forEach((c) => (todosAbertos ? novo.delete(c) : novo.add(c)));
+      return novo;
+    });
+  }
+
   function toggleEmpresa(cdEmpresa: number) {
     setEmpresasSelecionadas((prev) => {
       const novo = new Set(prev);
@@ -1052,7 +1074,28 @@ export default function BalancoPatrimonialPage() {
               status={alavancagemAjustada === null ? 'neutro' : statusAlavancagem(alavancagemAjustada)}
             />
           </div>
-          <div className="flex items-center gap-2 text-xs font-bold tracking-[.08em] text-[#6e4b59]"><Receipt aria-hidden="true" className="h-4 w-4" />Detalhamento das contas</div>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-xs font-bold tracking-[.08em] text-[#6e4b59]"><Receipt aria-hidden="true" className="h-4 w-4" />Detalhamento das contas</div>
+            <div className="flex items-center gap-1.5 print:hidden" role="group" aria-label="Recolher ou expandir por nível">
+              <span className="text-xs text-[#6b7280]">Recolher/expandir:</span>
+              {([1, 2, 3] as const).map((n) => {
+                const aberto = codigosPorNivel[n].length > 0 && codigosPorNivel[n].every((c) => contasExpandidas.has(c));
+                return (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() => toggleNivel(n)}
+                    aria-pressed={aberto}
+                    title={aberto ? `Recolher o nível ${n}` : `Expandir o nível ${n}`}
+                    className="inline-flex items-center gap-1 rounded-md border border-[#d1d5db] bg-white px-2.5 py-1 text-xs font-medium text-[#6e4b59] hover:bg-[#f5ecef] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#b3838c]"
+                  >
+                    {aberto ? <ChevronDown aria-hidden="true" className="h-3.5 w-3.5" /> : <ChevronRight aria-hidden="true" className="h-3.5 w-3.5" />}
+                    Nível {n}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-stretch">
             <TabelaBalanco
               titulo="Ativos"

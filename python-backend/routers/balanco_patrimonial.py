@@ -38,6 +38,13 @@ DESPESAITENS_FORNECEDORES = (
     51, 52, 53, 55, 56, 58, 60, 61, 63, 64, 70, 73, 74, 76, 79, 82, 83, 84, 85, 87,
     110, 145, 146, 149, 152, 159, 160, 161, 167, 218, 219, 220, 221, 222, 224, 225, 226,
     227, 228, 229, 231, 259, 262, 263, 264, 271, 280, 287, 488, 489, 539, 543, 544, 546,
+    # Acrescimos (regra do proximo mes): multa/juros 25, CSRF 128, cartao de credito 151,
+    # co-participacao 153, IRRF representantes 170, tarifas c/ prorrogacao 171, juros s/
+    # antecipacao 186, INSS auto de infracao 232, IRRF pro-labore 247, IRRF aluguel 251,
+    # CSLL/IRPJ provisao 260/261, casa Gerlano 269/270 e 556. Retiradas dos socios
+    # (30, 57, 135, 162, 557), Cairo lojas 136, taxas e emolumento 80 e emprestimo mutuo
+    # 148 ficam de fora.
+    25, 128, 151, 153, 170, 171, 186, 232, 247, 251, 260, 261, 269, 270, 556,
 )
 
 # PC.1.3 Investimentos (CAPEX) a pagar: reformas e obras (150), maquinas e
@@ -61,10 +68,16 @@ DESPESAITENS_MARKETING = (
 # tarifa pg de salario 78, cestas basicas prod 207, ajuste cartao credito 187,
 # recrut/selecao prod 213, devolucoes de vendas 276, juros operacao importacao 279,
 # bloqueio judicial 286, comissao marketplace 491, recompra de titulos 541,
-# recrut/selecao 91, juros fornecedores 93, programas trabalhista 265 e 266.
+# recrut/selecao 91, juros fornecedores 93, programas trabalhista 265 e 266,
+# fardamento 44/204, EPI 46/205, resgate inadimplencia 154, viagens/ajuda de custo
+# 62/141/142/156/157, contribuicao sindical prod 197, estagios prod 200, comissao
+# influencer 558, taxas cartao 59, tarifas 65/66/67/147, conducoes 252, doacao de pecas 248,
+# tarifas de cobranca/cartorio/bancarias 273/274/275 e sinistro 24/03 (545).
 DESPESAITENS_INVEST_A_VENCER = (
     164, 190, 997, 13, 23, 48, 54, 68, 78, 81, 91, 93, 187, 207, 213, 244, 245, 265, 266,
     276, 279, 286, 491, 541,
+    44, 46, 59, 62, 65, 66, 67, 141, 142, 147, 154, 156, 157, 197, 200, 204, 205, 248, 252, 558,
+    273, 274, 275, 545,
 )
 
 # PC.5 Tributos a recolher: despesaitens indicados pelo usuario (15 codigos;
@@ -77,8 +90,8 @@ DESPESAITENS_TRIBUTOS = (111, 112, 113, 116, 117, 118, 119, 120, 123, 126, 127, 
 DESPESAITENS_ENDIVIDAMENTO_TRIBUTARIO = (158,)
 
 # PC.IMV / PNC.IMV Obrigacoes por compra de imoveis: contratos de compra de
-# imoveis (EDGE 700 e CASA MAUA 2101/2702/2703/2602).
-DESPESAITENS_IMOVEIS = (992, 994, 996, 998, 999)
+# imoveis (EDGE 700, EDGE APTO 540 e CASA MAUA 2003/2101/2702/2703/2602).
+DESPESAITENS_IMOVEIS = (992, 994, 995, 996, 998, 999, 540)
 
 # PC.6 / PNC.10 IR e CSLL: IRPJ apuracao (125) e CSLL apuracao (124).
 DESPESAITENS_IR_CSLL = (124, 125)
