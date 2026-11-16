@@ -53,6 +53,10 @@ DESPESAITENS_MARKETING = (
     237, 238, 239, 240, 241, 242, 163, 165, 132, 542,
 )
 
+# Investimentos extras na linha 1: so o em aberto de hoje em diante (software 164,
+# fabrica Castelao 190 e BS Design 997); o vencido nao entra.
+DESPESAITENS_INVEST_A_VENCER = (164, 190, 997)
+
 # PC.5 Tributos a recolher: despesaitens indicados pelo usuario (15 codigos;
 # inclui 158 Multas SEFAZ, 123 ISS ret. fonte e 230 IRRF outros servicos).
 DESPESAITENS_TRIBUTOS = (111, 112, 113, 116, 117, 118, 119, 120, 123, 126, 127, 230, 250, 285)
@@ -1003,8 +1007,20 @@ def get_balanco_patrimonial(
                      AND vl_pago = 0{cc}""", (DESPESAITENS_MARKETING, *prm)
             ) or []
             marketing = float(rows[0]["total"]) if rows else 0.0
-            return {"PC.1": -(proximo + rescisao + capex + marketing), "PC.1.1": -proximo, "PC.1.2": -rescisao,
-                    "PC.1.3": -capex, "PC.1.4": -marketing}
+            rows = execute_query(
+                f"""SELECT COALESCE(SUM(vl_rateio), 0) AS total
+                   FROM public.vr_fcp_despduplicatai
+                   WHERE cd_despesaitem IN %s
+                     AND dt_vencimento >= CURRENT_DATE
+                     AND tp_situacao = 'N'
+                     AND vl_pago = 0{cc}""", (DESPESAITENS_INVEST_A_VENCER, *prm)
+            ) or []
+            invest = float(rows[0]["total"]) if rows else 0.0
+            # PC.1 = total. PC.1.1 = tudo sem as rescisoes (fornecedores do proximo mes +
+            # investimentos e marketing em aberto + investimentos extras a vencer);
+            # PC.1.2 = so as rescisoes de aluguel.
+            sem_rescisao = proximo + capex + marketing + invest
+            return {"PC.1": -(sem_rescisao + rescisao), "PC.1.1": -sem_rescisao, "PC.1.2": -rescisao}
 
         # PC.5 = tributos a recolher do PROXIMO MES FECHADO ao mes de referencia (mesmo
         # conceito de PC.1): em aberto, nada pago, filtrado pelo centro de custo das
@@ -1151,8 +1167,6 @@ def get_balanco_patrimonial(
 # em diante, sem filtro de empresa; "ate_12m" / "apos_12m" = corte do CP/LP.
 _DETALHE_PASSIVO = {
     "PC.1": (lambda: DESPESAITENS_FORNECEDORES, "proximo_mes"),
-    "PC.1.3": (lambda: DESPESAITENS_CAPEX, "todos"),
-    "PC.1.4": (lambda: DESPESAITENS_MARKETING, "todos"),
     "PC.2": (lambda: DESPESAITENS_MATERIA_PRIMA, None),
     "PC.3": (lambda: ("114", "137"), "ate"), "PNC.8": (lambda: ("114", "137"), "apos"),
     "PC.IMV": (lambda: DESPESAITENS_IMOVEIS, "ate"), "PNC.IMV": (lambda: DESPESAITENS_IMOVEIS, "apos"),
@@ -1184,6 +1198,50 @@ def get_detalhe_lancamentos(conta: str = Query(..., description="PC.1.2 (resciso
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _detalhe_passivo_pc1(empresas: Optional[str], mes_referencia: str) -> dict:
+    """Detalhe da linha 1 (sem aberturas): fornecedores do proximo mes + investimentos e
+    marketing em aberto (todo o em aberto) + investimentos extras a vencer + rescisoes."""
+    ini, fim = _janela_proximo_mes(mes_referencia)
+    cc, prm = _filtro_ccusto_duplicatas(empresas, alias="d")
+    try:
+        rows = execute_query(
+            f"""SELECT d.cd_fornecedor,
+                       CASE WHEN p.nm_fantasia IS NULL OR TRIM(p.nm_fantasia) = '' OR p.nm_fantasia ~ '^\\*+$'
+                            THEN COALESCE(p.nm_pessoa, pf.nm_pessoa, 'Fornecedor ' || d.cd_fornecedor::text)
+                            ELSE p.nm_fantasia END AS fornecedor,
+                       d.cd_despesaitem::text AS cd_despesa,
+                       COALESCE(i.ds_despesaitem, 'Despesa ' || d.cd_despesaitem::text) AS despesa,
+                       to_char(d.dt_vencimento, 'YYYY-MM') AS mes,
+                       SUM(d.vl_rateio) AS valor,
+                       COUNT(*) AS qtd
+                FROM public.vr_fcp_despduplicatai d
+                LEFT JOIN vr_pes_pessoa p ON p.cd_pessoa = d.cd_fornecedor
+                LEFT JOIN vr_pes_pesfisica pf ON pf.cd_pessoa = d.cd_fornecedor
+                LEFT JOIN public.vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
+                WHERE d.tp_situacao = 'N'
+                  AND d.vl_pago = 0
+                  AND (
+                        (d.cd_despesaitem IN %s AND d.dt_vencimento BETWEEN %s AND %s)
+                     OR d.cd_despesaitem IN %s
+                     OR d.cd_despesaitem IN %s
+                     OR (d.cd_despesaitem IN %s AND d.dt_vencimento >= CURRENT_DATE)
+                  ){cc}
+                GROUP BY 1, 2, 3, 4, 5
+                ORDER BY 5, 2""",
+            (tuple(DESPESAITENS_FORNECEDORES), ini, fim, tuple(DESPESAITENS_CAPEX),
+             tuple(DESPESAITENS_MARKETING), tuple(DESPESAITENS_INVEST_A_VENCER), *prm),
+        ) or []
+        linhas = [
+            {"cdFornecedor": r["cd_fornecedor"], "fornecedor": r["fornecedor"], "cdDespesa": r["cd_despesa"],
+             "despesa": r["despesa"], "mes": r["mes"], "valor": float(r["valor"] or 0), "qtd": int(r["qtd"])}
+            for r in rows
+        ]
+        return {"conta": "PC.1", "linhas": linhas}
+    except Exception as e:
+        print(f"[ERROR] detalhe-passivo PC.1: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/api/balanco-patrimonial/detalhe-passivo")
 def get_detalhe_passivo(conta: str = Query(..., description="Codigo da conta do Passivo, ex: PC.1"),
                         empresas: Optional[str] = Query(None, description="Empresas do filtro (cd_empresa/ccusto, virgula)"),
@@ -1193,6 +1251,8 @@ def get_detalhe_passivo(conta: str = Query(..., description="Codigo da conta do 
     if conta not in _DETALHE_PASSIVO:
         raise HTTPException(status_code=400, detail="Conta sem detalhamento")
     itens_fn, janela = _DETALHE_PASSIVO[conta]
+    if conta == "PC.1":
+        return _detalhe_passivo_pc1(empresas, mesReferencia or date.today().strftime("%Y-%m"))
     corte = ""
     if janela in ("ate", "ate_com_vencidos"):
         corte = "AND d.dt_vencimento < CURRENT_DATE + INTERVAL '12 months'"
