@@ -53,9 +53,19 @@ DESPESAITENS_MARKETING = (
     237, 238, 239, 240, 241, 242, 163, 165, 132, 542,
 )
 
-# Investimentos extras na linha 1: so o em aberto de hoje em diante (software 164,
-# fabrica Castelao 190 e BS Design 997); o vencido nao entra.
-DESPESAITENS_INVEST_A_VENCER = (164, 190, 997)
+# Despesas extras na linha 1: so o em aberto de hoje em diante (o vencido nao entra).
+# Investimentos: software 164, fabrica Castelao 190, BS Design 997. Outras: contribuicao
+# sindical 13, estagios e treinamentos 23, IOF 48, tarifa manut. de conta 68, ajuda de
+# custo de deslocamento 244 e de viagens 245 comerciais, cestas basicas 54, tarifa de registro de titulo 81
+# (taxas e emolumento 80 fica de fora por decisao do usuario),
+# tarifa pg de salario 78, cestas basicas prod 207, ajuste cartao credito 187,
+# recrut/selecao prod 213, devolucoes de vendas 276, juros operacao importacao 279,
+# bloqueio judicial 286, comissao marketplace 491, recompra de titulos 541,
+# recrut/selecao 91, juros fornecedores 93, programas trabalhista 265 e 266.
+DESPESAITENS_INVEST_A_VENCER = (
+    164, 190, 997, 13, 23, 48, 54, 68, 78, 81, 91, 93, 187, 207, 213, 244, 245, 265, 266,
+    276, 279, 286, 491, 541,
+)
 
 # PC.5 Tributos a recolher: despesaitens indicados pelo usuario (15 codigos;
 # inclui 158 Multas SEFAZ, 123 ISS ret. fonte e 230 IRRF outros servicos).
