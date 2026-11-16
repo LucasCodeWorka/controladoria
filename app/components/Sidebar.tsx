@@ -21,6 +21,7 @@ import {
   Clock,
   Sparkles,
   Scale,
+  PackageX,
   Banknote,
   TrendingUp,
   Minus,
@@ -152,6 +153,11 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
       name: 'Balanço Patrimonial',
       href: '/balanco-patrimonial',
       icon: Scale,
+    },
+    {
+      name: 'Quebra de Pedidos',
+      href: '/quebra-pedidos',
+      icon: PackageX,
     },
   ];
 
