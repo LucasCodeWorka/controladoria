@@ -96,11 +96,13 @@ export default function QuebraPedidosPage() {
   const [motivosDisponiveis, setMotivosDisponiveis] = useState<OpcaoMotivo[]>([]);
   const [motivosSelecionados, setMotivosSelecionados] = useState<Set<number>>(new Set());
   const [filtroMotivoAberto, setFiltroMotivoAberto] = useState(false);
+  const [ate10, setAte10] = useState(false);
   const [dados, setDados] = useState<DadosQuebra | null>(null);
   const [loading, setLoading] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
 
-  async function consultar() {
+  async function consultar(ate10Forcado?: boolean) {
+    const usarAte10 = ate10Forcado ?? ate10;
     if (!dataInicio || !dataFim) {
       setErro('Informe a data inicial e a final.');
       return;
@@ -113,6 +115,7 @@ export default function QuebraPedidosPage() {
     setErro(null);
     try {
       const params = new URLSearchParams({ dataInicio, dataFim });
+      if (usarAte10) params.set('ate10', 'true');
       // Todos marcados (ou nenhum) = sem filtro de motivo.
       if (motivosSelecionados.size > 0 && motivosSelecionados.size < motivosDisponiveis.length) {
         params.set('motivos', Array.from(motivosSelecionados).join(','));
@@ -220,8 +223,19 @@ export default function QuebraPedidosPage() {
               </div>
             )}
           </div>
+          <label className="flex items-center gap-2 text-sm text-gray-700 pb-2 cursor-pointer" title="Só conta como quebra o pedido que teve até 10% das peças canceladas (ex.: 10 de 100 entra; 11 de 100 não)">
+            <input
+              type="checkbox"
+              checked={ate10}
+              onChange={(e) => {
+                setAte10(e.target.checked);
+                if (dados) consultar(e.target.checked);
+              }}
+            />
+            Só pedidos com até 10% cancelado
+          </label>
           <button
-            onClick={consultar}
+            onClick={() => consultar()}
             disabled={loading}
             className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-md transition-colors disabled:opacity-50"
           >

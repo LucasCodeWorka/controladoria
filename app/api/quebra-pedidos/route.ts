@@ -8,7 +8,7 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const params = new URLSearchParams();
-    for (const chave of ['dataInicio', 'dataFim', 'somenteQuebra', 'motivos']) {
+    for (const chave of ['dataInicio', 'dataFim', 'somenteQuebra', 'motivos', 'ate10']) {
       const valor = searchParams.get(chave);
       if (valor) params.set(chave, valor);
     }

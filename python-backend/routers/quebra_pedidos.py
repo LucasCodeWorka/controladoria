@@ -22,6 +22,7 @@ from routers.indicadores import OPERACOES_EXCLUIDAS, REPRESENTANTES_EXCLUIDOS
 router = APIRouter()
 
 MOTIVO_QUEBRA = 6
+LIMITE_PCT = 0.10  # pedido so conta como quebra se cancelou ate 10% das pecas dele
 
 
 def _parse_data(valor: Optional[str], padrao: date) -> date:
@@ -46,6 +47,22 @@ def _pct(parte: float, total: float) -> Optional[float]:
     return round(parte / total * 100, 2) if total else None
 
 
+def _ate_limite(p) -> bool:
+    return p is not None and p <= LIMITE_PCT + 1e-9
+
+
+def _pct_pedidos(itens: list) -> dict:
+    """(cd_empresa, cd_pedido) -> fracao cancelada (qt_cancelada / qt_solicitada) do pedido todo."""
+    ids = sorted({i["cd_pedido"] for i in itens})
+    if not ids:
+        return {}
+    rows = execute_query(
+        """SELECT cd_empresa, cd_pedido, SUM(qt_cancelada) AS c, SUM(qt_solicitada) AS s
+           FROM vr_ped_pedidoi WHERE cd_operacao IN (52, 1) AND cd_pedido = ANY(%s)
+           GROUP BY cd_empresa, cd_pedido""", (ids,)) or []
+    return {(r["cd_empresa"], r["cd_pedido"]): (float(r["c"] or 0) / float(r["s"]) if r["s"] else None) for r in rows}
+
+
 # ── Cache mensal (meses fechados nao mudam) ──────────────────────────────
 
 def _criar_tabelas_cache():
@@ -55,11 +72,14 @@ def _criar_tabelas_cache():
             valor NUMERIC NOT NULL DEFAULT 0, qtd NUMERIC NOT NULL DEFAULT 0,
             PRIMARY KEY (mes, cd_motivo)
         )""", ())
+    execute_insert("ALTER TABLE quebra_pedidos_mes ADD COLUMN IF NOT EXISTS valor_ate10 NUMERIC NOT NULL DEFAULT 0", ())
+    execute_insert("ALTER TABLE quebra_pedidos_mes ADD COLUMN IF NOT EXISTS qtd_ate10 NUMERIC NOT NULL DEFAULT 0", ())
     execute_insert("""
         CREATE TABLE IF NOT EXISTS quebra_pedidos_mes_calc (
             mes TEXT PRIMARY KEY, faturamento NUMERIC NOT NULL DEFAULT 0,
             calculado_em TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         )""", ())
+    execute_insert("ALTER TABLE quebra_pedidos_mes_calc ADD COLUMN IF NOT EXISTS ate10 BOOLEAN NOT NULL DEFAULT FALSE", ())
 
 
 def _calcular_mes(mes: str):
@@ -69,7 +89,7 @@ def _calcular_mes(mes: str):
     fim = date(ano + 1, 1, 1) if m == 12 else date(ano, m + 1, 1)
     ops_fab = ", ".join(str(o) for o in OPERACOES_EXCLUIDAS)
     reps_excl = ", ".join(str(r) for r in REPRESENTANTES_EXCLUIDOS)
-    rows = execute_query(
+    itens = execute_query(
         """
         WITH ult AS (
             SELECT a.*, ROW_NUMBER() OVER (
@@ -78,18 +98,29 @@ def _calcular_mes(mes: str):
             FROM vr_ped_pedidoicanc2 a
             WHERE a.dt_cadastro >= %s::date AND a.dt_cadastro < %s::date
         )
-        SELECT u.cd_motivocanc AS cd_motivo,
-               MAX(COALESCE(NULLIF(TRIM(u.ds_motivocanc), ''), 'Motivo ' || u.cd_motivocanc::text)) AS motivo,
-               COALESCE(SUM(b.vl_unitario * b.qt_cancelada), 0) AS valor,
-               COALESCE(SUM(b.qt_cancelada), 0) AS qtd
+        SELECT u.cd_empresa, u.cd_pedido, u.cd_motivocanc AS cd_motivo,
+               COALESCE(NULLIF(TRIM(u.ds_motivocanc), ''), 'Motivo ' || u.cd_motivocanc::text) AS motivo,
+               COALESCE(b.vl_unitario * b.qt_cancelada, 0) AS valor,
+               COALESCE(b.qt_cancelada, 0) AS qtd
         FROM ult u
         JOIN vr_ped_pedidoi b
           ON u.cd_pedido = b.cd_pedido AND u.cd_empresa = b.cd_empresa AND u.cd_produto = b.cd_produto
         WHERE u.rn = 1 AND b.cd_operacao IN (52, 1) AND u.cd_motivocanc IS NOT NULL
-        GROUP BY u.cd_motivocanc
         """,
         (ini.isoformat(), fim.isoformat()),
     ) or []
+    pct = _pct_pedidos(itens)
+    agg: dict = {}
+    for i in itens:
+        a = agg.setdefault(i["cd_motivo"], {"cd_motivo": i["cd_motivo"], "motivo": i["motivo"],
+                                            "valor": 0.0, "qtd": 0.0, "valor10": 0.0, "qtd10": 0.0})
+        v, q = float(i["valor"] or 0), float(i["qtd"] or 0)
+        a["valor"] += v
+        a["qtd"] += q
+        if _ate_limite(pct.get((i["cd_empresa"], i["cd_pedido"]))):
+            a["valor10"] += v
+            a["qtd10"] += q
+    rows = list(agg.values())
     fat = execute_query(
         f"""
         SELECT COALESCE(SUM(CASE WHEN t.tp_operacao = 'S' THEN i.vl_totalliquido ELSE -i.vl_totalliquido END), 0) AS fat
@@ -108,12 +139,13 @@ def _calcular_mes(mes: str):
     execute_insert("DELETE FROM quebra_pedidos_mes WHERE mes = %s", (mes,))
     for r in rows:
         execute_insert(
-            "INSERT INTO quebra_pedidos_mes (mes, cd_motivo, motivo, valor, qtd) VALUES (%s, %s, %s, %s, %s)",
-            (mes, r["cd_motivo"], r["motivo"], float(r["valor"] or 0), float(r["qtd"] or 0)),
+            "INSERT INTO quebra_pedidos_mes (mes, cd_motivo, motivo, valor, qtd, valor_ate10, qtd_ate10) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (mes, r["cd_motivo"], r["motivo"], float(r["valor"] or 0), float(r["qtd"] or 0),
+             float(r["valor10"] or 0), float(r["qtd10"] or 0)),
         )
     execute_insert(
-        """INSERT INTO quebra_pedidos_mes_calc (mes, faturamento, calculado_em) VALUES (%s, %s, CURRENT_TIMESTAMP)
-           ON CONFLICT (mes) DO UPDATE SET faturamento = EXCLUDED.faturamento, calculado_em = CURRENT_TIMESTAMP""",
+        """INSERT INTO quebra_pedidos_mes_calc (mes, faturamento, calculado_em, ate10) VALUES (%s, %s, CURRENT_TIMESTAMP, TRUE)
+           ON CONFLICT (mes) DO UPDATE SET faturamento = EXCLUDED.faturamento, calculado_em = CURRENT_TIMESTAMP, ate10 = TRUE""",
         (mes, float(fat[0]["fat"] or 0)),
     )
 
@@ -126,13 +158,13 @@ def garantir_meses_fechados():
     """Calcula os meses fechados do ano que ainda nao estao no cache."""
     _criar_tabelas_cache()
     hoje = date.today()
-    prontos = {r["mes"] for r in (execute_query("SELECT mes FROM quebra_pedidos_mes_calc") or [])}
+    prontos = {r["mes"] for r in (execute_query("SELECT mes FROM quebra_pedidos_mes_calc WHERE ate10") or [])}
     for mes in _meses_fechados(hoje):
         if mes not in prontos:
             _calcular_mes(mes)
 
 
-def _serie_mensal(hoje: date, motivos_filtro: list) -> list:
+def _serie_mensal(hoje: date, motivos_filtro: list, ate10: bool = False) -> list:
     meses = _meses_fechados(hoje)
     if not meses:
         return []
@@ -140,16 +172,17 @@ def _serie_mensal(hoje: date, motivos_filtro: list) -> list:
     calc = {r["mes"]: float(r["faturamento"] or 0) for r in (execute_query(
         "SELECT mes, faturamento FROM quebra_pedidos_mes_calc WHERE mes IN %s", (tuple(meses),)) or [])}
     linhas = execute_query(
-        "SELECT mes, cd_motivo, valor, qtd FROM quebra_pedidos_mes WHERE mes IN %s", (tuple(meses),)) or []
+        "SELECT mes, cd_motivo, valor, qtd, valor_ate10, qtd_ate10 FROM quebra_pedidos_mes WHERE mes IN %s", (tuple(meses),)) or []
     por_mes: dict = {m: {"valor": 0.0, "qtd": 0.0, "valorQuebra": 0.0} for m in meses}
     for r in linhas:
         if motivos_filtro and r["cd_motivo"] not in motivos_filtro:
             continue
         d = por_mes[r["mes"]]
-        d["valor"] += float(r["valor"])
-        d["qtd"] += float(r["qtd"])
+        v = float(r["valor_ate10"] if ate10 else r["valor"])
+        d["valor"] += v
+        d["qtd"] += float(r["qtd_ate10"] if ate10 else r["qtd"])
         if r["cd_motivo"] == MOTIVO_QUEBRA:
-            d["valorQuebra"] += float(r["valor"])
+            d["valorQuebra"] += v
     serie = []
     for m in meses:
         d = por_mes[m]
@@ -166,6 +199,7 @@ def quebra_pedidos(
     dataFim: Optional[str] = Query(None, description="Data final AAAA-MM-DD, inclusive (default: hoje)"),
     somenteQuebra: bool = Query(False, description="true = so o motivo 6 (QUEBRA DE PEDIDOS), igual ao indicador"),
     motivos: Optional[str] = Query(None, description="Lista de cd_motivocanc separados por virgula (default: todos)"),
+    ate10: bool = Query(False, description="true = so pedidos que cancelaram ate 10% das pecas"),
 ):
     try:
         hoje = date.today()
@@ -196,7 +230,7 @@ def quebra_pedidos(
             SELECT u.cd_motivocanc AS cd_motivo,
                    COALESCE(NULLIF(TRIM(u.ds_motivocanc), ''), 'Motivo ' || u.cd_motivocanc::text) AS motivo,
                    u.dt_cadastro::date AS data,
-                   u.cd_pedido,
+                   u.cd_empresa, u.cd_pedido,
                    COALESCE(b.qt_cancelada, 0) AS qtd,
                    COALESCE(b.vl_unitario * b.qt_cancelada, 0) AS valor
             FROM ult u
@@ -210,6 +244,10 @@ def quebra_pedidos(
             """,
             (ini.isoformat(), fim_exclusivo.isoformat()),
         ) or []
+
+        if ate10:
+            pct_ped = _pct_pedidos(itens)
+            itens = [i for i in itens if _ate_limite(pct_ped.get((i["cd_empresa"], i["cd_pedido"])))]
 
         fat_rows = execute_query(
             f"""
@@ -278,11 +316,11 @@ def quebra_pedidos(
         # Grafico mensal: meses do ano atual ate o ULTIMO MES FECHADO (nao depende das
         # datas do filtro; respeita o filtro de motivo). Meses fechados ficam em cache
         # no banco (calcular um mes leva dezenas de segundos).
-        por_mes = _serie_mensal(hoje, lista_motivos_filtro)
+        por_mes = _serie_mensal(hoje, lista_motivos_filtro, ate10)
 
         quebra = por_motivo.get(MOTIVO_QUEBRA)
         return {
-            "dataInicio": ini.isoformat(), "dataFim": fim.isoformat(), "somenteQuebra": somenteQuebra,
+            "dataInicio": ini.isoformat(), "dataFim": fim.isoformat(), "somenteQuebra": somenteQuebra, "ate10": ate10,
             "consolidado": {
                 "itens": len(itens),
                 "pedidos": len({i["cd_pedido"] for i in itens}),
