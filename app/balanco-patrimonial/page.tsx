@@ -642,7 +642,15 @@ export default function BalancoPatrimonialPage() {
   // PC.2) vem do endpoint /api/balanco-patrimonial/dados e sobrescrevem o
   // zero aqui; o resto continua zerado ate ser implementado.
   const [valoresAtivos, setValoresAtivos] = useState<Record<string, number>>(() => valoresZerados(PLANO_ATIVOS));
-  const [valoresPassivo, setValoresPassivo] = useState<Record<string, number>>(() => valoresZerados(PLANO_PASSIVO));
+  // Valores do Passivo como vieram do servidor (sempre com as rescisoes); os flags "sem rescisoes"
+  // so descontam aqui na tela, sem nova consulta (a consulta ao banco e lenta).
+  const [valoresPassivoBase, setValoresPassivo] = useState<Record<string, number>>(() => valoresZerados(PLANO_PASSIVO));
+  const valoresPassivo = useMemo(() => {
+    const v = { ...valoresPassivoBase };
+    if (semRescisaoFolha) { v['PC.4'] = (v['PC.4'] ?? 0) - (v['PC.4.2'] ?? 0); v['PC.4.2'] = 0; }
+    if (semRescisaoShopping) { v['PC.1'] = (v['PC.1'] ?? 0) - (v['PC.1.2'] ?? 0); v['PC.1.2'] = 0; }
+    return v;
+  }, [valoresPassivoBase, semRescisaoFolha, semRescisaoShopping]);
   const [bens, setBens] = useState<{ codigo: string; linha: string; nome: string; valor: number }[]>([]);
   const [carregando, setCarregando] = useState(false);
   const [contaDetalhe, setContaDetalhe] = useState<ContaBalanco | null>(null);
@@ -749,9 +757,7 @@ export default function BalancoPatrimonialPage() {
     });
   }
 
-  async function consultar(sobrescrever?: { mes: string; empresas: Set<number>; total: number }, flags?: { folha: boolean; shopping: boolean }) {
-    const semFolha = flags?.folha ?? semRescisaoFolha;
-    const semShopping = flags?.shopping ?? semRescisaoShopping;
+  async function consultar(sobrescrever?: { mes: string; empresas: Set<number>; total: number }) {
     const mes = sobrescrever?.mes ?? mesReferencia;
     const empresas = sobrescrever?.empresas ?? empresasSelecionadas;
     const totalEmpresas = sobrescrever?.total ?? empresasDisponiveis.length;
@@ -786,8 +792,6 @@ export default function BalancoPatrimonialPage() {
       if (totalEmpresas > 0 && empresas.size < totalEmpresas) {
         params.set('empresas', Array.from(empresas).join(','));
       }
-      if (semFolha) params.set('semRescisaoFolha', 'true');
-      if (semShopping) params.set('semRescisaoShopping', 'true');
       setEmpresasConsultadas(params.get('empresas') ?? '');
       // Lucro e EBITDA dos ultimos 12 meses (DRE) - nao trava o balanco se falhar.
       fetch(`/api/balanco-patrimonial/indicadores-dre?mesReferencia=${mes}`, { cache: 'no-store' })
@@ -962,10 +966,7 @@ export default function BalancoPatrimonialPage() {
             <input
               type="checkbox"
               checked={semRescisaoFolha}
-              onChange={(e) => {
-                setSemRescisaoFolha(e.target.checked);
-                if (consultaExecutada) consultar(undefined, { folha: e.target.checked, shopping: semRescisaoShopping });
-              }}
+              onChange={(e) => setSemRescisaoFolha(e.target.checked)}
             />
             Sem rescisões de folha
           </label>
@@ -973,10 +974,7 @@ export default function BalancoPatrimonialPage() {
             <input
               type="checkbox"
               checked={semRescisaoShopping}
-              onChange={(e) => {
-                setSemRescisaoShopping(e.target.checked);
-                if (consultaExecutada) consultar(undefined, { folha: semRescisaoFolha, shopping: e.target.checked });
-              }}
+              onChange={(e) => setSemRescisaoShopping(e.target.checked)}
             />
             Sem rescisões de shopping
           </label>
