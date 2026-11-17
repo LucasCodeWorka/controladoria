@@ -374,3 +374,191 @@ def resumo(
         saida["equilibrio"] = {"receitaLiquida": rec, "lucro": luc, "percentual": (luc / rec * 100) if rec else None}
     necessario, receita_necessaria = alvo["necessario"], alvo["receitaNecessaria"]
     return {"filtro": filtro, "anoAnterior": ano_anterior, "cenarios": saida, "crescimentoNecessario": necessario, "receitaNecessaria": receita_necessaria, "crescimentoNecessario0": alvo0["necessario"], "receitaNecessaria0": alvo0["receitaNecessaria"], "meta": meta}
+
+
+# ── Realizado (para comparar com a projecao / orcamento) ─────────────────
+@router.get("/api/dre-projetada/realizado")
+def realizado(
+    inicio: str = Query(..., description="Primeiro mes da projecao, YYYY-MM"),
+    filtro: str = Query("consolidado"),
+    forcar: bool = Query(False),
+):
+    """DRE realizada dos mesmos 12 meses da projecao (mesma consulta/cache da tela de DRE).
+    So os meses FECHADOS (anteriores ao mes corrente) trazem valor; o resto vem em 'abertos'."""
+    try:
+        ano, mes = (int(x) for x in inicio.split("-"))
+        if not 1 <= mes <= 12:
+            raise ValueError
+    except ValueError:
+        raise HTTPException(status_code=400, detail="inicio deve ser YYYY-MM")
+    try:
+        hoje = date.today()
+        meses = []
+        for n in range(12):
+            a, m = _soma_meses(ano, mes, n)
+            meses.append(f"{a}-{m:02d}")
+        fechados = [m for m in meses if tuple(int(x) for x in m.split("-")) < (hoje.year, hoje.month)]
+        if not fechados:
+            return {"periodos": meses, "fechados": [], "abertos": meses, "realizado": {}}
+        a_ult, m_ult = (int(x) for x in fechados[-1].split("-"))
+        a_prox, m_prox = _soma_meses(a_ult, m_ult, 1)
+        ini = f"{meses[0]}-01"
+        fim = date.fromordinal(date(a_prox, m_prox, 1).toordinal() - 1).isoformat()
+        dados = dre_cache.obter(
+            "analitica", ini, fim, filtro, forcar,
+            lambda: dre_mod._calcular_valores_unificada(ini, fim, filtro, campo_data_despesa="dt_emissao"),
+        )
+        valores = dados.get("valores") or {}
+        saida = {}
+        for cod, linha in valores.items():
+            if cod in ("NAO_CLASSIFICADO", "EXCLUIDO"):
+                continue
+            saida[cod] = {m: float((linha or {}).get(m, 0) or 0) for m in fechados}
+        return {"periodos": meses, "fechados": fechados, "abertos": [m for m in meses if m not in fechados], "realizado": saida}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[ERROR] Erro no realizado da DRE projetada: {e}")
+        raise HTTPException(status_code=500, detail=f"Erro ao buscar o realizado: {str(e)}")
+
+
+# ── Orcamentos (cenarios da DRE projetada salvos) ────────────────────────
+# O orcamento guarda os VALORES finais (ja com as edicoes de A/V %) congelados: assim ele nao muda
+# quando a base do ano anterior se move, e da pra comparar com o realizado depois.
+from pydantic import BaseModel
+from typing import Any, Dict, List
+from database import execute_insert
+
+
+class OrcamentoIn(BaseModel):
+    nome: str
+    filtro: str = "consolidado"
+    inicio: str
+    cenario: str = "realista"
+    parametros: Dict[str, Any] = {}
+    periodos: List[Dict[str, Any]]
+    valores: Dict[str, Dict[str, float]]
+    anoAnterior: Dict[str, Dict[str, float]] = {}
+    tipos: Dict[str, str] = {}
+    manuais: List[Dict[str, Any]] = []
+    qtdEdicoes: int = 0
+
+
+def _criar_tabela_orcamentos():
+    execute_insert("""
+        CREATE TABLE IF NOT EXISTS dre_projetada_orcamentos (
+            id SERIAL PRIMARY KEY,
+            nome TEXT NOT NULL,
+            filtro TEXT NOT NULL,
+            inicio TEXT NOT NULL,
+            cenario TEXT,
+            parametros JSONB,
+            periodos JSONB NOT NULL,
+            valores JSONB NOT NULL,
+            ano_anterior JSONB,
+            tipos JSONB,
+            manuais JSONB,
+            qtd_edicoes INTEGER NOT NULL DEFAULT 0,
+            receita_liquida NUMERIC,
+            lucro NUMERIC,
+            ativo BOOLEAN NOT NULL DEFAULT TRUE,
+            criado_em TIMESTAMP NOT NULL DEFAULT NOW(),
+            atualizado_em TIMESTAMP NOT NULL DEFAULT NOW()
+        )""", ())
+
+
+def _tot(valores: dict, cod: str) -> float:
+    return float(((valores or {}).get(cod) or {}).get("total", 0) or 0)
+
+
+@router.get("/api/dre-projetada/orcamentos")
+def listar_orcamentos():
+    try:
+        _criar_tabela_orcamentos()
+        rows = execute_query(
+            """SELECT id, nome, filtro, inicio, cenario, qtd_edicoes, receita_liquida, lucro, criado_em, atualizado_em
+               FROM dre_projetada_orcamentos WHERE ativo ORDER BY atualizado_em DESC""", ()) or []
+        return {"orcamentos": [{
+            "id": r["id"], "nome": r["nome"], "filtro": r["filtro"], "inicio": r["inicio"], "cenario": r["cenario"],
+            "qtdEdicoes": r["qtd_edicoes"], "receitaLiquida": float(r["receita_liquida"] or 0), "lucro": float(r["lucro"] or 0),
+            "criadoEm": r["criado_em"].isoformat() if r["criado_em"] else None,
+            "atualizadoEm": r["atualizado_em"].isoformat() if r["atualizado_em"] else None,
+        } for r in rows]}
+    except Exception as e:
+        print(f"[ERROR] listar orcamentos: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/api/dre-projetada/orcamentos/{orcamento_id}")
+def obter_orcamento(orcamento_id: int):
+    try:
+        _criar_tabela_orcamentos()
+        rows = execute_query("SELECT * FROM dre_projetada_orcamentos WHERE id = %s AND ativo", (orcamento_id,)) or []
+        if not rows:
+            raise HTTPException(status_code=404, detail="Orcamento nao encontrado")
+        r = rows[0]
+        return {
+            "id": r["id"], "nome": r["nome"], "filtro": r["filtro"], "inicio": r["inicio"], "cenario": r["cenario"],
+            "parametros": r["parametros"] or {}, "periodos": r["periodos"], "valores": r["valores"],
+            "anoAnterior": r["ano_anterior"] or {}, "tipos": r["tipos"] or {}, "manuais": r["manuais"] or [],
+            "qtdEdicoes": r["qtd_edicoes"],
+            "atualizadoEm": r["atualizado_em"].isoformat() if r["atualizado_em"] else None,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[ERROR] obter orcamento: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _params_orcamento(o: OrcamentoIn) -> tuple:
+    return (
+        o.nome.strip(), o.filtro, o.inicio, o.cenario, json.dumps(o.parametros), json.dumps(o.periodos),
+        json.dumps(o.valores), json.dumps(o.anoAnterior), json.dumps(o.tipos), json.dumps(o.manuais),
+        o.qtdEdicoes, _tot(o.valores, "03"), _tot(o.valores, "14"),
+    )
+
+
+@router.post("/api/dre-projetada/orcamentos")
+def criar_orcamento(o: OrcamentoIn):
+    if not o.nome.strip():
+        raise HTTPException(status_code=400, detail="Informe o nome do orcamento")
+    try:
+        _criar_tabela_orcamentos()
+        rows = execute_insert(
+            """INSERT INTO dre_projetada_orcamentos
+               (nome, filtro, inicio, cenario, parametros, periodos, valores, ano_anterior, tipos, manuais, qtd_edicoes, receita_liquida, lucro)
+               VALUES (%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s,%s,%s) RETURNING id""",
+            _params_orcamento(o))
+        return {"id": rows[0]["id"] if rows else None}
+    except Exception as e:
+        print(f"[ERROR] criar orcamento: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/api/dre-projetada/orcamentos/{orcamento_id}")
+def atualizar_orcamento(orcamento_id: int, o: OrcamentoIn):
+    if not o.nome.strip():
+        raise HTTPException(status_code=400, detail="Informe o nome do orcamento")
+    try:
+        _criar_tabela_orcamentos()
+        execute_insert(
+            """UPDATE dre_projetada_orcamentos SET nome=%s, filtro=%s, inicio=%s, cenario=%s, parametros=%s::jsonb,
+               periodos=%s::jsonb, valores=%s::jsonb, ano_anterior=%s::jsonb, tipos=%s::jsonb, manuais=%s::jsonb,
+               qtd_edicoes=%s, receita_liquida=%s, lucro=%s, atualizado_em=NOW() WHERE id=%s AND ativo""",
+            _params_orcamento(o) + (orcamento_id,))
+        return {"id": orcamento_id}
+    except Exception as e:
+        print(f"[ERROR] atualizar orcamento: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/api/dre-projetada/orcamentos/{orcamento_id}")
+def excluir_orcamento(orcamento_id: int):
+    try:
+        _criar_tabela_orcamentos()
+        execute_insert("UPDATE dre_projetada_orcamentos SET ativo = FALSE, atualizado_em = NOW() WHERE id = %s", (orcamento_id,))
+        return {"id": orcamento_id}
+    except Exception as e:
+        print(f"[ERROR] excluir orcamento: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

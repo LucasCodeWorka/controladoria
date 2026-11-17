@@ -101,6 +101,154 @@ function CelulaPct({ texto, pctAtual, editado, onCommit, className, titulo }: {
   );
 }
 
+
+type LinhaTabela = { conta: ContaDRE | { codigo: string; nome: string; nivel: number; tipo: 'resultado' }; profundidade: number };
+interface OrcamentoResumo {
+  id: number; nome: string; filtro: string; inicio: string; cenario: string; qtdEdicoes: number;
+  receitaLiquida: number; lucro: number; atualizadoEm: string | null;
+}
+interface RealizadoResp { periodos: string[]; fechados: string[]; abertos: string[]; realizado: Record<string, Valores> }
+
+// Totalizadores do realizado calculados aqui (mesma regra da DRE), pra nao depender de quais o servidor devolve.
+function completarTotalizadores(real: Record<string, Valores>, meses: string[]): Record<string, Valores> {
+  const out: Record<string, Valores> = { ...real };
+  const v = (c: string, m: string) => out[c]?.[m] ?? 0;
+  const regras: [string, string, string][] = [['03', '01', '02'], ['05', '03', '04'], ['07', '05', '06'], ['09', '07', '08'], ['11', '09', '10'], ['14', '11', '13']];
+  for (const [tot, a, b] of regras) {
+    const linha: Valores = { total: 0 };
+    for (const m of meses) { linha[m] = v(a, m) + v(b, m); linha.total += linha[m]; }
+    out[tot] = linha;
+  }
+  return out;
+}
+
+const mesRotulo = (m: string) => `${NOMES_MES[parseInt(m.split('-')[1], 10)]}/${m.split('-')[0].slice(2)}`;
+const corDif = (d: number) => (Math.abs(d) < 0.005 ? 'text-gray-500' : d > 0 ? 'text-green-700' : 'text-red-600');
+const fmtDifPct = (real: number, proj: number) => (proj ? `${(((real - proj) / Math.abs(proj)) * 100).toFixed(1).replace('.', ',')}%` : '-');
+
+// Projetado (ou orcamento) x realizado, acumulado nos meses escolhidos. Diferenca = realizado - projetado:
+// positiva = favoravel (receita maior ou despesa menor, ja que despesa e negativa).
+function ComparacaoRealizado({ linhas, abertos, alternar, projetado, real, fechados, de, ate, setDe, setAte }: {
+  linhas: LinhaTabela[]; abertos: Set<string>; alternar: (c: string) => void; projetado: Record<string, Valores>;
+  real: Record<string, Valores>; fechados: string[]; de: string; ate: string; setDe: (m: string) => void; setAte: (m: string) => void;
+}) {
+  const meses = fechados.filter((m) => m >= de && m <= ate);
+  const soma = (d: Record<string, Valores>, c: string) => meses.reduce((s, m) => s + (d[c]?.[m] ?? 0), 0);
+  const recP = soma(projetado, '03');
+  const recR = soma(real, '03');
+  const cartoes: { cod: string; titulo: string }[] = [
+    { cod: '03', titulo: 'Receita líquida' }, { cod: '09', titulo: 'EBITDA' }, { cod: '14', titulo: 'Lucro líquido' },
+  ];
+  if (fechados.length === 0) {
+    return <div className="p-6 text-sm text-gray-700">Nenhum mês deste período já fechou, então ainda não há realizado para comparar.</div>;
+  }
+  return (
+    <div>
+      <div className="px-5 py-3 border-b border-gray-200 flex flex-wrap items-center gap-3 text-sm text-black">
+        <span className="font-semibold">Meses comparados:</span>
+        <select value={de} onChange={(e) => { setDe(e.target.value); if (e.target.value > ate) setAte(e.target.value); }} className="px-2 py-1 border border-gray-300 rounded bg-white">
+          {fechados.map((m) => <option key={m} value={m}>{mesRotulo(m)}</option>)}
+        </select>
+        <span>até</span>
+        <select value={ate} onChange={(e) => { setAte(e.target.value); if (e.target.value < de) setDe(e.target.value); }} className="px-2 py-1 border border-gray-300 rounded bg-white">
+          {fechados.map((m) => <option key={m} value={m}>{mesRotulo(m)}</option>)}
+        </select>
+        <span className="text-xs text-gray-600">Só meses já fechados entram. Diferença = realizado − projetado (positiva = favorável).</span>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 p-5">
+        {cartoes.map(({ cod, titulo }) => {
+          const p = soma(projetado, cod); const r = soma(real, cod); const d = r - p;
+          return (
+            <div key={cod} className="rounded-lg border border-gray-200 p-3">
+              <div className="text-xs font-semibold text-black uppercase">{titulo}</div>
+              <div className="mt-1 text-xs text-black">Projetado <strong>{formatarValor(p)}</strong></div>
+              <div className="text-xs text-black">Realizado <strong>{formatarValor(r)}</strong></div>
+              <div className={`mt-1 text-sm font-bold ${corDif(d)}`}>{formatarValor(d)} ({fmtDifPct(r, p)})</div>
+            </div>
+          );
+        })}
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full border-collapse">
+          <thead>
+            <tr className="bg-gray-100 text-black text-xs">
+              <th className="px-4 py-2 text-left sticky left-0 bg-gray-100 z-20 min-w-[320px]">CONTA</th>
+              <th className="px-3 py-2 text-right">PROJETADO</th>
+              <th className="px-3 py-2 text-right">A/V %</th>
+              <th className="px-3 py-2 text-right">REALIZADO</th>
+              <th className="px-3 py-2 text-right">A/V %</th>
+              <th className="px-3 py-2 text-right">DIFERENÇA</th>
+              <th className="px-3 py-2 text-right">DIF. %</th>
+            </tr>
+          </thead>
+          <tbody>
+            {linhas.map(({ conta, profundidade }) => {
+              const resultado = conta.tipo === 'resultado';
+              const filhos = 'filhos' in conta ? conta.filhos : undefined;
+              const temFilhos = !!filhos?.length;
+              const p = soma(projetado, conta.codigo);
+              const r = soma(real, conta.codigo);
+              const d = r - p;
+              const cor = resultado ? 'bg-green-50 font-bold' : CORES_NIVEL[Math.min(profundidade + 1, 4)];
+              return (
+                <tr key={conta.codigo} className={`${cor} text-black hover:bg-gray-100`}>
+                  <td className="px-4 py-2 border-b border-gray-200 sticky left-0 bg-inherit z-10">
+                    <div className="flex items-center gap-2" style={{ paddingLeft: `${profundidade * 16}px` }}>
+                      {temFilhos ? (
+                        <button onClick={() => alternar(conta.codigo)}>{abertos.has(conta.codigo) ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}</button>
+                      ) : <div className="w-4" />}
+                      {!resultado && <span className="font-mono text-xs">{conta.codigo}</span>}
+                      <span className="text-sm">{conta.nome}</span>
+                    </div>
+                  </td>
+                  <td className="px-3 py-2 border-b border-gray-200 text-right text-sm">{formatarValor(p)}</td>
+                  <td className="px-3 py-2 border-b border-gray-200 text-right text-xs">{av(p, recP)}</td>
+                  <td className="px-3 py-2 border-b border-gray-200 text-right text-sm">{formatarValor(r)}</td>
+                  <td className="px-3 py-2 border-b border-gray-200 text-right text-xs">{av(r, recR)}</td>
+                  <td className={`px-3 py-2 border-b border-gray-200 text-right text-sm font-semibold ${corDif(d)}`}>{formatarValor(d)}</td>
+                  <td className={`px-3 py-2 border-b border-gray-200 text-right text-xs ${corDif(d)}`}>{fmtDifPct(r, p)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div className="overflow-x-auto border-t border-gray-200">
+        <table className="w-full border-collapse text-black">
+          <thead>
+            <tr className="bg-gray-100 text-xs">
+              <th className="px-4 py-2 text-left">MÊS</th>
+              <th className="px-3 py-2 text-right">REC. LÍQ. PROJ.</th>
+              <th className="px-3 py-2 text-right">REC. LÍQ. REAL.</th>
+              <th className="px-3 py-2 text-right">DIF.</th>
+              <th className="px-3 py-2 text-right">LUCRO PROJ.</th>
+              <th className="px-3 py-2 text-right">LUCRO REAL.</th>
+              <th className="px-3 py-2 text-right">DIF.</th>
+            </tr>
+          </thead>
+          <tbody>
+            {meses.map((m) => {
+              const rp = projetado['03']?.[m] ?? 0; const rr = real['03']?.[m] ?? 0;
+              const lp = projetado['14']?.[m] ?? 0; const lr = real['14']?.[m] ?? 0;
+              return (
+                <tr key={m} className="border-t border-gray-100 text-sm">
+                  <td className="px-4 py-1.5 font-semibold">{mesRotulo(m)}</td>
+                  <td className="px-3 py-1.5 text-right">{formatarValor(rp)}</td>
+                  <td className="px-3 py-1.5 text-right">{formatarValor(rr)}</td>
+                  <td className={`px-3 py-1.5 text-right ${corDif(rr - rp)}`}>{formatarValor(rr - rp)}</td>
+                  <td className="px-3 py-1.5 text-right">{formatarValor(lp)}</td>
+                  <td className="px-3 py-1.5 text-right">{formatarValor(lr)}</td>
+                  <td className={`px-3 py-1.5 text-right ${corDif(lr - lp)}`}>{formatarValor(lr - lp)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 interface ResumoCenario { receitaLiquida: number; lucro: number; percentual: number | null }
 interface ResumoEmpresa {
   filtro: string; nome: string; carregando: boolean; erro?: string;
@@ -124,10 +272,24 @@ export default function DreProjetadaPage() {
   const execResumo = useRef(0);
   const [semGerente, setSemGerente] = useState(false);
   const montou = useRef(false);
+  // Orcamentos salvos (valores congelados da projecao) e comparacao com o realizado
+  const [orcamentos, setOrcamentos] = useState<OrcamentoResumo[]>([]);
+  const [orcamentoAtivo, setOrcamentoAtivo] = useState<{ id: number; nome: string } | null>(null);
+  const [orcamentosAberto, setOrcamentosAberto] = useState(false);
+  const [nomeNovoOrc, setNomeNovoOrc] = useState('');
+  const [salvandoOrc, setSalvandoOrc] = useState(false);
+  const [msgOrc, setMsgOrc] = useState<string | null>(null);
+  const [comparacao, setComparacao] = useState(false);
+  const [realizadoResp, setRealizadoResp] = useState<(RealizadoResp & { chave: string }) | null>(null);
+  const [carregandoReal, setCarregandoReal] = useState(false);
+  const [erroReal, setErroReal] = useState<string | null>(null);
+  const [compDe, setCompDe] = useState('');
+  const [compAte, setCompAte] = useState('');
 
   const buscar = useCallback(async (forcar = false) => {
     setCarregando(true);
     setErro(null);
+    setOrcamentoAtivo(null);
     try {
       const params = new URLSearchParams({ inicio, cenario, filtro });
       const infl = Number(inflacaoTxt.replace(',', '.'));
@@ -248,7 +410,7 @@ export default function DreProjetadaPage() {
     if (!edicoesCarregadas.current) return;
     try { localStorage.setItem(CHAVE_EDICOES, JSON.stringify(edicoesPorChave)); } catch { /* segue sem salvar */ }
   }, [edicoesPorChave]);
-  const chaveEdicoes = `${filtro}|${inicio}`;
+  const chaveEdicoes = orcamentoAtivo ? `orc:${orcamentoAtivo.id}` : `${filtro}|${inicio}`;
   const edicoes = useMemo<Edicoes>(() => edicoesPorChave[chaveEdicoes] ?? {}, [edicoesPorChave, chaveEdicoes]);
   const qtdEdicoes = Object.values(edicoes).reduce((n, o) => n + Object.keys(o).length, 0);
 
@@ -299,6 +461,117 @@ export default function DreProjetadaPage() {
   function restaurarEdicoes() {
     setEdicoesPorChave((prev) => { const n = { ...prev }; delete n[chaveEdicoes]; return n; });
   }
+
+  // ── Orcamentos salvos ──
+  const listarOrcamentos = useCallback(async () => {
+    try {
+      const r = await fetch('/api/dre-projetada/orcamentos', { cache: 'no-store' });
+      const j = await r.json();
+      if (r.ok && Array.isArray(j.orcamentos)) setOrcamentos(j.orcamentos);
+    } catch (e) { console.error('Erro ao listar orçamentos:', e); }
+  }, []);
+  useEffect(() => { listarOrcamentos(); }, [listarOrcamentos]);
+
+  const arred = (o: Record<string, Valores>) => {
+    const r: Record<string, Valores> = {};
+    for (const [c, l] of Object.entries(o)) { r[c] = {}; for (const [k, v] of Object.entries(l)) r[c][k] = Math.round(v * 100) / 100; }
+    return r;
+  };
+
+  async function salvarOrcamento(modo: 'novo' | 'atualizar') {
+    if (!dados) return;
+    const nome = modo === 'atualizar' && orcamentoAtivo ? orcamentoAtivo.nome : nomeNovoOrc.trim();
+    if (!nome) { setMsgOrc('Informe o nome do orçamento.'); return; }
+    setSalvandoOrc(true);
+    setMsgOrc(null);
+    try {
+      const corpo = {
+        nome, filtro: dados.parametros && (dados.parametros as { filtro?: string }).filtro ? (dados.parametros as { filtro?: string }).filtro : filtro,
+        inicio: dados.periodos[0]?.key ?? inicio, cenario,
+        parametros: { ...dados.parametros, semGerente, orcamentoBase: cenario },
+        periodos: dados.periodos, valores: arred(projetadoEd), anoAnterior: arred(dados.anoAnterior),
+        tipos: dados.tipos, manuais: dados.manuais ?? [], qtdEdicoes,
+      };
+      const atualizando = modo === 'atualizar' && orcamentoAtivo;
+      const r = await fetch(atualizando ? `/api/dre-projetada/orcamentos/${orcamentoAtivo!.id}` : '/api/dre-projetada/orcamentos', {
+        method: atualizando ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.detail || j.error || 'Erro ao salvar o orçamento');
+      const id = atualizando ? orcamentoAtivo!.id : j.id;
+      setMsgOrc(atualizando ? 'Orçamento atualizado.' : 'Orçamento salvo.');
+      setNomeNovoOrc('');
+      await listarOrcamentos();
+      await carregarOrcamento(id, true);
+    } catch (e) {
+      setMsgOrc(e instanceof Error ? e.message : 'Erro ao salvar o orçamento');
+    } finally {
+      setSalvandoOrc(false);
+    }
+  }
+
+  async function carregarOrcamento(id: number, mantemMensagem = false) {
+    if (!mantemMensagem) setMsgOrc(null);
+    setCarregando(true);
+    try {
+      const r = await fetch(`/api/dre-projetada/orcamentos/${id}`, { cache: 'no-store' });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.detail || j.error || 'Erro ao abrir o orçamento');
+      setFiltro(j.filtro);
+      setInicio(j.inicio);
+      if (CENARIOS.some((c) => c.chave === j.cenario)) setCenario(j.cenario as Cenario);
+      setEdicoesPorChave((prev) => { const n = { ...prev }; delete n[`orc:${id}`]; return n; });
+      setOrcamentoAtivo({ id, nome: j.nome });
+      setRealizadoResp(null);
+      setDados({ periodos: j.periodos, projetado: j.valores, anoAnterior: j.anoAnterior, tipos: j.tipos, manuais: j.manuais, parametros: j.parametros });
+      setErro(null);
+    } catch (e) {
+      setErro(e instanceof Error ? e.message : 'Erro ao abrir o orçamento');
+    } finally {
+      setCarregando(false);
+    }
+  }
+
+  async function excluirOrcamento(id: number, nome: string) {
+    if (!window.confirm(`Excluir o orçamento "${nome}"?`)) return;
+    try {
+      await fetch(`/api/dre-projetada/orcamentos/${id}`, { method: 'DELETE' });
+      if (orcamentoAtivo?.id === id) setOrcamentoAtivo(null);
+      await listarOrcamentos();
+    } catch (e) { console.error('Erro ao excluir orçamento:', e); }
+  }
+
+  // ── Comparacao com o realizado ──
+  const filtroDosDados = (dados?.parametros as { filtro?: string } | undefined)?.filtro ?? filtro;
+  const chaveReal = dados ? `${dados.periodos[0]?.key}|${filtroDosDados}` : '';
+  const buscarRealizado = useCallback(async (forcar = false) => {
+    if (!dados) return;
+    setCarregandoReal(true);
+    setErroReal(null);
+    try {
+      const params = new URLSearchParams({ inicio: dados.periodos[0].key, filtro: filtroDosDados });
+      if (forcar) params.set('forcar', 'true');
+      const r = await fetch(`/api/dre-projetada/realizado?${params.toString()}`, { cache: 'no-store' });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.detail || j.error || 'Erro ao buscar o realizado');
+      setRealizadoResp({ ...j, chave: `${dados.periodos[0].key}|${filtroDosDados}` });
+      const f: string[] = j.fechados ?? [];
+      setCompDe(f[0] ?? ''); setCompAte(f[f.length - 1] ?? '');
+    } catch (e) {
+      setErroReal(e instanceof Error ? e.message : 'Erro ao buscar o realizado');
+    } finally {
+      setCarregandoReal(false);
+    }
+  }, [dados, filtroDosDados]);
+  useEffect(() => {
+    if (comparacao && dados && (!realizadoResp || realizadoResp.chave !== chaveReal) && !carregandoReal && !erroReal) buscarRealizado();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [comparacao, chaveReal, realizadoResp]);
+  useEffect(() => { setErroReal(null); }, [chaveReal]);
+  const realizadoCompleto = useMemo(
+    () => (realizadoResp && realizadoResp.chave === chaveReal ? completarTotalizadores(realizadoResp.realizado, realizadoResp.fechados) : null),
+    [realizadoResp, chaveReal],
+  );
   const gruposPorAno = useMemo(() => {
     const g: { ano: string; qtd: number }[] = [];
     for (const per of periodos) {
@@ -550,6 +823,83 @@ export default function DreProjetadaPage() {
         </div>
       )}
 
+      {/* Orcamentos salvos */}
+      <div className="bg-white rounded-lg shadow-md p-4 text-black">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <h2 className="text-base font-semibold">Orçamentos salvos</h2>
+          <button onClick={() => setOrcamentosAberto((v) => !v)} className="text-xs font-medium underline">
+            {orcamentosAberto ? 'Recolher lista' : `Ver lista (${orcamentos.length})`}
+          </button>
+        </div>
+        <p className="text-xs mt-1">Depois de editar os percentuais, salve o cenário como orçamento: os valores ficam congelados e podem ser comparados com o realizado (botão &quot;Projetado × Realizado&quot; acima da tabela).</p>
+        {dados && (
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <input
+              value={nomeNovoOrc}
+              onChange={(e) => setNomeNovoOrc(e.target.value)}
+              placeholder="Nome do orçamento (ex.: Orçamento 2027 - base realista)"
+              className="px-3 py-2 text-sm border border-gray-300 rounded-md w-[360px] max-w-full"
+            />
+            <button
+              onClick={() => salvarOrcamento('novo')}
+              disabled={salvandoOrc || !nomeNovoOrc.trim()}
+              className="px-4 py-2 text-sm bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50"
+            >
+              {salvandoOrc ? 'Salvando...' : 'Salvar como novo orçamento'}
+            </button>
+            {orcamentoAtivo && (
+              <button
+                onClick={() => salvarOrcamento('atualizar')}
+                disabled={salvandoOrc}
+                className="px-4 py-2 text-sm border border-green-600 text-green-800 rounded-md bg-white hover:bg-green-50 disabled:opacity-50"
+              >
+                Atualizar &quot;{orcamentoAtivo.nome}&quot; com as edições
+              </button>
+            )}
+            {msgOrc && <span className="text-sm">{msgOrc}</span>}
+          </div>
+        )}
+        {orcamentosAberto && (
+          <div className="mt-3 overflow-x-auto">
+            {orcamentos.length === 0 ? (
+              <p className="text-sm">Nenhum orçamento salvo ainda.</p>
+            ) : (
+              <table className="w-full border-collapse text-sm">
+                <thead>
+                  <tr className="bg-gray-100 text-xs">
+                    <th className="px-3 py-2 text-left">NOME</th>
+                    <th className="px-3 py-2 text-left">EMPRESA</th>
+                    <th className="px-3 py-2 text-left">INÍCIO</th>
+                    <th className="px-3 py-2 text-right">REC. LÍQUIDA</th>
+                    <th className="px-3 py-2 text-right">LUCRO</th>
+                    <th className="px-3 py-2 text-right">EDIÇÕES</th>
+                    <th className="px-3 py-2 text-left">ATUALIZADO</th>
+                    <th className="px-3 py-2"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {orcamentos.map((o) => (
+                    <tr key={o.id} className={`border-t border-gray-100 ${orcamentoAtivo?.id === o.id ? 'bg-green-50' : ''}`}>
+                      <td className="px-3 py-2 font-semibold">{o.nome}</td>
+                      <td className="px-3 py-2">{o.filtro === 'consolidado' ? 'Consolidado' : o.filtro === 'fabrica' ? 'Fábrica' : o.filtro}</td>
+                      <td className="px-3 py-2">{o.inicio.split('-').reverse().join('/')}</td>
+                      <td className="px-3 py-2 text-right">{formatarValor(o.receitaLiquida)}</td>
+                      <td className={`px-3 py-2 text-right ${o.lucro < 0 ? 'text-red-600' : ''}`}>{formatarValor(o.lucro)}</td>
+                      <td className="px-3 py-2 text-right">{o.qtdEdicoes}</td>
+                      <td className="px-3 py-2">{o.atualizadoEm ? new Date(o.atualizadoEm).toLocaleString('pt-BR') : ''}</td>
+                      <td className="px-3 py-2 text-right whitespace-nowrap">
+                        <button onClick={() => carregarOrcamento(o.id)} className="px-3 py-1 text-xs border border-gray-300 rounded bg-white hover:bg-gray-50 mr-2">Abrir</button>
+                        <button onClick={() => excluirOrcamento(o.id, o.nome)} className="px-3 py-1 text-xs border border-red-300 text-red-700 rounded bg-white hover:bg-red-50">Excluir</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        )}
+      </div>
+
       {!dados && carregando && (
         <div className="bg-white rounded-lg shadow border border-gray-200 p-8 flex items-center justify-center gap-2 text-gray-600">
           <RefreshCw className="w-6 h-6 animate-spin text-green-600" /> Calculando a base do ano anterior…
@@ -569,7 +919,7 @@ export default function DreProjetadaPage() {
               <div>
                 <h2 className="text-xl font-bold text-gray-800">Projeção de Resultado - {filtroLabel}</h2>
                 <p className="text-sm text-gray-600 mt-1">
-                  Período: {periodos[0]?.label} a {periodos[periodos.length - 1]?.label} · Cenário {CENARIOS.find((c) => c.chave === cenario)?.titulo}
+                  Período: {periodos[0]?.label} a {periodos[periodos.length - 1]?.label} · {orcamentoAtivo ? <>Orçamento <strong>{orcamentoAtivo.nome}</strong></> : <>Cenário {CENARIOS.find((c) => c.chave === cenario)?.titulo}</>}
                 </p>
                 <p className="text-xs text-gray-600 mt-1 flex items-center gap-2">
                   <span className="px-1.5 py-0.5 text-[10px] rounded bg-slate-200 text-slate-700">Fixa</span> mesmo valor do ano anterior
@@ -578,6 +928,18 @@ export default function DreProjetadaPage() {
                 </p>
               </div>
               <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setComparacao((v) => !v)}
+                  title="Compara o projetado (ou o orçamento aberto) com o realizado dos meses já fechados"
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-md border ${comparacao ? 'bg-blue-600 text-white border-blue-700' : 'bg-white text-black border-gray-300 hover:bg-gray-50'}`}
+                >
+                  {carregandoReal ? 'Buscando realizado...' : 'Projetado × Realizado'}
+                </button>
+                {comparacao && (
+                  <button onClick={() => buscarRealizado(true)} disabled={carregandoReal} title="Recalcular o realizado ignorando o cache" className="px-2 py-1.5 text-xs border border-gray-300 rounded-md bg-white hover:bg-gray-50 disabled:opacity-50">
+                    <RefreshCw className={`w-3.5 h-3.5 ${carregandoReal ? 'animate-spin' : ''}`} />
+                  </button>
+                )}
                 <label className="flex items-center gap-2 text-xs font-medium text-gray-600 cursor-pointer select-none">
                   Comparar com ano anterior
                   <button
@@ -605,6 +967,28 @@ export default function DreProjetadaPage() {
               </button>
             </div>
           )}
+          {comparacao ? (
+            erroReal ? (
+              <div className="p-6 text-sm text-red-700">{erroReal}</div>
+            ) : realizadoCompleto && realizadoResp ? (
+              <ComparacaoRealizado
+                linhas={linhas}
+                abertos={abertos}
+                alternar={alternar}
+                projetado={projetadoEd}
+                real={realizadoCompleto}
+                fechados={realizadoResp.fechados}
+                de={compDe}
+                ate={compAte}
+                setDe={setCompDe}
+                setAte={setCompAte}
+              />
+            ) : (
+              <div className="p-8 flex items-center justify-center gap-2 text-gray-700">
+                <RefreshCw className="w-5 h-5 animate-spin text-green-600" /> Buscando o realizado dos meses fechados…
+              </div>
+            )
+          ) : (
           <div className="overflow-x-auto">
             <table className="w-full border-collapse">
               <thead>
@@ -743,6 +1127,7 @@ export default function DreProjetadaPage() {
               </tbody>
             </table>
           </div>
+          )}
         </div>
       )}
       <p className="text-xs text-gray-500">Valores em R$. Despesas aparecem negativas (como na DRE). A/V % = percentual sobre a receita líquida do período. Nas contas do último nível (custos e despesas), clique no A/V % de um mês para alterá-lo (ou na coluna total para aplicar aos 12 meses): grupos, totalizadores e lucro recalculam na hora.</p>
