@@ -353,6 +353,7 @@ function formatarVariacao(pct: number | null): string {
 interface DetalheFaixaItem {
   referencia: string; nome: string; cor: string | null; estoque: number; pctCampanha: number; descontoAtual: number;
   giro: number | null; mesesFL: number | null; regra: number; mista: boolean;
+  estoqueRede?: number; precoCheio?: number | null; precoPromoAtual?: number | null; precoCampanha?: number | null; preco70?: number | null;
 }
 
 // Regra de desconto pra sugestao de campanha, com base no Giro Total (do
@@ -1032,6 +1033,7 @@ export default function GiroPage() {
   const manterDescontoAltoRef = useRef(false);
   // Mesmos parametros da ultima consulta de totais (filtros da tela) - o modal da tabela por loja os reaproveita.
   const paramsTotaisRef = useRef('');
+  const [selecionadosDetalhe, setSelecionadosDetalhe] = useState<Set<string>>(new Set());
   const [detalheFaixaLoja, setDetalheFaixaLoja] = useState<{
     cdLoja: number; nomeLoja: string; faixa: number; carregando: boolean; erro?: string; itens: DetalheFaixaItem[];
   } | null>(null);
@@ -1316,6 +1318,7 @@ export default function GiroPage() {
 
   // Clique numa quantidade da tabela "Qtd novo por loja": mostra as referencias/cores que a formam.
   async function abrirDetalheFaixaLoja(cdLoja: number, nomeLoja: string, faixa: number) {
+    setSelecionadosDetalhe(new Set());
     setDetalheFaixaLoja({ cdLoja, nomeLoja, faixa, carregando: true, itens: [] });
     try {
       const params = new URLSearchParams(paramsTotaisRef.current);
@@ -1332,9 +1335,9 @@ export default function GiroPage() {
 
   function baixarCsvDetalheFaixa() {
     if (!detalheFaixaLoja) return;
-    const linhas = [['Referência', 'Descrição', 'Cor', 'Estoque', 'Desconto atual %', 'Campanha %', 'Giro', 'Meses FL', 'Regra', 'Mista']];
+    const linhas = [['Referência', 'Descrição', 'Cor', 'Estoque loja', 'Estoque rede', 'Desconto atual %', 'Campanha %', 'Preço campanha', 'Preço a 70%', 'Impacto R$', 'Giro', 'Meses FL', 'Regra', 'Mista']];
     for (const i of detalheFaixaLoja.itens) {
-      linhas.push([i.referencia, i.nome, i.cor ?? '', String(i.estoque).replace('.', ','), String(i.descontoAtual).replace('.', ','), String(i.pctCampanha), i.giro === null ? '' : i.giro.toFixed(2).replace('.', ','), i.mesesFL === null ? '' : String(i.mesesFL), String(i.regra), i.mista ? 'sim' : 'não']);
+      linhas.push([i.referencia, i.nome, i.cor ?? '', String(i.estoque).replace('.', ','), String(i.estoqueRede ?? i.estoque).replace('.', ','), String(i.descontoAtual).replace('.', ','), String(i.pctCampanha), i.precoCampanha == null ? '' : i.precoCampanha.toFixed(2).replace('.', ','), i.preco70 == null ? '' : i.preco70.toFixed(2).replace('.', ','), i.precoCampanha == null || i.preco70 == null ? '' : ((i.precoCampanha - i.preco70) * (i.estoqueRede ?? i.estoque)).toFixed(2).replace('.', ','), i.giro === null ? '' : i.giro.toFixed(2).replace('.', ','), i.mesesFL === null ? '' : String(i.mesesFL), String(i.regra), i.mista ? 'sim' : 'não']);
     }
     const csv = '\uFEFF' + linhas.map((l) => l.map((c) => `"${c.replace(/"/g, '""')}"`).join(';')).join('\n');
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
@@ -3155,35 +3158,85 @@ export default function GiroPage() {
                     <table className="w-full border-collapse text-sm text-black">
                       <thead className="sticky top-0 bg-gray-100">
                         <tr className="text-[11px] uppercase">
+                          <th className="px-2 py-2 text-center">
+                            <input
+                              type="checkbox"
+                              aria-label="Selecionar todas"
+                              checked={detalheFaixaLoja.itens.length > 0 && selecionadosDetalhe.size === detalheFaixaLoja.itens.length}
+                              onChange={(e) => setSelecionadosDetalhe(e.target.checked ? new Set(detalheFaixaLoja.itens.map((_, idx) => String(idx))) : new Set())}
+                            />
+                          </th>
                           <th className="px-3 py-2 text-left">Referência</th>
                           <th className="px-3 py-2 text-left">Descrição</th>
                           <th className="px-3 py-2 text-left">Cor</th>
-                          <th className="px-3 py-2 text-right">Estoque</th>
+                          <th className="px-3 py-2 text-right">Estoque loja</th>
+                          <th className="px-3 py-2 text-right" title="Estoque de todas as lojas do canal (varejo: todas menos Maraponga e Fábrica) - o desconto vale pra rede toda">Estoque rede</th>
                           <th className="px-3 py-2 text-right">Desc. atual</th>
                           <th className="px-3 py-2 text-right">Campanha</th>
+                          <th className="px-3 py-2 text-right">Preço campanha</th>
+                          <th className="px-3 py-2 text-right">Preço a 70%</th>
+                          <th className="px-3 py-2 text-right">Dif. por peça</th>
+                          <th className="px-3 py-2 text-right">Impacto (R$)</th>
                           <th className="px-3 py-2 text-right">Giro</th>
                           <th className="px-3 py-2 text-right">Meses FL</th>
                           <th className="px-3 py-2 text-center">Regra</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {detalheFaixaLoja.itens.map((i, idx) => (
-                          <tr key={`${i.referencia}-${i.cor}-${idx}`} className="border-t border-gray-100 hover:bg-rose-50">
-                            <td className="px-3 py-1.5 font-mono text-xs">{i.referencia}</td>
-                            <td className="px-3 py-1.5">{i.nome}</td>
-                            <td className="px-3 py-1.5">{i.cor ?? '-'}</td>
-                            <td className="px-3 py-1.5 text-right font-semibold">{formatarQtd(i.estoque)}</td>
-                            <td className="px-3 py-1.5 text-right">{String(i.descontoAtual).replace('.', ',')}%</td>
-                            <td className="px-3 py-1.5 text-right">{String(i.pctCampanha).replace('.', ',')}%</td>
-                            <td className="px-3 py-1.5 text-right">{i.giro === null ? '-' : i.giro.toFixed(2).replace('.', ',')}</td>
-                            <td className="px-3 py-1.5 text-right">{i.mesesFL ?? '-'}</td>
-                            <td className="px-3 py-1.5 text-center">{i.regra}{i.mista ? ' (mista)' : ''}</td>
-                          </tr>
-                        ))}
+                        {detalheFaixaLoja.itens.map((i, idx) => {
+                          const marcado = selecionadosDetalhe.has(String(idx));
+                          const difPeca = i.precoCampanha != null && i.preco70 != null ? i.precoCampanha - i.preco70 : null;
+                          const estRede = i.estoqueRede ?? i.estoque;
+                          const impacto = difPeca !== null ? difPeca * estRede : null;
+                          const moedaDet = (v: number | null | undefined) => (v == null ? '-' : v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }));
+                          return (
+                            <tr key={`${i.referencia}-${i.cor}-${idx}`} className={`border-t border-gray-100 hover:bg-rose-50 ${marcado ? 'bg-rose-50' : ''}`}>
+                              <td className="px-2 py-1.5 text-center">
+                                <input
+                                  type="checkbox"
+                                  checked={marcado}
+                                  onChange={() => setSelecionadosDetalhe((prev) => { const n = new Set(prev); if (n.has(String(idx))) n.delete(String(idx)); else n.add(String(idx)); return n; })}
+                                />
+                              </td>
+                              <td className="px-3 py-1.5 font-mono text-xs">{i.referencia}</td>
+                              <td className="px-3 py-1.5">{i.nome}</td>
+                              <td className="px-3 py-1.5">{i.cor ?? '-'}</td>
+                              <td className="px-3 py-1.5 text-right font-semibold">{formatarQtd(i.estoque)}</td>
+                              <td className="px-3 py-1.5 text-right">{formatarQtd(estRede)}</td>
+                              <td className="px-3 py-1.5 text-right">{String(i.descontoAtual).replace('.', ',')}%</td>
+                              <td className="px-3 py-1.5 text-right">{String(i.pctCampanha).replace('.', ',')}%</td>
+                              <td className="px-3 py-1.5 text-right">{moedaDet(i.precoCampanha)}</td>
+                              <td className="px-3 py-1.5 text-right">{moedaDet(i.preco70)}</td>
+                              <td className={`px-3 py-1.5 text-right ${difPeca !== null && difPeca > 0 ? 'text-red-700' : ''}`}>{moedaDet(difPeca)}</td>
+                              <td className={`px-3 py-1.5 text-right font-semibold ${impacto !== null && impacto > 0 ? 'text-red-700' : ''}`}>{moedaDet(impacto)}</td>
+                              <td className="px-3 py-1.5 text-right">{i.giro === null ? '-' : i.giro.toFixed(2).replace('.', ',')}</td>
+                              <td className="px-3 py-1.5 text-right">{i.mesesFL ?? '-'}</td>
+                              <td className="px-3 py-1.5 text-center">{i.regra}{i.mista ? ' (mista)' : ''}</td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   )}
                 </div>
+                {!detalheFaixaLoja.carregando && selecionadosDetalhe.size > 0 && (() => {
+                  const sel = detalheFaixaLoja.itens.filter((_, idx) => selecionadosDetalhe.has(String(idx)));
+                  const pecas = sel.reduce((a, i) => a + (i.estoqueRede ?? i.estoque), 0);
+                  const validos = sel.filter((i) => i.precoCampanha != null && i.preco70 != null);
+                  const impacto = validos.reduce((a, i) => a + ((i.precoCampanha as number) - (i.preco70 as number)) * (i.estoqueRede ?? i.estoque), 0);
+                  const valorCampanha = validos.reduce((a, i) => a + (i.precoCampanha as number) * (i.estoqueRede ?? i.estoque), 0);
+                  const valor70 = validos.reduce((a, i) => a + (i.preco70 as number) * (i.estoqueRede ?? i.estoque), 0);
+                  const moedaRod = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+                  return (
+                    <div className="border-t-2 border-gray-300 bg-yellow-50 px-5 py-3 text-sm text-black flex flex-wrap items-center gap-x-6 gap-y-1">
+                      <span className="font-semibold">{sel.length} selecionada(s) · {formatarQtd(pecas)} peças na rede</span>
+                      <span>Estoque da rede na campanha atual: <strong>{moedaRod(valorCampanha)}</strong></span>
+                      <span>Estoque da rede a 70%: <strong>{moedaRod(valor70)}</strong></span>
+                      <span className="font-bold text-red-700">Impacto de subir para 70%: {moedaRod(impacto)} ({valorCampanha ? `${((impacto / valorCampanha) * 100).toFixed(1).replace('.', ',')}%` : '-'} do valor)</span>
+                      {validos.length < sel.length && <span className="text-xs">({sel.length - validos.length} sem preço cheio, fora da conta)</span>}
+                    </div>
+                  );
+                })()}
               </div>
             </div>
           )}

@@ -2731,6 +2731,25 @@ def totais_desconto_giro(
                             "giro": giro_regra, "mesesFL": meses_regra, "regra": regra_cor,
                             "mista": bool(tem_cor_sem_meses_fl_item),
                         })
+                        # Simulacao "campanha a 70% fixo": preco cheio do canal, preco da campanha atual e
+                        # preco a 70%, os dois ja com o arredondamento psicologico (_calcular_preco_campanha).
+                        canal_det = "atacado" if atac_loja else "varejo"
+                        cheio_det = _preco_cheio_canal(preco_cor.get("precoAtacado" if atac_loja else "precoVarejo"), promo_cor.get(canal_det), fb_ref.get(canal_det))
+                        pct_det = pct_atacado_cor if atac_loja else pct_varejo_cor
+                        promo_det = promo_cor.get(canal_det)
+                        # O desconto vale pra REDE toda do canal: varejo = todas as lojas (menos Maraponga e
+                        # Fabrica); atacado = Maraponga. O impacto de subir pra 70% usa esse estoque.
+                        estoque_rede = est_loja if atac_loja else sum(
+                            float((d or {}).get("estoque") or 0) for c, d in cor_item["porLoja"].items()
+                            if int(c) not in (1, CD_EMPRESA_MARAPONGA)
+                        )
+                        detalhe_celula[-1].update({
+                            "estoqueRede": estoque_rede,
+                            "precoCheio": cheio_det,
+                            "precoPromoAtual": (promo_det or {}).get("precoPromo"),
+                            "precoCampanha": _calcular_preco_campanha(cheio_det, pct_det) if cheio_det else None,
+                            "preco70": _calcular_preco_campanha(cheio_det, 70) if cheio_det else None,
+                        })
                 grupo_desconto = desconto_por_grupo["mistas" if tem_cor_sem_meses_fl_item else "naoMistas"]
                 grupo_desconto["atacado"] += desconto_atacado_cor
                 grupo_desconto["varejo"] += desconto_varejo_cor
