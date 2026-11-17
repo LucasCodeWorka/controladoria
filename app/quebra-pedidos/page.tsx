@@ -276,7 +276,7 @@ export default function QuebraPedidosPage() {
   const c = dados?.consolidado;
   const grafico = (dados?.porMes ?? []).map((m) => ({ mes: rotuloMes(m.mes), valor: m.valor, valorQuebra: m.valorQuebra, pct: m.pctFaturamento, pctQuebra: m.faturamento ? (m.valorQuebra / m.faturamento) * 100 : null, faturamento: m.faturamento }));
   // Rotulo em duas linhas sobre a barra: % do faturamento da fabrica (em cima) e valor.
-  const rotuloBarra = (cor: string, campoPct: 'pct' | 'pctQuebra') => (props: any) => {
+  const rotuloBarra = (cor: string, campoPct: 'pct' | 'pctQuebra') => function RotuloBarra(props: any) {
     const { x, y, width, value, index } = props;
     if (!Number(value)) return null;
     const pct = grafico[index]?.[campoPct];
