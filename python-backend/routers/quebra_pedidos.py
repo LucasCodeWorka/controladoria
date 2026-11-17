@@ -230,7 +230,7 @@ def quebra_pedidos(
             SELECT u.cd_motivocanc AS cd_motivo,
                    COALESCE(NULLIF(TRIM(u.ds_motivocanc), ''), 'Motivo ' || u.cd_motivocanc::text) AS motivo,
                    u.dt_cadastro::date AS data,
-                   u.cd_empresa, u.cd_pedido,
+                   u.cd_empresa, u.cd_pedido, b.cd_cliente,
                    COALESCE(b.qt_cancelada, 0) AS qtd,
                    COALESCE(b.vl_unitario * b.qt_cancelada, 0) AS valor
             FROM ult u
@@ -303,6 +303,24 @@ def quebra_pedidos(
                 "pctFaturamento": _pct(m["valor"], faturamento),
             })
 
+        por_cliente: dict = {}
+        for i in itens:
+            cl = por_cliente.setdefault(i["cd_cliente"], {"cdCliente": i["cd_cliente"], "pedidos": set(), "itens": 0, "qtd": 0.0, "valor": 0.0})
+            cl["pedidos"].add(i["cd_pedido"])
+            cl["itens"] += 1
+            cl["qtd"] += float(i["qtd"] or 0)
+            cl["valor"] += float(i["valor"] or 0)
+        nomes = {}
+        ids_cli = [k for k in por_cliente if k is not None]
+        if ids_cli:
+            for r in execute_query("SELECT cd_pessoa, nm_pessoa FROM vr_pes_pessoa WHERE cd_pessoa = ANY(%s)", (ids_cli,)) or []:
+                nomes[r["cd_pessoa"]] = r["nm_pessoa"]
+        lista_clientes = [{
+            "cdCliente": c["cdCliente"], "cliente": nomes.get(c["cdCliente"]) or "(sem nome)",
+            "pedidos": len(c["pedidos"]), "itens": c["itens"], "qtd": round(c["qtd"], 2), "valor": round(c["valor"], 2),
+            "pctDoTotal": _pct(c["valor"], total_valor),
+        } for c in sorted(por_cliente.values(), key=lambda x: x["valor"], reverse=True)]
+
         lista_datas = []
         for k in sorted(por_data):
             d = por_data[k]
@@ -334,6 +352,7 @@ def quebra_pedidos(
             },
             "porMotivo": lista_motivos,
             "porData": lista_datas,
+            "porCliente": lista_clientes,
             "porMes": por_mes,
         }
     except HTTPException:

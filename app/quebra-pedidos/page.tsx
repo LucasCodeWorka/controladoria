@@ -26,6 +26,16 @@ interface DiaQuebra {
   pctFaturamento: number | null;
 }
 
+interface ClienteQuebra {
+  cdCliente: number | null;
+  cliente: string;
+  pedidos: number;
+  itens: number;
+  qtd: number;
+  valor: number;
+  pctDoTotal: number | null;
+}
+
 interface MesQuebra {
   mes: string;
   valor: number;
@@ -58,6 +68,7 @@ interface DadosQuebra {
   };
   porMotivo: MotivoQuebra[];
   porData: DiaQuebra[];
+  porCliente: ClienteQuebra[];
   porMes: MesQuebra[];
 }
 
@@ -351,42 +362,42 @@ export default function QuebraPedidosPage() {
             </div>
 
             <div className="bg-white rounded-lg shadow-md p-4 overflow-x-auto">
-              <h2 className="text-sm font-bold text-brand-dark mb-3">Por data</h2>
+              <h2 className="text-sm font-bold text-brand-dark mb-3">Por cliente</h2>
               <table className="w-full text-sm">
                 <thead>
                   <tr className="text-left text-xs text-gray-500 border-b border-gray-200">
-                    <th className="py-2 pr-2">Data</th>
+                    <th className="py-2 pr-2">Cliente</th>
+                    <th className="py-2 px-2 text-right">Pedidos</th>
                     <th className="py-2 px-2 text-right">Itens</th>
                     <th className="py-2 px-2 text-right">Qtd. cancelada</th>
                     <th className="py-2 px-2 text-right">Valor</th>
-                    <th className="py-2 px-2 text-right">Faturamento</th>
-                    <th className="py-2 pl-2 text-right">% do fat.</th>
+                    <th className="py-2 pl-2 text-right">% do total cancelado</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {dados.porData.length === 0 && (
+                  {dados.porCliente.length === 0 && (
                     <tr><td colSpan={6} className="py-6 text-center text-gray-500">Nenhum cancelamento no período.</td></tr>
                   )}
-                  {dados.porData.map((d) => (
-                    <tr key={d.data} className="border-b border-gray-100">
-                      <td className="py-2 pr-2">{fmtData(d.data)}</td>
-                      <td className="py-2 px-2 text-right">{fmtNum(d.itens)}</td>
-                      <td className="py-2 px-2 text-right">{fmtNum(d.qtd)}</td>
-                      <td className="py-2 px-2 text-right whitespace-nowrap">{fmtMoeda(d.valor)}</td>
-                      <td className="py-2 px-2 text-right whitespace-nowrap">{fmtMoeda(d.faturamento)}</td>
-                      <td className="py-2 pl-2 text-right">{fmtPct(d.pctFaturamento)}</td>
+                  {dados.porCliente.map((cl) => (
+                    <tr key={cl.cdCliente ?? 'sem'} className="border-b border-gray-100">
+                      <td className="py-2 pr-2">{cl.cdCliente} - {cl.cliente}</td>
+                      <td className="py-2 px-2 text-right">{fmtNum(cl.pedidos)}</td>
+                      <td className="py-2 px-2 text-right">{fmtNum(cl.itens)}</td>
+                      <td className="py-2 px-2 text-right">{fmtNum(cl.qtd)}</td>
+                      <td className="py-2 px-2 text-right whitespace-nowrap">{fmtMoeda(cl.valor)}</td>
+                      <td className="py-2 pl-2 text-right">{fmtPct(cl.pctDoTotal)}</td>
                     </tr>
                   ))}
                 </tbody>
-                {dados.porData.length > 0 && (
+                {dados.porCliente.length > 0 && (
                   <tfoot>
                     <tr className="font-bold border-t-2 border-gray-300">
                       <td className="py-2 pr-2">Consolidado</td>
-                      <td className="py-2 px-2 text-right">{fmtNum(totalDatas.itens)}</td>
-                      <td className="py-2 px-2 text-right">{fmtNum(totalDatas.qtd)}</td>
-                      <td className="py-2 px-2 text-right whitespace-nowrap">{fmtMoeda(totalDatas.valor)}</td>
-                      <td className="py-2 px-2 text-right whitespace-nowrap">{fmtMoeda(c.faturamentoFabrica)}</td>
-                      <td className="py-2 pl-2 text-right">{fmtPct(c.pctFaturamento)}</td>
+                      <td className="py-2 px-2 text-right">{fmtNum(c.pedidos)}</td>
+                      <td className="py-2 px-2 text-right">{fmtNum(c.itens)}</td>
+                      <td className="py-2 px-2 text-right">{fmtNum(c.qtd)}</td>
+                      <td className="py-2 px-2 text-right whitespace-nowrap">{fmtMoeda(c.valor)}</td>
+                      <td className="py-2 pl-2 text-right">{fmtPct(100)}</td>
                     </tr>
                   </tfoot>
                 )}
