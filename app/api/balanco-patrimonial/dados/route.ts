@@ -12,6 +12,9 @@ export async function GET(request: NextRequest) {
     const params = new URLSearchParams();
     if (mesReferencia) params.set('mesReferencia', mesReferencia);
     if (empresas) params.set('empresas', empresas);
+    for (const flag of ['semRescisaoFolha', 'semRescisaoShopping']) {
+      if (searchParams.get(flag) === 'true') params.set(flag, 'true');
+    }
 
     const response = await fetch(`${PYTHON_API_URL}/api/balanco-patrimonial/dados?${params.toString()}`, {
       method: 'GET',

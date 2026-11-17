@@ -631,6 +631,8 @@ export default function BalancoPatrimonialPage() {
   );
   const [ordenacao, setOrdenacao] = useState<Ordenacao>(null);
   const [salvoAtivo, setSalvoAtivo] = useState(false);
+  const [semRescisaoFolha, setSemRescisaoFolha] = useState(false);
+  const [semRescisaoShopping, setSemRescisaoShopping] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
   const [empresasConsultadas, setEmpresasConsultadas] = useState('');
   const [mesConsultado, setMesConsultado] = useState('');
@@ -662,8 +664,8 @@ export default function BalancoPatrimonialPage() {
         // Cookie (padrao LIEBE) primeiro; cai no localStorage antigo pra quem
         // ja tinha filtro salvo antes da mudanca.
         const salvo =
-          carregarFiltroCookie<{ mesReferencia: string; empresas: number[]; ordenacao: Ordenacao }>(CHAVE_FILTROS) ||
-          carregarFiltro<{ mesReferencia: string; empresas: number[]; ordenacao: Ordenacao }>(CHAVE_FILTROS);
+          carregarFiltroCookie<{ mesReferencia: string; empresas: number[]; ordenacao: Ordenacao; semRescisaoFolha?: boolean; semRescisaoShopping?: boolean }>(CHAVE_FILTROS) ||
+          carregarFiltro<{ mesReferencia: string; empresas: number[]; ordenacao: Ordenacao; semRescisaoFolha?: boolean; semRescisaoShopping?: boolean }>(CHAVE_FILTROS);
         const validas = new Set(lista.map((e) => e.cdEmpresa));
         let mes = mesReferencia;
         let empresas = new Set(lista.map((e) => e.cdEmpresa));
@@ -677,6 +679,8 @@ export default function BalancoPatrimonialPage() {
             if (antigas.every((e) => empresas.has(e.cdEmpresa))) EMPRESAS_DONAS_DE_BENS.forEach((e) => empresas.add(e.cdEmpresa));
           }
           if (salvo.ordenacao && ['conta', 'valor', 'pct'].includes(salvo.ordenacao.campo)) setOrdenacao(salvo.ordenacao);
+          if (salvo.semRescisaoFolha) setSemRescisaoFolha(true);
+          if (salvo.semRescisaoShopping) setSemRescisaoShopping(true);
           setSalvoAtivo(true);
         }
         setMesReferencia(mes);
@@ -689,10 +693,10 @@ export default function BalancoPatrimonialPage() {
   useEffect(() => {
     if (empresasDisponiveis.length === 0) return;
     const timer = setTimeout(() => {
-      salvarFiltroCookie(CHAVE_FILTROS, { mesReferencia, empresas: Array.from(empresasSelecionadas), ordenacao });
+      salvarFiltroCookie(CHAVE_FILTROS, { mesReferencia, empresas: Array.from(empresasSelecionadas), ordenacao, semRescisaoFolha, semRescisaoShopping });
     }, 400);
     return () => clearTimeout(timer);
-  }, [mesReferencia, empresasSelecionadas, ordenacao, empresasDisponiveis]);
+  }, [mesReferencia, empresasSelecionadas, ordenacao, empresasDisponiveis, semRescisaoFolha, semRescisaoShopping]);
 
   function limparFiltros() {
     apagarCookie(CHAVE_FILTROS);
@@ -700,6 +704,8 @@ export default function BalancoPatrimonialPage() {
     setMesReferencia(primeiroDiaMesAtual());
     setEmpresasSelecionadas(new Set(empresasDisponiveis.map((e) => e.cdEmpresa)));
     setOrdenacao(null);
+    setSemRescisaoFolha(false);
+    setSemRescisaoShopping(false);
     setSalvoAtivo(false);
   }
 
@@ -743,7 +749,9 @@ export default function BalancoPatrimonialPage() {
     });
   }
 
-  async function consultar(sobrescrever?: { mes: string; empresas: Set<number>; total: number }) {
+  async function consultar(sobrescrever?: { mes: string; empresas: Set<number>; total: number }, flags?: { folha: boolean; shopping: boolean }) {
+    const semFolha = flags?.folha ?? semRescisaoFolha;
+    const semShopping = flags?.shopping ?? semRescisaoShopping;
     const mes = sobrescrever?.mes ?? mesReferencia;
     const empresas = sobrescrever?.empresas ?? empresasSelecionadas;
     const totalEmpresas = sobrescrever?.total ?? empresasDisponiveis.length;
@@ -778,6 +786,8 @@ export default function BalancoPatrimonialPage() {
       if (totalEmpresas > 0 && empresas.size < totalEmpresas) {
         params.set('empresas', Array.from(empresas).join(','));
       }
+      if (semFolha) params.set('semRescisaoFolha', 'true');
+      if (semShopping) params.set('semRescisaoShopping', 'true');
       setEmpresasConsultadas(params.get('empresas') ?? '');
       // Lucro e EBITDA dos ultimos 12 meses (DRE) - nao trava o balanco se falhar.
       fetch(`/api/balanco-patrimonial/indicadores-dre?mesReferencia=${mes}`, { cache: 'no-store' })
@@ -947,6 +957,29 @@ export default function BalancoPatrimonialPage() {
               </div>
             )}
           </div>
+
+          <label className="flex items-center gap-2 text-sm text-[#1d1d1d] cursor-pointer" title="Tira a rescisão de funcionários (PC.4.2) do cálculo">
+            <input
+              type="checkbox"
+              checked={semRescisaoFolha}
+              onChange={(e) => {
+                setSemRescisaoFolha(e.target.checked);
+                if (consultaExecutada) consultar(undefined, { folha: e.target.checked, shopping: semRescisaoShopping });
+              }}
+            />
+            Sem rescisões de folha
+          </label>
+          <label className="flex items-center gap-2 text-sm text-[#1d1d1d] cursor-pointer" title="Tira a rescisão de aluguéis de shopping (PC.1.2) do cálculo">
+            <input
+              type="checkbox"
+              checked={semRescisaoShopping}
+              onChange={(e) => {
+                setSemRescisaoShopping(e.target.checked);
+                if (consultaExecutada) consultar(undefined, { folha: semRescisaoFolha, shopping: e.target.checked });
+              }}
+            />
+            Sem rescisões de shopping
+          </label>
 
           <button
             onClick={() => consultar()}

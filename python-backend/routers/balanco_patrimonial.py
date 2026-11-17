@@ -888,7 +888,9 @@ def get_indicadores_dre(mesReferencia: str = Query(..., description="Mes de refe
 @router.get("/api/balanco-patrimonial/dados")
 def get_balanco_patrimonial(
     mesReferencia: str = Query(..., description="Mes de referencia YYYY-MM"),
-    empresas: Optional[str] = Query(None, description="Lista de cd_empresa/cd_ccusto separados por virgula (default: todas)")
+    empresas: Optional[str] = Query(None, description="Lista de cd_empresa/cd_ccusto separados por virgula (default: todas)"),
+    semRescisaoFolha: bool = Query(False, description="true = tira a rescisao de funcionarios (PC.4.2) do calculo"),
+    semRescisaoShopping: bool = Query(False, description="true = tira a rescisao de alugueis de shopping (PC.1.2) do calculo"),
 ):
     """
     Valores do Balanco Patrimonial: Caixa, Contas a Receber (boletos e
@@ -1016,7 +1018,7 @@ def get_balanco_patrimonial(
                      AND vl_pago = 0{cc}""", (DESPESAITENS_FORNECEDORES, ini, fim, *prm)
             ) or []
             proximo = float(rows[0]["total"]) if rows else 0.0
-            rescisao = _calcular_rescisoes(mesReferencia, empresas)
+            rescisao = 0.0 if semRescisaoShopping else _calcular_rescisoes(mesReferencia, empresas)
             rows = execute_query(
                 f"""SELECT COALESCE(SUM(vl_rateio), 0) AS total
                    FROM public.vr_fcp_despduplicatai
@@ -1125,7 +1127,7 @@ def get_balanco_patrimonial(
                 "SELECT competencia, custo_total FROM fato_custo_mensal ORDER BY competencia DESC LIMIT 1", ()
             ) or []
             salarios = float(rows[0]["custo_total"] or 0) if rows else 0.0
-            extras = _total_ajustes("PC.4")
+            extras = 0.0 if semRescisaoFolha else _total_ajustes("PC.4")
             return {"PC.4": -(salarios + extras), "PC.4.1": -salarios, "PC.4.2": -extras}
 
         with ThreadPoolExecutor(max_workers=6) as pool:
@@ -1213,7 +1215,12 @@ def get_detalhe_lancamentos(conta: str = Query(..., description="PC.1.2 (resciso
         elif conta == "PC.4.2":
             _criar_tabela_ajustes()
             rows = execute_query("SELECT descricao, valor FROM fcp_balanco_ajustes WHERE conta = 'PC.4' AND ativo ORDER BY id", ()) or []
-            itens = [{"descricao": r["descricao"], "informacao": "Lancamento manual", "valor": float(r["valor"])} for r in rows]
+            def _info(r):
+                # Eventos da simulacao de rescisoes (folha): provento soma, desconto subtrai.
+                if str(r["descricao"]).startswith("Evento "):
+                    return "Provento" if float(r["valor"]) >= 0 else "Desconto"
+                return "Lancamento manual"
+            itens = [{"descricao": r["descricao"], "informacao": _info(r), "valor": float(r["valor"])} for r in rows]
         else:
             raise HTTPException(status_code=400, detail="Abertura sem detalhamento")
         return {"conta": conta, "itens": itens}
