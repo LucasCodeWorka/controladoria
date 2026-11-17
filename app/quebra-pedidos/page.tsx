@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { PackageX, Loader2, ChevronDown } from 'lucide-react';
+import { PackageX, Loader2, ChevronDown, RefreshCw, ArrowUp, ArrowDown } from 'lucide-react';
 import { Bar, BarChart, CartesianGrid, LabelList, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
 interface MotivoQuebra {
@@ -94,11 +94,62 @@ const isoPrimeiroDiaMes = () => `${isoHoje().slice(0, 8)}01`;
 function Cartao({ rotulo, valor, detalhe, destaque }: { rotulo: string; valor: string; detalhe?: string; destaque?: boolean }) {
   return (
     <div className={`rounded-lg shadow-md p-4 ${destaque ? 'bg-rose-50 border border-rose-200' : 'bg-white'}`}>
-      <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">{rotulo}</p>
+      <p className="text-xs font-semibold uppercase tracking-wide text-black">{rotulo}</p>
       <p className="text-2xl font-bold text-brand-dark mt-1">{valor}</p>
-      {detalhe && <p className="text-xs text-gray-500 mt-1">{detalhe}</p>}
+      {detalhe && <p className="text-xs text-black mt-1">{detalhe}</p>}
     </div>
   );
+}
+
+type Ord = { col: string; asc: boolean } | null;
+
+function ordenar<T>(lista: T[], ord: Ord): T[] {
+  if (!ord) return lista;
+  return [...lista].sort((a, b) => {
+    const x = (a as any)[ord.col];
+    const y = (b as any)[ord.col];
+    const r = typeof x === 'string' || typeof y === 'string'
+      ? String(x ?? '').localeCompare(String(y ?? ''), 'pt-BR')
+      : (x ?? -Infinity) - (y ?? -Infinity);
+    return ord.asc ? r : -r;
+  });
+}
+
+function proximaOrd(atual: Ord, col: string): Ord {
+  if (atual?.col === col) return { col, asc: !atual.asc };
+  return { col, asc: col === 'motivo' || col === 'cliente' };
+}
+
+function Th({ rotulo, col, ord, setOrd, className }: { rotulo: string; col: string; ord: Ord; setOrd: (o: Ord) => void; className: string }) {
+  const ativo = ord?.col === col;
+  const direita = className.includes('text-right');
+  return (
+    <th className={`${className} cursor-pointer select-none hover:bg-gray-50`} onClick={() => setOrd(proximaOrd(ord, col))} title="Clique para ordenar">
+      <span className={`inline-flex items-center gap-1 ${direita ? 'flex-row-reverse' : ''}`}>
+        {rotulo}
+        {ativo ? (ord!.asc ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />) : null}
+      </span>
+    </th>
+  );
+}
+
+// Cache das consultas (sobrevive a recarregar a pagina): "Consultar" usa o que ja foi
+// buscado; o botao de atualizar ignora e busca de novo.
+const CACHE_PREFIXO = 'quebra-pedidos:v1:';
+function lerCache(chave: string): { dados: any; em: string } | null {
+  try {
+    const bruto = localStorage.getItem(CACHE_PREFIXO + chave);
+    return bruto ? JSON.parse(bruto) : null;
+  } catch {
+    return null;
+  }
+}
+function gravarCache(chave: string, dados: any, em: string) {
+  try {
+    localStorage.setItem(CACHE_PREFIXO + chave, JSON.stringify({ dados, em }));
+  } catch {
+    // sem espaco/bloqueado: segue sem cache
+  }
 }
 
 export default function QuebraPedidosPage() {
@@ -108,11 +159,14 @@ export default function QuebraPedidosPage() {
   const [motivosSelecionados, setMotivosSelecionados] = useState<Set<number>>(new Set());
   const [filtroMotivoAberto, setFiltroMotivoAberto] = useState(false);
   const [ate10, setAte10] = useState(false);
+  const [atualizadoEm, setAtualizadoEm] = useState<string | null>(null);
+  const [ordMotivo, setOrdMotivo] = useState<Ord>(null);
+  const [ordCliente, setOrdCliente] = useState<Ord>(null);
   const [dados, setDados] = useState<DadosQuebra | null>(null);
   const [loading, setLoading] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
 
-  async function consultar(ate10Forcado?: boolean) {
+  async function consultar(ate10Forcado?: boolean, ignorarCache = false) {
     const usarAte10 = ate10Forcado ?? ate10;
     if (!dataInicio || !dataFim) {
       setErro('Informe a data inicial e a final.');
@@ -131,13 +185,25 @@ export default function QuebraPedidosPage() {
       if (motivosSelecionados.size > 0 && motivosSelecionados.size < motivosDisponiveis.length) {
         params.set('motivos', Array.from(motivosSelecionados).join(','));
       }
-      const response = await fetch(`/api/quebra-pedidos?${params.toString()}`, { cache: 'no-store' });
+      const chave = params.toString();
+      if (!ignorarCache) {
+        const emCache = lerCache(chave);
+        if (emCache) {
+          setDados(emCache.dados);
+          setAtualizadoEm(emCache.em);
+          return;
+        }
+      }
+      const response = await fetch(`/api/quebra-pedidos?${chave}`, { cache: 'no-store' });
       const data = await response.json();
       if (!response.ok || data.error) {
         setErro(`Erro do backend: ${data.detail || data.error || 'Erro desconhecido'}`);
         return;
       }
+      const agora = new Date().toLocaleString('pt-BR');
+      gravarCache(chave, data, agora);
       setDados(data);
+      setAtualizadoEm(agora);
     } catch (e) {
       console.error('Erro ao buscar quebra de pedidos:', e);
       setErro('Erro ao buscar os dados. Tente novamente.');
@@ -186,7 +252,7 @@ export default function QuebraPedidosPage() {
         </div>
         <div>
           <h1 className="text-2xl font-bold text-brand-dark">Quebra de Pedidos</h1>
-          <p className="text-sm text-gray-500">
+          <p className="text-sm text-black">
             Itens de pedido da fábrica cancelados, por motivo, por data e consolidados, com o percentual sobre o faturamento da fábrica.
           </p>
         </div>
@@ -194,23 +260,23 @@ export default function QuebraPedidosPage() {
 
       <div className="bg-white rounded-lg shadow-md p-4">
         <div className="flex items-end gap-3 flex-wrap">
-          <label className="text-sm text-gray-600">
+          <label className="text-sm text-black">
             <span className="block text-xs font-medium mb-1">Data inicial</span>
             <input type="date" value={dataInicio} onChange={(e) => setDataInicio(e.target.value)} className="px-3 py-2 border border-gray-300 rounded-md text-sm" />
           </label>
-          <label className="text-sm text-gray-600">
+          <label className="text-sm text-black">
             <span className="block text-xs font-medium mb-1">Data final</span>
             <input type="date" value={dataFim} onChange={(e) => setDataFim(e.target.value)} className="px-3 py-2 border border-gray-300 rounded-md text-sm" />
           </label>
           <div className="relative">
-            <span className="block text-xs font-medium mb-1 text-gray-600">Motivo</span>
+            <span className="block text-xs font-medium mb-1 text-black">Motivo</span>
             <button
               type="button"
               onClick={() => setFiltroMotivoAberto((v) => !v)}
               className="min-w-[220px] flex items-center justify-between gap-2 px-3 py-2 border border-gray-300 rounded-md text-sm bg-white hover:bg-gray-50"
             >
               {motivosSelecionados.size === motivosDisponiveis.length ? 'Todos os motivos' : `Motivos (${motivosSelecionados.size}/${motivosDisponiveis.length})`}
-              <ChevronDown className="w-4 h-4 text-gray-500" />
+              <ChevronDown className="w-4 h-4 text-black" />
             </button>
             {filtroMotivoAberto && (
               <div className="absolute z-30 mt-1 w-80 max-h-80 overflow-auto bg-white border border-gray-200 rounded-lg shadow-xl p-2">
@@ -218,10 +284,10 @@ export default function QuebraPedidosPage() {
                   <button type="button" className="text-xs font-medium text-purple-700 hover:text-purple-900" onClick={() => setMotivosSelecionados(new Set(motivosDisponiveis.map((m) => m.cdMotivo)))}>
                     Todos
                   </button>
-                  <button type="button" className="text-xs font-medium text-gray-600 hover:text-gray-900" onClick={() => setMotivosSelecionados(new Set(motivosDisponiveis.filter((m) => m.ehQuebra).map((m) => m.cdMotivo)))}>
+                  <button type="button" className="text-xs font-medium text-black hover:text-black" onClick={() => setMotivosSelecionados(new Set(motivosDisponiveis.filter((m) => m.ehQuebra).map((m) => m.cdMotivo)))}>
                     Só quebra de pedidos
                   </button>
-                  <button type="button" className="text-xs font-medium text-gray-600 hover:text-gray-900" onClick={() => setMotivosSelecionados(new Set())}>
+                  <button type="button" className="text-xs font-medium text-black hover:text-black" onClick={() => setMotivosSelecionados(new Set())}>
                     Nenhum
                   </button>
                 </div>
@@ -234,7 +300,7 @@ export default function QuebraPedidosPage() {
               </div>
             )}
           </div>
-          <label className="flex items-center gap-2 text-sm text-gray-700 pb-2 cursor-pointer" title="Só conta como quebra o pedido que teve até 10% das peças canceladas (ex.: 10 de 100 entra; 11 de 100 não)">
+          <label className="flex items-center gap-2 text-sm text-black pb-2 cursor-pointer" title="Só conta como quebra o pedido que teve até 10% das peças canceladas (ex.: 10 de 100 entra; 11 de 100 não)">
             <input
               type="checkbox"
               checked={ate10}
@@ -253,16 +319,25 @@ export default function QuebraPedidosPage() {
             {loading && <Loader2 className="w-4 h-4 animate-spin" />}
             Consultar
           </button>
+          <button
+            onClick={() => consultar(undefined, true)}
+            disabled={loading}
+            title="Atualizar dados (ignora o cache e busca de novo)"
+            className="p-2 bg-gray-100 text-black rounded-md hover:bg-gray-200 transition-colors disabled:opacity-50"
+          >
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+          </button>
+          {atualizadoEm && <span className="text-xs text-black pb-2">Atualizado em {atualizadoEm}</span>}
         </div>
         {erro && <p className="text-sm text-red-600 mt-3">{erro}</p>}
-        <p className="text-xs text-gray-400 mt-3">
+        <p className="text-xs text-black mt-3">
           Cancelamentos pela data em que foram registrados (último cancelamento de cada item), operações 52 e 1. Valor = valor unitário × quantidade cancelada.
           O percentual usa o faturamento da fábrica no mesmo período.
         </p>
       </div>
 
       {!dados && !loading && !erro && (
-        <div className="bg-white rounded-lg shadow-md p-8 text-center text-sm text-gray-500">
+        <div className="bg-white rounded-lg shadow-md p-8 text-center text-sm text-black">
           Escolha o período e o motivo e clique em Consultar.
         </div>
       )}
@@ -288,16 +363,16 @@ export default function QuebraPedidosPage() {
 
           <div className="bg-white rounded-lg shadow-md p-4">
             <h2 className="text-sm font-bold text-brand-dark">Valor cancelado por mês</h2>
-            <p className="text-xs text-gray-500 mb-3">Meses do ano atual até o último mês fechado (não depende das datas do filtro; respeita o filtro de motivo).</p>
+            <p className="text-xs text-black mb-3">Meses do ano atual até o último mês fechado (não depende das datas do filtro; respeita o filtro de motivo).</p>
             {grafico.length === 0 ? (
-              <p className="text-sm text-gray-500">Ainda não há mês fechado neste ano.</p>
+              <p className="text-sm text-black">Ainda não há mês fechado neste ano.</p>
             ) : (
               <div className="h-64">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={grafico} margin={{ top: 24, right: 8, left: 8, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                    <XAxis dataKey="mes" tick={{ fontSize: 12 }} />
-                    <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `${Math.round(Number(v) / 1000)}k`} />
+                    <XAxis dataKey="mes" tick={{ fontSize: 12, fill: '#000000' }} />
+                    <YAxis tick={{ fontSize: 11, fill: '#000000' }} tickFormatter={(v) => `${Math.round(Number(v) / 1000)}k`} />
                     <Tooltip
                       formatter={(v, nome) => [fmtMoeda(Number(v)), nome === 'valorQuebra' ? 'Quebra de pedidos' : 'Total cancelado']}
                       labelFormatter={(rotulo, itens) => {
@@ -306,7 +381,7 @@ export default function QuebraPedidosPage() {
                       }}
                     />
                     <Bar dataKey="valor" fill="#c5949d" name="valor">
-                      <LabelList dataKey="valor" position="top" formatter={rotuloValor} style={{ fontSize: 11, fill: '#4b5563' }} />
+                      <LabelList dataKey="valor" position="top" formatter={rotuloValor} style={{ fontSize: 11, fill: '#000000' }} />
                     </Bar>
                     <Bar dataKey="valorQuebra" fill="#8B6E5A" name="valorQuebra">
                       <LabelList dataKey="valorQuebra" position="top" formatter={rotuloValor} style={{ fontSize: 11, fill: '#8B6E5A' }} />
@@ -322,20 +397,20 @@ export default function QuebraPedidosPage() {
               <h2 className="text-sm font-bold text-brand-dark mb-3">Por motivo</h2>
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="text-left text-xs text-gray-500 border-b border-gray-200">
-                    <th className="py-2 pr-2">Motivo</th>
-                    <th className="py-2 px-2 text-right">Pedidos</th>
-                    <th className="py-2 px-2 text-right">Qtd. cancelada</th>
-                    <th className="py-2 px-2 text-right">Valor</th>
-                    <th className="py-2 px-2 text-right">% do total</th>
-                    <th className="py-2 pl-2 text-right">% do fat.</th>
+                  <tr className="text-left text-xs text-black border-b border-gray-200">
+                    <Th rotulo="Motivo" col="motivo" ord={ordMotivo} setOrd={setOrdMotivo} className="py-2 pr-2" />
+                    <Th rotulo="Pedidos" col="pedidos" ord={ordMotivo} setOrd={setOrdMotivo} className="py-2 px-2 text-right" />
+                    <Th rotulo="Qtd. cancelada" col="qtd" ord={ordMotivo} setOrd={setOrdMotivo} className="py-2 px-2 text-right" />
+                    <Th rotulo="Valor" col="valor" ord={ordMotivo} setOrd={setOrdMotivo} className="py-2 px-2 text-right" />
+                    <Th rotulo="% do total" col="pctDoTotal" ord={ordMotivo} setOrd={setOrdMotivo} className="py-2 px-2 text-right" />
+                    <Th rotulo="% do fat." col="pctFaturamento" ord={ordMotivo} setOrd={setOrdMotivo} className="py-2 pl-2 text-right" />
                   </tr>
                 </thead>
                 <tbody>
                   {dados.porMotivo.length === 0 && (
-                    <tr><td colSpan={6} className="py-6 text-center text-gray-500">Nenhum cancelamento no período.</td></tr>
+                    <tr><td colSpan={6} className="py-6 text-center text-black">Nenhum cancelamento no período.</td></tr>
                   )}
-                  {dados.porMotivo.map((m) => (
+                  {ordenar(dados.porMotivo, ordMotivo).map((m) => (
                     <tr key={m.cdMotivo} className={`border-b border-gray-100 ${m.ehQuebra ? 'bg-rose-50 font-semibold' : ''}`}>
                       <td className="py-2 pr-2">{m.cdMotivo} - {m.motivo}</td>
                       <td className="py-2 px-2 text-right">{fmtNum(m.pedidos)}</td>
@@ -365,20 +440,20 @@ export default function QuebraPedidosPage() {
               <h2 className="text-sm font-bold text-brand-dark mb-3">Por cliente</h2>
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="text-left text-xs text-gray-500 border-b border-gray-200">
-                    <th className="py-2 pr-2">Cliente</th>
-                    <th className="py-2 px-2 text-right">Pedidos</th>
-                    <th className="py-2 px-2 text-right">Itens</th>
-                    <th className="py-2 px-2 text-right">Qtd. cancelada</th>
-                    <th className="py-2 px-2 text-right">Valor</th>
-                    <th className="py-2 pl-2 text-right">% do total cancelado</th>
+                  <tr className="text-left text-xs text-black border-b border-gray-200">
+                    <Th rotulo="Cliente" col="cliente" ord={ordCliente} setOrd={setOrdCliente} className="py-2 pr-2" />
+                    <Th rotulo="Pedidos" col="pedidos" ord={ordCliente} setOrd={setOrdCliente} className="py-2 px-2 text-right" />
+                    <Th rotulo="Itens" col="itens" ord={ordCliente} setOrd={setOrdCliente} className="py-2 px-2 text-right" />
+                    <Th rotulo="Qtd. cancelada" col="qtd" ord={ordCliente} setOrd={setOrdCliente} className="py-2 px-2 text-right" />
+                    <Th rotulo="Valor" col="valor" ord={ordCliente} setOrd={setOrdCliente} className="py-2 px-2 text-right" />
+                    <Th rotulo="% do total cancelado" col="pctDoTotal" ord={ordCliente} setOrd={setOrdCliente} className="py-2 pl-2 text-right" />
                   </tr>
                 </thead>
                 <tbody>
                   {dados.porCliente.length === 0 && (
-                    <tr><td colSpan={6} className="py-6 text-center text-gray-500">Nenhum cancelamento no período.</td></tr>
+                    <tr><td colSpan={6} className="py-6 text-center text-black">Nenhum cancelamento no período.</td></tr>
                   )}
-                  {dados.porCliente.map((cl) => (
+                  {ordenar(dados.porCliente, ordCliente).map((cl) => (
                     <tr key={cl.cdCliente ?? 'sem'} className="border-b border-gray-100">
                       <td className="py-2 pr-2">{cl.cdCliente} - {cl.cliente}</td>
                       <td className="py-2 px-2 text-right">{fmtNum(cl.pedidos)}</td>
