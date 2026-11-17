@@ -22,6 +22,7 @@ import {
   Sparkles,
   Scale,
   PackageX,
+  Landmark,
   Banknote,
   TrendingUp,
   Minus,
@@ -158,6 +159,11 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
       name: 'Quebra de Pedidos',
       href: '/quebra-pedidos',
       icon: PackageX,
+    },
+    {
+      name: 'Endividamento',
+      href: '/endividamento',
+      icon: Landmark,
     },
   ];
 
