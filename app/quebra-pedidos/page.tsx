@@ -1,6 +1,7 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { carregarFiltro, salvarFiltro } from '../utils/persistirFiltro';
 import { PackageX, Loader2, ChevronDown, RefreshCw, ArrowUp, ArrowDown } from 'lucide-react';
 import { Bar, BarChart, CartesianGrid, LabelList, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
@@ -152,6 +153,17 @@ function gravarCache(chave: string, dados: any, em: string) {
   }
 }
 
+const CHAVE_FILTROS = 'quebra_pedidos_filtros';
+
+interface FiltrosSalvos {
+  dataInicio: string;
+  dataFim: string;
+  motivos: number[] | null; // null = todos
+  ate10: boolean;
+  ordMotivo: Ord;
+  ordCliente: Ord;
+}
+
 export default function QuebraPedidosPage() {
   const [dataInicio, setDataInicio] = useState(isoPrimeiroDiaMes());
   const [dataFim, setDataFim] = useState(isoHoje());
@@ -165,6 +177,8 @@ export default function QuebraPedidosPage() {
   const [dados, setDados] = useState<DadosQuebra | null>(null);
   const [loading, setLoading] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
+  const motivosSalvosRef = useRef<number[] | null>(null);
+  const [filtrosRestaurados, setFiltrosRestaurados] = useState(false);
 
   async function consultar(ate10Forcado?: boolean, ignorarCache = false) {
     const usarAte10 = ate10Forcado ?? ate10;
@@ -214,15 +228,41 @@ export default function QuebraPedidosPage() {
 
   // So a lista de motivos (pro filtro) carrega ao abrir; os dados so vem ao clicar em Consultar.
   useEffect(() => {
+    const salvo = carregarFiltro<FiltrosSalvos>(CHAVE_FILTROS);
+    if (salvo) {
+      if (salvo.dataInicio) setDataInicio(salvo.dataInicio);
+      if (salvo.dataFim) setDataFim(salvo.dataFim);
+      if (typeof salvo.ate10 === 'boolean') setAte10(salvo.ate10);
+      if (salvo.ordMotivo) setOrdMotivo(salvo.ordMotivo);
+      if (salvo.ordCliente) setOrdCliente(salvo.ordCliente);
+      motivosSalvosRef.current = Array.isArray(salvo.motivos) ? salvo.motivos : null;
+    }
     fetch('/api/quebra-pedidos/motivos', { cache: 'no-store' })
       .then((r) => r.json())
       .then((d) => {
         const lista: OpcaoMotivo[] = d.motivos || [];
         setMotivosDisponiveis(lista);
-        setMotivosSelecionados(new Set(lista.map((m) => m.cdMotivo)));
+        const salvos = motivosSalvosRef.current;
+        const validos = salvos ? lista.filter((m) => salvos.includes(m.cdMotivo)) : lista;
+        setMotivosSelecionados(new Set((validos.length ? validos : lista).map((m) => m.cdMotivo)));
       })
-      .catch((e) => console.error('Erro ao buscar motivos:', e));
+      .catch((e) => console.error('Erro ao buscar motivos:', e))
+      .finally(() => setFiltrosRestaurados(true));
   }, []);
+
+  // Guarda os ultimos filtros usados (so depois de restaurar, pra nao sobrescrever com o padrao).
+  useEffect(() => {
+    if (!filtrosRestaurados) return;
+    const todos = motivosSelecionados.size === motivosDisponiveis.length;
+    salvarFiltro<FiltrosSalvos>(CHAVE_FILTROS, {
+      dataInicio,
+      dataFim,
+      motivos: todos ? null : Array.from(motivosSelecionados),
+      ate10,
+      ordMotivo,
+      ordCliente,
+    });
+  }, [filtrosRestaurados, dataInicio, dataFim, motivosSelecionados, motivosDisponiveis, ate10, ordMotivo, ordCliente]);
 
   function toggleMotivo(cd: number) {
     setMotivosSelecionados((atual) => {
@@ -234,7 +274,20 @@ export default function QuebraPedidosPage() {
   }
 
   const c = dados?.consolidado;
-  const grafico = (dados?.porMes ?? []).map((m) => ({ mes: rotuloMes(m.mes), valor: m.valor, valorQuebra: m.valorQuebra, pct: m.pctFaturamento, faturamento: m.faturamento }));
+  const grafico = (dados?.porMes ?? []).map((m) => ({ mes: rotuloMes(m.mes), valor: m.valor, valorQuebra: m.valorQuebra, pct: m.pctFaturamento, pctQuebra: m.faturamento ? (m.valorQuebra / m.faturamento) * 100 : null, faturamento: m.faturamento }));
+  // Rotulo em duas linhas sobre a barra: % do faturamento da fabrica (em cima) e valor.
+  const rotuloBarra = (cor: string, campoPct: 'pct' | 'pctQuebra') => (props: any) => {
+    const { x, y, width, value, index } = props;
+    if (!Number(value)) return null;
+    const pct = grafico[index]?.[campoPct];
+    const cx = Number(x) + Number(width) / 2;
+    return (
+      <text x={cx} textAnchor="middle" fontSize={11} fill={cor}>
+        <tspan x={cx} y={Number(y) - 16} fontWeight={600}>{pct != null ? fmtPct(pct) : ''}</tspan>
+        <tspan x={cx} y={Number(y) - 4}>{rotuloValor(value)}</tspan>
+      </text>
+    );
+  };
   const totalDatas = (dados?.porData ?? []).reduce(
     (acc, d) => ({ itens: acc.itens + d.itens, qtd: acc.qtd + d.qtd, valor: acc.valor + d.valor, faturamento: acc.faturamento + d.faturamento }),
     { itens: 0, qtd: 0, valor: 0, faturamento: 0 },
@@ -369,7 +422,7 @@ export default function QuebraPedidosPage() {
             ) : (
               <div className="h-64">
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={grafico} margin={{ top: 24, right: 8, left: 8, bottom: 0 }}>
+                  <BarChart data={grafico} margin={{ top: 36, right: 8, left: 8, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} />
                     <XAxis dataKey="mes" tick={{ fontSize: 12, fill: '#000000' }} />
                     <YAxis tick={{ fontSize: 11, fill: '#000000' }} tickFormatter={(v) => `${Math.round(Number(v) / 1000)}k`} />
@@ -381,10 +434,10 @@ export default function QuebraPedidosPage() {
                       }}
                     />
                     <Bar dataKey="valor" fill="#c5949d" name="valor">
-                      <LabelList dataKey="valor" position="top" formatter={rotuloValor} style={{ fontSize: 11, fill: '#000000' }} />
+                      <LabelList dataKey="valor" content={rotuloBarra('#000000', 'pct')} />
                     </Bar>
                     <Bar dataKey="valorQuebra" fill="#8B6E5A" name="valorQuebra">
-                      <LabelList dataKey="valorQuebra" position="top" formatter={rotuloValor} style={{ fontSize: 11, fill: '#8B6E5A' }} />
+                      <LabelList dataKey="valorQuebra" content={rotuloBarra('#8B6E5A', 'pctQuebra')} />
                     </Bar>
                   </BarChart>
                 </ResponsiveContainer>
