@@ -79,10 +79,6 @@ export const PLANO_PASSIVO: ContaBalanco[] = [
         codigo: 'PC.3',
         nome: '3 - EMPRÉSTIMOS, FINANCIAMENTOS E DEBÊNTURES',
         nivel: 2,
-        detalhes: [
-          { codigo: 'PC.3.1', nome: 'PRINCIPAL' },
-          { codigo: 'PC.3.2', nome: 'JUROS' },
-        ],
       },
       { codigo: 'PC.ETR', nome: '4 - ENDIVIDAMENTO TRIBUTÁRIO', nivel: 2 },
       { codigo: 'PC.IMV', nome: '5 - OBRIGAÇÕES POR COMPRA DE IMÓVEIS', nivel: 2 },
@@ -108,10 +104,6 @@ export const PLANO_PASSIVO: ContaBalanco[] = [
         codigo: 'PNC.8',
         nome: '9 - EMPRÉSTIMOS, FINANCIAMENTOS E DEBÊNTURES',
         nivel: 2,
-        detalhes: [
-          { codigo: 'PNC.8.1', nome: 'PRINCIPAL' },
-          { codigo: 'PNC.8.2', nome: 'JUROS' },
-        ],
       },
       { codigo: 'PNC.ETR', nome: '10 - ENDIVIDAMENTO TRIBUTÁRIO', nivel: 2 },
       { codigo: 'PNC.IMV', nome: '11 - OBRIGAÇÕES POR COMPRA DE IMÓVEIS', nivel: 2 },
