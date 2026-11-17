@@ -839,13 +839,14 @@ export default function BalancoPatrimonialPage() {
   const estoques = valoresAtivos['AC.3'] ?? 0;
   const patrimonioLiquido = totalAtivos - Math.abs(totalPassivo);
   // Divida Liquida / EBITDA (alavancagem financeira tradicional):
-  //   bruta = emprestimos e financiamentos (PC.3 + PNC.8) + cheque especial utilizado;
+  //   bruta = principal dos emprestimos e financiamentos (PC.3.1 + PNC.8.1, sem as linhas de juros) + cheque especial utilizado;
   //   caixa = so saldos bancarios positivos (saldo negativo ja entra como cheque especial na bruta, sem dupla contagem);
   //   fornecedores, materia-prima, tributos e salarios ficam fora.
   // Alavancagem ajustada = o mesmo + obrigacoes de compra de imoveis (PC.IMV e PNC.IMV), mostrada a parte.
   const somaPassivo = (codigos: string[]) => Math.abs(codigos.reduce((s, c) => s + (valoresPassivo[c] ?? 0), 0));
-  const emprestimosCP = somaPassivo(['PC.3']);
-  const emprestimosLP = somaPassivo(['PNC.8']);
+  // So o principal (PC.3.1 e PNC.8.1): as linhas de juros (PC.3.2 e PNC.8.2) ficam fora da divida.
+  const emprestimosCP = somaPassivo(['PC.3.1']);
+  const emprestimosLP = somaPassivo(['PNC.8.1']);
   const imoveisCP = somaPassivo(['PC.IMV']);
   const imoveisLP = somaPassivo(['PNC.IMV']);
   const chequeEspecial = caixaInfo?.chequeEspecial ?? 0;
@@ -857,8 +858,8 @@ export default function BalancoPatrimonialPage() {
 
   const statusAlavancagem = (x: number): Status => (x <= 2.5 ? 'ok' : x <= 3 ? 'atencao' : 'ruim');
   const memoriaDivida = (ajustada: boolean): LinhaMemoria[] => [
-    { t: 'Empréstimos curto prazo (PC.3)', v: formatarValor(emprestimosCP) },
-    { t: 'Empréstimos longo prazo (PNC.8)', v: formatarValor(emprestimosLP) },
+    { t: 'Empréstimos curto prazo - principal (PC.3.1)', v: formatarValor(emprestimosCP) },
+    { t: 'Empréstimos longo prazo - principal (PNC.8.1)', v: formatarValor(emprestimosLP) },
     { t: 'Cheque especial utilizado', v: formatarValor(chequeEspecial) },
     { t: 'Dívida financeira bruta', v: formatarValor(dividaBruta), forte: true },
     ...(ajustada ? [
