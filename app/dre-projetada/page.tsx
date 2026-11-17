@@ -57,6 +57,50 @@ function proximoMesISO() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
+// Edicoes de A/V %: codigo da conta -> periodo (YYYY-MM) -> % sobre a receita liquida (com sinal, como na DRE).
+type Edicoes = Record<string, Record<string, number>>;
+const CHAVE_EDICOES = 'dre_projetada_edicoes_v1';
+// Cada grupo alimenta estes totalizadores (cascata: margem -> lucro bruto -> EBITDA -> ... -> lucro liquido).
+const CADEIA_TOTALIZADORES: Record<string, string[]> = {
+  '04': ['05', '07', '09', '11', '14'],
+  '06': ['07', '09', '11', '14'],
+  '08': ['09', '11', '14'],
+  '10': ['11', '14'],
+  '13': ['14'],
+};
+
+const fmtPctTxt = (n: number) => n.toFixed(2).replace('.', ',');
+
+// Celula de A/V % editavel: clique para digitar o novo percentual (Enter aplica, Esc cancela, vazio desfaz a edicao).
+function CelulaPct({ texto, pctAtual, editado, onCommit, className, titulo }: {
+  texto: string; pctAtual: number | null; editado: boolean; onCommit: (txt: string) => void; className: string; titulo: string;
+}) {
+  const [editando, setEditando] = useState(false);
+  const [txt, setTxt] = useState('');
+  const confirmar = () => { setEditando(false); onCommit(txt); };
+  return (
+    <td
+      className={`${className} ${editado ? 'bg-yellow-100 font-semibold ring-1 ring-inset ring-yellow-400' : ''} ${editando ? '' : 'cursor-pointer hover:bg-yellow-50'}`}
+      title={editado ? `${titulo} (editado - apague o valor para desfazer)` : titulo}
+      onClick={() => { if (!editando) { setTxt(pctAtual === null ? '' : fmtPctTxt(pctAtual)); setEditando(true); } }}
+    >
+      {editando ? (
+        <input
+          autoFocus
+          value={txt}
+          onChange={(e) => setTxt(e.target.value)}
+          onBlur={confirmar}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') confirmar();
+            if (e.key === 'Escape') setEditando(false);
+          }}
+          className="w-16 px-1 py-0.5 text-right text-xs border border-yellow-500 rounded bg-white text-black"
+        />
+      ) : texto}
+    </td>
+  );
+}
+
 interface ResumoCenario { receitaLiquida: number; lucro: number; percentual: number | null }
 interface ResumoEmpresa {
   filtro: string; nome: string; carregando: boolean; erro?: string;
@@ -193,6 +237,68 @@ export default function DreProjetadaPage() {
   const periodos = dados?.periodos ?? [];
   const recLiqPeriodo = (key: string) => dados?.projetado['03']?.[key] ?? 0;
   const recLiqTotal = dados?.projetado['03']?.total ?? 0;
+  // ── Edicao de A/V % no ultimo nivel: recalcula grupos, totalizadores e lucro na propria tela ──
+  const [edicoesPorChave, setEdicoesPorChave] = useState<Record<string, Edicoes>>({});
+  const edicoesCarregadas = useRef(false);
+  useEffect(() => {
+    try { const bruto = localStorage.getItem(CHAVE_EDICOES); if (bruto) setEdicoesPorChave(JSON.parse(bruto)); } catch { /* sem edicoes salvas */ }
+    edicoesCarregadas.current = true;
+  }, []);
+  useEffect(() => {
+    if (!edicoesCarregadas.current) return;
+    try { localStorage.setItem(CHAVE_EDICOES, JSON.stringify(edicoesPorChave)); } catch { /* segue sem salvar */ }
+  }, [edicoesPorChave]);
+  const chaveEdicoes = `${filtro}|${inicio}`;
+  const edicoes = useMemo<Edicoes>(() => edicoesPorChave[chaveEdicoes] ?? {}, [edicoesPorChave, chaveEdicoes]);
+  const qtdEdicoes = Object.values(edicoes).reduce((n, o) => n + Object.keys(o).length, 0);
+
+  const projetadoEd = useMemo(() => {
+    if (!dados) return {} as Record<string, Valores>;
+    const base = dados.projetado;
+    if (qtdEdicoes === 0) return base;
+    const out: Record<string, Valores> = {};
+    const obter = (c: string) => (out[c] ??= { ...(base[c] ?? { total: 0 }) });
+    for (const [cod, porPeriodo] of Object.entries(edicoes)) {
+      const partes = cod.split('.');
+      for (const [per, pct] of Object.entries(porPeriodo)) {
+        const rec = Math.abs(base['03']?.[per] ?? 0);
+        const novo = (pct / 100) * rec;
+        const delta = novo - (base[cod]?.[per] ?? 0);
+        if (!delta) continue;
+        const somar = (c: string) => { const l = obter(c); l[per] = (l[per] ?? 0) + delta; l.total = (l.total ?? 0) + delta; };
+        somar(cod);
+        for (let n = 1; n < partes.length; n++) somar(partes.slice(0, n).join('.'));
+        (CADEIA_TOTALIZADORES[partes[0]] ?? []).forEach(somar);
+      }
+    }
+    return { ...base, ...out };
+  }, [dados, edicoes, qtdEdicoes]);
+
+  // Aplica o texto digitado a um ou mais periodos da conta. O sinal segue o da linha (despesa continua negativa).
+  function editarPct(codigo: string, periodosAlvo: string[], texto: string) {
+    if (!dados) return;
+    const limpo = texto.trim();
+    const numero = Number(limpo.replace(',', '.'));
+    setEdicoesPorChave((prev) => {
+      const atuais: Edicoes = { ...(prev[chaveEdicoes] ?? {}) };
+      const linha = { ...(atuais[codigo] ?? {}) };
+      for (const per of periodosAlvo) {
+        if (limpo === '') { delete linha[per]; continue; }
+        if (Number.isNaN(numero)) continue;
+        const original = dados.projetado[codigo]?.[per] ?? 0;
+        const sinal = original !== 0 ? Math.sign(original) : (dados.anoAnterior[codigo]?.[per] ?? 0) !== 0 ? Math.sign(dados.anoAnterior[codigo][per]) : (numero < 0 ? -1 : 1);
+        const rec = Math.abs(dados.projetado['03']?.[per] ?? 0);
+        const pctOriginal = rec ? (Math.abs(original) / rec) * 100 : 0;
+        const pctNovo = Math.abs(numero);
+        if (Math.abs(pctNovo - pctOriginal) < 0.005) delete linha[per]; else linha[per] = sinal * pctNovo;
+      }
+      if (Object.keys(linha).length) atuais[codigo] = linha; else delete atuais[codigo];
+      return { ...prev, [chaveEdicoes]: atuais };
+    });
+  }
+  function restaurarEdicoes() {
+    setEdicoesPorChave((prev) => { const n = { ...prev }; delete n[chaveEdicoes]; return n; });
+  }
   const gruposPorAno = useMemo(() => {
     const g: { ano: string; qtd: number }[] = [];
     for (const per of periodos) {
@@ -487,6 +593,18 @@ export default function DreProjetadaPage() {
               </div>
             </div>
           </div>
+          {qtdEdicoes > 0 && (
+            <div className="px-5 py-2 bg-yellow-50 border-b border-yellow-200 flex items-center justify-between gap-3 text-sm text-yellow-900">
+              <span>
+                {qtdEdicoes} {qtdEdicoes === 1 ? 'célula editada' : 'células editadas'} · Lucro líquido projetado com as edições:{' '}
+                <strong>{formatarValor(projetadoEd['14']?.total ?? 0)}</strong>{' '}
+                ({av(projetadoEd['14']?.total ?? 0, recLiqTotal)} da receita líquida)
+              </span>
+              <button onClick={restaurarEdicoes} className="px-3 py-1 text-xs font-medium border border-yellow-400 rounded bg-white hover:bg-yellow-100">
+                Restaurar valores do cenário
+              </button>
+            </div>
+          )}
           <div className="overflow-x-auto">
             <table className="w-full border-collapse">
               <thead>
@@ -545,11 +663,12 @@ export default function DreProjetadaPage() {
               </thead>
               <tbody>
                 {linhas.map(({ conta, profundidade }) => {
-                  const proj = dados.projetado[conta.codigo];
+                  const proj = projetadoEd[conta.codigo];
                   const ant = dados.anoAnterior[conta.codigo];
                   const resultado = conta.tipo === 'resultado';
                   const filhos = 'filhos' in conta ? conta.filhos : undefined;
                   const temFilhos = !!filhos?.length;
+                  const editavel = !resultado && !temFilhos && ['04', '06', '08', '10', '13'].includes(conta.codigo.split('.')[0]);
                   const tipo = dados.tipos[conta.codigo];
                   const manual = tipo === 'manual';
                   const corLinha = manual ? 'bg-amber-100 text-amber-900 font-medium' : resultado ? 'bg-green-50 font-bold text-green-800' : CORES_NIVEL[Math.min(profundidade + 1, 4)];
@@ -584,7 +703,18 @@ export default function DreProjetadaPage() {
                               </>
                             )}
                             <td className={`px-2 py-2 border-b border-gray-200 text-right text-sm ${corTexto(v)}`}>{formatarValor(v)}</td>
-                            <td className={`px-2 py-2 border-b border-gray-200 text-right text-xs bg-gray-50 ${v < 0 ? 'text-red-500' : 'text-gray-500'}`}>{av(v, recLiqPeriodo(per.key))}</td>
+                            {editavel ? (
+                              <CelulaPct
+                                texto={av(v, recLiqPeriodo(per.key))}
+                                pctAtual={recLiqPeriodo(per.key) ? (Math.abs(v) / Math.abs(recLiqPeriodo(per.key))) * 100 : null}
+                                editado={edicoes[conta.codigo]?.[per.key] !== undefined}
+                                onCommit={(t) => editarPct(conta.codigo, [per.key], t)}
+                                className={`px-2 py-2 border-b border-gray-200 text-right text-xs bg-gray-50 ${v < 0 ? 'text-red-500' : 'text-gray-500'}`}
+                                titulo="Clique para alterar o % sobre a receita líquida deste mês"
+                              />
+                            ) : (
+                              <td className={`px-2 py-2 border-b border-gray-200 text-right text-xs bg-gray-50 ${v < 0 ? 'text-red-500' : 'text-gray-500'}`}>{av(v, recLiqPeriodo(per.key))}</td>
+                            )}
                           </React.Fragment>
                         );
                       })}
@@ -595,7 +725,18 @@ export default function DreProjetadaPage() {
                         </>
                       )}
                       <td className={`px-3 py-2 border-b border-gray-200 text-right text-sm font-bold ${corTexto(totalProj)}`}>{formatarValor(totalProj)}</td>
-                      <td className={`px-3 py-2 border-b border-gray-200 text-right text-sm ${totalProj < 0 ? 'text-red-500' : 'text-gray-600'}`}>{av(totalProj, recLiqTotal)}</td>
+                      {editavel ? (
+                        <CelulaPct
+                          texto={av(totalProj, recLiqTotal)}
+                          pctAtual={recLiqTotal ? (Math.abs(totalProj) / Math.abs(recLiqTotal)) * 100 : null}
+                          editado={false}
+                          onCommit={(t) => editarPct(conta.codigo, periodos.map((x) => x.key), t)}
+                          className={`px-3 py-2 border-b border-gray-200 text-right text-sm ${totalProj < 0 ? 'text-red-500' : 'text-gray-600'}`}
+                          titulo="Clique para aplicar o mesmo % a todos os 12 meses"
+                        />
+                      ) : (
+                        <td className={`px-3 py-2 border-b border-gray-200 text-right text-sm ${totalProj < 0 ? 'text-red-500' : 'text-gray-600'}`}>{av(totalProj, recLiqTotal)}</td>
+                      )}
                     </tr>
                   );
                 })}
@@ -604,7 +745,7 @@ export default function DreProjetadaPage() {
           </div>
         </div>
       )}
-      <p className="text-xs text-gray-500">Valores em R$. Despesas aparecem negativas (como na DRE). A/V % = percentual sobre a receita líquida do período.</p>
+      <p className="text-xs text-gray-500">Valores em R$. Despesas aparecem negativas (como na DRE). A/V % = percentual sobre a receita líquida do período. Nas contas do último nível (custos e despesas), clique no A/V % de um mês para alterá-lo (ou na coluna total para aplicar aos 12 meses): grupos, totalizadores e lucro recalculam na hora.</p>
     </div>
   );
 }
