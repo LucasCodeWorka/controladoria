@@ -144,6 +144,11 @@ interface MatrizGiro {
   mesReferencia: string;
 }
 
+// Nome da loja sem a palavra "Shopping" (ex.: BARRA SHOPPING - RJ -> BARRA - RJ) na tabela por loja e no modal.
+function nomeLojaCurto(nome: string): string {
+  return nome.replace(/\s*shopping\s*/gi, ' ').replace(/\s+/g, ' ').trim();
+}
+
 function formatarQtd(valor: number): string {
   return valor.toLocaleString('pt-BR', { maximumFractionDigits: 0 });
 }
@@ -343,6 +348,11 @@ function formatarVariacao(pct: number | null): string {
   if (pct === null) return '';
   const sinal = pct > 0 ? '+' : '';
   return `${sinal}${pct.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
+}
+
+interface DetalheFaixaItem {
+  referencia: string; nome: string; cor: string | null; estoque: number; pctCampanha: number; descontoAtual: number;
+  giro: number | null; mesesFL: number | null; regra: number; mista: boolean;
 }
 
 // Regra de desconto pra sugestao de campanha, com base no Giro Total (do
@@ -1020,6 +1030,11 @@ export default function GiroPage() {
   const [manterDescontoAlto, setManterDescontoAlto] = useState(false);
   // Ref pra buscas disparadas no mesmo clique do checkbox (o state ainda nao atualizou).
   const manterDescontoAltoRef = useRef(false);
+  // Mesmos parametros da ultima consulta de totais (filtros da tela) - o modal da tabela por loja os reaproveita.
+  const paramsTotaisRef = useRef('');
+  const [detalheFaixaLoja, setDetalheFaixaLoja] = useState<{
+    cdLoja: number; nomeLoja: string; faixa: number; carregando: boolean; erro?: string; itens: DetalheFaixaItem[];
+  } | null>(null);
   const [manterDescontoAltoAtacado, setManterDescontoAltoAtacado] = useState(false);
   const manterDescontoAltoAtacadoRef = useRef(false);
   // Filtro "Mistas" / "Não mistas" ('' = todas, 'mistas' ou 'naoMistas') - o ref
@@ -1286,6 +1301,7 @@ export default function GiroPage() {
       aplicarFiltrosCategoriaParams(params);
       if (manterDescontoAltoRef.current) params.set('manterDescontoAlto', 'true');
       if (manterDescontoAltoAtacadoRef.current) params.set('manterDescontoAltoAtacado', 'true');
+      paramsTotaisRef.current = params.toString();
       const response = await fetch(`/api/giro/totais-desconto?${params.toString()}`, { cache: 'no-store' });
       const data = await response.json();
       if (response.ok && !data.error) {
@@ -1296,6 +1312,37 @@ export default function GiroPage() {
     } finally {
       setTotaisDescontoCarregando(false);
     }
+  }
+
+  // Clique numa quantidade da tabela "Qtd novo por loja": mostra as referencias/cores que a formam.
+  async function abrirDetalheFaixaLoja(cdLoja: number, nomeLoja: string, faixa: number) {
+    setDetalheFaixaLoja({ cdLoja, nomeLoja, faixa, carregando: true, itens: [] });
+    try {
+      const params = new URLSearchParams(paramsTotaisRef.current);
+      params.set('detalheLoja', String(cdLoja));
+      params.set('detalheFaixa', String(faixa));
+      const response = await fetch(`/api/giro/totais-desconto?${params.toString()}`, { cache: 'no-store' });
+      const data = await response.json();
+      if (!response.ok || data.error) throw new Error(data.detail || data.error || 'Erro ao buscar o detalhe');
+      setDetalheFaixaLoja((prev) => (prev ? { ...prev, carregando: false, itens: data.detalheCelula ?? [] } : prev));
+    } catch (e) {
+      setDetalheFaixaLoja((prev) => (prev ? { ...prev, carregando: false, erro: e instanceof Error ? e.message : 'Erro ao buscar o detalhe' } : prev));
+    }
+  }
+
+  function baixarCsvDetalheFaixa() {
+    if (!detalheFaixaLoja) return;
+    const linhas = [['Referência', 'Descrição', 'Cor', 'Estoque', 'Desconto atual %', 'Campanha %', 'Giro', 'Meses FL', 'Regra', 'Mista']];
+    for (const i of detalheFaixaLoja.itens) {
+      linhas.push([i.referencia, i.nome, i.cor ?? '', String(i.estoque).replace('.', ','), String(i.descontoAtual).replace('.', ','), String(i.pctCampanha), i.giro === null ? '' : i.giro.toFixed(2).replace('.', ','), i.mesesFL === null ? '' : String(i.mesesFL), String(i.regra), i.mista ? 'sim' : 'não']);
+    }
+    const csv = '\uFEFF' + linhas.map((l) => l.map((c) => `"${c.replace(/"/g, '""')}"`).join(';')).join('\n');
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `giro-${detalheFaixaLoja.nomeLoja}-${detalheFaixaLoja.faixa === 0 ? 'sem-promocao' : `${detalheFaixaLoja.faixa}pct`}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   // Busca a venda mes a mes so das referencias que estao na pagina atual
@@ -3035,7 +3082,7 @@ export default function GiroPage() {
                         <tr className="text-[11px] uppercase text-black">
                           <th className="border border-slate-300 bg-green-100 px-2 py-1 text-left">Promoção %</th>
                           {lojas.map((e) => (
-                            <th key={e.cdEmpresa} className="border border-slate-300 bg-green-100 px-2 py-1 text-right whitespace-nowrap">{e.nome}</th>
+                            <th key={e.cdEmpresa} className="border border-slate-300 bg-green-100 px-2 py-1 text-right whitespace-nowrap">{nomeLojaCurto(e.nome)}</th>
                           ))}
                           <th className="border border-slate-300 bg-sky-100 px-2 py-1 text-right">Total</th>
                         </tr>
@@ -3044,7 +3091,13 @@ export default function GiroPage() {
                         {faixas.map((f) => (
                           <tr key={f}>
                             <td className="border border-slate-300 px-2 py-1 text-center text-black">{f}%</td>
-                            {lojas.map((e) => <td key={e.cdEmpresa} className={celula}>{totaisDescontoCarregando ? '...' : formatarQtd(qtd(e.cdEmpresa, f))}</td>)}
+                            {lojas.map((e) => (
+                              <td key={e.cdEmpresa} className={celula}>
+                                {totaisDescontoCarregando ? '...' : qtd(e.cdEmpresa, f) > 0 ? (
+                                  <button onClick={() => abrirDetalheFaixaLoja(e.cdEmpresa, nomeLojaCurto(e.nome), f)} className="underline hover:text-blue-700" title={`Ver as referências de ${nomeLojaCurto(e.nome)} na faixa de ${f}%`}>{formatarQtd(qtd(e.cdEmpresa, f))}</button>
+                                ) : formatarQtd(0)}
+                              </td>
+                            ))}
                             <td className={`${celula} font-semibold`}>{totaisDescontoCarregando ? '...' : formatarQtd(totalFaixa(f))}</td>
                           </tr>
                         ))}
@@ -3055,7 +3108,13 @@ export default function GiroPage() {
                         </tr>
                         <tr className="text-black">
                           <td className="border border-slate-300 px-2 py-1 text-center">Sem promoção</td>
-                          {lojas.map((e) => <td key={e.cdEmpresa} className={celula}>{formatarQtd(qtd(e.cdEmpresa, 0))}</td>)}
+                          {lojas.map((e) => (
+                            <td key={e.cdEmpresa} className={celula}>
+                              {qtd(e.cdEmpresa, 0) > 0 ? (
+                                <button onClick={() => abrirDetalheFaixaLoja(e.cdEmpresa, nomeLojaCurto(e.nome), 0)} className="underline hover:text-blue-700" title={`Ver as referências de ${nomeLojaCurto(e.nome)} sem promoção`}>{formatarQtd(qtd(e.cdEmpresa, 0))}</button>
+                              ) : formatarQtd(0)}
+                            </td>
+                          ))}
                           <td className={`${celula} font-semibold`}>{formatarQtd(totalFaixa(0))}</td>
                         </tr>
                       </tbody>
@@ -3063,6 +3122,69 @@ export default function GiroPage() {
                   </div>
                 );
               })()}
+            </div>
+          )}
+
+          {detalheFaixaLoja && (
+            <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setDetalheFaixaLoja(null)}>
+              <div className="bg-white rounded-lg shadow-xl w-[95vw] max-w-6xl max-h-[90vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+                <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200">
+                  <div>
+                    <h2 className="text-base font-semibold text-black">
+                      {detalheFaixaLoja.nomeLoja} — {detalheFaixaLoja.faixa === 0 ? 'sem promoção' : `campanha nova de ${detalheFaixaLoja.faixa}%`}
+                    </h2>
+                    <p className="text-xs text-black">
+                      {detalheFaixaLoja.carregando ? 'Buscando referências…' : `${formatarQtd(detalheFaixaLoja.itens.length)} referência/cor · ${formatarQtd(detalheFaixaLoja.itens.reduce((a, i) => a + i.estoque, 0))} peças (segue os filtros da tela)`}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {!detalheFaixaLoja.carregando && detalheFaixaLoja.itens.length > 0 && (
+                      <button onClick={baixarCsvDetalheFaixa} className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-black rounded-md text-sm">Baixar CSV</button>
+                    )}
+                    <button onClick={() => setDetalheFaixaLoja(null)} className="text-black hover:text-black" aria-label="Fechar"><X className="w-5 h-5" /></button>
+                  </div>
+                </div>
+                <div className="flex-1 overflow-auto">
+                  {detalheFaixaLoja.erro ? (
+                    <p className="p-6 text-sm text-red-700">{detalheFaixaLoja.erro}</p>
+                  ) : detalheFaixaLoja.carregando ? (
+                    <div className="flex items-center justify-center gap-2 py-12 text-black"><Loader2 className="w-5 h-5 animate-spin" /> Calculando…</div>
+                  ) : detalheFaixaLoja.itens.length === 0 ? (
+                    <p className="p-6 text-sm text-black">Nenhuma referência nessa faixa com os filtros atuais.</p>
+                  ) : (
+                    <table className="w-full border-collapse text-sm text-black">
+                      <thead className="sticky top-0 bg-gray-100">
+                        <tr className="text-[11px] uppercase">
+                          <th className="px-3 py-2 text-left">Referência</th>
+                          <th className="px-3 py-2 text-left">Descrição</th>
+                          <th className="px-3 py-2 text-left">Cor</th>
+                          <th className="px-3 py-2 text-right">Estoque</th>
+                          <th className="px-3 py-2 text-right">Desc. atual</th>
+                          <th className="px-3 py-2 text-right">Campanha</th>
+                          <th className="px-3 py-2 text-right">Giro</th>
+                          <th className="px-3 py-2 text-right">Meses FL</th>
+                          <th className="px-3 py-2 text-center">Regra</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {detalheFaixaLoja.itens.map((i, idx) => (
+                          <tr key={`${i.referencia}-${i.cor}-${idx}`} className="border-t border-gray-100 hover:bg-rose-50">
+                            <td className="px-3 py-1.5 font-mono text-xs">{i.referencia}</td>
+                            <td className="px-3 py-1.5">{i.nome}</td>
+                            <td className="px-3 py-1.5">{i.cor ?? '-'}</td>
+                            <td className="px-3 py-1.5 text-right font-semibold">{formatarQtd(i.estoque)}</td>
+                            <td className="px-3 py-1.5 text-right">{String(i.descontoAtual).replace('.', ',')}%</td>
+                            <td className="px-3 py-1.5 text-right">{String(i.pctCampanha).replace('.', ',')}%</td>
+                            <td className="px-3 py-1.5 text-right">{i.giro === null ? '-' : i.giro.toFixed(2).replace('.', ',')}</td>
+                            <td className="px-3 py-1.5 text-right">{i.mesesFL ?? '-'}</td>
+                            <td className="px-3 py-1.5 text-center">{i.regra}{i.mista ? ' (mista)' : ''}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </div>
             </div>
           )}
 

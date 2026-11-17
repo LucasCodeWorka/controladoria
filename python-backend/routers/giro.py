@@ -2535,6 +2535,8 @@ def totais_desconto_giro(
     mesesFLMinimo: Optional[int] = Query(None, description="Mesmo filtro 'Meses FL maior que' da tabela"),
     manterDescontoAlto: bool = Query(False, description="Varejo: referencias nao mistas, apos 12 meses como FL, com desconto atual >= 50% mantem o desconto que ja tem"),
     manterDescontoAltoAtacado: bool = Query(False, description="Atacado: referencias nao mistas, apos 12 meses como FL, com desconto atual >= 50% mantem o desconto que ja tem"),
+    detalheLoja: Optional[int] = Query(None, description="Com detalheFaixa: devolve tambem as referencias/cores que formam a quantidade dessa loja nessa faixa (tabela por loja)"),
+    detalheFaixa: Optional[int] = Query(None, description="Faixa de campanha (0 = sem promocao, 10, 20 ... 100) do detalhe pedido"),
 ):
     """
     Totais pros 2 cards acima da tabela "Giro por referencia e loja"
@@ -2600,6 +2602,7 @@ def totais_desconto_giro(
         # Mesmo "novo" (campanha) POR LOJA: {cd_empresa: {faixa: estoque}}. Maraponga usa a
         # campanha do Atacado (so vende atacado); as demais, a do Varejo. Fabrica fica de fora.
         faixas_por_loja = {}
+        detalhe_celula = []  # referencias/cores da celula (detalheLoja x detalheFaixa)
 
         def _faixa_dezena(pct: float) -> int:
             return 0 if pct < 5 else min(100, int(round(pct / 10.0)) * 10)
@@ -2716,6 +2719,18 @@ def totais_desconto_giro(
                     faixa_loja = fn_atac if int(cd_loja) == CD_EMPRESA_MARAPONGA else str(faixa_novo)
                     por_faixa = faixas_por_loja.setdefault(str(cd_loja), {})
                     por_faixa[faixa_loja] = por_faixa.get(faixa_loja, 0.0) + est_loja
+                    if detalheLoja is not None and detalheFaixa is not None and int(cd_loja) == detalheLoja and int(faixa_loja) == detalheFaixa:
+                        atac_loja = int(cd_loja) == CD_EMPRESA_MARAPONGA
+                        detalhe_celula.append({
+                            "referencia": item["referencia"], "nome": item.get("nome") or item.get("descricao") or "",
+                            "cor": cor_item.get("cor"), "estoque": est_loja,
+                            "pctCampanha": pct_atacado_cor if atac_loja else pct_varejo_cor,
+                            "descontoAtual": round(_desconto_atual_canal(
+                                preco_cor.get("precoAtacado" if atac_loja else "precoVarejo"),
+                                promo_cor.get("atacado" if atac_loja else "varejo"), fb_ref.get("atacado" if atac_loja else "varejo")), 1),
+                            "giro": giro_regra, "mesesFL": meses_regra, "regra": regra_cor,
+                            "mista": bool(tem_cor_sem_meses_fl_item),
+                        })
                 grupo_desconto = desconto_por_grupo["mistas" if tem_cor_sem_meses_fl_item else "naoMistas"]
                 grupo_desconto["atacado"] += desconto_atacado_cor
                 grupo_desconto["varejo"] += desconto_varejo_cor
@@ -2761,6 +2776,7 @@ def totais_desconto_giro(
             "faixasPromoVarejo": faixas_varejo,
             "faixasPromoAtacado": faixas_atacado,
             "faixasPromoPorLoja": faixas_por_loja,
+            "detalheCelula": sorted(detalhe_celula, key=lambda x: -x["estoque"]) if detalheLoja is not None else None,
             "totalReferencias": total_referencias,
             "totalReferenciasMistas": sum(1 for i in dados_incluidos if mista_dict.get(i["referencia"], False)),
             "totalReferenciasNaoMistas": sum(1 for i in dados_incluidos if not mista_dict.get(i["referencia"], False)),
