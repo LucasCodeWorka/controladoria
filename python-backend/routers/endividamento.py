@@ -140,18 +140,20 @@ def _carregar_titulos(cd_fornecedor: int, nr_duplicata: int) -> List[dict]:
     """Parcelas do contrato (fornecedor + duplicata): principal (114) e juros (137...) por parcela."""
     rows = execute_query(
         """SELECT nr_parcela, dt_vencimento::date AS venc, cd_despesaitem AS item, SUM(vl_rateio) AS valor,
-                  MAX(CASE WHEN tp_situacao = 'N' AND vl_pago = 0 THEN 1 ELSE 0 END) AS aberto
+                  MAX(CASE WHEN tp_situacao = 'N' AND vl_pago = 0 THEN 1 ELSE 0 END) AS aberto,
+                  SUM(CASE WHEN tp_situacao = 'N' AND vl_pago = 0 THEN vl_rateio ELSE 0 END) AS valor_aberto
            FROM public.vr_fcp_despduplicatai
            WHERE cd_fornecedor = %s AND nr_duplicata = %s AND tp_situacao <> 'C'
              AND cd_despesaitem IN (114, 137, 115, 121, 258)
            GROUP BY 1, 2, 3 ORDER BY 1, 3""", (cd_fornecedor, nr_duplicata)) or []
     por: Dict[int, dict] = {}
     for r in rows:
-        p = por.setdefault(r["nr_parcela"], {"n": r["nr_parcela"], "venc": r["venc"], "principal": 0.0, "juros": 0.0, "aberto": False})
+        p = por.setdefault(r["nr_parcela"], {"n": r["nr_parcela"], "venc": r["venc"], "principal": 0.0, "juros": 0.0, "aberto": False,
+                                                 "principal_aberto": 0.0, "juros_aberto": 0.0})
         if r["item"] == ITENS_PRINCIPAL:
-            p["principal"] += float(r["valor"])
+            p["principal"] += float(r["valor"]); p["principal_aberto"] += float(r["valor_aberto"] or 0)
         else:
-            p["juros"] += float(r["valor"])
+            p["juros"] += float(r["valor"]); p["juros_aberto"] += float(r["valor_aberto"] or 0)
         p["aberto"] = p["aberto"] or bool(r["aberto"])
         if r["venc"] and (p["venc"] is None or r["venc"] > p["venc"]):
             p["venc"] = r["venc"]
@@ -353,8 +355,8 @@ def _resumo_contrato(c: dict, hoje: date) -> dict:
 def _titulos_abertos_contrato(c: dict) -> dict:
     if not c.get("cd_fornecedor") or not c.get("nr_duplicata"):
         return {"principal": 0.0, "juros": 0.0}
-    t = [x for x in _carregar_titulos(int(c["cd_fornecedor"]), int(c["nr_duplicata"])) if x["aberto"]]
-    return {"principal": round(sum(x["principal"] for x in t), 2), "juros": round(sum(x["juros"] for x in t), 2)}
+    t = _carregar_titulos(int(c["cd_fornecedor"]), int(c["nr_duplicata"]))
+    return {"principal": round(sum(x["principal_aberto"] for x in t), 2), "juros": round(sum(x["juros_aberto"] for x in t), 2)}
 
 
 @router.get("/api/endividamento/contratos")

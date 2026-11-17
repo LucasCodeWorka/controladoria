@@ -2597,6 +2597,9 @@ def totais_desconto_giro(
         # desconto que a cor ja tem ativo; "novo" = percentual sugerido pela campanha.
         faixas_varejo = {"atual": {}, "novo": {}}
         faixas_atacado = {"atual": {}, "novo": {}}
+        # Mesmo "novo" (campanha) POR LOJA: {cd_empresa: {faixa: estoque}}. Maraponga usa a
+        # campanha do Atacado (so vende atacado); as demais, a do Varejo. Fabrica fica de fora.
+        faixas_por_loja = {}
 
         def _faixa_dezena(pct: float) -> int:
             return 0 if pct < 5 else min(100, int(round(pct / 10.0)) * 10)
@@ -2706,6 +2709,13 @@ def totais_desconto_giro(
                 faixa_novo = _faixa_dezena(pct_varejo_cor)
                 faixas_varejo["atual"][str(faixa_atual)] = faixas_varejo["atual"].get(str(faixa_atual), 0.0) + estoque_resto_cor
                 faixas_varejo["novo"][str(faixa_novo)] = faixas_varejo["novo"].get(str(faixa_novo), 0.0) + estoque_resto_cor
+                for cd_loja, dados_loja in cor_item["porLoja"].items():
+                    est_loja = float((dados_loja or {}).get("estoque") or 0)
+                    if est_loja <= 0 or int(cd_loja) == 1:
+                        continue
+                    faixa_loja = fn_atac if int(cd_loja) == CD_EMPRESA_MARAPONGA else str(faixa_novo)
+                    por_faixa = faixas_por_loja.setdefault(str(cd_loja), {})
+                    por_faixa[faixa_loja] = por_faixa.get(faixa_loja, 0.0) + est_loja
                 grupo_desconto = desconto_por_grupo["mistas" if tem_cor_sem_meses_fl_item else "naoMistas"]
                 grupo_desconto["atacado"] += desconto_atacado_cor
                 grupo_desconto["varejo"] += desconto_varejo_cor
@@ -2750,6 +2760,7 @@ def totais_desconto_giro(
             "baseCheioCampanhaVarejo": base_cheio_campanha["varejo"],
             "faixasPromoVarejo": faixas_varejo,
             "faixasPromoAtacado": faixas_atacado,
+            "faixasPromoPorLoja": faixas_por_loja,
             "totalReferencias": total_referencias,
             "totalReferenciasMistas": sum(1 for i in dados_incluidos if mista_dict.get(i["referencia"], False)),
             "totalReferenciasNaoMistas": sum(1 for i in dados_incluidos if not mista_dict.get(i["referencia"], False)),

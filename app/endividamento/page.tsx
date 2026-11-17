@@ -64,6 +64,60 @@ function Cartao({ rotulo, valor, detalhe, destaque }: { rotulo: string; valor: s
   );
 }
 
+// Juros: o que esta lancado no contas a pagar x o que o modelo (cronograma) preve ate o fim dos contratos.
+function CartaoJuros({ contratos, jurosTotalTitulos }: { contratos: Contrato[]; jurosTotalTitulos: number }) {
+  const linhas = contratos.map((c) => {
+    const lancado = c.titulosAbertos.juros;
+    // contratos so com o 114 (parcela cheia): o juros vem embutido no principal lancado
+    const embutido = lancado === 0 ? Math.max(0, c.titulosAbertos.principal - c.saldoAtual) : 0;
+    return { c, lancado, embutido, modelo: c.jurosRestantes, dif: c.jurosRestantes - lancado - embutido };
+  });
+  const tot = linhas.reduce((a, l) => ({ lancado: a.lancado + l.lancado, embutido: a.embutido + l.embutido, modelo: a.modelo + l.modelo, dif: a.dif + l.dif }), { lancado: 0, embutido: 0, modelo: 0, dif: 0 });
+  const semContrato = jurosTotalTitulos - tot.lancado;
+  return (
+    <div className="bg-white rounded-lg shadow-md p-4">
+      <h2 className="text-sm font-bold text-brand-dark mb-1">Juros — lançado no contas a pagar × modelo</h2>
+      <p className="text-xs mb-3">Juros restantes de cada contrato no cronograma, comparados com o que já está lançado como juros (137, TAC, IOF, seguro) e com o que vem embutido no principal lançado (parcelas cheias).</p>
+      <div className="overflow-x-auto">
+        <table className="w-full border-collapse text-sm">
+          <thead>
+            <tr className="bg-gray-100 text-xs">
+              <th className="px-2 py-2 text-left">Contrato</th>
+              <th className="px-2 py-2 text-right">Juros lançados</th>
+              <th className="px-2 py-2 text-right">Embutido no principal lançado</th>
+              <th className="px-2 py-2 text-right">Juros do modelo (restantes)</th>
+              <th className="px-2 py-2 text-right">Diferença (modelo − lançado)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {linhas.map((l) => (
+              <tr key={l.c.id} className="border-t border-gray-100">
+                <td className="px-2 py-1.5">{l.c.nome}</td>
+                <td className="px-2 py-1.5 text-right">{moeda(l.lancado)}</td>
+                <td className="px-2 py-1.5 text-right">{l.embutido ? moeda(l.embutido) : '-'}</td>
+                <td className="px-2 py-1.5 text-right">{moeda(l.modelo)}</td>
+                <td className={`px-2 py-1.5 text-right ${Math.abs(l.dif) > 1000 ? 'text-red-600' : ''}`}>{moeda(l.dif)}</td>
+              </tr>
+            ))}
+            <tr className="border-t-2 border-gray-300 font-bold">
+              <td className="px-2 py-2">Total dos contratos modelados</td>
+              <td className="px-2 py-2 text-right">{moeda(tot.lancado)}</td>
+              <td className="px-2 py-2 text-right">{moeda(tot.embutido)}</td>
+              <td className="px-2 py-2 text-right">{moeda(tot.modelo)}</td>
+              <td className="px-2 py-2 text-right">{moeda(tot.dif)}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p className="text-xs mt-2">
+        Juros em aberto no contas a pagar no total: <strong>{moeda(jurosTotalTitulos)}</strong>
+        {Math.abs(semContrato) > 1 && <> — {moeda(semContrato)} não estão ligados a nenhum contrato modelado (outras duplicatas de juros).</>}
+        {' '}Diferença negativa = o lançado é maior que o modelo (normalmente encargos da 1ª parcela, como IOF e TAC, que o cronograma não calcula); positiva = o modelo prevê mais juros do que o lançado.
+      </p>
+    </div>
+  );
+}
+
 // Custo da divida x Selic: quanto a divida custa acima (ou abaixo) da taxa basica da economia.
 function CartaoSelic({ selic, custoAnual, saldo, contratos }: { selic: Selic | null; custoAnual: number; saldo: number; contratos: ItemDetalhe[] }) {
   if (!selic) return <div className="bg-white rounded-lg shadow-md p-4 text-sm">Buscando a Selic…</div>;
@@ -117,8 +171,8 @@ function CartaoSelic({ selic, custoAnual, saldo, contratos }: { selic: Selic | n
 
 // ───────────────────────── Painel Dívida Geral ─────────────────────────
 
-function PainelDivida({ painel, selic, mesDetalhe, setMesDetalhe, onAbrir, onSalvarMetas }: {
-  painel: Painel; selic: Selic | null; mesDetalhe: string; setMesDetalhe: (m: string) => void; onAbrir: (c: ItemDetalhe) => void;
+function PainelDivida({ painel, selic, contratos, mesDetalhe, setMesDetalhe, onAbrir, onSalvarMetas }: {
+  painel: Painel; selic: Selic | null; contratos: Contrato[]; mesDetalhe: string; setMesDetalhe: (m: string) => void; onAbrir: (c: ItemDetalhe) => void;
   onSalvarMetas: (md: number | null, mc: number | null) => Promise<void>;
 }) {
   const [metaDivida, setMetaDivida] = useState(painel.metas.metaDivida !== null ? String(painel.metas.metaDivida) : '');
@@ -172,6 +226,8 @@ function PainelDivida({ painel, selic, mesDetalhe, setMesDetalhe, onAbrir, onSal
         />
       </div>
 
+
+      <CartaoJuros contratos={contratos} jurosTotalTitulos={conf.jurosTitulos} />
 
       <CartaoSelic selic={selic} custoAnual={m0?.custoAnual ?? 0} saldo={m0?.saldo ?? 0} contratos={painel.detalheMes.contratos} />
 
@@ -733,6 +789,7 @@ export default function EndividamentoPage() {
         <PainelDivida
           painel={painel}
           selic={selic}
+          contratos={contratos}
           mesDetalhe={mesDetalhe}
           setMesDetalhe={(m) => { setMesDetalhe(m); carregar(m); }}
           onAbrir={(c) => { setSelecionadoAba(c.id); setAba(c.modalidade === 'SAC' ? 'sac' : 'price'); }}
