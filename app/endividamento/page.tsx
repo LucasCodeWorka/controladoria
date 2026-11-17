@@ -36,6 +36,8 @@ interface Painel {
   qtdContratos: number;
 }
 
+interface Selic { disponivel: boolean; aa: number | null; mensal: number | null; data: string | null; fonte: string }
+
 const moeda = (v: number | null | undefined) => (v === null || v === undefined ? '-' : v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }));
 const pct = (v: number | null | undefined, casas = 2) => (v === null || v === undefined ? '-' : `${(v * 100).toLocaleString('pt-BR', { minimumFractionDigits: casas, maximumFractionDigits: casas })}%`);
 const NOMES_MES = ['', 'jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
@@ -62,10 +64,61 @@ function Cartao({ rotulo, valor, detalhe, destaque }: { rotulo: string; valor: s
   );
 }
 
+// Custo da divida x Selic: quanto a divida custa acima (ou abaixo) da taxa basica da economia.
+function CartaoSelic({ selic, custoAnual, saldo, contratos }: { selic: Selic | null; custoAnual: number; saldo: number; contratos: ItemDetalhe[] }) {
+  if (!selic) return <div className="bg-white rounded-lg shadow-md p-4 text-sm">Buscando a Selic…</div>;
+  if (!selic.disponivel || selic.aa === null) {
+    return <div className="bg-white rounded-lg shadow-md p-4 text-sm">Comparação com a Selic indisponível: não foi possível consultar o Banco Central agora.</div>;
+  }
+  const selicAa: number = selic.aa;
+  const spread = custoAnual - selicAa;
+  const razao = selicAa ? custoAnual / selicAa : 0;
+  const efeitoAno = saldo * spread; // R$/ano a mais (ou a menos) do que custaria a Selic sobre o mesmo saldo
+  const acima = spread > 0;
+  const pp = (v: number) => `${v >= 0 ? '+' : '−'}${(Math.abs(v) * 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} p.p.`;
+  const maxTaxa = Math.max(selicAa, custoAnual, ...contratos.map((c) => c.taxaAa), 0.01);
+  const barra = (v: number, cor: string) => <div className="h-2 rounded" style={{ width: `${Math.min(100, (v / maxTaxa) * 100)}%`, background: cor }} />;
+  return (
+    <div className="bg-white rounded-lg shadow-md p-4">
+      <div className="flex flex-wrap items-baseline gap-2 mb-3">
+        <h2 className="text-sm font-bold text-brand-dark">Custo da dívida × Selic</h2>
+        <span className="text-xs">{selic.fonte}{selic.data ? ` · ${selic.data}` : ''}</span>
+      </div>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+        <div><p className="text-xs font-semibold uppercase">Selic (meta)</p><p className="text-2xl font-bold">{pct(selic.aa)}</p><p className="text-xs">a.a. · {pct(selic.mensal, 3)} a.m.</p></div>
+        <div><p className="text-xs font-semibold uppercase">Custo médio da dívida</p><p className="text-2xl font-bold">{pct(custoAnual)}</p><p className="text-xs">a.a., ponderado pelo saldo</p></div>
+        <div>
+          <p className="text-xs font-semibold uppercase">Spread sobre a Selic</p>
+          <p className={`text-2xl font-bold ${acima ? 'text-red-600' : 'text-green-700'}`}>{pp(spread)}</p>
+          <p className="text-xs">a dívida custa {razao.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}× a Selic</p>
+        </div>
+        <div>
+          <p className="text-xs font-semibold uppercase">{acima ? 'Custo acima da Selic' : 'Custo abaixo da Selic'}</p>
+          <p className={`text-2xl font-bold ${acima ? 'text-red-600' : 'text-green-700'}`}>{moeda(Math.abs(efeitoAno))}</p>
+          <p className="text-xs">por ano, sobre o saldo de {moeda(saldo)}</p>
+        </div>
+      </div>
+      <div className="space-y-2">
+        <div className="grid grid-cols-[minmax(160px,260px)_1fr_150px] items-center gap-3 text-xs">
+          <span className="font-semibold">Selic (meta)</span>{barra(selicAa, '#6b7280')}<span className="text-right">{pct(selicAa)}</span>
+        </div>
+        {contratos.map((c) => (
+          <div key={c.id} className="grid grid-cols-[minmax(160px,260px)_1fr_150px] items-center gap-3 text-xs">
+            <span className="truncate" title={c.nome}>{c.nome}</span>
+            {barra(c.taxaAa, c.taxaAa > selicAa ? '#c5949d' : '#86efac')}
+            <span className={`text-right ${c.taxaAa > selicAa ? 'text-red-600' : 'text-green-700'}`}>{pct(c.taxaAa)} ({pp(c.taxaAa - selicAa)})</span>
+          </div>
+        ))}
+      </div>
+      <p className="text-xs mt-3">Taxas efetivas anuais dos contratos modelados contra a meta Selic anual. Contratos &quot;a confirmar&quot; usam a taxa calibrada pelos títulos.</p>
+    </div>
+  );
+}
+
 // ───────────────────────── Painel Dívida Geral ─────────────────────────
 
-function PainelDivida({ painel, mesDetalhe, setMesDetalhe, onAbrir, onSalvarMetas }: {
-  painel: Painel; mesDetalhe: string; setMesDetalhe: (m: string) => void; onAbrir: (c: ItemDetalhe) => void;
+function PainelDivida({ painel, selic, mesDetalhe, setMesDetalhe, onAbrir, onSalvarMetas }: {
+  painel: Painel; selic: Selic | null; mesDetalhe: string; setMesDetalhe: (m: string) => void; onAbrir: (c: ItemDetalhe) => void;
   onSalvarMetas: (md: number | null, mc: number | null) => Promise<void>;
 }) {
   const [metaDivida, setMetaDivida] = useState(painel.metas.metaDivida !== null ? String(painel.metas.metaDivida) : '');
@@ -118,6 +171,9 @@ function PainelDivida({ painel, mesDetalhe, setMesDetalhe, onAbrir, onSalvarMeta
           detalhe={`Títulos de principal em aberto (114): ${moeda(conf.principalTitulos)} − saldo do modelo ${moeda(conf.saldoModelo)}. Diferença = juros embutidos nas parcelas cheias e ajustes de calibração.`}
         />
       </div>
+
+
+      <CartaoSelic selic={selic} custoAnual={m0?.custoAnual ?? 0} saldo={m0?.saldo ?? 0} contratos={painel.detalheMes.contratos} />
 
       <div className="bg-white rounded-lg shadow-md p-4">
         <h2 className="text-sm font-bold text-brand-dark mb-1">Saldo da dívida e despesa financeira — próximos {painel.meses.length} meses</h2>
@@ -580,6 +636,7 @@ export default function EndividamentoPage() {
   const [erro, setErro] = useState<string | null>(null);
   const [aviso, setAviso] = useState<string | null>(null);
   const [selecionadoAba, setSelecionadoAba] = useState<number | null>(null);
+  const [selic, setSelic] = useState<Selic | null>(null);
 
   const carregar = useCallback(async (mes?: string) => {
     setErro(null);
@@ -599,6 +656,9 @@ export default function EndividamentoPage() {
   }, []);
 
   useEffect(() => { carregar(); }, [carregar]);
+  useEffect(() => {
+    chamar<Selic>('selic').then(setSelic).catch(() => setSelic({ disponivel: false, aa: null, mensal: null, data: null, fonte: '' }));
+  }, []);
 
   async function sincronizar(recalibrar: boolean) {
     setSincronizando(true); setAviso(null);
@@ -672,6 +732,7 @@ export default function EndividamentoPage() {
       {!carregando && aba === 'painel' && painel && painel.qtdContratos > 0 && (
         <PainelDivida
           painel={painel}
+          selic={selic}
           mesDetalhe={mesDetalhe}
           setMesDetalhe={(m) => { setMesDetalhe(m); carregar(m); }}
           onAbrir={(c) => { setSelecionadoAba(c.id); setAba(c.modalidade === 'SAC' ? 'sac' : 'price'); }}

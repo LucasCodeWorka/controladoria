@@ -13,6 +13,8 @@ from typing import Any, Dict, List, Optional
 from datetime import date, timedelta
 import calendar
 import json
+import time
+import urllib.request
 
 from database import execute_query, execute_insert
 
@@ -530,6 +532,28 @@ def sincronizar(recalibrar: bool = Query(False, description="Recalibra tambem os
         print(f"[ERROR] sincronizar: {e}")
         import traceback; traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Selic (referencia de mercado para comparar o custo da divida) ────────
+_cache_selic: Dict[str, Any] = {"valor": None, "em": 0.0}
+
+
+@router.get("/api/endividamento/selic")
+def selic():
+    """Meta Selic a.a. (serie 432 do BCB). Cache de 6h; se o BCB falhar, devolve o ultimo valor ou indisponivel."""
+    if _cache_selic["valor"] is not None and time.time() - _cache_selic["em"] < 6 * 3600:
+        return _cache_selic["valor"]
+    try:
+        url = "https://api.bcb.gov.br/dados/serie/bcdata.sgs.432/dados/ultimos/1?formato=json"
+        with urllib.request.urlopen(url, timeout=8) as r:
+            dado = json.loads(r.read().decode())[0]
+        aa = float(dado["valor"]) / 100
+        res = {"disponivel": True, "aa": aa, "mensal": taxa_mes(aa), "data": dado["data"], "fonte": "Meta Selic (BCB, série 432)"}
+        _cache_selic.update(valor=res, em=time.time())
+        return res
+    except Exception as e:
+        print(f"[ENDIVIDAMENTO] Selic indisponivel: {e}")
+        return _cache_selic["valor"] or {"disponivel": False, "aa": None, "mensal": None, "data": None, "fonte": "Selic indisponível no momento"}
 
 
 # ── Painel Divida Geral (consolidado) ────────────────────────────────────
