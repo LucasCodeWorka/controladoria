@@ -3130,7 +3130,7 @@ export default function GiroPage() {
 
           {detalheFaixaLoja && (
             <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setDetalheFaixaLoja(null)}>
-              <div className="bg-white rounded-lg shadow-xl w-[95vw] max-w-6xl max-h-[90vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+              <div className="bg-white rounded-lg shadow-xl w-[98vw] max-w-[1700px] max-h-[94vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
                 <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200">
                   <div>
                     <h2 className="text-base font-semibold text-black">
@@ -3155,7 +3155,7 @@ export default function GiroPage() {
                   ) : detalheFaixaLoja.itens.length === 0 ? (
                     <p className="p-6 text-sm text-black">Nenhuma referência nessa faixa com os filtros atuais.</p>
                   ) : (
-                    <table className="w-full border-collapse text-sm text-black">
+                    <table className="w-full min-w-[1400px] border-collapse text-sm text-black whitespace-nowrap">
                       <thead className="sticky top-0 bg-gray-100">
                         <tr className="text-[11px] uppercase">
                           <th className="px-2 py-2 text-center">
@@ -3167,7 +3167,7 @@ export default function GiroPage() {
                             />
                           </th>
                           <th className="px-3 py-2 text-left">Referência</th>
-                          <th className="px-3 py-2 text-left">Descrição</th>
+                          <th className="px-3 py-2 text-left min-w-[280px]">Descrição</th>
                           <th className="px-3 py-2 text-left">Cor</th>
                           <th className="px-3 py-2 text-right">Estoque loja</th>
                           <th className="px-3 py-2 text-right" title="Estoque de todas as lojas do canal (varejo: todas menos Maraponga e Fábrica) - o desconto vale pra rede toda">Estoque rede</th>
@@ -3199,7 +3199,7 @@ export default function GiroPage() {
                                 />
                               </td>
                               <td className="px-3 py-1.5 font-mono text-xs">{i.referencia}</td>
-                              <td className="px-3 py-1.5">{i.nome}</td>
+                              <td className="px-3 py-1.5 whitespace-normal min-w-[280px]">{i.nome}</td>
                               <td className="px-3 py-1.5">{i.cor ?? '-'}</td>
                               <td className="px-3 py-1.5 text-right font-semibold">{formatarQtd(i.estoque)}</td>
                               <td className="px-3 py-1.5 text-right">{formatarQtd(estRede)}</td>
