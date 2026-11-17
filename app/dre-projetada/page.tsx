@@ -126,13 +126,121 @@ const mesRotulo = (m: string) => `${NOMES_MES[parseInt(m.split('-')[1], 10)]}/${
 const corDif = (d: number) => (Math.abs(d) < 0.005 ? 'text-gray-500' : d > 0 ? 'text-green-700' : 'text-red-600');
 const fmtDifPct = (real: number, proj: number) => (proj ? `${(((real - proj) / Math.abs(proj)) * 100).toFixed(1).replace('.', ',')}%` : '-');
 
+
+interface DuplicataReal {
+  nrDuplicata?: string | number; id?: number; dtEmissao: string; nomeCCusto?: string; cdFornecedor?: number | string;
+  nmFornecedor?: string; descricao?: string; valor: number; mes: string;
+}
+const fmtDataIso = (v: string | null | undefined) => (v ? v.slice(0, 10).split('-').reverse().join('/') : '-');
+
+// Modal do realizado: as duplicatas que formam o valor da conta nos meses comparados (mesma consulta da tela de DRE).
+function ModalRealizado({ conta, nome, meses, filtro, valorQuadro, onFechar }: {
+  conta: string; nome: string; meses: string[]; filtro: string; valorQuadro: number; onFechar: () => void;
+}) {
+  const [dups, setDups] = useState<DuplicataReal[] | null>(null);
+  const [erro, setErro] = useState<string | null>(null);
+  const [visao, setVisao] = useState<'lancamentos' | 'fornecedor' | 'mes'>('lancamentos');
+  useEffect(() => {
+    let vivo = true;
+    const filtros = filtro === 'consolidado' || filtro === 'fabrica' ? [filtro] : filtro.split(',');
+    Promise.all(meses.flatMap((m) => filtros.map((f) =>
+      fetch(`/api/dre/unificada/duplicatas?conta=${encodeURIComponent(conta)}&periodo=${m}&filtro=${encodeURIComponent(f)}`, { cache: 'no-store' })
+        .then((r) => r.json().then((d) => ({ ok: r.ok, d })))
+        .then(({ ok, d }) => { if (!ok) throw new Error(d.detail || d.error || 'Erro ao buscar as duplicatas'); return (d.duplicatas || []).map((x: DuplicataReal) => ({ ...x, mes: m })); }),
+    )))
+      .then((listas) => { if (vivo) setDups((listas.flat() as DuplicataReal[]).sort((a, b) => (b.valor ?? 0) - (a.valor ?? 0))); })
+      .catch((e) => { if (vivo) setErro(e instanceof Error ? e.message : 'Erro ao buscar as duplicatas'); });
+    return () => { vivo = false; };
+  }, [conta, meses, filtro]);
+
+  const total = (dups ?? []).reduce((a, d) => a + (d.valor || 0), 0);
+  const agrupar = (chave: (d: DuplicataReal) => string, rotulo: (d: DuplicataReal) => string) => {
+    const m = new Map<string, { rotulo: string; valor: number; qtd: number }>();
+    for (const d of dups ?? []) { const k = chave(d); const x = m.get(k) ?? { rotulo: rotulo(d), valor: 0, qtd: 0 }; x.valor += d.valor || 0; x.qtd += 1; m.set(k, x); }
+    return Array.from(m.values()).sort((a, b) => b.valor - a.valor);
+  };
+  const porFornecedor = useMemo(() => agrupar((d) => String(d.cdFornecedor ?? d.nmFornecedor ?? '-'), (d) => `${d.cdFornecedor ?? ''} ${d.nmFornecedor ?? 'N/A'}`.trim()), [dups]); // eslint-disable-line react-hooks/exhaustive-deps
+  const porMes = useMemo(() => agrupar((d) => d.mes, (d) => mesRotulo(d.mes)).sort((a, b) => a.rotulo.localeCompare(b.rotulo)), [dups]); // eslint-disable-line react-hooks/exhaustive-deps
+  const dif = Math.abs(valorQuadro) - total;
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onFechar}>
+      <div className="bg-white rounded-lg shadow-xl w-[95vw] max-w-6xl max-h-[90vh] flex flex-col text-black" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-start justify-between px-6 py-4 border-b border-gray-200 bg-gray-50 rounded-t-lg">
+          <div>
+            <h3 className="text-lg font-semibold">Realizado — {conta} {nome}</h3>
+            <p className="text-sm">
+              {mesRotulo(meses[0])}{meses.length > 1 ? ` a ${mesRotulo(meses[meses.length - 1])}` : ''} · no quadro: <strong>{formatarValor(valorQuadro)}</strong>
+              {dups && <> · lançamentos: <strong>{formatarValor(-total)}</strong>{Math.abs(dif) > 0.5 && <span className="text-amber-700"> (diferença de {formatarValor(dif)}: reclassificações por descrição/exclusões da DRE)</span>}</>}
+            </p>
+          </div>
+          <button onClick={onFechar} className="text-2xl leading-none px-2" aria-label="Fechar">×</button>
+        </div>
+        <div className="px-6 py-2 border-b border-gray-200 flex gap-2 text-sm">
+          {([['lancamentos', 'Lançamentos'], ['fornecedor', 'Por fornecedor'], ['mes', 'Por mês']] as const).map(([k, r]) => (
+            <button key={k} onClick={() => setVisao(k)} className={`px-3 py-1 rounded border ${visao === k ? 'bg-blue-600 text-white border-blue-700' : 'bg-white border-gray-300 hover:bg-gray-50'}`}>{r}</button>
+          ))}
+        </div>
+        <div className="flex-1 overflow-auto">
+          {erro ? <div className="p-6 text-sm text-red-700">{erro}</div>
+            : !dups ? <div className="flex items-center justify-center gap-2 py-12"><RefreshCw className="w-6 h-6 animate-spin text-blue-600" /> Buscando lançamentos…</div>
+            : dups.length === 0 ? <div className="p-8 text-center text-sm">Nenhum lançamento encontrado para esta conta nos meses escolhidos.</div>
+            : visao === 'lancamentos' ? (
+              <table className="w-full border-collapse text-sm">
+                <thead className="sticky top-0 bg-gray-100"><tr className="text-xs">
+                  <th className="px-3 py-2 text-left">Mês</th><th className="px-3 py-2 text-left">Nr duplicata</th><th className="px-3 py-2 text-left">Emissão</th>
+                  <th className="px-3 py-2 text-left">Centro de custo</th><th className="px-3 py-2 text-left">Fornecedor</th><th className="px-3 py-2 text-left">Descrição</th><th className="px-3 py-2 text-right">Valor</th>
+                </tr></thead>
+                <tbody>
+                  {dups.map((d, i) => (
+                    <tr key={i} className="border-t border-gray-100 hover:bg-blue-50">
+                      <td className="px-3 py-1.5 whitespace-nowrap">{mesRotulo(d.mes)}</td>
+                      <td className="px-3 py-1.5 font-mono text-xs">{d.nrDuplicata ?? d.id ?? '-'}</td>
+                      <td className="px-3 py-1.5 whitespace-nowrap">{fmtDataIso(d.dtEmissao)}</td>
+                      <td className="px-3 py-1.5">{d.nomeCCusto || '-'}</td>
+                      <td className="px-3 py-1.5">{d.cdFornecedor ? `${d.cdFornecedor} - ` : ''}{d.nmFornecedor || 'N/A'}</td>
+                      <td className="px-3 py-1.5">{d.descricao || '-'}</td>
+                      <td className="px-3 py-1.5 text-right font-medium text-red-600 whitespace-nowrap">{formatarValor(d.valor)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <table className="w-full border-collapse text-sm">
+                <thead className="sticky top-0 bg-gray-100"><tr className="text-xs">
+                  <th className="px-3 py-2 text-left">{visao === 'fornecedor' ? 'Fornecedor' : 'Mês'}</th><th className="px-3 py-2 text-right">Lançamentos</th><th className="px-3 py-2 text-right">Valor</th><th className="px-3 py-2 text-right">% do total</th>
+                </tr></thead>
+                <tbody>
+                  {(visao === 'fornecedor' ? porFornecedor : porMes).map((x) => (
+                    <tr key={x.rotulo} className="border-t border-gray-100">
+                      <td className="px-3 py-1.5">{x.rotulo}</td><td className="px-3 py-1.5 text-right">{x.qtd}</td>
+                      <td className="px-3 py-1.5 text-right text-red-600 font-medium">{formatarValor(x.valor)}</td>
+                      <td className="px-3 py-1.5 text-right">{total ? `${((x.valor / total) * 100).toFixed(1).replace('.', ',')}%` : '-'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+        </div>
+        {dups && dups.length > 0 && (
+          <div className="border-t-2 border-gray-300 bg-gray-100 px-6 py-3 flex justify-between text-sm">
+            <span className="font-semibold">TOTAL ({dups.length} {dups.length === 1 ? 'registro' : 'registros'})</span>
+            <span className="font-bold text-red-600">{formatarValor(total)}</span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // Projetado (ou orcamento) x realizado, acumulado nos meses escolhidos. Diferenca = realizado - projetado:
 // positiva = favoravel (receita maior ou despesa menor, ja que despesa e negativa).
-function ComparacaoRealizado({ linhas, abertos, alternar, projetado, real, fechados, de, ate, setDe, setAte }: {
-  linhas: LinhaTabela[]; abertos: Set<string>; alternar: (c: string) => void; projetado: Record<string, Valores>;
+function ComparacaoRealizado({ linhas, abertos, alternar, projetado, real, fechados, de, ate, setDe, setAte, filtro }: {
+  filtro: string; linhas: LinhaTabela[]; abertos: Set<string>; alternar: (c: string) => void; projetado: Record<string, Valores>;
   real: Record<string, Valores>; fechados: string[]; de: string; ate: string; setDe: (m: string) => void; setAte: (m: string) => void;
 }) {
-  const meses = fechados.filter((m) => m >= de && m <= ate);
+  const meses = useMemo(() => fechados.filter((m) => m >= de && m <= ate), [fechados, de, ate]);
+  const [modal, setModal] = useState<{ conta: string; nome: string; valor: number } | null>(null);
   const soma = (d: Record<string, Valores>, c: string) => meses.reduce((s, m) => s + (d[c]?.[m] ?? 0), 0);
   const recP = soma(projetado, '03');
   const recR = soma(real, '03');
@@ -144,6 +252,7 @@ function ComparacaoRealizado({ linhas, abertos, alternar, projetado, real, fecha
   }
   return (
     <div>
+      {modal && <ModalRealizado conta={modal.conta} nome={modal.nome} meses={meses} filtro={filtro} valorQuadro={modal.valor} onFechar={() => setModal(null)} />}
       <div className="px-5 py-3 border-b border-gray-200 flex flex-wrap items-center gap-3 text-sm text-black">
         <span className="font-semibold">Meses comparados:</span>
         <select value={de} onChange={(e) => { setDe(e.target.value); if (e.target.value > ate) setAte(e.target.value); }} className="px-2 py-1 border border-gray-300 rounded bg-white">
@@ -203,7 +312,11 @@ function ComparacaoRealizado({ linhas, abertos, alternar, projetado, real, fecha
                   </td>
                   <td className="px-3 py-2 border-b border-gray-200 text-right text-sm">{formatarValor(p)}</td>
                   <td className="px-3 py-2 border-b border-gray-200 text-right text-xs">{av(p, recP)}</td>
-                  <td className="px-3 py-2 border-b border-gray-200 text-right text-sm">{formatarValor(r)}</td>
+                  <td className="px-3 py-2 border-b border-gray-200 text-right text-sm">
+                    {!resultado && r !== 0 && !['01', '02'].includes(conta.codigo.split('.')[0]) ? (
+                      <button onClick={() => setModal({ conta: conta.codigo, nome: conta.nome, valor: r })} className="underline hover:text-blue-700" title="Ver os lançamentos que formam o realizado">{formatarValor(r)}</button>
+                    ) : formatarValor(r)}
+                  </td>
                   <td className="px-3 py-2 border-b border-gray-200 text-right text-xs">{av(r, recR)}</td>
                   <td className={`px-3 py-2 border-b border-gray-200 text-right text-sm font-semibold ${corDif(d)}`}>{formatarValor(d)}</td>
                   <td className={`px-3 py-2 border-b border-gray-200 text-right text-xs ${corDif(d)}`}>{fmtDifPct(r, p)}</td>
@@ -972,6 +1085,7 @@ export default function DreProjetadaPage() {
               <div className="p-6 text-sm text-red-700">{erroReal}</div>
             ) : realizadoCompleto && realizadoResp ? (
               <ComparacaoRealizado
+                filtro={filtroDosDados}
                 linhas={linhas}
                 abertos={abertos}
                 alternar={alternar}
