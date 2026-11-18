@@ -350,6 +350,12 @@ function formatarVariacao(pct: number | null): string {
   return `${sinal}${pct.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
 }
 
+interface Enviada70 {
+  id: number; referencia: string; cor: string; canal: 'varejo' | 'atacado'; nome: string | null; lojaOrigem: string | null;
+  mesReferencia: string | null; estoqueRede: number; precoCheio: number | null; precoCampanha: number | null; preco70: number | null;
+  pctCampanha: number | null; difPeca: number | null; impacto: number | null; criadoEm: string | null;
+}
+
 interface DetalheFaixaItem {
   referencia: string; nome: string; cor: string | null; estoque: number; pctCampanha: number; descontoAtual: number;
   giro: number | null; mesesFL: number | null; regra: number; mista: boolean;
@@ -1033,7 +1039,9 @@ export default function GiroPage() {
   const manterDescontoAltoRef = useRef(false);
   // Mesmos parametros da ultima consulta de totais (filtros da tela) - o modal da tabela por loja os reaproveita.
   const paramsTotaisRef = useRef('');
-  const [selecionadosDetalhe, setSelecionadosDetalhe] = useState<Set<string>>(new Set());
+  // Referencias "enviadas para 70%" (marcadas no modal, loja a loja; guardadas no banco)
+  const [enviadas70, setEnviadas70] = useState<Enviada70[]>([]);
+  const [modalEnviadas70Aberto, setModalEnviadas70Aberto] = useState(false);
   const [detalheFaixaLoja, setDetalheFaixaLoja] = useState<{
     cdLoja: number; nomeLoja: string; faixa: number; carregando: boolean; erro?: string; itens: DetalheFaixaItem[];
   } | null>(null);
@@ -1316,9 +1324,72 @@ export default function GiroPage() {
     }
   }
 
+  const carregarEnviadas70 = async () => {
+    try {
+      const r = await fetch('/api/giro/enviadas-70', { cache: 'no-store' });
+      const j = await r.json();
+      if (r.ok && Array.isArray(j.itens)) setEnviadas70(j.itens);
+    } catch (e) {
+      console.error('Erro ao buscar as referências enviadas para 70%:', e);
+    }
+  };
+  useEffect(() => { carregarEnviadas70(); }, []);
+
+  const canalDaLoja = (cdLoja: number) => (cdLoja === 2 ? 'atacado' : 'varejo');
+  const chaveEnviada = (referencia: string, cor: string | null | undefined, canal: string) => `${referencia}|${cor ?? ''}|${canal}`;
+  const chavesEnviadas = new Set(enviadas70.map((e) => chaveEnviada(e.referencia, e.cor, e.canal)));
+
+  function itemParaEnvio(i: DetalheFaixaItem, cdLoja: number, nomeLoja: string) {
+    return {
+      referencia: i.referencia, cor: i.cor ?? '', canal: canalDaLoja(cdLoja), nome: i.nome, loja_origem: nomeLoja, mes_referencia: mesReferencia,
+      estoque_rede: i.estoqueRede ?? i.estoque, preco_cheio: i.precoCheio ?? null, preco_campanha: i.precoCampanha ?? null,
+      preco_70: i.preco70 ?? null, pct_campanha: i.pctCampanha,
+    };
+  }
+
+  // Marca/desmarca no modal da loja e guarda (ou tira) da lista de enviadas para 70%.
+  async function alternarEnviada70(itens: DetalheFaixaItem[], marcar: boolean) {
+    if (!detalheFaixaLoja || itens.length === 0) return;
+    const { cdLoja, nomeLoja } = detalheFaixaLoja;
+    try {
+      if (marcar) {
+        await fetch('/api/giro/enviadas-70', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ itens: itens.map((i) => itemParaEnvio(i, cdLoja, nomeLoja)) }),
+        });
+      } else {
+        await Promise.all(itens.map((i) => fetch(`/api/giro/enviadas-70?referencia=${encodeURIComponent(i.referencia)}&cor=${encodeURIComponent(i.cor ?? '')}&canal=${canalDaLoja(cdLoja)}`, { method: 'DELETE' })));
+      }
+    } catch (e) {
+      console.error('Erro ao guardar a seleção para 70%:', e);
+    }
+    await carregarEnviadas70();
+  }
+
+  async function removerEnviada70(e: Enviada70) {
+    await fetch(`/api/giro/enviadas-70?referencia=${encodeURIComponent(e.referencia)}&cor=${encodeURIComponent(e.cor)}&canal=${e.canal}`, { method: 'DELETE' });
+    await carregarEnviadas70();
+  }
+
+  async function limparEnviadas70() {
+    if (!window.confirm('Limpar toda a lista de referências enviadas para 70%?')) return;
+    await fetch('/api/giro/enviadas-70?todas=true', { method: 'DELETE' });
+    await carregarEnviadas70();
+  }
+
+  function baixarCsvEnviadas70() {
+    const linhas = [['Referência', 'Descrição', 'Cor', 'Canal', 'Marcada na loja', 'Estoque rede', 'Preço cheio', 'Preço campanha', 'Preço a 70%', 'Dif. por peça', 'Impacto R$']];
+    const n2 = (v: number | null) => (v == null ? '' : v.toFixed(2).replace('.', ','));
+    for (const e of enviadas70) linhas.push([e.referencia, e.nome ?? '', e.cor, e.canal, e.lojaOrigem ?? '', String(e.estoqueRede).replace('.', ','), n2(e.precoCheio), n2(e.precoCampanha), n2(e.preco70), n2(e.difPeca), n2(e.impacto)]);
+    const csv = '\uFEFF' + linhas.map((l) => l.map((c) => `"${c.replace(/"/g, '""')}"`).join(';')).join('\n');
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+    const a = document.createElement('a');
+    a.href = url; a.download = 'giro-enviadas-para-70.csv'; a.click();
+    URL.revokeObjectURL(url);
+  }
+
   // Clique numa quantidade da tabela "Qtd novo por loja": mostra as referencias/cores que a formam.
   async function abrirDetalheFaixaLoja(cdLoja: number, nomeLoja: string, faixa: number) {
-    setSelecionadosDetalhe(new Set());
     setDetalheFaixaLoja({ cdLoja, nomeLoja, faixa, carregando: true, itens: [] });
     try {
       const params = new URLSearchParams(paramsTotaisRef.current);
@@ -2747,7 +2818,15 @@ export default function GiroPage() {
             </div>
           )}
 
-          <div className="flex justify-end gap-2">
+          <div className="flex justify-between gap-2">
+            <button
+              onClick={() => setModalEnviadas70Aberto(true)}
+              className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-black rounded-md text-xs"
+              title="Referências marcadas, loja a loja, nos modais da tabela por loja para subir a campanha para 70%"
+            >
+              Referências enviadas para 70% ({enviadas70.length})
+            </button>
+            <div className="flex gap-2">
             <button
               onClick={() => setMostrarPrecosCheios((v) => !v)}
               className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-black rounded-md text-sm flex items-center gap-1.5"
@@ -2762,6 +2841,7 @@ export default function GiroPage() {
               <Info className="w-4 h-4" />
               Regras
             </button>
+            </div>
           </div>
 
           <div className="bg-white rounded-lg shadow-lg overflow-hidden">
@@ -3128,6 +3208,83 @@ export default function GiroPage() {
           </div>
 
 
+          {modalEnviadas70Aberto && (
+            <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setModalEnviadas70Aberto(false)}>
+              <div className="bg-white rounded-lg shadow-xl w-[98vw] max-w-[1500px] max-h-[94vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+                <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200">
+                  <div>
+                    <h2 className="text-base font-semibold text-black">Referências enviadas para 70%</h2>
+                    <p className="text-xs text-black">Marcadas nos modais da tabela por loja. Cada referência/cor conta uma vez só (o desconto vale pra rede toda do canal).</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {enviadas70.length > 0 && <button onClick={baixarCsvEnviadas70} className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-black rounded-md text-sm">Baixar CSV</button>}
+                    {enviadas70.length > 0 && <button onClick={limparEnviadas70} className="px-3 py-1.5 border border-red-300 text-red-700 rounded-md text-sm hover:bg-red-50">Limpar lista</button>}
+                    <button onClick={() => setModalEnviadas70Aberto(false)} className="text-black" aria-label="Fechar"><X className="w-5 h-5" /></button>
+                  </div>
+                </div>
+                <div className="flex-1 overflow-auto">
+                  {enviadas70.length === 0 ? (
+                    <p className="p-6 text-sm text-black">Nenhuma referência marcada ainda. Abra uma quantidade da tabela &quot;Qtd novo por loja&quot; e marque as referências.</p>
+                  ) : (
+                    <table className="w-full min-w-[1200px] border-collapse text-sm text-black whitespace-nowrap">
+                      <thead className="sticky top-0 bg-gray-100">
+                        <tr className="text-[11px] uppercase">
+                          <th className="px-3 py-2 text-left">Referência</th>
+                          <th className="px-3 py-2 text-left min-w-[260px]">Descrição</th>
+                          <th className="px-3 py-2 text-left">Cor</th>
+                          <th className="px-3 py-2 text-left">Canal</th>
+                          <th className="px-3 py-2 text-left">Marcada na loja</th>
+                          <th className="px-3 py-2 text-right">Estoque rede</th>
+                          <th className="px-3 py-2 text-right">Preço campanha</th>
+                          <th className="px-3 py-2 text-right">Preço a 70%</th>
+                          <th className="px-3 py-2 text-right">Dif. por peça</th>
+                          <th className="px-3 py-2 text-right">Impacto (R$)</th>
+                          <th className="px-3 py-2"></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {enviadas70.map((e) => {
+                          const m = (v: number | null) => (v == null ? '-' : v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }));
+                          return (
+                            <tr key={e.id} className="border-t border-gray-100 hover:bg-rose-50">
+                              <td className="px-3 py-1.5 font-mono text-xs">{e.referencia}</td>
+                              <td className="px-3 py-1.5 whitespace-normal">{e.nome}</td>
+                              <td className="px-3 py-1.5">{e.cor || '-'}</td>
+                              <td className="px-3 py-1.5">{e.canal === 'atacado' ? 'Atacado' : 'Varejo'}</td>
+                              <td className="px-3 py-1.5">{e.lojaOrigem ?? '-'}</td>
+                              <td className="px-3 py-1.5 text-right">{formatarQtd(e.estoqueRede)}</td>
+                              <td className="px-3 py-1.5 text-right">{m(e.precoCampanha)}</td>
+                              <td className="px-3 py-1.5 text-right">{m(e.preco70)}</td>
+                              <td className={`px-3 py-1.5 text-right ${(e.difPeca ?? 0) > 0 ? 'text-red-700' : ''}`}>{m(e.difPeca)}</td>
+                              <td className={`px-3 py-1.5 text-right font-semibold ${(e.impacto ?? 0) > 0 ? 'text-red-700' : ''}`}>{m(e.impacto)}</td>
+                              <td className="px-3 py-1.5 text-right"><button onClick={() => removerEnviada70(e)} className="text-xs underline text-black hover:text-red-700">remover</button></td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+                {enviadas70.length > 0 && (() => {
+                  const moedaRod = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+                  const total = enviadas70.reduce((a, e) => a + (e.impacto ?? 0), 0);
+                  const pecas = enviadas70.reduce((a, e) => a + e.estoqueRede, 0);
+                  const porLoja = new Map<string, { n: number; impacto: number }>();
+                  for (const e of enviadas70) { const k = e.lojaOrigem ?? '-'; const x = porLoja.get(k) ?? { n: 0, impacto: 0 }; x.n += 1; x.impacto += e.impacto ?? 0; porLoja.set(k, x); }
+                  return (
+                    <div className="border-t-2 border-gray-300 bg-yellow-50 px-5 py-3 text-sm text-black space-y-1">
+                      <div className="flex flex-wrap items-center gap-x-6">
+                        <span className="font-semibold">{enviadas70.length} referência/cor · {formatarQtd(pecas)} peças na rede</span>
+                        <span className="font-bold text-red-700">Impacto total de subir para 70%: {moedaRod(total)}</span>
+                      </div>
+                      <div className="text-xs">Por loja onde foram marcadas: {Array.from(porLoja.entries()).map(([k, x]) => `${k}: ${x.n} (${moedaRod(x.impacto)})`).join(' · ')}</div>
+                    </div>
+                  );
+                })()}
+              </div>
+            </div>
+          )}
+
           {detalheFaixaLoja && (
             <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setDetalheFaixaLoja(null)}>
               <div className="bg-white rounded-lg shadow-xl w-[98vw] max-w-[1700px] max-h-[94vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
@@ -3162,8 +3319,8 @@ export default function GiroPage() {
                             <input
                               type="checkbox"
                               aria-label="Selecionar todas"
-                              checked={detalheFaixaLoja.itens.length > 0 && selecionadosDetalhe.size === detalheFaixaLoja.itens.length}
-                              onChange={(e) => setSelecionadosDetalhe(e.target.checked ? new Set(detalheFaixaLoja.itens.map((_, idx) => String(idx))) : new Set())}
+                              checked={detalheFaixaLoja.itens.length > 0 && detalheFaixaLoja.itens.every((i) => chavesEnviadas.has(chaveEnviada(i.referencia, i.cor, canalDaLoja(detalheFaixaLoja.cdLoja))))}
+                              onChange={(e) => alternarEnviada70(detalheFaixaLoja.itens, e.target.checked)}
                             />
                           </th>
                           <th className="px-3 py-2 text-left">Referência</th>
@@ -3184,7 +3341,7 @@ export default function GiroPage() {
                       </thead>
                       <tbody>
                         {detalheFaixaLoja.itens.map((i, idx) => {
-                          const marcado = selecionadosDetalhe.has(String(idx));
+                          const marcado = chavesEnviadas.has(chaveEnviada(i.referencia, i.cor, canalDaLoja(detalheFaixaLoja.cdLoja)));
                           const difPeca = i.precoCampanha != null && i.preco70 != null ? i.precoCampanha - i.preco70 : null;
                           const estRede = i.estoqueRede ?? i.estoque;
                           const impacto = difPeca !== null ? difPeca * estRede : null;
@@ -3195,7 +3352,7 @@ export default function GiroPage() {
                                 <input
                                   type="checkbox"
                                   checked={marcado}
-                                  onChange={() => setSelecionadosDetalhe((prev) => { const n = new Set(prev); if (n.has(String(idx))) n.delete(String(idx)); else n.add(String(idx)); return n; })}
+                                  onChange={() => alternarEnviada70([i], !marcado)}
                                 />
                               </td>
                               <td className="px-3 py-1.5 font-mono text-xs">{i.referencia}</td>
@@ -3219,21 +3376,18 @@ export default function GiroPage() {
                     </table>
                   )}
                 </div>
-                {!detalheFaixaLoja.carregando && selecionadosDetalhe.size > 0 && (() => {
-                  const sel = detalheFaixaLoja.itens.filter((_, idx) => selecionadosDetalhe.has(String(idx)));
-                  const pecas = sel.reduce((a, i) => a + (i.estoqueRede ?? i.estoque), 0);
-                  const validos = sel.filter((i) => i.precoCampanha != null && i.preco70 != null);
-                  const impacto = validos.reduce((a, i) => a + ((i.precoCampanha as number) - (i.preco70 as number)) * (i.estoqueRede ?? i.estoque), 0);
-                  const valorCampanha = validos.reduce((a, i) => a + (i.precoCampanha as number) * (i.estoqueRede ?? i.estoque), 0);
-                  const valor70 = validos.reduce((a, i) => a + (i.preco70 as number) * (i.estoqueRede ?? i.estoque), 0);
+                {!detalheFaixaLoja.carregando && enviadas70.length > 0 && (() => {
+                  const canalAtual = canalDaLoja(detalheFaixaLoja.cdLoja);
+                  const sel = detalheFaixaLoja.itens.filter((i) => chavesEnviadas.has(chaveEnviada(i.referencia, i.cor, canalAtual)));
+                  const impactoSel = sel.reduce((a, i) => a + (i.precoCampanha != null && i.preco70 != null ? (i.precoCampanha - i.preco70) * (i.estoqueRede ?? i.estoque) : 0), 0);
+                  const pecasSel = sel.reduce((a, i) => a + (i.estoqueRede ?? i.estoque), 0);
+                  const impactoTotal = enviadas70.reduce((a, e) => a + (e.impacto ?? 0), 0);
                   const moedaRod = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
                   return (
                     <div className="border-t-2 border-gray-300 bg-yellow-50 px-5 py-3 text-sm text-black flex flex-wrap items-center gap-x-6 gap-y-1">
-                      <span className="font-semibold">{sel.length} selecionada(s) · {formatarQtd(pecas)} peças na rede</span>
-                      <span>Estoque da rede na campanha atual: <strong>{moedaRod(valorCampanha)}</strong></span>
-                      <span>Estoque da rede a 70%: <strong>{moedaRod(valor70)}</strong></span>
-                      <span className="font-bold text-red-700">Impacto de subir para 70%: {moedaRod(impacto)} ({valorCampanha ? `${((impacto / valorCampanha) * 100).toFixed(1).replace('.', ',')}%` : '-'} do valor)</span>
-                      {validos.length < sel.length && <span className="text-xs">({sel.length - validos.length} sem preço cheio, fora da conta)</span>}
+                      <span className="font-semibold">Nesta lista: {sel.length} marcada(s) · {formatarQtd(pecasSel)} peças na rede · impacto <strong className="text-red-700">{moedaRod(impactoSel)}</strong></span>
+                      <span className="font-bold text-red-700">Total enviado para 70% (todas as lojas): {enviadas70.length} ref/cor · {moedaRod(impactoTotal)}</span>
+                      <button onClick={() => { setDetalheFaixaLoja(null); setModalEnviadas70Aberto(true); }} className="underline text-black text-xs">Ver lista completa</button>
                     </div>
                   );
                 })()}
