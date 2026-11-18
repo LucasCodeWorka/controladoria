@@ -1376,7 +1376,10 @@ export default function GiroPage() {
           body: JSON.stringify({ itens: itens.map((i) => itemParaEnvio(i, cdLoja, nomeLoja)) }),
         });
       } else {
-        await Promise.all(itens.map((i) => fetch(`/api/giro/enviadas-70?referencia=${encodeURIComponent(i.referencia)}&cor=${encodeURIComponent(i.cor ?? '')}&canal=${canalDaLoja(cdLoja)}`, { method: 'DELETE' })));
+        await fetch('/api/giro/enviadas-70/remover', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ itens: itens.map((i) => ({ referencia: i.referencia, cor: i.cor ?? '', canal: canalDaLoja(cdLoja) })) }),
+        });
       }
     } catch (e) {
       console.error('Erro ao guardar a seleção para 70%:', e);
@@ -3328,6 +3331,14 @@ export default function GiroPage() {
                     </p>
                   </div>
                   <div className="flex items-center gap-2">
+                    {!detalheFaixaLoja.carregando && detalheFaixaLoja.itens.some((i) => chavesEnviadas.has(chaveEnviada(i.referencia, i.cor, canalDaLoja(detalheFaixaLoja.cdLoja)))) && (
+                      <button
+                        onClick={() => alternarEnviada70(detalheFaixaLoja.itens.filter((i) => chavesEnviadas.has(chaveEnviada(i.referencia, i.cor, canalDaLoja(detalheFaixaLoja.cdLoja)))), false)}
+                        className="px-3 py-1.5 border border-gray-300 hover:bg-gray-50 text-black rounded-md text-sm"
+                      >
+                        Desmarcar todas
+                      </button>
+                    )}
                     {!detalheFaixaLoja.carregando && detalheFaixaLoja.itens.length > 0 && (
                       <button onClick={baixarCsvDetalheFaixa} className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-black rounded-md text-sm">Baixar CSV</button>
                     )}

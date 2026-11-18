@@ -31,6 +31,16 @@ class LoteEnviado(BaseModel):
     itens: List[ItemEnviado]
 
 
+class ChaveEnviada(BaseModel):
+    referencia: str
+    cor: Optional[str] = ""
+    canal: str = "varejo"
+
+
+class LoteRemocao(BaseModel):
+    itens: List[ChaveEnviada]
+
+
 def _criar_tabela():
     execute_insert("""
         CREATE TABLE IF NOT EXISTS giro_enviadas_70 (
@@ -118,4 +128,17 @@ def desmarcar(
         raise
     except Exception as e:
         print(f"[ERROR] enviadas-70 desmarcar: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/api/giro/enviadas-70/remover")
+def remover_lote(lote: LoteRemocao):
+    """Desmarca varias referencias/cores de uma vez (uma requisicao so, em vez de uma por linha)."""
+    try:
+        _criar_tabela()
+        for i in lote.itens:
+            execute_insert("DELETE FROM giro_enviadas_70 WHERE referencia = %s AND cor = %s AND canal = %s", (i.referencia, i.cor or "", i.canal))
+        return {"removidos": len(lote.itens)}
+    except Exception as e:
+        print(f"[ERROR] enviadas-70 remover lote: {e}")
         raise HTTPException(status_code=500, detail=str(e))
