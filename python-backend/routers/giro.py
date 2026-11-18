@@ -837,7 +837,11 @@ def _obter_primeira_oportunidade_por_cor(
         params_ativo = (mes_referencia, *cd_empresas)
 
     rows = execute_query(f"""
-        SELECT COALESCE(ds_cor, 'SEM COR') AS cor, MIN(dt_inicio) AS dt_primeira
+        SELECT COALESCE(ds_cor, 'SEM COR') AS cor, MAX((
+            SELECT MIN(h2.dt_inicio) FROM hist_dproduto h2
+            WHERE h2.cd_produto = hist_dproduto.cd_produto
+              AND h2.status ILIKE 'OPORTUNIDADE%%'
+        )) AS dt_primeira
         FROM hist_dproduto
         WHERE referencia = %s
           AND atual = true
@@ -967,12 +971,15 @@ def _obter_primeira_oportunidade(
     referencias: list, status_filtro: Optional[list] = None,
     mes_referencia: Optional[str] = None, cd_empresas: Optional[list] = None,
 ) -> dict:
-    """Data mais antiga (dt_inicio) entre os SKUs de cada referencia que
+    """Data mais antiga entre os SKUs de cada referencia que
     estao HOJE (atual=true) em algum status "OPORTUNIDADE..." - via
     hist_dproduto, historico tipo SCD (uma linha por trecho de tempo que o
     produto ficou com aquele conjunto de atributos). SKU que ja foi
     oportunidade e voltou pra EM LINHA nao conta (so quem esta oportunidade
-    agora).
+    agora). Data de cada SKU = a PRIMEIRA vez que ele virou qualquer status
+    OPORTUNIDADE (nao o dt_inicio da linha atual, que reinicia a cada mudanca
+    de cadastro). Data da referencia/cor = a MAIS RECENTE entre os SKUs, ou
+    seja, quando o ULTIMO SKU virou FL (todos ja eram FL a partir dali).
 
     Quando a tela tem um filtro de status ativo, so considera os SKUs que
     TAMBEM passam nesse filtro - como status e um valor so por SKU (nao da
@@ -1016,7 +1023,11 @@ def _obter_primeira_oportunidade(
 
     placeholders = ",".join(["%s"] * len(referencias))
     rows = execute_query(f"""
-        SELECT referencia, MIN(dt_inicio) AS dt_primeira
+        SELECT referencia, MAX((
+            SELECT MIN(h2.dt_inicio) FROM hist_dproduto h2
+            WHERE h2.cd_produto = hist_dproduto.cd_produto
+              AND h2.status ILIKE 'OPORTUNIDADE%%'
+        )) AS dt_primeira
         FROM hist_dproduto
         WHERE referencia IN ({placeholders})
           AND atual = true
@@ -1063,7 +1074,11 @@ def _obter_primeira_oportunidade_por_referencia_e_cor(
 
     placeholders = ",".join(["%s"] * len(referencias))
     rows = execute_query(f"""
-        SELECT referencia, COALESCE(ds_cor, 'SEM COR') AS cor, MIN(dt_inicio) AS dt_primeira
+        SELECT referencia, COALESCE(ds_cor, 'SEM COR') AS cor, MAX((
+            SELECT MIN(h2.dt_inicio) FROM hist_dproduto h2
+            WHERE h2.cd_produto = hist_dproduto.cd_produto
+              AND h2.status ILIKE 'OPORTUNIDADE%%'
+        )) AS dt_primeira
         FROM hist_dproduto
         WHERE referencia IN ({placeholders})
           AND atual = true
