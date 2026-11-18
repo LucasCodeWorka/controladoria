@@ -2684,6 +2684,69 @@ export default function GiroPage() {
             </div>
           )}
 
+          {matriz && (
+            <div className="bg-white rounded-lg shadow-lg p-4">
+              <p className="text-xs font-medium text-black uppercase tracking-wide" title="Estoque de cada loja por faixa de promoção NOVA (percentual sugerido pela campanha, arredondado pra dezena). Maraponga usa a campanha do Atacado; as demais, a do Varejo. Fábrica fora. Segue os filtros da tela.">
+                Análise por % — Qtd novo por loja (filtro inteiro)
+              </p>
+              {(() => {
+                const porLoja = totaisDescontoGiro?.faixasPromoPorLoja ?? {};
+                const lojas = matriz.empresas.filter((e) => e.cdEmpresa !== 1);
+                const qtd = (cd: number, f: number) => porLoja[String(cd)]?.[String(f)] ?? 0;
+                const totalFaixa = (f: number) => lojas.reduce((a, e) => a + qtd(e.cdEmpresa, f), 0);
+                const faixas = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100].filter((f) => f <= 70 || totalFaixa(f) > 0);
+                const totalLoja = (cd: number) => faixas.reduce((a, f) => a + qtd(cd, f), 0);
+                const celula = 'border border-slate-300 px-2 py-1 text-right text-black';
+                return (
+                  <div className="mt-2 overflow-x-auto">
+                    <table className="w-full text-sm border-collapse">
+                      <thead>
+                        <tr className="text-[11px] uppercase text-black">
+                          <th className="border border-slate-300 bg-green-100 px-2 py-1 text-left">Promoção %</th>
+                          {lojas.map((e) => (
+                            <th key={e.cdEmpresa} className="border border-slate-300 bg-green-100 px-2 py-1 text-right whitespace-nowrap">{nomeLojaCurto(e.nome)}</th>
+                          ))}
+                          <th className="border border-slate-300 bg-sky-100 px-2 py-1 text-right">Total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {faixas.map((f) => (
+                          <tr key={f}>
+                            <td className="border border-slate-300 px-2 py-1 text-center text-black">{f}%</td>
+                            {lojas.map((e) => (
+                              <td key={e.cdEmpresa} className={celula}>
+                                {totaisDescontoCarregando ? '...' : qtd(e.cdEmpresa, f) > 0 ? (
+                                  <button onClick={() => abrirDetalheFaixaLoja(e.cdEmpresa, nomeLojaCurto(e.nome), f)} className="underline hover:text-blue-700" title={`Ver as referências de ${nomeLojaCurto(e.nome)} na faixa de ${f}%`}>{formatarQtd(qtd(e.cdEmpresa, f))}</button>
+                                ) : formatarQtd(0)}
+                              </td>
+                            ))}
+                            <td className={`${celula} font-semibold`}>{totaisDescontoCarregando ? '...' : formatarQtd(totalFaixa(f))}</td>
+                          </tr>
+                        ))}
+                        <tr className="font-bold bg-yellow-200 text-black">
+                          <td className="border border-slate-300 px-2 py-1 text-center">Total</td>
+                          {lojas.map((e) => <td key={e.cdEmpresa} className="border border-slate-300 px-2 py-1 text-right">{formatarQtd(totalLoja(e.cdEmpresa))}</td>)}
+                          <td className="border border-slate-300 px-2 py-1 text-right">{formatarQtd(faixas.reduce((a, f) => a + totalFaixa(f), 0))}</td>
+                        </tr>
+                        <tr className="text-black">
+                          <td className="border border-slate-300 px-2 py-1 text-center">Sem promoção</td>
+                          {lojas.map((e) => (
+                            <td key={e.cdEmpresa} className={celula}>
+                              {qtd(e.cdEmpresa, 0) > 0 ? (
+                                <button onClick={() => abrirDetalheFaixaLoja(e.cdEmpresa, nomeLojaCurto(e.nome), 0)} className="underline hover:text-blue-700" title={`Ver as referências de ${nomeLojaCurto(e.nome)} sem promoção`}>{formatarQtd(qtd(e.cdEmpresa, 0))}</button>
+                              ) : formatarQtd(0)}
+                            </td>
+                          ))}
+                          <td className={`${celula} font-semibold`}>{formatarQtd(totalFaixa(0))}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+
           <div className="flex justify-end gap-2">
             <button
               onClick={() => setMostrarPrecosCheios((v) => !v)}
@@ -3064,69 +3127,6 @@ export default function GiroPage() {
             )}
           </div>
 
-
-          {matriz && (
-            <div className="bg-white rounded-lg shadow-lg p-4">
-              <p className="text-xs font-medium text-black uppercase tracking-wide" title="Estoque de cada loja por faixa de promoção NOVA (percentual sugerido pela campanha, arredondado pra dezena). Maraponga usa a campanha do Atacado; as demais, a do Varejo. Fábrica fora. Segue os filtros da tela.">
-                Análise por % — Qtd novo por loja (filtro inteiro)
-              </p>
-              {(() => {
-                const porLoja = totaisDescontoGiro?.faixasPromoPorLoja ?? {};
-                const lojas = matriz.empresas.filter((e) => e.cdEmpresa !== 1);
-                const qtd = (cd: number, f: number) => porLoja[String(cd)]?.[String(f)] ?? 0;
-                const totalFaixa = (f: number) => lojas.reduce((a, e) => a + qtd(e.cdEmpresa, f), 0);
-                const faixas = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100].filter((f) => f <= 70 || totalFaixa(f) > 0);
-                const totalLoja = (cd: number) => faixas.reduce((a, f) => a + qtd(cd, f), 0);
-                const celula = 'border border-slate-300 px-2 py-1 text-right text-black';
-                return (
-                  <div className="mt-2 overflow-x-auto">
-                    <table className="w-full text-sm border-collapse">
-                      <thead>
-                        <tr className="text-[11px] uppercase text-black">
-                          <th className="border border-slate-300 bg-green-100 px-2 py-1 text-left">Promoção %</th>
-                          {lojas.map((e) => (
-                            <th key={e.cdEmpresa} className="border border-slate-300 bg-green-100 px-2 py-1 text-right whitespace-nowrap">{nomeLojaCurto(e.nome)}</th>
-                          ))}
-                          <th className="border border-slate-300 bg-sky-100 px-2 py-1 text-right">Total</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {faixas.map((f) => (
-                          <tr key={f}>
-                            <td className="border border-slate-300 px-2 py-1 text-center text-black">{f}%</td>
-                            {lojas.map((e) => (
-                              <td key={e.cdEmpresa} className={celula}>
-                                {totaisDescontoCarregando ? '...' : qtd(e.cdEmpresa, f) > 0 ? (
-                                  <button onClick={() => abrirDetalheFaixaLoja(e.cdEmpresa, nomeLojaCurto(e.nome), f)} className="underline hover:text-blue-700" title={`Ver as referências de ${nomeLojaCurto(e.nome)} na faixa de ${f}%`}>{formatarQtd(qtd(e.cdEmpresa, f))}</button>
-                                ) : formatarQtd(0)}
-                              </td>
-                            ))}
-                            <td className={`${celula} font-semibold`}>{totaisDescontoCarregando ? '...' : formatarQtd(totalFaixa(f))}</td>
-                          </tr>
-                        ))}
-                        <tr className="font-bold bg-yellow-200 text-black">
-                          <td className="border border-slate-300 px-2 py-1 text-center">Total</td>
-                          {lojas.map((e) => <td key={e.cdEmpresa} className="border border-slate-300 px-2 py-1 text-right">{formatarQtd(totalLoja(e.cdEmpresa))}</td>)}
-                          <td className="border border-slate-300 px-2 py-1 text-right">{formatarQtd(faixas.reduce((a, f) => a + totalFaixa(f), 0))}</td>
-                        </tr>
-                        <tr className="text-black">
-                          <td className="border border-slate-300 px-2 py-1 text-center">Sem promoção</td>
-                          {lojas.map((e) => (
-                            <td key={e.cdEmpresa} className={celula}>
-                              {qtd(e.cdEmpresa, 0) > 0 ? (
-                                <button onClick={() => abrirDetalheFaixaLoja(e.cdEmpresa, nomeLojaCurto(e.nome), 0)} className="underline hover:text-blue-700" title={`Ver as referências de ${nomeLojaCurto(e.nome)} sem promoção`}>{formatarQtd(qtd(e.cdEmpresa, 0))}</button>
-                              ) : formatarQtd(0)}
-                            </td>
-                          ))}
-                          <td className={`${celula} font-semibold`}>{formatarQtd(totalFaixa(0))}</td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
-                );
-              })()}
-            </div>
-          )}
 
           {detalheFaixaLoja && (
             <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setDetalheFaixaLoja(null)}>
