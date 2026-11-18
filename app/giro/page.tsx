@@ -359,6 +359,7 @@ interface Enviada70 {
 interface DetalheFaixaItem {
   referencia: string; nome: string; cor: string | null; estoque: number; pctCampanha: number; descontoAtual: number;
   giro: number | null; mesesFL: number | null; regra: number; mista: boolean;
+  enviada70?: boolean; faixaOriginal?: number;
   estoqueRede?: number; precoCheio?: number | null; precoPromoAtual?: number | null; precoCampanha?: number | null; preco70?: number | null;
 }
 
@@ -610,6 +611,8 @@ interface TotaisDescontoGiro {
   faixasPromoVarejo?: { atual: Record<string, number>; novo: Record<string, number> };
   // Estoque por loja em cada faixa de campanha (novo): { cdEmpresa: { faixa: qtd } }
   faixasPromoPorLoja?: Record<string, Record<string, number>>;
+  // Pecas de cada loja que mudaram de faixa para 70% por terem sido marcadas como enviadas para 70%
+  enviadas70PorLoja?: Record<string, number>;
   totalReferencias: number;
   totalReferenciasMistas?: number;
   totalDescontoAtacadoMistas?: number;
@@ -1324,6 +1327,21 @@ export default function GiroPage() {
     }
   }
 
+  // Refaz so a consulta de totais (mesmos filtros da ultima consulta) pra tabela por loja refletir as marcacoes para 70%.
+  const recarregarTotaisPorMarcacao = async () => {
+    if (!paramsTotaisRef.current) return;
+    setTotaisDescontoCarregando(true);
+    try {
+      const response = await fetch(`/api/giro/totais-desconto?${paramsTotaisRef.current}`, { cache: 'no-store' });
+      const data = await response.json();
+      if (response.ok && !data.error) setTotaisDescontoGiro(data);
+    } catch (e) {
+      console.error('Erro ao atualizar a tabela por loja:', e);
+    } finally {
+      setTotaisDescontoCarregando(false);
+    }
+  };
+
   const carregarEnviadas70 = async () => {
     try {
       const r = await fetch('/api/giro/enviadas-70', { cache: 'no-store' });
@@ -1364,17 +1382,20 @@ export default function GiroPage() {
       console.error('Erro ao guardar a seleção para 70%:', e);
     }
     await carregarEnviadas70();
+    recarregarTotaisPorMarcacao();
   }
 
   async function removerEnviada70(e: Enviada70) {
     await fetch(`/api/giro/enviadas-70?referencia=${encodeURIComponent(e.referencia)}&cor=${encodeURIComponent(e.cor)}&canal=${e.canal}`, { method: 'DELETE' });
     await carregarEnviadas70();
+    recarregarTotaisPorMarcacao();
   }
 
   async function limparEnviadas70() {
     if (!window.confirm('Limpar toda a lista de referências enviadas para 70%?')) return;
     await fetch('/api/giro/enviadas-70?todas=true', { method: 'DELETE' });
     await carregarEnviadas70();
+    recarregarTotaisPorMarcacao();
   }
 
   function baixarCsvEnviadas70() {
@@ -2782,7 +2803,8 @@ export default function GiroPage() {
                       </thead>
                       <tbody>
                         {faixas.map((f) => (
-                          <tr key={f}>
+                          <React.Fragment key={f}>
+                          <tr>
                             <td className="border border-slate-300 px-2 py-1 text-center text-black">{f}%</td>
                             {lojas.map((e) => (
                               <td key={e.cdEmpresa} className={celula}>
@@ -2793,6 +2815,14 @@ export default function GiroPage() {
                             ))}
                             <td className={`${celula} font-semibold`}>{totaisDescontoCarregando ? '...' : formatarQtd(totalFaixa(f))}</td>
                           </tr>
+                          {f === 70 && (totaisDescontoGiro?.enviadas70PorLoja && Object.keys(totaisDescontoGiro.enviadas70PorLoja).length > 0) && (
+                            <tr className="text-[11px] italic text-black bg-yellow-50">
+                              <td className="border border-slate-300 px-2 py-1 text-center" title="Peças que já estão contadas na linha de 70% acima por terem sido marcadas como enviadas para 70%">↳ enviadas p/ 70%</td>
+                              {lojas.map((e) => <td key={e.cdEmpresa} className="border border-slate-300 px-2 py-1 text-right">{formatarQtd(totaisDescontoGiro.enviadas70PorLoja?.[String(e.cdEmpresa)] ?? 0)}</td>)}
+                              <td className="border border-slate-300 px-2 py-1 text-right font-semibold">{formatarQtd(Object.values(totaisDescontoGiro.enviadas70PorLoja).reduce((a, v) => a + v, 0))}</td>
+                            </tr>
+                          )}
+                          </React.Fragment>
                         ))}
                         <tr className="font-bold bg-yellow-200 text-black">
                           <td className="border border-slate-300 px-2 py-1 text-center">Total</td>
@@ -3356,7 +3386,15 @@ export default function GiroPage() {
                                 />
                               </td>
                               <td className="px-3 py-1.5 font-mono text-xs">{i.referencia}</td>
-                              <td className="px-3 py-1.5 whitespace-normal min-w-[280px]">{i.nome}</td>
+                              <td className="px-3 py-1.5 whitespace-normal min-w-[280px]">
+                                {i.nome}
+                                {i.enviada70 && i.faixaOriginal !== undefined && i.faixaOriginal !== detalheFaixaLoja.faixa && (
+                                  <span className="ml-2 px-1.5 py-0.5 text-[10px] rounded bg-yellow-200">veio de {i.faixaOriginal}%</span>
+                                )}
+                                {i.enviada70 && i.faixaOriginal === detalheFaixaLoja.faixa && detalheFaixaLoja.faixa !== 70 && (
+                                  <span className="ml-2 px-1.5 py-0.5 text-[10px] rounded bg-yellow-200">já enviada p/ 70%</span>
+                                )}
+                              </td>
                               <td className="px-3 py-1.5">{i.cor ?? '-'}</td>
                               <td className="px-3 py-1.5 text-right font-semibold">{formatarQtd(i.estoque)}</td>
                               <td className="px-3 py-1.5 text-right">{formatarQtd(estRede)}</td>

@@ -2602,6 +2602,13 @@ def totais_desconto_giro(
         # Mesmo "novo" (campanha) POR LOJA: {cd_empresa: {faixa: estoque}}. Maraponga usa a
         # campanha do Atacado (so vende atacado); as demais, a do Varejo. Fabrica fica de fora.
         faixas_por_loja = {}
+        # Referencias/cores ja "enviadas para 70%" (marcadas no modal): na tabela por loja a quantidade delas
+        # passa pra faixa de 70%. Chave = (referencia, cor, canal); o desconto vale pra rede toda do canal.
+        try:
+            marcadas_70 = {(r["referencia"], r["cor"] or "", r["canal"]) for r in (execute_query("SELECT referencia, cor, canal FROM giro_enviadas_70", ()) or [])}
+        except Exception:
+            marcadas_70 = set()
+        enviadas_70_por_loja = {}  # cd_loja -> pecas que mudaram de faixa (de outra faixa para 70%)
         detalhe_celula = []  # referencias/cores da celula (detalheLoja x detalheFaixa)
 
         def _faixa_dezena(pct: float) -> int:
@@ -2716,11 +2723,18 @@ def totais_desconto_giro(
                     est_loja = float((dados_loja or {}).get("estoque") or 0)
                     if est_loja <= 0 or int(cd_loja) == 1:
                         continue
-                    faixa_loja = fn_atac if int(cd_loja) == CD_EMPRESA_MARAPONGA else str(faixa_novo)
+                    atac_loja = int(cd_loja) == CD_EMPRESA_MARAPONGA
+                    faixa_nat = fn_atac if atac_loja else str(faixa_novo)
+                    canal_loja = "atacado" if atac_loja else "varejo"
+                    marcada = (item["referencia"], cor_item.get("cor") or "", canal_loja) in marcadas_70
+                    faixa_loja = "70" if marcada else faixa_nat
                     por_faixa = faixas_por_loja.setdefault(str(cd_loja), {})
                     por_faixa[faixa_loja] = por_faixa.get(faixa_loja, 0.0) + est_loja
-                    if detalheLoja is not None and detalheFaixa is not None and int(cd_loja) == detalheLoja and int(faixa_loja) == detalheFaixa:
-                        atac_loja = int(cd_loja) == CD_EMPRESA_MARAPONGA
+                    if marcada and faixa_nat != "70":
+                        enviadas_70_por_loja[str(cd_loja)] = enviadas_70_por_loja.get(str(cd_loja), 0.0) + est_loja
+                    if detalheLoja is not None and detalheFaixa is not None and int(cd_loja) == detalheLoja and (
+                        int(faixa_nat) == detalheFaixa or (marcada and detalheFaixa == 70)
+                    ):
                         detalhe_celula.append({
                             "referencia": item["referencia"], "nome": item.get("nome") or item.get("descricao") or "",
                             "cor": cor_item.get("cor"), "estoque": est_loja,
@@ -2730,10 +2744,11 @@ def totais_desconto_giro(
                                 promo_cor.get("atacado" if atac_loja else "varejo"), fb_ref.get("atacado" if atac_loja else "varejo")), 1),
                             "giro": giro_regra, "mesesFL": meses_regra, "regra": regra_cor,
                             "mista": bool(tem_cor_sem_meses_fl_item),
+                            "enviada70": marcada, "faixaOriginal": int(faixa_nat),
                         })
                         # Simulacao "campanha a 70% fixo": preco cheio do canal, preco da campanha atual e
                         # preco a 70%, os dois ja com o arredondamento psicologico (_calcular_preco_campanha).
-                        canal_det = "atacado" if atac_loja else "varejo"
+                        canal_det = canal_loja
                         cheio_det = _preco_cheio_canal(preco_cor.get("precoAtacado" if atac_loja else "precoVarejo"), promo_cor.get(canal_det), fb_ref.get(canal_det))
                         pct_det = pct_atacado_cor if atac_loja else pct_varejo_cor
                         promo_det = promo_cor.get(canal_det)
@@ -2795,6 +2810,7 @@ def totais_desconto_giro(
             "faixasPromoVarejo": faixas_varejo,
             "faixasPromoAtacado": faixas_atacado,
             "faixasPromoPorLoja": faixas_por_loja,
+            "enviadas70PorLoja": enviadas_70_por_loja,
             "detalheCelula": sorted(detalhe_celula, key=lambda x: -x["estoque"]) if detalheLoja is not None else None,
             "totalReferencias": total_referencias,
             "totalReferenciasMistas": sum(1 for i in dados_incluidos if mista_dict.get(i["referencia"], False)),
