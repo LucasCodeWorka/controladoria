@@ -895,7 +895,10 @@ _CD_VALOR_TIPO_PROMO = {1: "fabrica", 2: "atacado", 3: "varejo"}
 
 
 def _obter_promocoes_produtos(cd_produtos: list, cd_empresas_filtro: list) -> dict:
-    """Promocao ATIVA HOJE (dt_inicio <= hoje <= dt_final, tp_situacao='A')
+    """Promocao ATIVA HOJE (dt_inicio <= hoje <= dt_final, tp_situacao='A' E
+    tp_situacaoitem='A' - quando o sistema desativa um produto de uma promocao,
+    cria uma promo "DESATIVAR" e marca o ITEM da promo original como 'E'
+    (encerrado), mantendo o cabecalho 'A')
     por cd_produto, olhando a empresa 1 (geral - cobre varejo e promocoes
     gerais de atacado) mais as empresas do filtro atual do Giro (pega
     promocao de atacado especifica de loja, ex: so Maraponga). Retorna
@@ -918,6 +921,7 @@ def _obter_promocoes_produtos(cd_produtos: list, cd_empresas_filtro: list) -> di
           AND cd_valor IN (1, 2, 3)
           AND cd_empresa IN ({placeholders_empresas})
           AND tp_situacao = 'A'
+          AND tp_situacaoitem = 'A'
           AND dt_inicio <= CURRENT_DATE
           AND (dt_final IS NULL OR dt_final >= CURRENT_DATE)
     """, (*cd_produtos, *cd_empresas_checar)) or []
