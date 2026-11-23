@@ -46,6 +46,16 @@ interface MesQuebra {
   pctFaturamento: number | null;
 }
 
+interface GrupoQuebra {
+  nome: string;
+  pedidos: number;
+  itens: number;
+  qtd: number;
+  valor: number;
+  valorQuebra: number;
+  pctDoTotal: number | null;
+}
+
 interface OpcaoMotivo {
   cdMotivo: number;
   motivo: string;
@@ -70,6 +80,8 @@ interface DadosQuebra {
   porMotivo: MotivoQuebra[];
   porData: DiaQuebra[];
   porCliente: ClienteQuebra[];
+  porLinha?: GrupoQuebra[];
+  porGrupo?: GrupoQuebra[];
   porMes: MesQuebra[];
 }
 
@@ -91,6 +103,57 @@ const isoHoje = () => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 };
 const isoPrimeiroDiaMes = () => `${isoHoje().slice(0, 8)}01`;
+
+const MAX_BARRAS_DIMENSAO = 15;
+
+// Grafico de barras horizontais (valor cancelado e parte de quebra, motivo 6) por linha ou grupo.
+function GraficoDimensao({ titulo, itens }: { titulo: string; itens: GrupoQuebra[] }) {
+  const top = itens.slice(0, MAX_BARRAS_DIMENSAO);
+  const resto = itens.slice(MAX_BARRAS_DIMENSAO);
+  const dadosGrafico = top.map((g) => ({ nome: g.nome, valor: g.valor, valorQuebra: g.valorQuebra, pct: g.pctDoTotal }));
+  if (resto.length > 0) {
+    dadosGrafico.push({
+      nome: `Outros (${resto.length})`,
+      valor: resto.reduce((a, g) => a + g.valor, 0),
+      valorQuebra: resto.reduce((a, g) => a + g.valorQuebra, 0),
+      pct: resto.reduce((a, g) => a + (g.pctDoTotal ?? 0), 0),
+    });
+  }
+  function RotuloDimensao(props: any) {
+    const { x, y, width, height, value, index } = props;
+    if (!Number(value)) return null;
+    const pct = dadosGrafico[index]?.pct;
+    return (
+      <text x={Number(x) + Number(width) + 6} y={Number(y) + Number(height) / 2 + 4} fontSize={11} fill="#000000">
+        {rotuloValor(value)}{pct != null ? ` · ${fmtPct(pct)}` : ''}
+      </text>
+    );
+  }
+  return (
+    <div className="bg-white rounded-lg shadow-md p-4">
+      <h2 className="text-sm font-bold text-brand-dark">{titulo}</h2>
+      <p className="text-xs text-black mb-3">Período e filtros da tela. Rótulo: valor · % do total cancelado. Marrom = quebra de pedidos (motivo 6).</p>
+      {dadosGrafico.length === 0 ? (
+        <p className="text-sm text-black">Nenhum cancelamento no período.</p>
+      ) : (
+        <div style={{ height: Math.max(180, dadosGrafico.length * 44 + 30) }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={dadosGrafico} layout="vertical" margin={{ top: 4, right: 90, left: 8, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" horizontal={false} />
+              <XAxis type="number" tick={{ fontSize: 11, fill: '#000000' }} tickFormatter={(v) => `${Math.round(Number(v) / 1000)}k`} />
+              <YAxis type="category" dataKey="nome" width={130} tick={{ fontSize: 11, fill: '#000000' }} interval={0} />
+              <Tooltip formatter={(v, nome) => [fmtMoeda(Number(v)), nome === 'valorQuebra' ? 'Quebra de pedidos' : 'Total cancelado']} />
+              <Bar dataKey="valor" fill="#c5949d" name="valor" barSize={14}>
+                <LabelList dataKey="valor" content={RotuloDimensao} />
+              </Bar>
+              <Bar dataKey="valorQuebra" fill="#8B6E5A" name="valorQuebra" barSize={14} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function Cartao({ rotulo, valor, detalhe, destaque }: { rotulo: string; valor: string; detalhe?: string; destaque?: boolean }) {
   return (
@@ -136,7 +199,7 @@ function Th({ rotulo, col, ord, setOrd, className }: { rotulo: string; col: stri
 
 // Cache das consultas (sobrevive a recarregar a pagina): "Consultar" usa o que ja foi
 // buscado; o botao de atualizar ignora e busca de novo.
-const CACHE_PREFIXO = 'quebra-pedidos:v1:';
+const CACHE_PREFIXO = 'quebra-pedidos:v2:';
 function lerCache(chave: string): { dados: any; em: string } | null {
   try {
     const bruto = localStorage.getItem(CACHE_PREFIXO + chave);
@@ -443,6 +506,11 @@ export default function QuebraPedidosPage() {
                 </ResponsiveContainer>
               </div>
             )}
+          </div>
+
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+            <GraficoDimensao titulo="Valor cancelado por linha" itens={dados.porLinha ?? []} />
+            <GraficoDimensao titulo="Valor cancelado por grupo" itens={dados.porGrupo ?? []} />
           </div>
 
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">

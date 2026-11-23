@@ -230,7 +230,7 @@ def quebra_pedidos(
             SELECT u.cd_motivocanc AS cd_motivo,
                    COALESCE(NULLIF(TRIM(u.ds_motivocanc), ''), 'Motivo ' || u.cd_motivocanc::text) AS motivo,
                    u.dt_cadastro::date AS data,
-                   u.cd_empresa, u.cd_pedido, b.cd_cliente,
+                   u.cd_empresa, u.cd_pedido, u.cd_produto, b.cd_cliente,
                    COALESCE(b.qt_cancelada, 0) AS qtd,
                    COALESCE(b.vl_unitario * b.qt_cancelada, 0) AS valor
             FROM ult u
@@ -321,6 +321,36 @@ def quebra_pedidos(
             "pctDoTotal": _pct(c["valor"], total_valor),
         } for c in sorted(por_cliente.values(), key=lambda x: x["valor"], reverse=True)]
 
+        # Por linha e por grupo do produto (giro_prd_referencia; produto sem classificacao
+        # cai em "SEM CLASSIFICACAO"). valorQuebra = parte do motivo 6.
+        classif: dict = {}
+        ids_prod = sorted({i["cd_produto"] for i in itens if i["cd_produto"] is not None})
+        if ids_prod:
+            for r in execute_query(
+                "SELECT cd_produto, linha, grupo FROM giro_prd_referencia WHERE cd_produto = ANY(%s)", (ids_prod,)) or []:
+                classif[r["cd_produto"]] = (r["linha"], r["grupo"])
+
+        def _agrupar(indice: int) -> list:
+            acc: dict = {}
+            for i in itens:
+                nome = (classif.get(i["cd_produto"], (None, None))[indice] or "").strip() or "SEM CLASSIFICACAO"
+                a = acc.setdefault(nome, {"nome": nome, "pedidos": set(), "itens": 0, "qtd": 0.0, "valor": 0.0, "valorQuebra": 0.0})
+                v = float(i["valor"] or 0)
+                a["pedidos"].add(i["cd_pedido"])
+                a["itens"] += 1
+                a["qtd"] += float(i["qtd"] or 0)
+                a["valor"] += v
+                if i["cd_motivo"] == MOTIVO_QUEBRA:
+                    a["valorQuebra"] += v
+            return [{
+                "nome": a["nome"], "pedidos": len(a["pedidos"]), "itens": a["itens"], "qtd": round(a["qtd"], 2),
+                "valor": round(a["valor"], 2), "valorQuebra": round(a["valorQuebra"], 2),
+                "pctDoTotal": _pct(a["valor"], total_valor),
+            } for a in sorted(acc.values(), key=lambda x: x["valor"], reverse=True)]
+
+        lista_linhas = _agrupar(0)
+        lista_grupos = _agrupar(1)
+
         lista_datas = []
         for k in sorted(por_data):
             d = por_data[k]
@@ -353,6 +383,8 @@ def quebra_pedidos(
             "porMotivo": lista_motivos,
             "porData": lista_datas,
             "porCliente": lista_clientes,
+            "porLinha": lista_linhas,
+            "porGrupo": lista_grupos,
             "porMes": por_mes,
         }
     except HTTPException:
