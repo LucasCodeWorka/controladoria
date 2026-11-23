@@ -802,6 +802,35 @@ def _obter_matriz_agregada_por_cor(mes_referencia: str, cd_empresas: list, refer
     ]
 
 
+def _clausula_cor_inteira_fl(mes_referencia: Optional[str], cd_empresas: Optional[list]):
+    """Clausula (+ params) que deixa passar so SKUs de COR INTEIRA em FL: a cor
+    NAO pode ter nenhum SKU em linha (pedido explicito do usuario - cor com
+    pelo menos um tamanho em linha nao e considerada FL, nao tem Meses FL nem
+    desconto de campanha). Com mes_referencia + cd_empresas, so SKUs em linha
+    COM estoque/venda nas lojas filtradas contam (mesmo criterio da mista).
+    Sempre ignora o filtro de status da tela (a decisao e da cor inteira)."""
+    clausula_ativo_linha, params_ativo_linha = "", ()
+    if mes_referencia and cd_empresas:
+        placeholders_emp = ",".join(["%s"] * len(cd_empresas))
+        clausula_ativo_linha = f"""
+            AND EXISTS (
+                SELECT 1 FROM giro_produto_snapshot g2
+                WHERE g2.cd_produto = hl.cd_produto
+                  AND g2.mes_referencia = %s AND g2.cd_empresa IN ({placeholders_emp})
+                  AND (g2.estoque_atual > 0 OR g2.venda_media_3m > 0)
+            )"""
+        params_ativo_linha = (mes_referencia, *cd_empresas)
+    clausula = f"""
+          AND NOT EXISTS (
+              SELECT 1 FROM hist_dproduto hl
+              WHERE hl.atual = true
+                AND hl.referencia = hist_dproduto.referencia
+                AND COALESCE(hl.ds_cor, 'SEM COR') = COALESCE(hist_dproduto.ds_cor, 'SEM COR')
+                AND hl.status = ANY(%s){clausula_ativo_linha}
+          )"""
+    return clausula, (list(STATUS_REFERENCIA_MISTA), *params_ativo_linha)
+
+
 def _obter_primeira_oportunidade_por_cor(
     referencia: str, status_filtro: Optional[list] = None,
     mes_referencia: Optional[str] = None, cd_empresas: Optional[list] = None,
@@ -836,6 +865,7 @@ def _obter_primeira_oportunidade_por_cor(
           )"""
         params_ativo = (mes_referencia, *cd_empresas)
 
+    clausula_cor_fl, params_cor_fl = _clausula_cor_inteira_fl(mes_referencia, cd_empresas)
     rows = execute_query(f"""
         SELECT COALESCE(ds_cor, 'SEM COR') AS cor, MAX((
             SELECT MIN(h2.dt_inicio) FROM hist_dproduto h2
@@ -845,9 +875,9 @@ def _obter_primeira_oportunidade_por_cor(
         FROM hist_dproduto
         WHERE referencia = %s
           AND atual = true
-          {clausula_status}{clausula_ativo}
+          {clausula_status}{clausula_ativo}{clausula_cor_fl}
         GROUP BY COALESCE(ds_cor, 'SEM COR')
-    """, (referencia, *params_status, *params_ativo)) or []
+    """, (referencia, *params_status, *params_ativo, *params_cor_fl)) or []
     return {r["cor"]: r["dt_primeira"] for r in rows}
 
 
@@ -1025,6 +1055,7 @@ def _obter_primeira_oportunidade(
           )"""
         params_ativo = (mes_referencia, *cd_empresas)
 
+    clausula_cor_fl, params_cor_fl = _clausula_cor_inteira_fl(mes_referencia, cd_empresas)
     placeholders = ",".join(["%s"] * len(referencias))
     rows = execute_query(f"""
         SELECT referencia, MAX((
@@ -1035,9 +1066,9 @@ def _obter_primeira_oportunidade(
         FROM hist_dproduto
         WHERE referencia IN ({placeholders})
           AND atual = true
-          {clausula_status}{clausula_ativo}
+          {clausula_status}{clausula_ativo}{clausula_cor_fl}
         GROUP BY referencia
-    """, (*referencias, *params_status, *params_ativo)) or []
+    """, (*referencias, *params_status, *params_ativo, *params_cor_fl)) or []
     return {r["referencia"]: r["dt_primeira"] for r in rows}
 
 
@@ -1076,6 +1107,7 @@ def _obter_primeira_oportunidade_por_referencia_e_cor(
           )"""
         params_ativo = (mes_referencia, *cd_empresas)
 
+    clausula_cor_fl, params_cor_fl = _clausula_cor_inteira_fl(mes_referencia, cd_empresas)
     placeholders = ",".join(["%s"] * len(referencias))
     rows = execute_query(f"""
         SELECT referencia, COALESCE(ds_cor, 'SEM COR') AS cor, MAX((
@@ -1086,9 +1118,9 @@ def _obter_primeira_oportunidade_por_referencia_e_cor(
         FROM hist_dproduto
         WHERE referencia IN ({placeholders})
           AND atual = true
-          {clausula_status}{clausula_ativo}
+          {clausula_status}{clausula_ativo}{clausula_cor_fl}
         GROUP BY referencia, COALESCE(ds_cor, 'SEM COR')
-    """, (*referencias, *params_status, *params_ativo)) or []
+    """, (*referencias, *params_status, *params_ativo, *params_cor_fl)) or []
     return {(r["referencia"], r["cor"]): r["dt_primeira"] for r in rows}
 
 
@@ -2437,16 +2469,22 @@ def _todas_referencias_mistas(mes_referencia: str, cd_empresas: tuple) -> set:
         if chave in _cache_referencias_mistas:
             return _cache_referencias_mistas[chave]
         placeholders_emp = ",".join(["%s"] * len(cd_empresas))
+        # MISTA = pelo menos uma cor INTEIRA em FL (todos os SKUs ativos da cor em
+        # oportunidade) e pelo menos uma cor que NAO e FL inteira (tem SKU em
+        # linha) - cor com so alguns tamanhos em FL conta como cor em linha.
         rows = execute_query(f"""
-            SELECT p.referencia
-            FROM giro_prd_referencia p
-            JOIN giro_produto_snapshot g ON g.cd_produto = p.cd_produto
-            WHERE (p.status = ANY(%s) OR p.status ILIKE 'OPORTUNIDADE%%')
-              AND g.mes_referencia = %s AND g.cd_empresa IN ({placeholders_emp})
-              AND (g.estoque_atual > 0 OR g.venda_media_3m > 0)
-            GROUP BY p.referencia
-            HAVING bool_or(p.status = ANY(%s)) AND bool_or(p.status ILIKE 'OPORTUNIDADE%%')
-        """, (list(STATUS_REFERENCIA_MISTA), mes_referencia, *cd_empresas, list(STATUS_REFERENCIA_MISTA))) or []
+            SELECT referencia FROM (
+                SELECT p.referencia, p.ds_cor, bool_and(p.status ILIKE 'OPORTUNIDADE%%') AS toda_fl
+                FROM giro_prd_referencia p
+                JOIN giro_produto_snapshot g ON g.cd_produto = p.cd_produto
+                WHERE (p.status = ANY(%s) OR p.status ILIKE 'OPORTUNIDADE%%')
+                  AND g.mes_referencia = %s AND g.cd_empresa IN ({placeholders_emp})
+                  AND (g.estoque_atual > 0 OR g.venda_media_3m > 0)
+                GROUP BY p.referencia, p.ds_cor
+            ) c
+            GROUP BY referencia
+            HAVING bool_or(toda_fl) AND bool_or(NOT toda_fl)
+        """, (list(STATUS_REFERENCIA_MISTA), mes_referencia, *cd_empresas)) or []
         _cache_referencias_mistas[chave] = {r["referencia"] for r in rows}
         return _cache_referencias_mistas[chave]
 
