@@ -780,6 +780,9 @@ export default function DREPage() {
         `/api/dre/auditoria/fornecedor-despesa?cdFornecedor=${cdFornecedor}&cdDespesaItemAtual=${cdDespesaItem}`
       );
       const data: AuditoriaFornecedorDespesa = await response.json();
+      // Resposta de erro do backend (ex.: 500 com {detail}) nao pode ir pro cache como
+      // se fosse resultado - o modal quebrava ao ler distribuicao.
+      if (!response.ok || !Array.isArray(data.distribuicao)) throw new Error(`HTTP ${response.status}`);
       setAuditoriaCache((prev) => ({ ...prev, [chave]: data }));
     } catch (error) {
       console.error('Erro ao verificar auditoria fornecedor-despesa:', error);
@@ -791,7 +794,8 @@ export default function DREPage() {
     setAuditoriaModal({ aberto: true, dup });
 
     const chave = `${dup.cdFornecedor}_${dup.cdDespesaItem}`;
-    if (auditoriaCache[chave]) return;
+    // Em 'erro' tenta de novo ao clicar; so reaproveita quando ja ha resultado ou carregando.
+    if (auditoriaCache[chave] && auditoriaCache[chave] !== 'erro') return;
 
     await verificarAuditoriaSilenciosa(dup.cdFornecedor!, dup.cdDespesaItem);
   }
