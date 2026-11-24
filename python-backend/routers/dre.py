@@ -239,6 +239,12 @@ CCUSTOS_LOJAS_ATIVOS = [2, 3, 4, 5, 6, 7, 8, 10, 14, 15, 17, 19, 20, 21, 22, 120
 # Cada item e um par (cd_fornecedor, cd_despesaitem) a ignorar nas consultas.
 DUPLICATAS_EXCLUIDAS_DRE_DFC = [(224131, 25)]
 
+# VALOR LIQUIDO DE ABATIMENTO: nas consultas de DRE/DFC o valor da despesa
+# (vl_rateio) e reduzido proporcionalmente ao abatimento da parcela
+# (vl_abatimento / vl_original). Abatimento integral => 0; parcial => valor da
+# fatia x (1 - abatimento/original). Expressao replicada nas queries abaixo:
+#   ABS(d.vl_rateio) * (1 - LEAST(1, COALESCE(COALESCE(d.vl_abatimento,0) / NULLIF(COALESCE(d.vl_original,d.vl_duplicata),0), 0)))
+
 # Fragmento SQL a adicionar em toda consulta a vr_fcp_despduplicatai (alias "d")
 # que alimenta paineis de DRE/DFC. Os parametros correspondentes (fornecedor, despesa)
 # devem ser adicionados ao final da tupla de params da respectiva query.
@@ -617,7 +623,7 @@ def get_dre_fabrica(
                 d.cd_despesaitem,
                 i.ds_despesaitem as descricao_despesa,
                 d.dt_emissao as dt_emissao,
-                ABS(d.vl_rateio) as valor
+                (ABS(d.vl_rateio) * (1 - LEAST(1, COALESCE(COALESCE(d.vl_abatimento, 0) / NULLIF(COALESCE(d.vl_original, d.vl_duplicata), 0), 0)))) as valor
             FROM vr_fcp_despduplicatai d
             JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
             WHERE d.dt_emissao >= %s
@@ -852,7 +858,7 @@ def get_dre_fabrica_por_ccusto(
                 d.cd_despesaitem,
                 i.ds_despesaitem as descricao_despesa,
                 d.cd_ccusto,
-                ABS(d.vl_rateio) as valor
+                (ABS(d.vl_rateio) * (1 - LEAST(1, COALESCE(COALESCE(d.vl_abatimento, 0) / NULLIF(COALESCE(d.vl_original, d.vl_duplicata), 0), 0)))) as valor
             FROM vr_fcp_despduplicatai d
             JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
             WHERE d.dt_emissao >= %s
@@ -1091,7 +1097,7 @@ def _calcular_dre_por_empresa(dataInicio: str, dataFim: str):
                 d.cd_despesaitem,
                 i.ds_despesaitem as descricao_despesa,
                 d.cd_ccusto,
-                ABS(d.vl_rateio) as valor
+                (ABS(d.vl_rateio) * (1 - LEAST(1, COALESCE(COALESCE(d.vl_abatimento, 0) / NULLIF(COALESCE(d.vl_original, d.vl_duplicata), 0), 0)))) as valor
             FROM vr_fcp_despduplicatai d
             JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
             WHERE d.dt_emissao >= %s
@@ -1634,7 +1640,7 @@ def _calcular_valores_dfc(dataInicio: str, dataFim: str, filtro: str, sem_anteci
                 i.ds_despesaitem as descricao_despesa,
                 d.dt_liq as dt_referencia,
                 d.dt_emissao as dt_emissao,
-                ABS(d.vl_rateio) as valor
+                (ABS(d.vl_rateio) * (1 - LEAST(1, COALESCE(COALESCE(d.vl_abatimento, 0) / NULLIF(COALESCE(d.vl_original, d.vl_duplicata), 0), 0)))) as valor
             FROM vr_fcp_despduplicatai d
             JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
             WHERE d.dt_liq >= %s
@@ -2131,7 +2137,7 @@ def _calcular_dfc_por_centro_custo(dataInicio: str, dataFim: str):
                 d.cd_ccusto,
                 d.dt_liq as dt_referencia,
                 d.dt_emissao as dt_emissao,
-                ABS(d.vl_rateio) as valor
+                (ABS(d.vl_rateio) * (1 - LEAST(1, COALESCE(COALESCE(d.vl_abatimento, 0) / NULLIF(COALESCE(d.vl_original, d.vl_duplicata), 0), 0)))) as valor
             FROM vr_fcp_despduplicatai d
             WHERE d.dt_liq >= %s
               AND d.dt_liq <= %s
@@ -2519,7 +2525,7 @@ def _calcular_dre_x_dfc_operacional(dataInicio: str, dataFim: str, filtro: str):
             destino[subgrupo]['total'] += valor
 
         query_despesas = f"""
-            SELECT d.cd_despesaitem, i.ds_despesaitem as descricao_despesa, d.dt_emissao, d.dt_liq, ABS(d.vl_rateio) as valor
+            SELECT d.cd_despesaitem, i.ds_despesaitem as descricao_despesa, d.dt_emissao, d.dt_liq, (ABS(d.vl_rateio) * (1 - LEAST(1, COALESCE(COALESCE(d.vl_abatimento, 0) / NULLIF(COALESCE(d.vl_original, d.vl_duplicata), 0), 0)))) as valor
             FROM vr_fcp_despduplicatai d
             JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
             WHERE d.tp_situacao = 'N'
@@ -2910,7 +2916,7 @@ def _calcular_valores_unificada(
                 d.cd_despesaitem,
                 i.ds_despesaitem as descricao_despesa,
                 d.{campo_data_despesa} as dt_referencia,
-                ABS(d.vl_rateio) as valor
+                (ABS(d.vl_rateio) * (1 - LEAST(1, COALESCE(COALESCE(d.vl_abatimento, 0) / NULLIF(COALESCE(d.vl_original, d.vl_duplicata), 0), 0)))) as valor
             FROM vr_fcp_despduplicatai d
             JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
             WHERE d.{campo_data_despesa} >= %s
@@ -3311,7 +3317,7 @@ def get_despesas_sem_associacao(
                 i.ds_despesaitem as descricao,
                 d.cd_ccusto,
                 COUNT(*) as quantidade,
-                SUM(ABS(d.vl_rateio)) as valor_total
+                SUM((ABS(d.vl_rateio) * (1 - LEAST(1, COALESCE(COALESCE(d.vl_abatimento, 0) / NULLIF(COALESCE(d.vl_original, d.vl_duplicata), 0), 0))))) as valor_total
             FROM vr_fcp_despduplicatai d
             JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
             WHERE d.dt_emissao >= %s
@@ -3465,7 +3471,7 @@ def _buscar_duplicatas_dfc(conta: str, periodo: str, filtro: str, despesa_item: 
                 d.dt_emissao,
                 d.dt_vencimento,
                 d.dt_liq as dt_baixa,
-                ABS(d.vl_rateio) as valor,
+                (ABS(d.vl_rateio) * (1 - LEAST(1, COALESCE(COALESCE(d.vl_abatimento, 0) / NULLIF(COALESCE(d.vl_original, d.vl_duplicata), 0), 0)))) as valor,
                 d.cd_ccusto,
                 cc.ds_ccusto as nome_ccusto,
                 d.cd_fornecedor,
@@ -3635,7 +3641,7 @@ def _buscar_duplicatas_unificada(conta: str, periodo: str, filtro: str, campo_da
                 d.dt_emissao,
                 d.dt_vencimento,
                 d.dt_baixa,
-                ABS(d.vl_rateio) as valor,
+                (ABS(d.vl_rateio) * (1 - LEAST(1, COALESCE(COALESCE(d.vl_abatimento, 0) / NULLIF(COALESCE(d.vl_original, d.vl_duplicata), 0), 0)))) as valor,
                 d.cd_ccusto,
                 cc.ds_ccusto as nome_ccusto,
                 d.cd_fornecedor,
@@ -4325,7 +4331,7 @@ def _calcular_dre_sintetico(dataInicio: str, dataFim: str, filtro: str):
                     d.cd_ccusto,
                     d.cd_despesaitem,
                     i.ds_despesaitem as descricao_despesa,
-                    SUM(ABS(d.vl_rateio)) as valor
+                    SUM((ABS(d.vl_rateio) * (1 - LEAST(1, COALESCE(COALESCE(d.vl_abatimento, 0) / NULLIF(COALESCE(d.vl_original, d.vl_duplicata), 0), 0))))) as valor
                 FROM vr_fcp_despduplicatai d
                 JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
                 WHERE d.dt_emissao >= %s
@@ -4441,7 +4447,7 @@ def _calcular_dre_sintetico(dataInicio: str, dataFim: str, filtro: str):
                 SELECT
                     d.cd_despesaitem,
                     i.ds_despesaitem as descricao_despesa,
-                    SUM(ABS(d.vl_rateio)) as valor
+                    SUM((ABS(d.vl_rateio) * (1 - LEAST(1, COALESCE(COALESCE(d.vl_abatimento, 0) / NULLIF(COALESCE(d.vl_original, d.vl_duplicata), 0), 0))))) as valor
                 FROM vr_fcp_despduplicatai d
                 JOIN vr_fcp_despesaitem i ON i.cd_despesaitem = d.cd_despesaitem
                 WHERE d.dt_emissao >= %s
@@ -4848,7 +4854,7 @@ def get_duplicatas_por_empresa(
                     i.ds_despesaitem as ds_despesaitem,
                     d.dt_emissao,
                     d.dt_vencimento,
-                    ABS(d.vl_rateio) as vl_rateio,
+                    (ABS(d.vl_rateio) * (1 - LEAST(1, COALESCE(COALESCE(d.vl_abatimento, 0) / NULLIF(COALESCE(d.vl_original, d.vl_duplicata), 0), 0)))) as vl_rateio,
                     d.cd_ccusto,
                     d.cd_empresa,
                     d.cd_fornecedor,
@@ -4878,7 +4884,7 @@ def get_duplicatas_por_empresa(
                     i.ds_despesaitem as ds_despesaitem,
                     d.dt_emissao,
                     d.dt_vencimento,
-                    ABS(d.vl_rateio) as vl_rateio,
+                    (ABS(d.vl_rateio) * (1 - LEAST(1, COALESCE(COALESCE(d.vl_abatimento, 0) / NULLIF(COALESCE(d.vl_original, d.vl_duplicata), 0), 0)))) as vl_rateio,
                     d.cd_ccusto,
                     d.cd_empresa,
                     d.cd_fornecedor,
