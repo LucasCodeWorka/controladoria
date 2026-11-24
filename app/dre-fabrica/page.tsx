@@ -335,6 +335,8 @@ export default function DREPage() {
     Record<string, AuditoriaFornecedorDespesa | 'loading' | 'erro'>
   >({});
   const [celulasAlertadas, setCelulasAlertadas] = useState<Set<string>>(new Set());
+  // Combinacoes fornecedor_despesa fora do padrao e ainda nao validadas (do lote de alertas)
+  const [combosAlertados, setCombosAlertados] = useState<Set<string>>(new Set());
   // Qtde de celulas (conta x mes) com alerta no periodo/filtro consultado
   const [totalAlertas, setTotalAlertas] = useState<number | null>(null);
   const [compararAnoAnterior, setCompararAnoAnterior] = useState(false);
@@ -867,6 +869,7 @@ export default function DREPage() {
         }
       }
       setCelulasAlertadas(expandido);
+      setCombosAlertados(new Set<string>(Array.isArray(data.combosAlertados) ? data.combosAlertados : []));
       setTotalAlertas(celulas.length);
     } catch (error) {
       console.error('Erro ao buscar alertas de auditoria:', error);
@@ -3672,7 +3675,10 @@ export default function DREPage() {
                               const chave = `${dup.cdFornecedor}_${dup.cdDespesaItem}`;
                               const resultado = auditoriaCache[chave];
                               const verificando = resultado === 'loading';
-                              const alertaConhecido = resultado && resultado !== 'loading' && resultado !== 'erro' && resultado.alerta;
+                              const resultadoOk = resultado && resultado !== 'loading' && resultado !== 'erro' ? resultado : null;
+                              // Vermelho se a verificacao individual acusou OU se o lote de alertas
+                              // acusou (e a individual nao confirmou que ja foi validado).
+                              const alertaConhecido = resultadoOk ? resultadoOk.alerta || (combosAlertados.has(chave) && !resultadoOk.validado) : combosAlertados.has(chave);
                               return (
                                 <button
                                   onClick={() => verificarAuditoria(dup)}

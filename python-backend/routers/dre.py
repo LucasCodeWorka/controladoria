@@ -4001,6 +4001,7 @@ def get_auditoria_alertas(
         prefixos_despesa = ('04', '06', '08', '10', '13')
 
         celulas = set()
+        combos_alertados = set()
         for row in rows:
             conta = _classificar_conta_dre(row['cd_despesaitem'], None, classificacoes_db)
             if conta in ('NAO_CLASSIFICADO', 'EXCLUIDO'):
@@ -4011,8 +4012,11 @@ def get_auditoria_alertas(
                 continue
             periodo = row['dt_emissao'].strftime('%Y-%m')
             celulas.add(f"{conta}:{periodo}")
+            combos_alertados.add(f"{row['cd_fornecedor']}_{row['cd_despesaitem']}")
 
-        return {"celulasAlertadas": sorted(celulas)}
+        # combosAlertados (fornecedor_despesa): o modal de duplicatas usa pra marcar em
+        # vermelho quem precisa de validacao sem depender de uma chamada por linha.
+        return {"celulasAlertadas": sorted(celulas), "combosAlertados": sorted(combos_alertados)}
 
     except HTTPException:
         raise
