@@ -977,8 +977,14 @@ def get_sync_status():
 
 
 @router.get("/api/indicadores/cmv-12m")
-def get_cmv_12m(fim: str):
-    """CMV total (fabrica + lojas) dos 12 meses fechados terminando no mes `fim` (YYYY-MM)."""
+def get_cmv_12m(fim: str, forcar: bool = False):
+    """CMV total (fabrica + lojas) dos 12 meses fechados terminando no mes `fim`
+    (YYYY-MM), com cache em banco (mes fechado: so muda se o CMV for reprocessado)."""
+    import cache_telas
+    return cache_telas.obter(f"cmv-12m|{fim}", 6 * 3600, lambda: _calcular_cmv_12m(fim), forcar=forcar)
+
+
+def _calcular_cmv_12m(fim: str):
     a, m = (int(x) for x in fim.split("-"))
     # Nunca olha mes aberto: limita ao ultimo mes fechado
     hoje = date.today()

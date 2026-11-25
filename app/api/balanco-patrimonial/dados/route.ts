@@ -12,7 +12,7 @@ export async function GET(request: NextRequest) {
     const params = new URLSearchParams();
     if (mesReferencia) params.set('mesReferencia', mesReferencia);
     if (empresas) params.set('empresas', empresas);
-    for (const flag of ['semRescisaoFolha', 'semRescisaoShopping']) {
+    for (const flag of ['semRescisaoFolha', 'semRescisaoShopping', 'forcar']) {
       if (searchParams.get(flag) === 'true') params.set(flag, 'true');
     }
 

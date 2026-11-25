@@ -17,6 +17,7 @@ from typing import Optional
 from datetime import date, timedelta
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+import cache_telas
 import threading
 import time
 import re
@@ -887,12 +888,40 @@ def get_indicadores_dre(mesReferencia: str = Query(..., description="Mes de refe
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# Visao Liebe do balanco (tela de Indicadores e Comparativo de Mercado): sem CB EMP. (110)
+# e CAIRO EIRELLI (100), com "sem rescisoes de folha/shopping" marcadas.
+EMPRESAS_VISAO_LIEBE = "1,2,3,4,5,6,7,8,10,14,15,17,19,20,21,22,120,50"
+TTL_CACHE_BALANCO_SEG = 30 * 60
+
+
+def _balanco_completo(payload: dict) -> bool:
+    # Resposta com consulta que falhou (timeout no banco) nao vai pro cache.
+    return isinstance(payload, dict) and bool(payload.get("valores")) and not payload.get("indisponiveis")
+
+
 @router.get("/api/balanco-patrimonial/dados")
 def get_balanco_patrimonial(
     mesReferencia: str = Query(..., description="Mes de referencia YYYY-MM"),
     empresas: Optional[str] = Query(None, description="Lista de cd_empresa/cd_ccusto separados por virgula (default: todas)"),
     semRescisaoFolha: bool = Query(False, description="true = tira a rescisao de funcionarios (PC.4.2) do calculo"),
     semRescisaoShopping: bool = Query(False, description="true = tira a rescisao de alugueis de shopping (PC.1.2) do calculo"),
+    forcar: bool = Query(False, description="Ignora o cache e recalcula"),
+):
+    """Balanco com cache em banco (cache_telas): vale 30 min; vencido, entrega o
+    salvo do mesmo dia e atualiza por tras; resposta incompleta nao e guardada."""
+    chave = f"balanco-dados|{mesReferencia}|{empresas or ''}|{int(semRescisaoFolha)}{int(semRescisaoShopping)}"
+    return cache_telas.obter(
+        chave, TTL_CACHE_BALANCO_SEG,
+        lambda: _calcular_balanco(mesReferencia, empresas, semRescisaoFolha, semRescisaoShopping),
+        forcar=forcar, valido=_balanco_completo,
+    )
+
+
+def _calcular_balanco(
+    mesReferencia: str,
+    empresas: Optional[str],
+    semRescisaoFolha: bool,
+    semRescisaoShopping: bool,
 ):
     """
     Valores do Balanco Patrimonial: Caixa, Contas a Receber (boletos e
@@ -1359,6 +1388,7 @@ def salvar_classificacao_despesas_balanco(data: dict):
     """Salva classificacao de uma ou mais despesas pro Balanco. Enviar
     conta_balanco vazio/NAO_CLASSIFICADO remove a classificacao."""
     try:
+        cache_telas.invalidar("balanco-dados", "configuracao do balanco alterada")
         _criar_tabelas_balanco()
         classificacoes = data.get("classificacoes", [])
         usuario = data.get("usuario", "sistema")
@@ -1427,6 +1457,7 @@ def listar_configuracao_contas_balanco():
 def salvar_configuracao_conta_balanco(data: dict):
     """Salva a janela (em meses, a partir do mes filtrado) de UMA conta."""
     try:
+        cache_telas.invalidar("balanco-dados", "configuracao do balanco alterada")
         _criar_tabelas_balanco()
         codigo = data.get("codigo")
         meses_janela = data.get("mesesJanela")

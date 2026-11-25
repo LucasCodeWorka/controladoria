@@ -102,7 +102,7 @@ export default function ComparativoMercadoPage() {
       .then((r) => r.json())
       .then((d) => { if (vivo && typeof d.lucroLiquido12m === 'number') setDre(d); else if (vivo) setErro(d.detail || d.error || 'Erro ao buscar a DRE'); })
       .catch((e) => vivo && setErro(String(e)));
-    fetch(`/api/balanco-patrimonial/dados?mesReferencia=${mes}&${QUERY_BALANCO_VISAO_LIEBE}`, { cache: 'no-store' })
+    fetch(`/api/balanco-patrimonial/dados?mesReferencia=${mes}&${QUERY_BALANCO_VISAO_LIEBE}${tentativa > 0 ? '&forcar=true' : ''}`, { cache: 'no-store' })
       .then(async (r) => {
         const d = await r.json();
         if (!r.ok || d.error || !d.valores) throw new Error(d.error || d.detail || 'Erro ao buscar o balanço patrimonial');

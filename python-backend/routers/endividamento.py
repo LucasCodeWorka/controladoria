@@ -359,6 +359,20 @@ def _titulos_abertos_contrato(c: dict) -> dict:
     return {"principal": round(sum(x["principal_aberto"] for x in t), 2), "juros": round(sum(x["juros_aberto"] for x in t), 2)}
 
 
+def _invalida_painel(f):
+    """Depois de alterar contratos/metas, apaga o cache do painel (cache_telas)."""
+    import functools
+    import cache_telas
+
+    @functools.wraps(f)
+    def _wrap(*args, **kwargs):
+        try:
+            return f(*args, **kwargs)
+        finally:
+            cache_telas.invalidar("endividamento-painel", f.__name__)
+    return _wrap
+
+
 @router.get("/api/endividamento/contratos")
 def listar_contratos():
     try:
@@ -395,6 +409,7 @@ def _validar(c: ContratoIn):
 
 
 @router.post("/api/endividamento/contratos")
+@_invalida_painel
 def criar_contrato(c: ContratoIn):
     _validar(c)
     try:
@@ -412,6 +427,7 @@ def criar_contrato(c: ContratoIn):
 
 
 @router.put("/api/endividamento/contratos/{contrato_id}")
+@_invalida_painel
 def atualizar_contrato(contrato_id: int, c: ContratoIn):
     _validar(c)
     try:
@@ -429,6 +445,7 @@ def atualizar_contrato(contrato_id: int, c: ContratoIn):
 
 
 @router.delete("/api/endividamento/contratos/{contrato_id}")
+@_invalida_painel
 def excluir_contrato(contrato_id: int):
     try:
         _criar_tabelas()
@@ -485,6 +502,7 @@ def cronograma_do_contrato(contrato_id: int):
 
 
 @router.post("/api/endividamento/sincronizar")
+@_invalida_painel
 def sincronizar(recalibrar: bool = Query(False, description="Recalibra tambem os contratos ja importados e ainda nao confirmados")):
     """Cria (ou recalibra) contratos a partir dos titulos de emprestimo em aberto (despesa 114)."""
     try:
@@ -578,6 +596,7 @@ def obter_metas():
 
 
 @router.put("/api/endividamento/metas")
+@_invalida_painel
 def salvar_metas(m: MetasIn):
     _criar_tabelas()
     for chave, v in (("meta_divida", m.metaDivida), ("meta_custo_mensal", m.metaCustoMensal)):
@@ -600,8 +619,15 @@ def _saldo_em(c: dict, cron: List[dict], fim: date) -> float:
 
 
 @router.get("/api/endividamento/painel")
-def painel(meses: int = Query(36, ge=1, le=120), mesDetalhe: Optional[str] = Query(None, description="YYYY-MM para o detalhe por contrato (padrao: mes atual)")):
-    """Consolidado mes a mes (aba 'Painel Divida Geral' + 'E.1 Mes N'): saldo, custo ponderado, despesa financeira."""
+def painel(meses: int = Query(36, ge=1, le=120), mesDetalhe: Optional[str] = Query(None, description="YYYY-MM para o detalhe por contrato (padrao: mes atual)"),
+           forcar: bool = Query(False, description="Ignora o cache e recalcula")):
+    """Consolidado mes a mes (aba 'Painel Divida Geral' + 'E.1 Mes N'): saldo, custo ponderado, despesa financeira.
+    Com cache em banco (cache_telas); contratos/metas alterados apagam o cache."""
+    import cache_telas
+    return cache_telas.obter(f"endividamento-painel|{meses}|{mesDetalhe or ''}", 10 * 60, lambda: _calcular_painel(meses, mesDetalhe), forcar=forcar)
+
+
+def _calcular_painel(meses: int, mesDetalhe: Optional[str]):
     try:
         _criar_tabelas()
         hoje = date.today()

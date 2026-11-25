@@ -3,6 +3,7 @@ import asyncio
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import dre_cache
+import cache_telas
 from database import close_all_connections
 
 from routers import health, indicadores, dre, classificacao, analise_executiva, cmv_detalhado, giro, estoque_tempo, foto, analisador_dre, balanco_patrimonial, fluxo_caixa, fluxo_cenarios, dre_projetada, quebra_pedidos, endividamento, giro_enviadas_70
@@ -88,6 +89,9 @@ async def startup_event():
     # Meses fechados da Quebra de Pedidos (cada mes leva dezenas de segundos) -
     # calcula em background pra tela abrir o grafico na hora.
     asyncio.create_task(_aquecer_quebra_pedidos())
+    # Visao Liebe (balanco, CMV 12m e DFC por agrupamento) pronta pro Comparativo
+    # de Mercado e Indicadores - ver cache_telas.py.
+    asyncio.create_task(cache_telas.aquecer_loop())
 
 
 @app.on_event("shutdown")
