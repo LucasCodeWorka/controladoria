@@ -114,6 +114,9 @@ function fmt(n: number, decimais = 2) {
   });
 }
 
+// Centros de custo das lojas + ecommerce (mesmos de CCUSTOS_LOJAS do backend)
+const LOJAS_ECOMMERCE_CCUSTOS: Record<number, string> = { 2: 'MARAPONGA', 3: 'IGUATEMI', 4: 'TABOSA', 5: 'NORTH', 6: 'DOM LUIS', 7: 'PARANGABA', 8: 'RIO MAR', 10: 'BARRA SHOPPING - RJ', 14: 'SALVADOR SHOPPING - BA', 15: 'MORUMBI SHOPPING', 17: 'RIO MAR RECIFE', 19: 'NORTH JOQUEI', 20: 'PORTO ALEGRE', 21: 'RIOMAR KENNEDY', 22: 'INTIMATES', 120: 'ECOMMERCE' };
+
 function fmtMoeda(n: number) {
   return n.toLocaleString('pt-BR', {
     style: 'currency', currency: 'BRL',
@@ -374,6 +377,8 @@ export default function IndicadoresControladoriaPage() {
   const [entradaBalanco, setEntradaBalanco] = useState<EntradaIndicadoresBalanco | null>(null);
   const [erroBalanco, setErroBalanco] = useState<string | null>(null);
   const [prazosDfc, setPrazosDfc] = useState<{ pmr: number | null; pmp: number | null; pme: number | null; inicio: string; fim: string } | null>(null);
+  const [cmv12m, setCmv12m] = useState<{ valor: number; lojas: number; fabrica: number; inicio: string; fim: string } | null>(null);
+  const [prazosGrupos, setPrazosGrupos] = useState<{ lojas: { pmr: number | null; pmp: number | null; pme: number | null } | null; fabrica: { pmr: number | null; pmp: number | null; pme: number | null } | null }>({ lojas: null, fabrica: null });
   const [erroDfc, setErroDfc] = useState<string | null>(null);
 
   const mesAtualISO = (() => {
@@ -519,6 +524,37 @@ export default function IndicadoresControladoriaPage() {
     return () => { vivo = false; controller.abort(); };
   }, [inicioDfc, fimDfc]);
 
+  // Prazos por agrupamento (mesmo periodo fechado): lojas + ecommerce e fabrica
+  useEffect(() => {
+    if (!inicioDfc || !fimDfc) return;
+    let vivo = true;
+    setPrazosGrupos({ lojas: null, fabrica: null });
+    const controller = new AbortController();
+    const filtroLojas = Object.keys(LOJAS_ECOMMERCE_CCUSTOS).join(',');
+    const buscar = (filtro: string) => {
+      const params = new URLSearchParams({ dataInicio: inicioDfc, dataFim: fimDfc, filtro, semAntecipacao: 'false' });
+      return fetch(`/api/dfc/unificada?${params.toString()}`, { cache: 'no-store', signal: controller.signal })
+        .then((r) => r.json())
+        .then((d) => (d.metadata ? { pmr: d.metadata.prazoMedioRecebimento ?? null, pmp: d.metadata.prazoMedioPagamento ?? null, pme: d.metadata.prazoMedioEstocagem ?? null } : null))
+        .catch(() => null);
+    };
+    buscar(filtroLojas).then((v) => { if (vivo) setPrazosGrupos((p) => ({ ...p, lojas: v })); });
+    buscar('fabrica').then((v) => { if (vivo) setPrazosGrupos((p) => ({ ...p, fabrica: v })); });
+    return () => { vivo = false; controller.abort(); };
+  }, [inicioDfc, fimDfc]);
+
+  const fimCmv = fimDfc ? fimDfc.slice(0, 7) : null;
+  useEffect(() => {
+    if (!fimCmv) return;
+    let vivo = true;
+    setCmv12m(null);
+    fetch(`/api/indicadores/cmv-12m?fim=${fimCmv}`, { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((d) => { if (vivo && typeof d.cmv12m === 'number') setCmv12m({ valor: d.cmv12m, lojas: Number(d.cmv12mLojas) || 0, fabrica: Number(d.cmv12mFabrica) || 0, inicio: d.inicio, fim: d.fim }); })
+      .catch(() => {});
+    return () => { vivo = false; };
+  }, [fimCmv]);
+
   const cicloFinanceiro =
     prazosDfc && prazosDfc.pmr !== null && prazosDfc.pme !== null && prazosDfc.pmp !== null
       ? prazosDfc.pmr + prazosDfc.pme - prazosDfc.pmp
@@ -532,6 +568,26 @@ export default function IndicadoresControladoriaPage() {
       id: 'ciclo', titulo: 'Ciclo Financeiro', valor: fmtDias(cicloFinanceiro), verde: cicloFinanceiro !== null && cicloFinanceiro < 0,
       calculo: `PMR + PME − PMP${cicloFinanceiro !== null ? ` = ${prazosDfc.pmr!.toFixed(1)} + ${prazosDfc.pme!.toFixed(1)} − ${prazosDfc.pmp!.toFixed(1)}` : ''}. Quantos dias, em média, a empresa financia a operação com capital próprio antes de recuperar o dinheiro em caixa.`,
     },
+    ...(() => {
+      const [aI, mI] = cmv12m ? cmv12m.inicio.split('-') : ['', ''];
+      const janelaTxt = cmv12m ? `${mI}/${aI} a ${cmv12m.fim.split('-').reverse().join('/')}` : '';
+      const montar = (id: string, titulo: string, escopo: string, cmv: number | null, p: { pmr: number | null; pmp: number | null; pme: number | null } | null, carregandoPrazos: boolean) => {
+        const ciclo = p && p.pmr !== null && p.pme !== null && p.pmp !== null ? p.pmr + p.pme - p.pmp : null;
+        const cmvDia = cmv !== null ? cmv / 365 : null;
+        const valor = cmvDia !== null && ciclo !== null ? cmvDia * ciclo : null;
+        return {
+          id, titulo, valor: valor === null ? '-' : fmtMoeda(valor),
+          calculo: cmvDia !== null && ciclo !== null
+            ? `CMV dos 12 meses fechados (${janelaTxt}, ${escopo}) = ${fmtMoeda(cmv!)} ÷ 365 = ${fmtMoeda(cmvDia)} por dia × ciclo financeiro do agrupamento (${ciclo.toFixed(1)} dias = PMR ${p!.pmr!.toFixed(1)} + PME ${p!.pme!.toFixed(1)} − PMP ${p!.pmp!.toFixed(1)}).`
+            : carregandoPrazos || cmv === null ? 'Carregando...' : 'Sem dados suficientes de prazos médios para este agrupamento no período.',
+        };
+      };
+      return [
+        montar('cgc-total', 'Capital de Giro Circulante', 'todas as lojas + ecommerce + fábrica', cmv12m ? cmv12m.valor : null, prazosDfc, false),
+        montar('cgc-lojas', 'Capital de Giro Circulante Lojas', 'lojas + ecommerce', cmv12m ? cmv12m.lojas : null, prazosGrupos.lojas, prazosGrupos.lojas === null),
+        montar('cgc-fabrica', 'Capital de Giro Circulante Fábrica', 'fábrica', cmv12m ? cmv12m.fabrica : null, prazosGrupos.fabrica, prazosGrupos.fabrica === null),
+      ];
+    })(),
   ] : [];
 
   const indicadoresBalanco = entradaBalanco ? calcularIndicadoresBalanco(entradaBalanco) : [];

@@ -976,6 +976,38 @@ def get_sync_status():
     return _sync_status
 
 
+@router.get("/api/indicadores/cmv-12m")
+def get_cmv_12m(fim: str):
+    """CMV total (fabrica + lojas) dos 12 meses fechados terminando no mes `fim` (YYYY-MM)."""
+    a, m = (int(x) for x in fim.split("-"))
+    # Nunca olha mes aberto: limita ao ultimo mes fechado
+    hoje = date.today()
+    ult_a, ult_m = (hoje.year, hoje.month - 1) if hoje.month > 1 else (hoje.year - 1, 12)
+    if (a, m) > (ult_a, ult_m):
+        a, m = ult_a, ult_m
+        fim = f"{a}-{m:02d}"
+    ini_m = m - 11
+    ini_a = a
+    while ini_m <= 0:
+        ini_m += 12
+        ini_a -= 1
+    inicio = date(ini_a, ini_m, 1).isoformat()
+    fim_excl = date(a + (m // 12), (m % 12) + 1, 1).isoformat()
+    por_grupo = {}
+    for chave, tabela in (("fabrica", "mv_cmv_fab"), ("lojas", "mv_cmv_loja")):
+        r = execute_query(
+            f"SELECT ABS(COALESCE(SUM(valor), 0)) AS cmv FROM {tabela} WHERE data >= %s AND data < %s",
+            (inicio, fim_excl),
+        )
+        por_grupo[chave] = float(r[0]["cmv"]) if r else 0.0
+    return {
+        "inicio": inicio[:7], "fim": fim,
+        "cmv12m": por_grupo["fabrica"] + por_grupo["lojas"],
+        "cmv12mFabrica": por_grupo["fabrica"],
+        "cmv12mLojas": por_grupo["lojas"],
+    }
+
+
 @router.get("/api/indicadores/historico")
 def get_historico():
     _criar_tabela_historico()
