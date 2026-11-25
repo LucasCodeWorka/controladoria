@@ -876,7 +876,9 @@ def get_indicadores_dre(mesReferencia: str = Query(..., description="Mes de refe
         def soma_12m(codigo):
             return sum(float(v or 0) for k, v in (valores.get(codigo) or {}).items() if re.fullmatch(r"\d{4}-\d{2}", k))
 
-        return {"inicio": ini, "fim": fim, "mesFim": f"{ano}-{mes:02d}", "lucroLiquido12m": soma_12m("14"), "ebitda12m": soma_12m("09")}
+        return {"inicio": ini, "fim": fim, "mesFim": f"{ano}-{mes:02d}", "lucroLiquido12m": soma_12m("14"), "ebitda12m": soma_12m("09"),
+                # Usados no comparativo de mercado (margens, ROA, giro, ROIC)
+                "receitaLiquida12m": soma_12m("03"), "cmv12m": abs(soma_12m("04.02")), "depreciacao12m": abs(soma_12m("12"))}
     except HTTPException:
         raise
     except Exception as e:

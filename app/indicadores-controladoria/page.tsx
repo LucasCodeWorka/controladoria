@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { Loader2, ChevronRight, ArrowUp, ArrowDown, Minus, CheckCircle2, AlertCircle, MinusCircle } from 'lucide-react';
+import { QUERY_BALANCO_VISAO_LIEBE } from '../balanco-patrimonial/empresasLiebe';
 import { calcularIndicadoresBalanco, montarValoresBalanco, type EntradaIndicadoresBalanco, type StatusIndicador } from '../balanco-patrimonial/indicadoresBalanco';
 
 interface GiroLojas {
@@ -463,7 +464,7 @@ export default function IndicadoresControladoriaPage() {
         ? { lucroLiquido12m: d.lucroLiquido12m, ebitda12m: d.ebitda12m, inicio: d.inicio, fim: d.fim }
         : null))
       .catch(() => null);
-    fetch(`/api/balanco-patrimonial/dados?mesReferencia=${mesBalanco}`, { cache: 'no-store' })
+    fetch(`/api/balanco-patrimonial/dados?mesReferencia=${mesBalanco}&${QUERY_BALANCO_VISAO_LIEBE}`, { cache: 'no-store' })
       .then(async (r) => {
         const d = await r.json();
         if (!r.ok || d.error || !d.valores) throw new Error(d.error || d.detail || 'Erro ao buscar o balanço patrimonial');

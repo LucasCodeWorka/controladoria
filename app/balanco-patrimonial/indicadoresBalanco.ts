@@ -30,11 +30,11 @@ export const fmtIndice = (v: number) => v.toLocaleString('pt-BR', { minimumFract
 
 const mesAno = (iso: string) => `${iso.slice(5, 7)}/${iso.slice(2, 4)}`;
 
-function totalGrupo(grupo: ContaBalanco, valores: Record<string, number>): number {
+export function totalGrupo(grupo: ContaBalanco, valores: Record<string, number>): number {
   if (!grupo.filhos || grupo.filhos.length === 0) return valores[grupo.codigo] ?? 0;
   return grupo.filhos.reduce((acc, filho) => acc + (valores[filho.codigo] ?? 0), 0);
 }
-const totalGeral = (plano: ContaBalanco[], valores: Record<string, number>) =>
+export const totalGeral = (plano: ContaBalanco[], valores: Record<string, number>) =>
   plano.reduce((acc, g) => acc + totalGrupo(g, valores), 0);
 
 export function calcularIndicadoresBalanco(e: EntradaIndicadoresBalanco): IndicadorBalanco[] {
@@ -62,7 +62,7 @@ export function calcularIndicadoresBalanco(e: EntradaIndicadoresBalanco): Indica
   const liqImediata = passivoCirculante > 0 ? caixa / passivoCirculante : null;
   const liqSeca = passivoCirculante > 0 ? (ativoCirculante - estoques) / passivoCirculante : null;
   const liqCorrente = passivoCirculante > 0 ? ativoCirculante / passivoCirculante : null;
-  const roe = dre && patrimonioLiquido > 0 ? (dre.lucroLiquido12m / patrimonioLiquido) * 100 : null;
+  const roe = dre && patrimonioLiquido !== 0 ? (dre.lucroLiquido12m / patrimonioLiquido) * 100 : null;
   const ebitdaValido = !!dre && dre.ebitda12m > 0;
   const dividaEbitda = ebitdaValido ? dividaLiquida / dre!.ebitda12m : null;
   const alavancagemAjustada = ebitdaValido ? dividaAjustadaLiquida / dre!.ebitda12m : null;

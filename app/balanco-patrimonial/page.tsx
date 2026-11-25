@@ -875,7 +875,7 @@ export default function BalancoPatrimonialPage() {
   const liqImediata = passivoCirculante > 0 ? caixa / passivoCirculante : null;
   const liqSeca = passivoCirculante > 0 ? (ativoCirculante - estoques) / passivoCirculante : null;
   const liqCorrente = passivoCirculante > 0 ? ativoCirculante / passivoCirculante : null;
-  const roe = indicadoresDre && patrimonioLiquido > 0 ? (indicadoresDre.lucroLiquido12m / patrimonioLiquido) * 100 : null;
+  const roe = indicadoresDre && patrimonioLiquido !== 0 ? (indicadoresDre.lucroLiquido12m / patrimonioLiquido) * 100 : null;
   const ebitdaValido = !!indicadoresDre && indicadoresDre.ebitda12m > 0;
   const dividaEbitda = ebitdaValido ? dividaLiquida / indicadoresDre!.ebitda12m : null;
   const alavancagemAjustada = ebitdaValido ? dividaAjustadaLiquida / indicadoresDre!.ebitda12m : null;

@@ -106,6 +106,11 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
       icon: BarChart3,
     },
     {
+      name: 'Comparativo Mercado',
+      href: '/comparativo-mercado',
+      icon: GitCompare,
+    },
+    {
       name: 'DRE',
       href: '/dre-fabrica',
       icon: Factory,
