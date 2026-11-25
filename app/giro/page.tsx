@@ -613,6 +613,8 @@ interface TotaisDescontoGiro {
   faixasPromoPorLoja?: Record<string, Record<string, number>>;
   // Estoque por loja em cada faixa de PRECO da promocao atual ('0' = sem promocao): { cdEmpresa: { '19.90': qtd } }
   faixasPrecoPorLoja?: Record<string, Record<string, number>>;
+  // Mesmo por grupo (classificação 'grupo'): { grupo: { cdEmpresa: { '19.90': qtd } } }
+  faixasPrecoPorGrupo?: Record<string, Record<string, Record<string, number>>>;
   // Pecas de cada loja que mudaram de faixa para 70% por terem sido marcadas como enviadas para 70%
   enviadas70PorLoja?: Record<string, number>;
   totalReferencias: number;
@@ -3242,64 +3244,89 @@ export default function GiroPage() {
             )}
           </div>
 
-          {matriz && (
-            <div className="bg-white rounded-lg shadow-lg p-4">
-              <p className="text-xs font-medium text-black uppercase tracking-wide" title="Estoque de cada loja por faixa de PREÇO da promoção ATUAL (mesmas faixas do arredondamento da campanha: 9,90 / 19,90 / 29,90...). Maraponga usa o preço da promoção do Atacado; as demais lojas, o da promoção do Varejo. Só aparecem as faixas que têm estoque.">
-                Análise por faixa de preço — Qtd atual por loja (filtro inteiro)
-              </p>
-              {(() => {
-                const porLoja = totaisDescontoGiro?.faixasPrecoPorLoja ?? {};
-                const lojas = matriz.empresas.filter((e) => e.cdEmpresa !== 1);
-                const qtd = (cd: number, f: string) => porLoja[String(cd)]?.[f] ?? 0;
-                const totalFaixa = (f: string) => lojas.reduce((a, e) => a + qtd(e.cdEmpresa, f), 0);
-                const faixasComPromo = Array.from(new Set(Object.values(porLoja).flatMap((m) => Object.keys(m))))
-                  .filter((f) => f !== '0')
-                  .sort((a, b) => parseFloat(a) - parseFloat(b))
-                  .filter((f) => totalFaixa(f) > 0);
-                const rotulo = (f: string) => `R$ ${parseFloat(f).toFixed(2).replace('.', ',')}`;
-                const celula = 'border border-slate-300 px-2 py-1 text-right text-black';
-                const totalLoja = (cd: number) => faixasComPromo.reduce((a, f) => a + qtd(cd, f), 0);
-                return (
-                  <div className="mt-2 overflow-x-auto">
-                    <table className="w-full text-sm border-collapse">
-                      <thead>
-                        <tr className="text-[11px] uppercase text-black">
-                          <th className="border border-slate-300 bg-green-100 px-2 py-1 text-left">Preço promoção</th>
-                          {lojas.map((e) => (
-                            <th key={e.cdEmpresa} className="border border-slate-300 bg-green-100 px-2 py-1 text-right whitespace-nowrap">{nomeLojaCurto(e.nome)}</th>
-                          ))}
-                          <th className="border border-slate-300 bg-sky-100 px-2 py-1 text-right">Total</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {faixasComPromo.map((f) => (
-                          <tr key={f}>
-                            <td className="border border-slate-300 px-2 py-1 text-center text-black">{rotulo(f)}</td>
-                            {lojas.map((e) => (
-                              <td key={e.cdEmpresa} className={celula}>{totaisDescontoCarregando ? '...' : formatarQtd(qtd(e.cdEmpresa, f))}</td>
-                            ))}
-                            <td className={`${celula} font-semibold`}>{totaisDescontoCarregando ? '...' : formatarQtd(totalFaixa(f))}</td>
-                          </tr>
+          {matriz && (() => {
+            const lojas = matriz.empresas.filter((e) => e.cdEmpresa !== 1);
+            const celula = 'border border-slate-300 px-2 py-1 text-right text-black';
+            const rotulo = (f: string) => `R$ ${parseFloat(f).toFixed(2).replace('.', ',')}`;
+            const renderTabela = (porLoja: Record<string, Record<string, number>>) => {
+              const qtd = (cd: number, f: string) => porLoja[String(cd)]?.[f] ?? 0;
+              const totalFaixa = (f: string) => lojas.reduce((a, e) => a + qtd(e.cdEmpresa, f), 0);
+              const faixasComPromo = Array.from(new Set(Object.values(porLoja).flatMap((m) => Object.keys(m))))
+                .filter((f) => f !== '0')
+                .sort((a, b) => parseFloat(a) - parseFloat(b))
+                .filter((f) => totalFaixa(f) > 0);
+              const totalLoja = (cd: number) => faixasComPromo.reduce((a, f) => a + qtd(cd, f), 0);
+              return (
+                <div className="mt-2 overflow-x-auto">
+                  <table className="w-full text-sm border-collapse">
+                    <thead>
+                      <tr className="text-[11px] uppercase text-black">
+                        <th className="border border-slate-300 bg-green-100 px-2 py-1 text-left">Preço promoção</th>
+                        {lojas.map((e) => (
+                          <th key={e.cdEmpresa} className="border border-slate-300 bg-green-100 px-2 py-1 text-right whitespace-nowrap">{nomeLojaCurto(e.nome)}</th>
                         ))}
-                        <tr className="font-bold bg-yellow-200 text-black">
-                          <td className="border border-slate-300 px-2 py-1 text-center">Total</td>
-                          {lojas.map((e) => <td key={e.cdEmpresa} className="border border-slate-300 px-2 py-1 text-right">{formatarQtd(totalLoja(e.cdEmpresa))}</td>)}
-                          <td className="border border-slate-300 px-2 py-1 text-right">{formatarQtd(faixasComPromo.reduce((a, f) => a + totalFaixa(f), 0))}</td>
+                        <th className="border border-slate-300 bg-sky-100 px-2 py-1 text-right">Total</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {faixasComPromo.map((f) => (
+                        <tr key={f}>
+                          <td className="border border-slate-300 px-2 py-1 text-center text-black">{rotulo(f)}</td>
+                          {lojas.map((e) => (
+                            <td key={e.cdEmpresa} className={celula}>{totaisDescontoCarregando ? '...' : formatarQtd(qtd(e.cdEmpresa, f))}</td>
+                          ))}
+                          <td className={`${celula} font-semibold`}>{totaisDescontoCarregando ? '...' : formatarQtd(totalFaixa(f))}</td>
                         </tr>
-                        {totalFaixa('0') > 0 && (
-                          <tr className="text-black">
-                            <td className="border border-slate-300 px-2 py-1 text-center">Sem promoção</td>
-                            {lojas.map((e) => <td key={e.cdEmpresa} className={celula}>{formatarQtd(qtd(e.cdEmpresa, '0'))}</td>)}
-                            <td className={`${celula} font-semibold`}>{formatarQtd(totalFaixa('0'))}</td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
+                      ))}
+                      <tr className="font-bold bg-yellow-200 text-black">
+                        <td className="border border-slate-300 px-2 py-1 text-center">Total</td>
+                        {lojas.map((e) => <td key={e.cdEmpresa} className="border border-slate-300 px-2 py-1 text-right">{formatarQtd(totalLoja(e.cdEmpresa))}</td>)}
+                        <td className="border border-slate-300 px-2 py-1 text-right">{formatarQtd(faixasComPromo.reduce((a, f) => a + totalFaixa(f), 0))}</td>
+                      </tr>
+                      {totalFaixa('0') > 0 && (
+                        <tr className="text-black">
+                          <td className="border border-slate-300 px-2 py-1 text-center">Sem promoção</td>
+                          {lojas.map((e) => <td key={e.cdEmpresa} className={celula}>{formatarQtd(qtd(e.cdEmpresa, '0'))}</td>)}
+                          <td className={`${celula} font-semibold`}>{formatarQtd(totalFaixa('0'))}</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            };
+            const porGrupo = totaisDescontoGiro?.faixasPrecoPorGrupo ?? {};
+            const totalGrupo = (g: string) => Object.values(porGrupo[g] ?? {}).reduce((a, m) => a + Object.entries(m).filter(([f]) => f !== '0').reduce((x, [, v]) => x + v, 0), 0);
+            const grupos = Object.keys(porGrupo).sort((a, b) => totalGrupo(b) - totalGrupo(a));
+            return (
+              <>
+                <div className="bg-white rounded-lg shadow-lg p-4">
+                  <p className="text-xs font-medium text-black uppercase tracking-wide" title="Estoque de cada loja por faixa de PREÇO da promoção ATUAL (mesmas faixas do arredondamento da campanha: 9,90 / 19,90 / 29,90...). Maraponga usa o preço da promoção do Atacado; as demais lojas, o da promoção do Varejo. Só aparecem as faixas que têm estoque.">
+                    Análise por faixa de preço — Qtd atual por loja (filtro inteiro)
+                  </p>
+                  {renderTabela(totaisDescontoGiro?.faixasPrecoPorLoja ?? {})}
+                </div>
+                {grupos.length > 0 && (
+                  <div className="bg-white rounded-lg shadow-lg p-4">
+                    <p className="text-xs font-medium text-black uppercase tracking-wide" title="A mesma tabela de faixa de preço, separada por grupo (classificação 'grupo' do filtro). Ordenado pelo estoque em promoção. Clique no grupo para abrir.">
+                      Análise por faixa de preço — por grupo
+                    </p>
+                    <div className="mt-2 space-y-2">
+                      {grupos.map((g) => (
+                        <details key={g} className="border border-slate-200 rounded-md">
+                          <summary className="cursor-pointer px-3 py-1.5 text-sm font-medium text-black bg-slate-50 hover:bg-slate-100 flex justify-between">
+                            <span>{g}</span>
+                            <span className="font-normal text-xs text-black">{formatarQtd(totalGrupo(g))} un. em promoção</span>
+                          </summary>
+                          <div className="px-3 pb-3">{renderTabela(porGrupo[g])}</div>
+                        </details>
+                      ))}
+                    </div>
                   </div>
-                );
-              })()}
-            </div>
-          )}
+                )}
+              </>
+            );
+          })()}
 
           {modalEnviadas70Aberto && (
             <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setModalEnviadas70Aberto(false)}>

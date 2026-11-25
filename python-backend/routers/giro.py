@@ -2663,6 +2663,8 @@ def totais_desconto_giro(
         # da campanha: 9,90 / 19,90 / 29,90...). Maraponga olha a promo do atacado; as demais, a do
         # varejo. "0" = sem promocao ativa. {cd_empresa: {"19.90": estoque}}
         faixas_preco_por_loja = {}
+        # Mesma coisa separada por GRUPO (classificacao "grupo" do filtro): {grupo: {cd_empresa: {faixa: estoque}}}
+        faixas_preco_por_grupo = {}
         # Referencias/cores ja "enviadas para 70%" (marcadas no modal): na tabela por loja a quantidade delas
         # passa pra faixa de 70%. Chave = (referencia, cor, canal); o desconto vale pra rede toda do canal.
         try:
@@ -2795,6 +2797,9 @@ def totais_desconto_giro(
                     faixa_preco = "0" if not preco_promo_loja or preco_promo_loja <= 0 else f"{_arredondar_preco_campanha(float(preco_promo_loja)):.2f}"
                     por_faixa_preco = faixas_preco_por_loja.setdefault(str(cd_loja), {})
                     por_faixa_preco[faixa_preco] = por_faixa_preco.get(faixa_preco, 0.0) + est_loja
+                    grupo_item = (item.get("categorias") or {}).get("grupo") or "SEM CLASSIFICACAO"
+                    por_grupo_loja = faixas_preco_por_grupo.setdefault(grupo_item, {}).setdefault(str(cd_loja), {})
+                    por_grupo_loja[faixa_preco] = por_grupo_loja.get(faixa_preco, 0.0) + est_loja
                     if marcada and faixa_nat != "70":
                         enviadas_70_por_loja[str(cd_loja)] = enviadas_70_por_loja.get(str(cd_loja), 0.0) + est_loja
                     if detalheLoja is not None and detalheFaixa is not None and int(cd_loja) == detalheLoja and (
@@ -2876,6 +2881,7 @@ def totais_desconto_giro(
             "faixasPromoAtacado": faixas_atacado,
             "faixasPromoPorLoja": faixas_por_loja,
             "faixasPrecoPorLoja": faixas_preco_por_loja,
+            "faixasPrecoPorGrupo": faixas_preco_por_grupo,
             "enviadas70PorLoja": enviadas_70_por_loja,
             "detalheCelula": sorted(detalhe_celula, key=lambda x: -x["estoque"]) if detalheLoja is not None else None,
             "totalReferencias": total_referencias,
