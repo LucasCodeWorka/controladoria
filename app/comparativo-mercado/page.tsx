@@ -18,7 +18,7 @@ interface BalancoLiebe { valores: Record<string, number>; caixaDisponivel: numbe
 
 const NAO_APLICAVEL_MOTIVO = 'Depende de cotação/ações em bolsa — a Liebe não é listada';
 
-function calcularLiebe(b: BalancoLiebe, d: DreLiebe): { valores: Partial<Record<IdIndicador, number | null>>; memoria: Partial<Record<IdIndicador, LinhaMemoria[]>> } {
+function calcularLiebe(b: BalancoLiebe, d: DreLiebe): { valores: Partial<Record<IdIndicador, number | null>>; memoria: Partial<Record<IdIndicador, LinhaMemoria[]>>; base: { ebitda: number; dividaLiquida: number } } {
   const v = b.valores;
   const ativoCirc = totalGrupo(PLANO_ATIVOS[0], v);
   const passivoCirc = Math.abs(totalGrupo(PLANO_PASSIVO[0], v));
@@ -78,7 +78,7 @@ function calcularLiebe(b: BalancoLiebe, d: DreLiebe): { valores: Partial<Record<
     cagr_receitas: [L('Não calculável: a DRE do sistema só tem histórico a partir de 2024, sem 5 anos de receita', '')],
     cagr_lucros: [L('Não calculável: a DRE do sistema só tem histórico a partir de 2024, sem 5 anos de lucro', '')],
   };
-  return { valores, memoria };
+  return { valores, memoria, base: { ebitda, dividaLiquida } };
 }
 
 const fmt = (n: number | null | undefined, f: 'pct' | 'x') =>
@@ -90,6 +90,7 @@ export default function ComparativoMercadoPage() {
   const [erro, setErro] = useState<string | null>(null);
   const [printAberto, setPrintAberto] = useState<string | null>(null);
   const [popup, setPopup] = useState<IdIndicador | null>(null);
+  const [multiplos, setMultiplos] = useState<{ conservador: number; base: number; otimista: number }>({ conservador: 3, base: 4, otimista: 5 });
 
   const [tentativa, setTentativa] = useState(0);
   useEffect(() => {
@@ -208,6 +209,104 @@ export default function ComparativoMercadoPage() {
         <p><span className="font-semibold">Valuation:</span> {NAO_APLICAVEL_MOTIVO}; por isso aparecem só os valores do mercado e a média.</p>
         <p><span className="font-semibold">Média do mercado:</span> média simples das 5 empresas, ignorando as que não têm o dado. Em valuation, Track & Field distorce a média (múltiplos muito acima das demais).</p>
       </div>
+
+      {liebe && (() => {
+        const { ebitda, dividaLiquida } = liebe.base;
+        const R = (n: number) => n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 });
+        const cenarios: { chave: 'conservador' | 'base' | 'otimista'; titulo: string }[] = [
+          { chave: 'conservador', titulo: 'Conservador' }, { chave: 'base', titulo: 'Base' }, { chave: 'otimista', titulo: 'Otimista' },
+        ];
+        const faixa = Array.from({ length: 9 }, (_, i) => 2 + i * 0.5);
+        const ev = (m: number) => m * ebitda;
+        return (
+          <div className="space-y-3">
+            <h2 className="text-lg font-bold text-black">Análise de sensibilidade do valuation — múltiplo de EBITDA</h2>
+            <p className="text-xs text-black">
+              EBITDA 12 meses fechados{dre ? ` (${fmtMes(dre.inicio)} a ${fmtMes(dre.fim)})` : ''}: <span className="font-semibold">{R(ebitda)}</span> ·
+              Dívida líquida (visão Liebe): <span className="font-semibold">{R(dividaLiquida)}</span>. Valor da firma = múltiplo × EBITDA; valor do acionista = valor da firma − dívida líquida.
+              Os múltiplos dos cenários são editáveis.
+            </p>
+            <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-gray-600 text-white text-right">
+                    <th className="px-4 py-3 font-semibold text-left">Cenário</th>
+                    {cenarios.map((c) => (<th key={c.chave} className="px-4 py-3 font-semibold">{c.titulo}</th>))}
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr className="border-t border-gray-100">
+                    <td className="px-4 py-3 font-semibold text-black">Múltiplo EV/EBITDA</td>
+                    {cenarios.map((c) => (
+                      <td key={c.chave} className="px-4 py-3 text-right">
+                        <input type="number" step="0.1" min="0" value={multiplos[c.chave]}
+                          onChange={(e) => setMultiplos((m) => ({ ...m, [c.chave]: Math.max(0, Number(e.target.value) || 0) }))}
+                          className="w-20 text-right border border-gray-300 rounded px-2 py-1 text-black" /> x
+                      </td>
+                    ))}
+                  </tr>
+                  <tr className="border-t border-gray-100">
+                    <td className="px-4 py-3 text-black">× EBITDA 12m</td>
+                    {cenarios.map((c) => (<td key={c.chave} className="px-4 py-3 text-right text-black">{R(ebitda)}</td>))}
+                  </tr>
+                  <tr className="border-t border-gray-200 bg-gray-50">
+                    <td className="px-4 py-3 font-semibold text-black">Valor da firma (EV)</td>
+                    {cenarios.map((c) => (<td key={c.chave} className="px-4 py-3 text-right font-semibold text-black">{R(ev(multiplos[c.chave]))}</td>))}
+                  </tr>
+                  <tr className="border-t border-gray-100">
+                    <td className="px-4 py-3 text-black">(−) Dívida líquida</td>
+                    {cenarios.map((c) => (<td key={c.chave} className="px-4 py-3 text-right text-black">{R(dividaLiquida)}</td>))}
+                  </tr>
+                  <tr className="border-t border-gray-200 bg-gray-50">
+                    <td className="px-4 py-3 font-semibold text-black">Valor do acionista (equity)</td>
+                    {cenarios.map((c) => {
+                      const v = ev(multiplos[c.chave]) - dividaLiquida;
+                      return <td key={c.chave} className={`px-4 py-3 text-right font-semibold ${v < 0 ? 'text-red-600' : 'text-black'}`}>{R(v)}</td>;
+                    })}
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-gray-600 text-white text-right">
+                    <th className="px-4 py-3 font-semibold text-left">Sensibilidade</th>
+                    {faixa.map((m) => (<th key={m} className="px-3 py-3 font-semibold whitespace-nowrap">{m.toLocaleString('pt-BR', { minimumFractionDigits: 1 })}x</th>))}
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr className="border-t border-gray-100">
+                    <td className="px-4 py-3 font-semibold text-black whitespace-nowrap">Valor da firma</td>
+                    {faixa.map((m) => (<td key={m} className="px-3 py-3 text-right text-black whitespace-nowrap">{R(ev(m))}</td>))}
+                  </tr>
+                  <tr className="border-t border-gray-100">
+                    <td className="px-4 py-3 font-semibold text-black whitespace-nowrap">Valor do acionista</td>
+                    {faixa.map((m) => {
+                      const v = ev(m) - dividaLiquida;
+                      return <td key={m} className={`px-3 py-3 text-right whitespace-nowrap ${v < 0 ? 'text-red-600' : 'text-black'}`}>{R(v)}</td>;
+                    })}
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-4 text-xs text-black space-y-1">
+              <p className="font-bold text-sm">De onde vêm os múltiplos (premissas — não há múltiplo de mercado publicado para o porte da Liebe)</p>
+              <p><span className="font-semibold">Conservador 3,0x:</span> média das 5 varejistas listadas dos seus prints (EV/EBITDA de 1,29x a 6,89x, média 3,07x).</p>
+              <p><span className="font-semibold">Base 4,0x:</span> referências setoriais de companhias abertas (vestuário baixa renda a ~5,8x em set/2024, segundo a Genial; Kroll América Latina ~7,3x em 1T/2023) com desconto de iliquidez de ~41,5% para empresa fechada (estudo PUC-Rio sobre o mercado brasileiro) — resulta em ~3,4x a ~4,3x.</p>
+              <p><span className="font-semibold">Otimista 5,0x:</span> referência de vestuário baixa renda (~5,8x) com desconto menor (~15%), como em empresas fechadas com crescimento e marca forte.</p>
+              <p>Como contraste, o Damodaran (jan/2026) mostra ~10,3x para vestuário em empresas globais listadas — sem desconto de tamanho e liquidez, não é comparável à Liebe.</p>
+              <p><span className="font-semibold">Limites:</span> a dívida líquida considera empréstimos e cheque especial menos caixa disponível; não inclui obrigações por compra de imóveis nem dívida tributária (a alavancagem ajustada da tela de Indicadores inclui os imóveis). O EBITDA vem da DRE consolidada sem depreciação lançada.</p>
+              <p>Fontes: <a className="underline" href="https://pages.stern.nyu.edu/~adamodar/New_Home_Page/datafile/vebitda.html" target="_blank" rel="noreferrer">Damodaran</a> ·
+                {' '}<a className="underline" href="https://analisa.genialinvestimentos.com.br/setores/vestuario/ceab3-inicio-de-cobertura-rumo-nova-era-de-margens/" target="_blank" rel="noreferrer">Genial (C&A)</a> ·
+                {' '}<a className="underline" href="https://www.kroll.com/-/media/kroll-br/pdf/multiplos-da-industria-na-america-latina-2-trimestre-2023.pdf" target="_blank" rel="noreferrer">Kroll</a> ·
+                {' '}<a className="underline" href="https://www.maxwell.vrac.puc-rio.br/28301/28301_6.PDF" target="_blank" rel="noreferrer">PUC-Rio (desconto de liquidez)</a></p>
+            </div>
+          </div>
+        );
+      })()}
 
       {popup && (() => {
         const def = GRUPOS.flatMap((g) => g.indicadores).find((d) => d.id === popup)!;
