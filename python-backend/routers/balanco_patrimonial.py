@@ -1175,7 +1175,10 @@ def get_balanco_patrimonial(
         caixa_disponivel = valores.pop("_CAIXA_POS", None)
         cheque_especial = valores.pop("_CHEQUE_ESP", None)
         return {"valores": valores, "bens": bens, "mesReferencia": mesReferencia,
-                "caixaDisponivel": caixa_disponivel, "chequeEspecial": cheque_especial}
+                "caixaDisponivel": caixa_disponivel, "chequeEspecial": cheque_especial,
+                # Blocos que falharam (ex.: timeout no banco) - ficam zerados nos valores;
+                # quem calcula indicadores deve tratar como dado incompleto.
+                "indisponiveis": [nome for nome in f_opcionais if nome not in resultados]}
     except HTTPException:
         raise
     except Exception as e:

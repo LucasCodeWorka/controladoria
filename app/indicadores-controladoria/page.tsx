@@ -468,6 +468,7 @@ export default function IndicadoresControladoriaPage() {
       .then(async (r) => {
         const d = await r.json();
         if (!r.ok || d.error || !d.valores) throw new Error(d.error || d.detail || 'Erro ao buscar o balanço patrimonial');
+        if (Array.isArray(d.indisponiveis) && d.indisponiveis.length > 0) throw new Error(`Dados do balanço incompletos (consultas que falharam: ${d.indisponiveis.join(', ')}). Recarregue a página para tentar de novo.`);
         return d;
       })
       .then(async (d) => {

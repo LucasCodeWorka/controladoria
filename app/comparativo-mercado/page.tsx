@@ -91,8 +91,10 @@ export default function ComparativoMercadoPage() {
   const [printAberto, setPrintAberto] = useState<string | null>(null);
   const [popup, setPopup] = useState<IdIndicador | null>(null);
 
+  const [tentativa, setTentativa] = useState(0);
   useEffect(() => {
     let vivo = true;
+    setErro(null); setBalanco(null); setDre(null);
     const h = new Date();
     const mes = `${h.getFullYear()}-${String(h.getMonth() + 1).padStart(2, '0')}`;
     fetch(`/api/balanco-patrimonial/indicadores-dre?mesReferencia=${mes}`, { cache: 'no-store' })
@@ -103,11 +105,12 @@ export default function ComparativoMercadoPage() {
       .then(async (r) => {
         const d = await r.json();
         if (!r.ok || d.error || !d.valores) throw new Error(d.error || d.detail || 'Erro ao buscar o balanço patrimonial');
+        if (Array.isArray(d.indisponiveis) && d.indisponiveis.length > 0) throw new Error(`Dados do balanço incompletos (consultas que falharam: ${d.indisponiveis.join(', ')}). Os indicadores não foram calculados para não mostrar valores errados. Clique em "Tentar de novo".`);
         if (vivo) setBalanco({ valores: montarValoresBalanco(d.valores), caixaDisponivel: typeof d.caixaDisponivel === 'number' ? d.caixaDisponivel : null, chequeEspecial: Number(d.chequeEspecial ?? 0) });
       })
       .catch((e) => vivo && setErro(e instanceof Error ? e.message : String(e)));
     return () => { vivo = false; };
-  }, []);
+  }, [tentativa]);
 
   const liebe = balanco && dre ? calcularLiebe(balanco, dre) : null;
   const fmtMes = (iso: string) => iso.slice(5, 7) + '/' + iso.slice(0, 4);
@@ -144,7 +147,12 @@ export default function ComparativoMercadoPage() {
         </div>
       )}
 
-      {erro && <p className="text-red-600 text-sm">{erro}</p>}
+      {erro && (
+        <div className="flex flex-wrap items-center gap-3 text-sm">
+          <p className="text-red-600">{erro}</p>
+          <button onClick={() => setTentativa((t) => t + 1)} className="px-3 py-1 rounded-full border border-brand-primary text-brand-primary hover:bg-brand-primary hover:text-white">Tentar de novo</button>
+        </div>
+      )}
 
       <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-x-auto">
         <table className="w-full text-sm">
