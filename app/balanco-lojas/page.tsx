@@ -21,8 +21,12 @@ import {
 const CHAVE_FILTROS = 'balancoLojas_filtros';
 const TIPOS_PADRAO = ['ROTATIVO', 'PRINCIPAL', 'RECONTAGEM'];
 
-type FiltroSituacao = 'todas' | 'validos' | 'cancelados' | 'andamento';
-interface Filtros { inicio: string; fim: string; empresas: number[] | null; tipos: string[]; busca: string; situacao: FiltroSituacao }
+// Situações do balanço no ERP (as marcadas por padrão são as que entram na acuracidade).
+const SITUACOES_OPCOES: { id: number; nome: string }[] = [
+  { id: 8, nome: 'Concluído (rotativo)' }, { id: 5, nome: 'Encerrado' }, { id: 3, nome: 'Calculado' },
+  { id: 7, nome: 'Situação 7' }, { id: 1, nome: 'Em andamento' }, { id: 6, nome: 'Cancelado' },
+];
+interface Filtros { inicio: string; fim: string; empresas: number[] | null; tipos: string[]; busca: string; situacoes: number[] }
 
 // Usada se a leitura das opções falhar: o filtro de lojas nunca some da tela.
 const LOJAS_FALLBACK = [
@@ -31,6 +35,7 @@ const LOJAS_FALLBACK = [
   [22, 'INTIMATES'], [120, 'ECOMMERCE'],
 ].map(([cdEmpresa, nome]) => ({ cdEmpresa: cdEmpresa as number, nome: nome as string }));
 const SITUACOES_VALIDAS = [3, 5, 7, 8];
+const SITUACOES_PADRAO = [8, 5, 3, 7];
 
 const isoLocal = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 const ultimosDias = (n: number) => {
@@ -53,7 +58,7 @@ const rotuloMil = (v: unknown) => {
   return Math.abs(v) >= 1000 ? `${(v / 1000).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}k` : v.toLocaleString('pt-BR', { maximumFractionDigits: 0 });
 };
 
-const FILTROS_PADRAO = (): Filtros => ({ ...ultimosDias(30), empresas: null, tipos: [...TIPOS_PADRAO], busca: '', situacao: 'todas' });
+const FILTROS_PADRAO = (): Filtros => ({ ...ultimosDias(30), empresas: null, tipos: [...TIPOS_PADRAO], busca: '', situacoes: [...SITUACOES_PADRAO] });
 
 // ---------------------------------------------------------------------------
 // explicações (popup) dos indicadores
@@ -250,6 +255,7 @@ export default function BalancoLojasPage() {
   const [popup, setPopup] = useState<string | null>(null);
   const [detalhe, setDetalhe] = useState<BalancoRow | null>(null);
   const [lojasAbertas, setLojasAbertas] = useState(false);
+  const [situacoesAbertas, setSituacoesAbertas] = useState(false);
   const jaConsultou = useRef(false);
   const ultimoHistoricoCompleto = useRef<boolean | null>(null);
 
@@ -273,7 +279,7 @@ export default function BalancoLojasPage() {
           empresas: emp && emp.length ? emp : null,
           tipos: tiposValidos.length ? tiposValidos : [...TIPOS_PADRAO],
           busca: typeof salvo.busca === 'string' ? salvo.busca : '',
-          situacao: ['todas', 'validos', 'cancelados', 'andamento'].includes(salvo.situacao as string) ? (salvo.situacao as FiltroSituacao) : 'todas',
+          situacoes: Array.isArray(salvo.situacoes) && salvo.situacoes.some((x) => SITUACOES_OPCOES.some((o) => o.id === x)) ? salvo.situacoes.filter((x) => SITUACOES_OPCOES.some((o) => o.id === x)) : [...SITUACOES_PADRAO],
         });
         setFiltroSalvo(true);
       }
@@ -286,6 +292,7 @@ export default function BalancoLojasPage() {
     jaConsultou.current = true;
     const q = new URLSearchParams({ inicio: f.inicio, fim: f.fim, tipos: f.tipos.join(',') });
     if (f.busca.trim()) q.set('busca', f.busca.trim());
+    q.set('situacoes', f.situacoes.join(','));
     if (f.empresas && f.empresas.length) q.set('empresas', f.empresas.join(','));
     try {
       const [rr, rb, rc] = await Promise.all([
@@ -360,19 +367,18 @@ export default function BalancoLojasPage() {
     if (atual.has(id)) atual.delete(id); else atual.add(id);
     setFiltros({ ...filtros, empresas: atual.size === 0 || atual.size === todas.length ? null : Array.from(atual) });
   };
+  const alternarSituacao = (id: number) => {
+    const atual = new Set(filtros.situacoes);
+    if (atual.has(id)) atual.delete(id); else atual.add(id);
+    setFiltros({ ...filtros, situacoes: atual.size === 0 ? [...SITUACOES_PADRAO] : Array.from(atual) });
+  };
   const alternarTipo = (t: string) => {
     const atual = new Set(filtros.tipos);
     if (atual.has(t)) atual.delete(t); else atual.add(t);
     setFiltros({ ...filtros, tipos: atual.size === 0 ? [...TIPOS_PADRAO] : Array.from(atual) });
   };
 
-  const balancosFiltrados = useMemo(() => balancos.filter((b) => {
-    if (lojaSel != null && b.cdEmpresa !== lojaSel) return false;
-    if (filtros.situacao === 'validos') return SITUACOES_VALIDAS.includes(b.tpSituacao);
-    if (filtros.situacao === 'cancelados') return b.tpSituacao === 6;
-    if (filtros.situacao === 'andamento') return b.tpSituacao === 1;
-    return true;
-  }), [balancos, lojaSel, filtros.situacao]);
+  const balancosFiltrados = useMemo(() => (lojaSel == null ? balancos : balancos.filter((b) => b.cdEmpresa === lojaSel)), [balancos, lojaSel]);
   const metas = dados?.metas ?? { ok: opcoes?.metaOk ?? 98, atencao: opcoes?.metaAtencao ?? 95 };
   const t = dados?.total;
   const textoLojas = `Lojas (${lojasSelecionadas ? lojasSelecionadas.length : listaLojas.length}/${listaLojas.length})`;
@@ -553,15 +559,26 @@ export default function BalancoLojasPage() {
             Balanço (nº ou descrição)
             <input type="text" value={filtros.busca} onChange={(e) => setFiltros({ ...filtros, busca: e.target.value })} onKeyDown={(e) => e.key === 'Enter' && consultar(filtros)} placeholder="Ex: 1731 ou RECONTAGEM" className="block mt-1 w-52 border border-gray-300 rounded-md px-2 py-1.5 text-sm text-black" />
           </label>
-          <label className="text-sm text-gray-700 font-medium">
-            Situação (lista de balanços)
-            <select value={filtros.situacao} onChange={(e) => setFiltros({ ...filtros, situacao: e.target.value as FiltroSituacao })} className="block mt-1 border border-gray-300 rounded-md px-2 py-1.5 text-sm text-black">
-              <option value="todas">Todas</option>
-              <option value="validos">Válidos</option>
-              <option value="cancelados">Cancelados</option>
-              <option value="andamento">Em andamento</option>
-            </select>
-          </label>
+          <div className="relative text-sm text-gray-700 font-medium">
+            Situação
+            <button onClick={() => setSituacoesAbertas((v) => !v)} className={`${botaoBase} mt-1 bg-white border-gray-300 text-black inline-flex items-center gap-2 w-full justify-between`} aria-expanded={situacoesAbertas}>
+              Situação ({filtros.situacoes.length}/{SITUACOES_OPCOES.length}) <ChevronDown className="w-4 h-4" />
+            </button>
+            {situacoesAbertas && (
+              <div className="absolute z-30 mt-1 w-60 bg-white border border-gray-200 rounded-lg shadow-lg p-2">
+                <div className="flex gap-3 px-2 py-1 text-xs font-semibold text-brand-text">
+                  <button onClick={() => setFiltros({ ...filtros, situacoes: [...SITUACOES_PADRAO] })}>Padrão (válidos)</button>
+                  <button onClick={() => setSituacoesAbertas(false)} className="ml-auto text-gray-600">Fechar</button>
+                </div>
+                {SITUACOES_OPCOES.map((o) => (
+                  <label key={o.id} className="flex items-center gap-2 px-2 py-1 text-sm text-black hover:bg-brand-soft rounded cursor-pointer">
+                    <input type="checkbox" checked={filtros.situacoes.includes(o.id)} onChange={() => alternarSituacao(o.id)} />
+                    {o.nome}
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
 
           <div className="flex flex-wrap items-center gap-3 text-sm text-black">
             <span className="font-medium text-gray-700">Tipos de balanço:</span>
@@ -630,7 +647,11 @@ export default function BalancoLojasPage() {
                 return (
                   <>
                     <div className="text-3xl font-bold tabular-nums mt-1 text-black">{fmtPct(media)}</div>
-                    <div className="text-xs text-gray-600 mt-1">Média das lojas sobre {dados.diasUteis} dias úteis (dias em que a maioria das lojas contou)</div>
+                    <div className="text-xs text-gray-600 mt-1">
+                      {dados.diasUteis > 0
+                        ? `Média das lojas sobre ${dados.diasUteis} dias úteis (dias em que a maioria das lojas fez balanço dos tipos filtrados)`
+                        : 'Não se aplica aos tipos filtrados: só faz sentido para o balanço rotativo (diário).'}
+                    </div>
                   </>
                 );
               })()}
