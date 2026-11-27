@@ -87,6 +87,7 @@ def _criar_tabelas() -> None:
             PRIMARY KEY (cd_empbal, nr_balanco)
         )""", ())
     execute_insert("CREATE INDEX IF NOT EXISTS ix_fcp_bal_resumo_dt ON fcp_bal_resumo (dt_cadastro)", ())
+    execute_insert("ALTER TABLE fcp_bal_resumo ADD COLUMN IF NOT EXISTS pecas_dif_ref_abs NUMERIC", ())
     execute_insert("""
         CREATE TABLE IF NOT EXISTS fcp_bal_diverg (
             cd_empbal INT NOT NULL, nr_balanco BIGINT NOT NULL, cd_produto BIGINT NOT NULL,
@@ -101,6 +102,35 @@ def _criar_tabelas() -> None:
             janela_ini DATE PRIMARY KEY, dt_sync TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )""", ())
     _tabelas_ok = True
+    # linhas antigas (anteriores a coluna nova): calcula de uma vez
+    if (execute_query("SELECT 1 FROM fcp_bal_resumo WHERE pecas_dif_ref_abs IS NULL LIMIT 1") or []):
+        _recalcular_dif_referencia(None, None)
+
+
+# Diferenca liquida por REFERENCIA: dentro de uma mesma referencia, a sobra de um
+# SKU (cor/tamanho) cobre a falta de outro (erro de etiquetagem, sem perda fisica).
+_SQL_DIF_REF = """
+    UPDATE fcp_bal_resumo r SET pecas_dif_ref_abs = COALESCE(x.s, 0)
+    FROM fcp_bal_resumo r2
+    LEFT JOIN (
+        SELECT cd_empbal, nr_balanco, SUM(ABS(n)) AS s FROM (
+            SELECT d.cd_empbal, d.nr_balanco, COALESCE(pr.referencia, d.cd_produto::text) AS ref, SUM(d.qt_diferenca) AS n
+            FROM fcp_bal_diverg d
+            LEFT JOIN (SELECT cd_produto, MIN(referencia) AS referencia FROM giro_prd_referencia GROUP BY cd_produto) pr ON pr.cd_produto = d.cd_produto
+            {filtro_d}
+            GROUP BY 1, 2, 3
+        ) t GROUP BY 1, 2
+    ) x ON x.cd_empbal = r2.cd_empbal AND x.nr_balanco = r2.nr_balanco
+    WHERE r.cd_empbal = r2.cd_empbal AND r.nr_balanco = r2.nr_balanco {filtro_r}
+"""
+
+
+def _recalcular_dif_referencia(ini: Optional[date], fim: Optional[date]) -> None:
+    if ini is None:
+        execute_insert(_SQL_DIF_REF.format(filtro_d="", filtro_r=""), ())
+    else:
+        execute_insert(_SQL_DIF_REF.format(filtro_d="WHERE d.dt_cadastro >= %s AND d.dt_cadastro < %s",
+                                           filtro_r="AND r.dt_cadastro >= %s AND r.dt_cadastro < %s"), (ini, fim, ini, fim))
 
 
 def _janelas(ate: date) -> list:
@@ -169,6 +199,7 @@ def _sincronizar_janela(ini: date, fim: date) -> None:
     execute_insert("DELETE FROM fcp_bal_diverg WHERE dt_cadastro >= %s AND dt_cadastro < %s AND cd_empbal = ANY(%s)", (ini, fim, LOJAS))
     execute_insert(_SQL_RESUMO, (PADROES_NAO_PRODUTO, LOJAS, ini, fim))
     execute_insert(_SQL_DIVERG, (LOJAS, ini, fim, PADROES_NAO_PRODUTO))
+    _recalcular_dif_referencia(ini, fim)
     execute_insert("INSERT INTO fcp_bal_sync (janela_ini, dt_sync) VALUES (%s, NOW()) ON CONFLICT (janela_ini) DO UPDATE SET dt_sync = NOW()", (ini,))
 
 
@@ -285,7 +316,10 @@ def _agregar(r: dict) -> dict:
     ativos, div = _f(r.get("itens_ativos")), _f(r.get("itens_divergentes"))
     base, dif = _f(r.get("pecas_base")), _f(r.get("pecas_dif_abs"))
     ac_itens = _pct(ativos - div, ativos)
-    ac_pecas = None if not base else round(max(0.0, 100.0 * (1 - dif / base)), 2)
+    dif_ref = min(_f(r.get("pecas_dif_ref_abs")), dif)  # diferenca liquida por referencia (fisica)
+    etiq = max(0.0, dif - dif_ref)                       # pecas trocadas entre SKUs da mesma referencia
+    ac_fisica = None if not base else round(max(0.0, 100.0 * (1 - dif_ref / base)), 2)
+    ac_etiq = None if not base else round(max(0.0, 100.0 * (1 - etiq / base)), 2)
     return {
         "balancos": int(r.get("balancos") or 0),
         "itensAtivos": int(ativos), "itensContados": int(_f(r.get("itens_contados"))), "itensDivergentes": int(div),
@@ -294,15 +328,16 @@ def _agregar(r: dict) -> dict:
         "valorFalta": round(_f(r.get("valor_falta")), 2), "valorSobra": round(_f(r.get("valor_sobra")), 2),
         "valorSaldo": round(_f(r.get("valor_saldo")), 2),
         "valorLiquido": round(_f(r.get("valor_sobra")) - _f(r.get("valor_falta")), 2),
-        "acuracidadeItens": ac_itens, "acuracidadePecas": ac_pecas,
+        "acuracidadeItens": ac_itens, "acuracidadePecas": ac_fisica, "acuracidadeFisica": ac_fisica, "acuracidadeEtiq": ac_etiq,
+        "pecasDifFisica": round(dif_ref), "pecasDifEtiq": round(etiq),
         "acuracidadeValor": None if not _f(r.get("valor_saldo")) else round(max(0.0, 100.0 * (1 - (_f(r.get("valor_falta")) + _f(r.get("valor_sobra"))) / max(_f(r.get("valor_saldo")), 1e-9))), 2),
-        "status": _status_acuracidade(ac_itens),
+        "status": _status_acuracidade(ac_fisica),
     }
 
 
 _COLS_SOMA = """
     COUNT(*) AS balancos, SUM(itens_ativos) AS itens_ativos, SUM(itens_contados) AS itens_contados, SUM(itens_divergentes) AS itens_divergentes,
-    SUM(pecas_saldo) AS pecas_saldo, SUM(pecas_contadas) AS pecas_contadas, SUM(pecas_dif_abs) AS pecas_dif_abs, SUM(pecas_base) AS pecas_base,
+    SUM(pecas_saldo) AS pecas_saldo, SUM(pecas_contadas) AS pecas_contadas, SUM(pecas_dif_abs) AS pecas_dif_abs, SUM(pecas_dif_ref_abs) AS pecas_dif_ref_abs, SUM(pecas_base) AS pecas_base,
     SUM(pecas_falta) AS pecas_falta, SUM(pecas_sobra) AS pecas_sobra, SUM(valor_saldo) AS valor_saldo, SUM(valor_falta) AS valor_falta, SUM(valor_sobra) AS valor_sobra
 """
 
@@ -440,7 +475,7 @@ def resumo(
             ag = _agregar(r)
             por_dia.append({"data": r["d"].isoformat(), "balancos": ag["balancos"], "itensAtivos": ag["itensAtivos"],
                             "itensDivergentes": ag["itensDivergentes"], "acuracidadeItens": ag["acuracidadeItens"],
-                            "acuracidadePecas": ag["acuracidadePecas"], "valorFalta": ag["valorFalta"], "valorSobra": ag["valorSobra"]})
+                            "acuracidadePecas": ag["acuracidadePecas"], "acuracidadeFisica": ag["acuracidadeFisica"], "acuracidadeEtiq": ag["acuracidadeEtiq"], "valorFalta": ag["valorFalta"], "valorSobra": ag["valorSobra"]})
 
         # por tipo (ignora o filtro de tipo pra comparar os tipos entre si)
         por_tipo = []
@@ -504,6 +539,8 @@ def balancos(
                 "valorFalta": ag["valorFalta"], "valorSobra": ag["valorSobra"],
                 "acuracidadeItens": ag["acuracidadeItens"] if valida else None,
                 "acuracidadePecas": ag["acuracidadePecas"] if valida else None,
+                "acuracidadeFisica": ag["acuracidadeFisica"] if valida else None,
+                "acuracidadeEtiq": ag["acuracidadeEtiq"] if valida else None,
                 "status": ag["status"] if valida else "neutro",
                 "horasAteContar": round((r["dt_contagem"] - r["dt_lista"]).total_seconds() / 3600, 1)
                     if r["dt_contagem"] and r["dt_lista"] and r["dt_contagem"] > r["dt_lista"] and (r["dt_contagem"] - r["dt_lista"]) < timedelta(days=2) else None,

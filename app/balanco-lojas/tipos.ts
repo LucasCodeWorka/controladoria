@@ -15,8 +15,10 @@ export interface Agg {
   valorSobra: number;
   valorSaldo: number;
   valorLiquido: number;
-  acuracidadeItens: number | null;
-  acuracidadePecas: number | null;
+  acuracidadeFisica: number | null;
+  acuracidadeEtiq: number | null;
+  pecasDifFisica: number;
+  pecasDifEtiq: number;
   acuracidadeValor: number | null;
   status: StatusAcur;
 }
@@ -48,8 +50,8 @@ export interface DiaRow {
   balancos: number;
   itensAtivos: number;
   itensDivergentes: number;
-  acuracidadeItens: number | null;
-  acuracidadePecas: number | null;
+  acuracidadeFisica: number | null;
+  acuracidadeEtiq: number | null;
   valorFalta: number;
   valorSobra: number;
 }
@@ -86,8 +88,8 @@ export interface BalancoRow {
   pecasSobra: number;
   valorFalta: number;
   valorSobra: number;
-  acuracidadeItens: number | null;
-  acuracidadePecas: number | null;
+  acuracidadeFisica: number | null;
+  acuracidadeEtiq: number | null;
   status: StatusAcur;
   horasAteContar: number | null;
 }

@@ -65,24 +65,24 @@ const FILTROS_PADRAO = (): Filtros => ({ ...ultimosDias(30), empresas: null, tip
 // ---------------------------------------------------------------------------
 interface InfoKpi { titulo: string; texto: string; memoria: (t: Resumo['total']) => [string, string][] }
 const INFO_KPI: Record<string, InfoKpi> = {
-  acurItens: {
-    titulo: 'Acuracidade por itens',
-    texto: 'Dos itens (SKU) que tinham saldo ou foram contados, quantos bateram exatamente com o sistema. É o jeito mais rigoroso de medir: um item com 1 peça de diferença conta como erro inteiro. Meta: 98% ou mais (verde); entre 95% e 98% atenção (amarelo); abaixo de 95% crítico (vermelho).',
+  acurFisica: {
+    titulo: 'Acuracidade física de peças',
+    texto: 'Mede a assertividade do estoque físico em relação ao estoque registrado no sistema, considerando as faltas e sobras efetivas de peças, independentemente das divergências de etiquetagem. Dentro de cada referência, a sobra de um SKU (cor/tamanho) cobre a falta de outro; só o saldo líquido é perda ou ganho físico real. Fórmula: 1 − (soma das diferenças líquidas por referência, em módulo) ÷ (soma, SKU a SKU, do maior valor entre saldo e contagem). Meta: 98% ou mais (verde); entre 95% e 98% atenção; abaixo de 95% crítico.',
     memoria: (t) => [
-      ['Itens ativos (saldo ou contagem ≠ 0)', fmtInt(t.itensAtivos)],
-      ['(−) Itens com diferença', fmtInt(t.itensDivergentes)],
-      ['Itens que bateram', fmtInt(t.itensAtivos - t.itensDivergentes)],
-      ['Acuracidade por itens', fmtPct(t.acuracidadeItens)],
+      ['Diferença total entre SKUs (faltas + sobras)', fmtInt(t.pecasFalta + t.pecasSobra)],
+      ['(−) Compensada dentro da mesma referência', fmtInt(t.pecasDifEtiq)],
+      ['Diferença física efetiva (peças)', fmtInt(t.pecasDifFisica)],
+      ['Acuracidade física de peças', fmtPct(t.acuracidadeFisica)],
     ],
   },
-  acurPecas: {
-    titulo: 'Acuracidade por peças',
-    texto: 'Mede o tamanho do erro em quantidade de peças: 1 menos a soma das diferenças (em módulo, faltas + sobras) dividida pela soma, item a item, do maior valor entre saldo e contagem. Perdoa erros pequenos em itens de muito estoque; por isso costuma ficar acima da acuracidade por itens.',
+  acurEtiq: {
+    titulo: 'Acuracidade de etiquetagem',
+    texto: 'Mede a assertividade da identificação dos produtos por SKU (referência, cor e tamanho), considerando as divergências compensatórias dentro de uma mesma referência, nas quais a sobra de um SKU corresponde à falta de outro, indicando um possível erro de etiquetagem, sem necessariamente representar uma perda física de estoque. Fórmula: 1 − (peças compensadas dentro da referência) ÷ (soma, SKU a SKU, do maior valor entre saldo e contagem).',
     memoria: (t) => [
-      ['Peças a menos (faltas)', fmtInt(t.pecasFalta)],
-      ['Peças a mais (sobras)', fmtInt(t.pecasSobra)],
-      ['Diferença total em módulo', fmtInt(t.pecasFalta + t.pecasSobra)],
-      ['Acuracidade por peças', fmtPct(t.acuracidadePecas)],
+      ['Diferença total entre SKUs (faltas + sobras)', fmtInt(t.pecasFalta + t.pecasSobra)],
+      ['(−) Diferença física efetiva', fmtInt(t.pecasDifFisica)],
+      ['Peças trocadas entre SKUs da mesma referência', fmtInt(t.pecasDifEtiq)],
+      ['Acuracidade de etiquetagem', fmtPct(t.acuracidadeEtiq)],
     ],
   },
   balancos: {
@@ -392,8 +392,8 @@ export default function BalancoLojasPage() {
     { id: 'ultimo', titulo: 'Último balanço', get: (r) => r.ultimoBalanco, render: (r) => (r.ultimoBalanco ? <span className={(r.diasSemBalanco ?? 0) >= 4 ? 'text-red-700 font-bold' : ''}>{fmtData(r.ultimoBalanco)}{r.diasSemBalanco != null ? ` (${r.diasSemBalanco}d)` : ''}</span> : '-') },
     { id: 'itens', titulo: 'Itens ativos', get: (r) => r.itensAtivos, render: (r) => fmtInt(r.itensAtivos), total: fmtInt(totalLojas?.itensAtivos) },
     { id: 'div', titulo: 'Itens c/ dif.', get: (r) => r.itensDivergentes, render: (r) => fmtInt(r.itensDivergentes), total: fmtInt(totalLojas?.itensDivergentes) },
-    { id: 'acurI', titulo: 'Acur. itens', alinhar: 'centro', get: (r) => r.acuracidadeItens, render: (r) => (r.acuracidadeItens == null ? '-' : <Badge status={r.status}>{fmtPct(r.acuracidadeItens)}</Badge>), total: totalLojas ? <Badge status={totalLojas.status}>{fmtPct(totalLojas.acuracidadeItens)}</Badge> : '' },
-    { id: 'acurP', titulo: 'Acur. peças', get: (r) => r.acuracidadePecas, render: (r) => fmtPct(r.acuracidadePecas), total: fmtPct(totalLojas?.acuracidadePecas) },
+    { id: 'acurI', titulo: 'Acur. física', alinhar: 'centro', get: (r) => r.acuracidadeFisica, render: (r) => (r.acuracidadeFisica == null ? '-' : <Badge status={r.status}>{fmtPct(r.acuracidadeFisica)}</Badge>), total: totalLojas ? <Badge status={totalLojas.status}>{fmtPct(totalLojas.acuracidadeFisica)}</Badge> : '' },
+    { id: 'acurP', titulo: 'Acur. etiquet.', get: (r) => r.acuracidadeEtiq, render: (r) => fmtPct(r.acuracidadeEtiq), total: fmtPct(totalLojas?.acuracidadeEtiq) },
     { id: 'pf', titulo: 'Falta (pç)', get: (r) => r.pecasFalta, render: (r) => fmtInt(r.pecasFalta), total: fmtInt(totalLojas?.pecasFalta) },
     { id: 'ps', titulo: 'Sobra (pç)', get: (r) => r.pecasSobra, render: (r) => fmtInt(r.pecasSobra), total: fmtInt(totalLojas?.pecasSobra) },
     { id: 'vf', titulo: 'Falta (R$)', get: (r) => r.valorFalta, render: (r) => <span className="text-red-700">{fmtBRL(r.valorFalta)}</span>, total: fmtBRL(totalLojas?.valorFalta) },
@@ -417,8 +417,8 @@ export default function BalancoLojasPage() {
       { id: 'op', titulo: 'Operador', alinhar: 'esq', get: (r) => r.operador, render: (r) => r.operador ?? '-' },
       { id: 'itens', titulo: 'Itens ativos', get: (r) => r.itensAtivos, render: (r) => fmtInt(r.itensAtivos), total: fmtInt(somar((b) => b.itensAtivos)) },
       { id: 'div', titulo: 'Itens c/ dif.', get: (r) => r.itensDivergentes, render: (r) => fmtInt(r.itensDivergentes), total: fmtInt(somar((b) => b.itensDivergentes)) },
-      { id: 'acur', titulo: 'Acur. itens', alinhar: 'centro', get: (r) => r.acuracidadeItens, render: (r) => (r.acuracidadeItens == null ? '-' : <Badge status={r.status}>{fmtPct(r.acuracidadeItens)}</Badge>), total: at ? fmtPct((100 * (at - dv)) / at) : '-' },
-      { id: 'acurp', titulo: 'Acur. peças', get: (r) => r.acuracidadePecas, render: (r) => fmtPct(r.acuracidadePecas) },
+      { id: 'acur', titulo: 'Acur. física', alinhar: 'centro', get: (r) => r.acuracidadeFisica, render: (r) => (r.acuracidadeFisica == null ? '-' : <Badge status={r.status}>{fmtPct(r.acuracidadeFisica)}</Badge>), total: '' },
+      { id: 'acurp', titulo: 'Acur. etiquet.', get: (r) => r.acuracidadeEtiq, render: (r) => fmtPct(r.acuracidadeEtiq) },
       { id: 'pf', titulo: 'Falta (pç)', get: (r) => r.pecasFalta, render: (r) => fmtInt(r.pecasFalta), total: fmtInt(somar((b) => b.pecasFalta)) },
       { id: 'ps', titulo: 'Sobra (pç)', get: (r) => r.pecasSobra, render: (r) => fmtInt(r.pecasSobra), total: fmtInt(somar((b) => b.pecasSobra)) },
       { id: 'vf', titulo: 'Falta (R$)', get: (r) => r.valorFalta, render: (r) => <span className="text-red-700">{fmtBRL(r.valorFalta)}</span>, total: fmtBRL(somar((b) => b.valorFalta)) },
@@ -434,8 +434,8 @@ export default function BalancoLojasPage() {
       { id: 'bal', titulo: 'Balanços', get: (r) => r.balancos, render: (r) => fmtInt(r.balancos), total: fmtInt(ops.reduce((s, o) => s + o.balancos, 0)) },
       { id: 'itens', titulo: 'Itens ativos', get: (r) => r.itensAtivos, render: (r) => fmtInt(r.itensAtivos), total: fmtInt(ops.reduce((s, o) => s + o.itensAtivos, 0)) },
       { id: 'div', titulo: 'Itens c/ dif.', get: (r) => r.itensDivergentes, render: (r) => fmtInt(r.itensDivergentes), total: fmtInt(ops.reduce((s, o) => s + o.itensDivergentes, 0)) },
-      { id: 'acur', titulo: 'Acur. itens', alinhar: 'centro', get: (r) => r.acuracidadeItens, render: (r) => (r.acuracidadeItens == null ? '-' : <Badge status={r.status}>{fmtPct(r.acuracidadeItens)}</Badge>) },
-      { id: 'acurp', titulo: 'Acur. peças', get: (r) => r.acuracidadePecas, render: (r) => fmtPct(r.acuracidadePecas) },
+      { id: 'acur', titulo: 'Acur. física', alinhar: 'centro', get: (r) => r.acuracidadeFisica, render: (r) => (r.acuracidadeFisica == null ? '-' : <Badge status={r.status}>{fmtPct(r.acuracidadeFisica)}</Badge>) },
+      { id: 'acurp', titulo: 'Acur. etiquet.', get: (r) => r.acuracidadeEtiq, render: (r) => fmtPct(r.acuracidadeEtiq) },
       { id: 'vf', titulo: 'Falta (R$)', get: (r) => r.valorFalta, render: (r) => <span className="text-red-700">{fmtBRL(r.valorFalta)}</span>, total: fmtBRL(ops.reduce((s, o) => s + o.valorFalta, 0)) },
       { id: 'vs', titulo: 'Sobra (R$)', get: (r) => r.valorSobra, render: (r) => <span className="text-blue-700">{fmtBRL(r.valorSobra)}</span>, total: fmtBRL(ops.reduce((s, o) => s + o.valorSobra, 0)) },
     ];
@@ -446,8 +446,8 @@ export default function BalancoLojasPage() {
     { id: 'bal', titulo: 'Balanços', get: (r) => r.balancos, render: (r) => fmtInt(r.balancos) },
     { id: 'itens', titulo: 'Itens ativos', get: (r) => r.itensAtivos, render: (r) => fmtInt(r.itensAtivos) },
     { id: 'div', titulo: 'Itens c/ dif.', get: (r) => r.itensDivergentes, render: (r) => fmtInt(r.itensDivergentes) },
-    { id: 'acur', titulo: 'Acur. itens', alinhar: 'centro', get: (r) => r.acuracidadeItens, render: (r) => (r.acuracidadeItens == null ? '-' : <Badge status={r.status}>{fmtPct(r.acuracidadeItens)}</Badge>) },
-    { id: 'acurp', titulo: 'Acur. peças', get: (r) => r.acuracidadePecas, render: (r) => fmtPct(r.acuracidadePecas) },
+    { id: 'acur', titulo: 'Acur. física', alinhar: 'centro', get: (r) => r.acuracidadeFisica, render: (r) => (r.acuracidadeFisica == null ? '-' : <Badge status={r.status}>{fmtPct(r.acuracidadeFisica)}</Badge>) },
+    { id: 'acurp', titulo: 'Acur. etiquet.', get: (r) => r.acuracidadeEtiq, render: (r) => fmtPct(r.acuracidadeEtiq) },
     { id: 'vf', titulo: 'Falta (R$)', get: (r) => r.valorFalta, render: (r) => <span className="text-red-700">{fmtBRL(r.valorFalta)}</span> },
     { id: 'vs', titulo: 'Sobra (R$)', get: (r) => r.valorSobra, render: (r) => <span className="text-blue-700">{fmtBRL(r.valorSobra)}</span> },
   ], []);
@@ -480,12 +480,12 @@ export default function BalancoLojasPage() {
   ], []);
 
   const serieLoja = useMemo(
-    () => (dados?.porLoja ?? []).filter((l) => l.itensAtivos > 0).sort((a, b) => (a.acuracidadeItens ?? 0) - (b.acuracidadeItens ?? 0)),
+    () => (dados?.porLoja ?? []).filter((l) => l.itensAtivos > 0).sort((a, b) => (a.acuracidadeFisica ?? 0) - (b.acuracidadeFisica ?? 0)),
     [dados],
   );
   const serieDia = useMemo(() => (dados?.porDia ?? []).map((d) => ({ ...d, rotulo: `${d.data.slice(8, 10)}/${d.data.slice(5, 7)}` })), [dados]);
   const minAcur = useMemo(() => {
-    const vs = serieDia.flatMap((d) => [d.acuracidadeItens, d.acuracidadePecas]).filter((v): v is number => v != null);
+    const vs = serieDia.flatMap((d) => [d.acuracidadeFisica, d.acuracidadeEtiq]).filter((v): v is number => v != null);
     return vs.length ? Math.max(0, Math.floor(Math.min(...vs, metas.atencao) - 2)) : 80;
   }, [serieDia, metas]);
 
@@ -628,10 +628,10 @@ export default function BalancoLojasPage() {
 
           {/* KPIs */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <Kpi id="acurItens" titulo="Acuracidade por itens" valor={fmtPct(t.acuracidadeItens)} status={t.status} onInfo={setPopup}
-              sub={`${fmtInt(t.itensDivergentes)} de ${fmtInt(t.itensAtivos)} itens com diferença · meta ${metas.ok}%`} />
-            <Kpi id="acurPecas" titulo="Acuracidade por peças" valor={fmtPct(t.acuracidadePecas)} status={statusDe(t.acuracidadePecas, metas)} onInfo={setPopup}
-              sub={`${fmtInt(t.pecasFalta + t.pecasSobra)} peças de diferença`} />
+            <Kpi id="acurFisica" titulo="Acuracidade física de peças" valor={fmtPct(t.acuracidadeFisica)} status={t.status} onInfo={setPopup}
+              sub={`${fmtInt(t.pecasDifFisica)} peças de diferença física · meta ${metas.ok}%`} />
+            <Kpi id="acurEtiq" titulo="Acuracidade de etiquetagem" valor={fmtPct(t.acuracidadeEtiq)} status={statusDe(t.acuracidadeEtiq, metas)} onInfo={setPopup}
+              sub={`${fmtInt(t.pecasDifEtiq)} peças trocadas entre SKUs da mesma referência`} />
             <Kpi id="balancos" titulo="Balanços realizados" valor={fmtInt(t.balancos)} onInfo={setPopup}
               sub={`${fmtInt(t.cancelados)} cancelados (${fmtPct(t.pctCancelados)}) · ${fmtInt(t.emAndamento)} em andamento`} />
             <Kpi id="divergencia" titulo="Balanços com diferença" valor={fmtPct(t.pctBalancosComDivergencia)} onInfo={setPopup}
@@ -661,7 +661,7 @@ export default function BalancoLojasPage() {
           {/* acuracidade por loja */}
           <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-4">
             <h2 className="text-lg font-bold text-black">Acuracidade por loja</h2>
-            <p className="text-xs text-gray-600 mb-2">Por itens e por peças, da pior para a melhor loja. Linhas tracejadas: meta de {metas.ok}% (verde) e piso de {metas.atencao}% (amarelo).</p>
+            <p className="text-xs text-gray-600 mb-2">Física de peças e etiquetagem, da pior para a melhor loja (ordenado pela física). Linhas tracejadas: meta de {metas.ok}% (verde) e piso de {metas.atencao}% (amarelo).</p>
             <div style={{ height: Math.max(260, serieLoja.length * 52 + 60) }}>
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={serieLoja} layout="vertical" margin={{ top: 8, right: 56, bottom: 8, left: 8 }} barCategoryGap="22%">
@@ -672,11 +672,11 @@ export default function BalancoLojasPage() {
                   <Legend wrapperStyle={{ fontSize: 12 }} />
                   <ReferenceLine x={metas.ok} stroke="#15803d" strokeDasharray="4 4" />
                   <ReferenceLine x={metas.atencao} stroke="#b45309" strokeDasharray="4 4" />
-                  <Bar dataKey="acuracidadeItens" name="Por itens" fill="#8e5e68">
-                    <LabelList dataKey="acuracidadeItens" position="right" formatter={rotuloPct} style={{ fontSize: 11, fontWeight: 600, fill: '#8e5e68' }} />
+                  <Bar dataKey="acuracidadeFisica" name="Física de peças" fill="#8e5e68">
+                    <LabelList dataKey="acuracidadeFisica" position="right" formatter={rotuloPct} style={{ fontSize: 11, fontWeight: 600, fill: '#8e5e68' }} />
                   </Bar>
-                  <Bar dataKey="acuracidadePecas" name="Por peças" fill="#9ca3af">
-                    <LabelList dataKey="acuracidadePecas" position="right" formatter={rotuloPct} style={{ fontSize: 11, fontWeight: 600, fill: '#4b5563' }} />
+                  <Bar dataKey="acuracidadeEtiq" name="Etiquetagem" fill="#9ca3af">
+                    <LabelList dataKey="acuracidadeEtiq" position="right" formatter={rotuloPct} style={{ fontSize: 11, fontWeight: 600, fill: '#4b5563' }} />
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
@@ -698,11 +698,11 @@ export default function BalancoLojasPage() {
                     <Legend wrapperStyle={{ fontSize: 12 }} />
                     <ReferenceLine y={metas.ok} stroke="#15803d" strokeDasharray="4 4" />
                     <ReferenceLine y={metas.atencao} stroke="#b45309" strokeDasharray="4 4" />
-                    <Line type="monotone" dataKey="acuracidadeItens" name="Por itens" stroke="#8e5e68" strokeWidth={2.5} dot={{ r: 3 }} connectNulls>
-                      <LabelList dataKey="acuracidadeItens" position="bottom" formatter={rotuloPct} style={{ fontSize: 11, fontWeight: 600, fill: '#8e5e68' }} />
+                    <Line type="monotone" dataKey="acuracidadeFisica" name="Física de peças" stroke="#8e5e68" strokeWidth={2.5} dot={{ r: 3 }} connectNulls>
+                      <LabelList dataKey="acuracidadeFisica" position="bottom" formatter={rotuloPct} style={{ fontSize: 11, fontWeight: 600, fill: '#8e5e68' }} />
                     </Line>
-                    <Line type="monotone" dataKey="acuracidadePecas" name="Por peças" stroke="#6b7280" strokeWidth={2} dot={{ r: 2 }} connectNulls>
-                      <LabelList dataKey="acuracidadePecas" position="top" formatter={rotuloPct} style={{ fontSize: 11, fontWeight: 600, fill: '#4b5563' }} />
+                    <Line type="monotone" dataKey="acuracidadeEtiq" name="Etiquetagem" stroke="#6b7280" strokeWidth={2} dot={{ r: 2 }} connectNulls>
+                      <LabelList dataKey="acuracidadeEtiq" position="top" formatter={rotuloPct} style={{ fontSize: 11, fontWeight: 600, fill: '#4b5563' }} />
                     </Line>
                   </LineChart>
                 </ResponsiveContainer>
@@ -866,7 +866,7 @@ function DetalheBalanco({ b, onFechar }: { b: BalancoRow; onFechar: () => void }
         <span>{b.descricao}</span>
         <span>{NOME_TIPO[b.tipo] ?? b.tipo} · {b.situacao}</span>
         {b.operador && <span>Operador: {b.operador}</span>}
-        <span>Acuracidade: <b>{fmtPct(b.acuracidadeItens)}</b> ({fmtInt(b.itensDivergentes)} de {fmtInt(b.itensAtivos)} itens com diferença)</span>
+        <span>Acuracidade física: <b>{fmtPct(b.acuracidadeFisica)}</b> · etiquetagem: <b>{fmtPct(b.acuracidadeEtiq)}</b> ({fmtInt(b.itensDivergentes)} de {fmtInt(b.itensAtivos)} itens com diferença)</span>
         <label className="inline-flex items-center gap-1.5 ml-auto cursor-pointer">
           <input type="checkbox" checked={somenteDiv} onChange={(e) => setSomenteDiv(e.target.checked)} /> Só itens com diferença
         </label>
