@@ -326,7 +326,7 @@ def _obter_saldos_bancarios(somente_hoje: bool = True) -> dict:
         vl_limite_contratado = float(r["vl_limite_total_credito"] or 0)
         vl_limite = vl_limite_contratado if qt_dias_restantes > 0 else 0.0
         contas.append({
-            "nmBanco": r["nm_banco"], "nrAgencia": r["nr_agencia"], "nrConta": r["nr_conta"],
+            "cdConta": r["cd_conta_bancaria"], "nmBanco": r["nm_banco"], "nrAgencia": r["nr_agencia"], "nrConta": r["nr_conta"],
             "vlSaldo": vl_saldo, "vlLimite": vl_limite, "vlDisponivel": vl_saldo + vl_limite,
             "vlLimiteContratado": vl_limite_contratado,
             "qtDiasCarencia": qt_dias_carencia, "qtDiasUsados": qt_dias_usados, "qtDiasRestantes": qt_dias_restantes,

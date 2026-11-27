@@ -557,6 +557,11 @@ def _criar_tabela_estoque_lojas():
 # (estoque da fabrica, sem coluna de empresa) x custo tabela 'C' cod 999 da
 # empresa 1 (f_prd_valor_produto2) + 10%. Produto sem valor nessa tabela vale 0.
 CD_EMPRESA_CACHE_FABRICA = 1
+# Empresa dona de cada conta bancaria (fin_contas_bancarias.id; a tabela nao tem
+# empresa): 7 Itau CB Empreendimentos = 110; 6 Itau Pacifico Holding = 100 (Cairo
+# Eireli); 9 Santander Corpo Sexy = 50; as demais (Itau Maraponga/Fabrica,
+# Santander Liebe, BB, ABC, BNB, Safra) = LIEBE (1).
+EMPRESA_DA_CONTA_BANCARIA = {7: 110, 6: 100, 9: 50}
 ACRESCIMO_ESTOQUE_FABRICA = 1.10
 
 SQL_ESTOQUE_FABRICA_DT_BASE = "SELECT MAX(dt_atualizacao) AS dt FROM mv_pcp_estoque_atual"
@@ -956,6 +961,11 @@ def _calcular_balanco(
         def _caixa():
             # Sem posicao de hoje, vale o ultimo saldo de cada conta.
             saldos = _obter_saldos_bancarios(somente_hoje=False)
+            if empresas:
+                # Filtro de empresas: so as contas bancarias da(s) empresa(s) escolhida(s).
+                sel = set(_parse_empresas(empresas))
+                saldos["contas"] = [c for c in saldos["contas"] if EMPRESA_DA_CONTA_BANCARIA.get(c["cdConta"], 1) in sel]
+                saldos["total"] = sum(c["vlSaldo"] for c in saldos["contas"])
             # _CAIXA_POS / _CHEQUE_ESP: usados so no indicador de divida (caixa
             # disponivel = saldos positivos; saldo negativo = cheque especial
             # utilizado, que e divida). Saem de "valores" antes da resposta.
