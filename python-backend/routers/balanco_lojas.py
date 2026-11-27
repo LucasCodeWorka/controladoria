@@ -228,6 +228,15 @@ def _periodo(ini: Optional[str], fim: Optional[str]):
     return d_ini, d_fim
 
 
+def _busca(busca: Optional[str], alias: str = ""):
+    """Filtro por numero ou descricao do balanco -> (clausula SQL, params)."""
+    b = (busca or "").strip()
+    if not b:
+        return "", ()
+    a = f"{alias}." if alias else ""
+    return f" AND ({a}nr_balanco::text = %s OR {a}ds_balanco ILIKE %s)", (b, f"%{b}%")
+
+
 def _f(v) -> float:
     return float(v) if v is not None else 0.0
 
@@ -331,15 +340,16 @@ def opcoes():
 @router.get("/api/balanco-lojas/resumo")
 def resumo(
     inicio: Optional[str] = Query(None), fim: Optional[str] = Query(None),
-    empresas: Optional[str] = Query(None), tipos: Optional[str] = Query(None),
+    empresas: Optional[str] = Query(None), tipos: Optional[str] = Query(None), busca: Optional[str] = Query(None),
 ):
     try:
         _criar_tabelas()
         d_ini, d_fim = _periodo(inicio, fim)
         lojas, tps = _parse_empresas(empresas), _parse_tipos(tipos)
         ini_ts, fim_ts = d_ini, d_fim + timedelta(days=1)
-        base = "FROM fcp_bal_resumo WHERE cd_empbal = ANY(%s) AND tipo = ANY(%s) AND dt_cadastro >= %s AND dt_cadastro < %s"
-        pb = (lojas, tps, ini_ts, fim_ts)
+        cb, pbusca = _busca(busca)
+        base = f"FROM fcp_bal_resumo WHERE cd_empbal = ANY(%s) AND tipo = ANY(%s) AND dt_cadastro >= %s AND dt_cadastro < %s{cb}"
+        pb = (lojas, tps, ini_ts, fim_ts, *pbusca)
         validas = f"{base} AND tp_situacao = ANY(%s)"
         pv = (*pb, list(SITUACOES_VALIDAS))
 
@@ -372,8 +382,8 @@ def resumo(
             SELECT cd_empbal, COUNT(*) FILTER (WHERE tp_situacao = 6) AS cancelados, MAX(dt_cadastro) FILTER (WHERE tp_situacao = ANY(%s)) AS ultimo
             {base} GROUP BY cd_empbal""", (list(SITUACOES_VALIDAS),) + pb) or [])}
         dias_loja: dict = {l: set() for l in lojas}
-        for r in execute_query(f"SELECT cd_empbal, dt_cadastro::date AS d FROM fcp_bal_resumo WHERE cd_empbal = ANY(%s) AND tipo = 'ROTATIVO' AND tp_situacao = ANY(%s) AND dt_cadastro >= %s AND dt_cadastro < %s AND itens_contados > 0 GROUP BY 1, 2",
-                               (lojas, list(SITUACOES_VALIDAS), ini_ts, fim_ts)) or []:
+        for r in execute_query(f"SELECT cd_empbal, dt_cadastro::date AS d FROM fcp_bal_resumo WHERE cd_empbal = ANY(%s) AND tipo = 'ROTATIVO' AND tp_situacao = ANY(%s) AND dt_cadastro >= %s AND dt_cadastro < %s AND itens_contados > 0{cb} GROUP BY 1, 2",
+                               (lojas, list(SITUACOES_VALIDAS), ini_ts, fim_ts, *pbusca)) or []:
             dias_loja.setdefault(r["cd_empbal"], set()).add(r["d"])
         uteis = _dias_uteis(d_ini, d_fim, dias_loja)
         set_uteis = set(uteis)
@@ -403,8 +413,8 @@ def resumo(
         # por tipo (ignora o filtro de tipo pra comparar os tipos entre si)
         por_tipo = []
         for r in execute_query(f"""SELECT tipo, {_COLS_SOMA} FROM fcp_bal_resumo
-            WHERE cd_empbal = ANY(%s) AND dt_cadastro >= %s AND dt_cadastro < %s AND tp_situacao = ANY(%s) GROUP BY tipo""",
-                               (lojas, ini_ts, fim_ts, list(SITUACOES_VALIDAS))) or []:
+            WHERE cd_empbal = ANY(%s) AND dt_cadastro >= %s AND dt_cadastro < %s AND tp_situacao = ANY(%s){cb} GROUP BY tipo""",
+                               (lojas, ini_ts, fim_ts, list(SITUACOES_VALIDAS), *pbusca)) or []:
             por_tipo.append({"tipo": r["tipo"], **_agregar(r)})
         por_tipo.sort(key=lambda x: TIPOS.index(x["tipo"]) if x["tipo"] in TIPOS else 9)
 
@@ -434,17 +444,18 @@ def resumo(
 def balancos(
     inicio: Optional[str] = Query(None), fim: Optional[str] = Query(None),
     empresas: Optional[str] = Query(None), tipos: Optional[str] = Query(None),
-    incluirCancelados: bool = Query(True),
+    incluirCancelados: bool = Query(True), busca: Optional[str] = Query(None),
 ):
     try:
         _criar_tabelas()
         d_ini, d_fim = _periodo(inicio, fim)
         lojas, tps = _parse_empresas(empresas), _parse_tipos(tipos)
-        filtro_sit = "" if incluirCancelados else " AND tp_situacao <> 6"
+        cb, pbusca = _busca(busca, "r")
+        filtro_sit = ("" if incluirCancelados else " AND tp_situacao <> 6") + cb
         rows = execute_query(f"""
             SELECT r.* FROM fcp_bal_resumo r
             WHERE r.cd_empbal = ANY(%s) AND r.tipo = ANY(%s) AND r.dt_cadastro >= %s AND r.dt_cadastro < %s{filtro_sit}
-            ORDER BY r.dt_cadastro DESC LIMIT 3000""", (lojas, tps, d_ini, d_fim + timedelta(days=1))) or []
+            ORDER BY r.dt_cadastro DESC LIMIT 3000""", (lojas, tps, d_ini, d_fim + timedelta(days=1), *pbusca)) or []
         out = []
         for r in rows:
             ag = _agregar({**r, "balancos": 1})
@@ -479,7 +490,7 @@ _SQL_NOME_PRODUTO = """
 @router.get("/api/balanco-lojas/produtos-criticos")
 def produtos_criticos(
     inicio: Optional[str] = Query(None), fim: Optional[str] = Query(None),
-    empresas: Optional[str] = Query(None), tipos: Optional[str] = Query(None),
+    empresas: Optional[str] = Query(None), tipos: Optional[str] = Query(None), busca: Optional[str] = Query(None),
 ):
     """Reincidencia (produto que divergiu em varios balanços) e maiores
     divergencias em valor."""
@@ -487,9 +498,10 @@ def produtos_criticos(
         _criar_tabelas()
         d_ini, d_fim = _periodo(inicio, fim)
         lojas, tps = _parse_empresas(empresas), _parse_tipos(tipos)
-        pb = (lojas, tps, list(SITUACOES_VALIDAS), d_ini, d_fim + timedelta(days=1))
-        filtro = """FROM fcp_bal_diverg d JOIN fcp_bal_resumo r ON r.cd_empbal = d.cd_empbal AND r.nr_balanco = d.nr_balanco
-                    WHERE d.cd_empbal = ANY(%s) AND r.tipo = ANY(%s) AND r.tp_situacao = ANY(%s) AND d.dt_cadastro >= %s AND d.dt_cadastro < %s"""
+        cb, pbusca = _busca(busca, "r")
+        pb = (lojas, tps, list(SITUACOES_VALIDAS), d_ini, d_fim + timedelta(days=1), *pbusca)
+        filtro = f"""FROM fcp_bal_diverg d JOIN fcp_bal_resumo r ON r.cd_empbal = d.cd_empbal AND r.nr_balanco = d.nr_balanco
+                    WHERE d.cd_empbal = ANY(%s) AND r.tipo = ANY(%s) AND r.tp_situacao = ANY(%s) AND d.dt_cadastro >= %s AND d.dt_cadastro < %s{cb}"""
         reinc = execute_query(f"""
             SELECT d.cd_produto, COUNT(*) AS vezes, COUNT(DISTINCT d.cd_empbal) AS lojas,
                    SUM(ABS(d.qt_diferenca)) AS pecas_abs, SUM(d.qt_diferenca) AS pecas_liq,

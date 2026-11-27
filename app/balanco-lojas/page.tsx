@@ -7,7 +7,7 @@
 
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Bar, BarChart, CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis, Legend,
+  Bar, BarChart, CartesianGrid, LabelList, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis, Legend,
 } from 'recharts';
 import { AlertTriangle, CheckCircle2, ClipboardCheck, Info, RefreshCw, X, ChevronDown } from 'lucide-react';
 import DualScroll from '../components/DualScroll';
@@ -21,7 +21,16 @@ import {
 const CHAVE_FILTROS = 'balancoLojas_filtros';
 const TIPOS_PADRAO = ['ROTATIVO', 'PRINCIPAL', 'RECONTAGEM'];
 
-interface Filtros { inicio: string; fim: string; empresas: number[] | null; tipos: string[] }
+type FiltroSituacao = 'todas' | 'validos' | 'cancelados' | 'andamento';
+interface Filtros { inicio: string; fim: string; empresas: number[] | null; tipos: string[]; busca: string; situacao: FiltroSituacao }
+
+// Usada se a leitura das opções falhar: o filtro de lojas nunca some da tela.
+const LOJAS_FALLBACK = [
+  [2, 'MARAPONGA'], [3, 'IGUATEMI'], [4, 'TABOSA'], [5, 'NORTH'], [6, 'DOM LUIS'], [7, 'PARANGABA'], [8, 'RIO MAR'], [10, 'BARRA SHOPPING - RJ'],
+  [14, 'SALVADOR SHOPPING - BA'], [15, 'MORUMBI SHOPPING'], [17, 'RIO MAR RECIFE'], [19, 'NORTH JOQUEI'], [20, 'PORTO ALEGRE'], [21, 'RIOMAR KENNEDY'],
+  [22, 'INTIMATES'], [120, 'ECOMMERCE'],
+].map(([cdEmpresa, nome]) => ({ cdEmpresa: cdEmpresa as number, nome: nome as string }));
+const SITUACOES_VALIDAS = [3, 5, 7, 8];
 
 const isoLocal = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 const ultimosDias = (n: number) => {
@@ -38,7 +47,13 @@ const mesAnterior = () => {
   const h = new Date();
   return { inicio: isoLocal(new Date(h.getFullYear(), h.getMonth() - 1, 1)), fim: isoLocal(new Date(h.getFullYear(), h.getMonth(), 0)) };
 };
-const FILTROS_PADRAO = (): Filtros => ({ ...ultimosDias(30), empresas: null, tipos: [...TIPOS_PADRAO] });
+const rotuloPct = (v: unknown) => (typeof v === 'number' ? `${v.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 1 })}%` : '');
+const rotuloMil = (v: unknown) => {
+  if (typeof v !== 'number' || v === 0) return '';
+  return Math.abs(v) >= 1000 ? `${(v / 1000).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}k` : v.toLocaleString('pt-BR', { maximumFractionDigits: 0 });
+};
+
+const FILTROS_PADRAO = (): Filtros => ({ ...ultimosDias(30), empresas: null, tipos: [...TIPOS_PADRAO], busca: '', situacao: 'todas' });
 
 // ---------------------------------------------------------------------------
 // explicações (popup) dos indicadores
@@ -272,7 +287,6 @@ function gerarAlertas(r: Resumo, criticos: Criticos | null, hojeEhFim: boolean):
 export default function BalancoLojasPage() {
   const [filtros, setFiltros] = useState<Filtros>(FILTROS_PADRAO);
   const [filtroSalvo, setFiltroSalvo] = useState(false);
-  const [pronto, setPronto] = useState(false);
   const [opcoes, setOpcoes] = useState<Opcoes | null>(null);
   const [dados, setDados] = useState<Resumo | null>(null);
   const [balancos, setBalancos] = useState<BalancoRow[]>([]);
@@ -308,17 +322,20 @@ export default function BalancoLojasPage() {
           fim: salvo.fim || FILTROS_PADRAO().fim,
           empresas: emp && emp.length ? emp : null,
           tipos: tiposValidos.length ? tiposValidos : [...TIPOS_PADRAO],
+          busca: typeof salvo.busca === 'string' ? salvo.busca : '',
+          situacao: ['todas', 'validos', 'cancelados', 'andamento'].includes(salvo.situacao as string) ? (salvo.situacao as FiltroSituacao) : 'todas',
         });
         setFiltroSalvo(true);
       }
-      setPronto(true);
     })();
   }, []);
 
   const consultar = useCallback(async (f: Filtros) => {
     setCarregando(true);
     setErro(null);
+    jaConsultou.current = true;
     const q = new URLSearchParams({ inicio: f.inicio, fim: f.fim, tipos: f.tipos.join(',') });
+    if (f.busca.trim()) q.set('busca', f.busca.trim());
     if (f.empresas && f.empresas.length) q.set('empresas', f.empresas.join(','));
     try {
       const [rr, rb, rc] = await Promise.all([
@@ -341,13 +358,6 @@ export default function BalancoLojasPage() {
       setCarregando(false);
     }
   }, []);
-
-  // consulta automática na abertura
-  useEffect(() => {
-    if (!pronto || jaConsultou.current) return;
-    jaConsultou.current = true;
-    consultar(filtros);
-  }, [pronto, filtros, consultar]);
 
   // andamento da leitura do histórico (só enquanto estiver rodando / incompleto)
   useEffect(() => {
@@ -393,8 +403,9 @@ export default function BalancoLojasPage() {
   };
 
   const lojasSelecionadas = filtros.empresas;
+  const listaLojas = opcoes?.lojas?.length ? opcoes.lojas : LOJAS_FALLBACK;
   const alternarLoja = (id: number) => {
-    const todas = (opcoes?.lojas ?? []).map((l) => l.cdEmpresa);
+    const todas = listaLojas.map((l) => l.cdEmpresa);
     const atual = new Set(lojasSelecionadas ?? todas);
     if (atual.has(id)) atual.delete(id); else atual.add(id);
     setFiltros({ ...filtros, empresas: atual.size === 0 || atual.size === todas.length ? null : Array.from(atual) });
@@ -407,10 +418,16 @@ export default function BalancoLojasPage() {
 
   const hojeEhFim = dados ? dados.periodo.fim >= isoLocal(new Date()) : false;
   const alertas = useMemo(() => (dados ? gerarAlertas(dados, criticos, hojeEhFim) : []), [dados, criticos, hojeEhFim]);
-  const balancosFiltrados = useMemo(() => (lojaSel == null ? balancos : balancos.filter((b) => b.cdEmpresa === lojaSel)), [balancos, lojaSel]);
+  const balancosFiltrados = useMemo(() => balancos.filter((b) => {
+    if (lojaSel != null && b.cdEmpresa !== lojaSel) return false;
+    if (filtros.situacao === 'validos') return SITUACOES_VALIDAS.includes(b.tpSituacao);
+    if (filtros.situacao === 'cancelados') return b.tpSituacao === 6;
+    if (filtros.situacao === 'andamento') return b.tpSituacao === 1;
+    return true;
+  }), [balancos, lojaSel, filtros.situacao]);
   const metas = dados?.metas ?? { ok: opcoes?.metaOk ?? 98, atencao: opcoes?.metaAtencao ?? 95 };
   const t = dados?.total;
-  const textoLojas = !opcoes ? 'Lojas' : lojasSelecionadas ? `Lojas (${lojasSelecionadas.length}/${opcoes.lojas.length})` : `Lojas (${opcoes.lojas.length}/${opcoes.lojas.length})`;
+  const textoLojas = `Lojas (${lojasSelecionadas ? lojasSelecionadas.length : listaLojas.length}/${listaLojas.length})`;
 
   // --- colunas ---------------------------------------------------------------
   const totalLojas = t;
@@ -559,17 +576,18 @@ export default function BalancoLojasPage() {
             ))}
           </div>
 
-          <div className="relative">
-            <button onClick={() => setLojasAbertas((v) => !v)} className={`${botaoBase} bg-white border-gray-300 text-black inline-flex items-center gap-2`} aria-expanded={lojasAbertas}>
+          <div className="relative text-sm text-gray-700 font-medium">
+            Lojas
+            <button onClick={() => setLojasAbertas((v) => !v)} className={`${botaoBase} mt-1 bg-white border-gray-300 text-black inline-flex items-center gap-2 w-full justify-between`} aria-expanded={lojasAbertas}>
               {textoLojas} <ChevronDown className="w-4 h-4" />
             </button>
-            {lojasAbertas && opcoes && (
+            {lojasAbertas && (
               <div className="absolute z-30 mt-1 w-64 bg-white border border-gray-200 rounded-lg shadow-lg p-2 max-h-80 overflow-auto">
                 <div className="flex gap-3 px-2 py-1 text-xs font-semibold text-brand-text">
                   <button onClick={() => setFiltros({ ...filtros, empresas: null })}>Todas</button>
                   <button onClick={() => setLojasAbertas(false)} className="ml-auto text-gray-600">Fechar</button>
                 </div>
-                {opcoes.lojas.map((l) => (
+                {listaLojas.map((l) => (
                   <label key={l.cdEmpresa} className="flex items-center gap-2 px-2 py-1 text-sm text-black hover:bg-brand-soft rounded cursor-pointer">
                     <input type="checkbox" checked={!lojasSelecionadas || lojasSelecionadas.includes(l.cdEmpresa)} onChange={() => alternarLoja(l.cdEmpresa)} />
                     {l.nome}
@@ -579,8 +597,22 @@ export default function BalancoLojasPage() {
             )}
           </div>
 
+          <label className="text-sm text-gray-700 font-medium">
+            Balanço (nº ou descrição)
+            <input type="text" value={filtros.busca} onChange={(e) => setFiltros({ ...filtros, busca: e.target.value })} onKeyDown={(e) => e.key === 'Enter' && consultar(filtros)} placeholder="Ex: 1731 ou RECONTAGEM" className="block mt-1 w-52 border border-gray-300 rounded-md px-2 py-1.5 text-sm text-black" />
+          </label>
+          <label className="text-sm text-gray-700 font-medium">
+            Situação (lista de balanços)
+            <select value={filtros.situacao} onChange={(e) => setFiltros({ ...filtros, situacao: e.target.value as FiltroSituacao })} className="block mt-1 border border-gray-300 rounded-md px-2 py-1.5 text-sm text-black">
+              <option value="todas">Todas</option>
+              <option value="validos">Válidos</option>
+              <option value="cancelados">Cancelados</option>
+              <option value="andamento">Em andamento</option>
+            </select>
+          </label>
+
           <div className="flex flex-wrap items-center gap-3 text-sm text-black">
-            <span className="font-medium text-gray-700">Tipos:</span>
+            <span className="font-medium text-gray-700">Tipos de balanço:</span>
             {Object.keys(NOME_TIPO).map((tp) => (
               <label key={tp} className="inline-flex items-center gap-1.5 cursor-pointer">
                 <input type="checkbox" checked={filtros.tipos.includes(tp)} onChange={() => alternarTipo(tp)} />
@@ -611,6 +643,11 @@ export default function BalancoLojasPage() {
       )}
 
       {!dados && carregando && <div className="text-center text-gray-700 py-16">Carregando os balanços…</div>}
+      {!dados && !carregando && !erro && (
+        <div className="bg-white border border-gray-200 rounded-lg p-10 text-center text-gray-700">
+          Escolha o período, as lojas e o tipo de balanço e clique em Consultar.
+        </div>
+      )}
 
       {dados && t && (
         <>
@@ -670,9 +707,9 @@ export default function BalancoLojasPage() {
             <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-4">
               <h2 className="text-lg font-bold text-black">Acuracidade por dia</h2>
               <p className="text-xs text-gray-600 mb-2">Linhas tracejadas: meta de {metas.ok}% (verde) e piso de {metas.atencao}% (amarelo).</p>
-              <div style={{ height: 280 }}>
+              <div style={{ height: 320 }}>
                 <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={serieDia} margin={{ top: 8, right: 16, bottom: 0, left: 0 }}>
+                  <LineChart data={serieDia} margin={{ top: 22, right: 16, bottom: 12, left: 0 }}>
                     <CartesianGrid stroke="#e5e7eb" vertical={false} />
                     <XAxis dataKey="rotulo" tick={{ fontSize: 12, fill: '#4b5563' }} interval="preserveStartEnd" />
                     <YAxis domain={[minAcur, 100]} tick={{ fontSize: 12, fill: '#4b5563' }} tickFormatter={(v) => `${v}%`} width={48} />
@@ -680,8 +717,12 @@ export default function BalancoLojasPage() {
                     <Legend wrapperStyle={{ fontSize: 12 }} />
                     <ReferenceLine y={metas.ok} stroke="#15803d" strokeDasharray="4 4" />
                     <ReferenceLine y={metas.atencao} stroke="#b45309" strokeDasharray="4 4" />
-                    <Line type="monotone" dataKey="acuracidadeItens" name="Por itens" stroke="#8e5e68" strokeWidth={2.5} dot={false} connectNulls />
-                    <Line type="monotone" dataKey="acuracidadePecas" name="Por peças" stroke="#6b7280" strokeWidth={2} dot={false} connectNulls />
+                    <Line type="monotone" dataKey="acuracidadeItens" name="Por itens" stroke="#8e5e68" strokeWidth={2.5} dot={{ r: 3 }} connectNulls>
+                      <LabelList dataKey="acuracidadeItens" position="bottom" formatter={rotuloPct} style={{ fontSize: 11, fontWeight: 600, fill: '#8e5e68' }} />
+                    </Line>
+                    <Line type="monotone" dataKey="acuracidadePecas" name="Por peças" stroke="#6b7280" strokeWidth={2} dot={{ r: 2 }} connectNulls>
+                      <LabelList dataKey="acuracidadePecas" position="top" formatter={rotuloPct} style={{ fontSize: 11, fontWeight: 600, fill: '#4b5563' }} />
+                    </Line>
                   </LineChart>
                 </ResponsiveContainer>
               </div>
@@ -689,16 +730,20 @@ export default function BalancoLojasPage() {
             <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-4">
               <h2 className="text-lg font-bold text-black">Falta e sobra por dia (R$)</h2>
               <p className="text-xs text-gray-600 mb-2">A preço de tabela do balanço. Falta em vermelho, sobra em azul.</p>
-              <div style={{ height: 280 }}>
+              <div style={{ height: 320 }}>
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={serieDia} margin={{ top: 8, right: 16, bottom: 0, left: 0 }}>
+                  <BarChart data={serieDia} margin={{ top: 22, right: 16, bottom: 12, left: 0 }}>
                     <CartesianGrid stroke="#e5e7eb" vertical={false} />
                     <XAxis dataKey="rotulo" tick={{ fontSize: 12, fill: '#4b5563' }} interval="preserveStartEnd" />
                     <YAxis tick={{ fontSize: 12, fill: '#4b5563' }} tickFormatter={(v) => fmtBRL0(v)} width={72} />
                     <Tooltip formatter={(v) => fmtBRL(Number(v))} labelFormatter={(l) => `Dia ${l}`} />
                     <Legend wrapperStyle={{ fontSize: 12 }} />
-                    <Bar dataKey="valorFalta" name="Falta" fill="#b91c1c" />
-                    <Bar dataKey="valorSobra" name="Sobra" fill="#1d4ed8" />
+                    <Bar dataKey="valorFalta" name="Falta" fill="#b91c1c">
+                      <LabelList dataKey="valorFalta" position="top" formatter={rotuloMil} style={{ fontSize: 10, fontWeight: 600, fill: '#b91c1c' }} />
+                    </Bar>
+                    <Bar dataKey="valorSobra" name="Sobra" fill="#1d4ed8">
+                      <LabelList dataKey="valorSobra" position="top" formatter={rotuloMil} style={{ fontSize: 10, fontWeight: 600, fill: '#1d4ed8' }} />
+                    </Bar>
                   </BarChart>
                 </ResponsiveContainer>
               </div>
