@@ -21,6 +21,9 @@ Definicoes (as mesmas aparecem em popup na tela):
 - acuracidade por pecas = 1 - soma(|diferenca|) / soma(maior entre saldo e
   contagem de cada item);
 - valores a preco de tabela do proprio balanco (vl_preco).
+So entra MERCADORIA: ficam de fora sacola, saquinho, embalagem, brinde, expositor,
+material de marketing, consumo, servico e uniforme (ver TERMOS_NAO_PRODUTO) e
+qualquer codigo >= 1.000.000 (insumo/material de PDV) - mesma regra do Giro.
 Balanço em andamento (1) e cancelado (6) nao entram na acuracidade; aparecem
 nos indicadores de processo.
 """
@@ -34,6 +37,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from database import execute_insert, execute_query
 from routers.dre import CCUSTOS_LOJAS
+from routers.giro import TERMOS_PRODUTO_EXCLUIDOS
 
 router = APIRouter()
 
@@ -45,6 +49,17 @@ SITUACAO_NOME = {1: "Em andamento", 3: "Calculado", 5: "Encerrado", 6: "Cancelad
 TIPOS = ("ROTATIVO", "PRINCIPAL", "RECONTAGEM", "AJUSTE")
 TIPOS_PADRAO = ("ROTATIVO", "PRINCIPAL", "RECONTAGEM")
 META_OK, META_ATENCAO = 98.0, 95.0  # acuracidade por itens (%): verde / amarelo / vermelho
+
+# Fora da avaliacao: o que nao e mercadoria de venda (sacola, saquinho, embalagem,
+# brinde, expositor, material de marketing, consumo, servico, uniforme...). Mesma
+# regra do Giro (codigo >= 1.000.000 = insumo/material de PDV + termos no nome),
+# mais a linha MATERIAIS DE MKT e alguns termos de consumo/servico.
+TERMOS_NAO_PRODUTO = list(TERMOS_PRODUTO_EXCLUIDOS) + ["CONSUMO", "SERVICO", "UNIFORME"]
+PADROES_NAO_PRODUTO = [f"%{t}%" for t in TERMOS_NAO_PRODUTO]
+# trecho SQL (alias i = item do balanco) + 1 parametro (lista de padroes)
+SQL_SO_PRODUTO = """i.cd_produto < 1000000
+        AND NOT EXISTS (SELECT 1 FROM giro_prd_referencia pn WHERE pn.cd_produto = i.cd_produto
+                        AND (pn.produto ILIKE ANY(%s) OR pn.linha ILIKE 'MATERIAIS DE MKT%%'))"""
 
 _tabelas_ok = False
 _trava_sync = threading.Lock()
@@ -120,6 +135,7 @@ _SQL_RESUMO = """
         MIN(i.dt_inclusao), MAX(i.dt_cadastro), NOW()
     FROM vr_bal_balancoc c
     LEFT JOIN vr_bal_balancoi i ON i.cd_empbal = c.cd_empbal AND i.nr_balanco = c.nr_balanco
+        AND """ + SQL_SO_PRODUTO + """
     WHERE c.cd_empbal = ANY(%s) AND c.dt_cadastro >= %s AND c.dt_cadastro < %s
     GROUP BY c.cd_empbal, c.nr_balanco, c.dt_cadastro, c.dt_inclusao, c.dt_validade, c.ds_balanco, c.tp_balanco, c.tp_situacao, c.cd_operador
     ON CONFLICT (cd_empbal, nr_balanco) DO UPDATE SET
@@ -140,6 +156,7 @@ _SQL_DIVERG = """
     FROM vr_bal_balancoc c
     JOIN vr_bal_balancoi i ON i.cd_empbal = c.cd_empbal AND i.nr_balanco = c.nr_balanco
     WHERE c.cd_empbal = ANY(%s) AND c.dt_cadastro >= %s AND c.dt_cadastro < %s AND i.qt_diferenca <> 0
+      AND """ + SQL_SO_PRODUTO + """
     ON CONFLICT (cd_empbal, nr_balanco, cd_produto) DO UPDATE SET
         qt_saldo = EXCLUDED.qt_saldo, qt_contagem = EXCLUDED.qt_contagem, qt_diferenca = EXCLUDED.qt_diferenca,
         vl_preco = EXCLUDED.vl_preco, vl_diferenca = EXCLUDED.vl_diferenca
@@ -150,8 +167,8 @@ def _sincronizar_janela(ini: date, fim: date) -> None:
     # Balanco que mudou de numero/loja nao existe; mas item que deixou de ter
     # diferenca (recontagem corrigiu) precisa sair: apaga a janela e regrava.
     execute_insert("DELETE FROM fcp_bal_diverg WHERE dt_cadastro >= %s AND dt_cadastro < %s AND cd_empbal = ANY(%s)", (ini, fim, LOJAS))
-    execute_insert(_SQL_RESUMO, (LOJAS, ini, fim))
-    execute_insert(_SQL_DIVERG, (LOJAS, ini, fim))
+    execute_insert(_SQL_RESUMO, (PADROES_NAO_PRODUTO, LOJAS, ini, fim))
+    execute_insert(_SQL_DIVERG, (LOJAS, ini, fim, PADROES_NAO_PRODUTO))
     execute_insert("INSERT INTO fcp_bal_sync (janela_ini, dt_sync) VALUES (%s, NOW()) ON CONFLICT (janela_ini) DO UPDATE SET dt_sync = NOW()", (ini,))
 
 
@@ -543,13 +560,13 @@ def itens_do_balanco(cdEmpresa: int = Query(...), nrBalanco: int = Query(...), s
     try:
         if cdEmpresa not in CCUSTOS_LOJAS:
             raise HTTPException(status_code=400, detail="Empresa inválida")
-        filtro = " AND i.qt_diferenca <> 0" if somenteDivergentes else " AND (i.qt_saldo <> 0 OR i.qt_contagem <> 0)"
+        filtro = (" AND i.qt_diferenca <> 0" if somenteDivergentes else " AND (i.qt_saldo <> 0 OR i.qt_contagem <> 0)") + " AND " + SQL_SO_PRODUTO
         rows = execute_query(f"""
             SELECT i.cd_produto, i.qt_saldo, i.qt_contagem, i.qt_diferenca, i.qt_falta, i.qt_sobra, i.vl_preco,
                    p.referencia, p.produto, p.ds_cor, p.ds_tamanho
             FROM vr_bal_balancoi i LEFT JOIN giro_prd_referencia p ON p.cd_produto = i.cd_produto
             WHERE i.cd_empbal = %s AND i.nr_balanco = %s{filtro}
-            ORDER BY ABS(i.qt_diferenca * COALESCE(i.vl_preco, 0)) DESC, i.cd_produto LIMIT 1000""", (cdEmpresa, nrBalanco)) or []
+            ORDER BY ABS(i.qt_diferenca * COALESCE(i.vl_preco, 0)) DESC, i.cd_produto LIMIT 1000""", (cdEmpresa, nrBalanco, PADROES_NAO_PRODUTO)) or []
         return {"itens": [{
             "cdProduto": r["cd_produto"], "referencia": r["referencia"], "produto": r["produto"], "cor": r["ds_cor"], "tamanho": r["ds_tamanho"],
             "saldo": _f(r["qt_saldo"]), "contagem": _f(r["qt_contagem"]), "diferenca": _f(r["qt_diferenca"]),
