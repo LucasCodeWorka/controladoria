@@ -18,6 +18,7 @@ import {
   GitCompare,
   Boxes,
   RotateCw,
+  ClipboardCheck,
   Clock,
   Sparkles,
   Scale,
@@ -144,6 +145,11 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
       name: 'Giro',
       href: '/giro',
       icon: RotateCw,
+    },
+    {
+      name: 'Balanço Lojas',
+      href: '/balanco-lojas',
+      icon: ClipboardCheck,
     },
     {
       name: 'Estoque por Tempo',

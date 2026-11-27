@@ -634,6 +634,7 @@ export default function BalancoPatrimonialPage() {
   const [semRescisaoFolha, setSemRescisaoFolha] = useState(false);
   const [semRescisaoShopping, setSemRescisaoShopping] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
+  const [dadosDe, setDadosDe] = useState<string | null>(null); // quando o balanco consultado foi calculado (cache)
   const [empresasConsultadas, setEmpresasConsultadas] = useState('');
   const [mesConsultado, setMesConsultado] = useState('');
   const [infoConsulta, setInfoConsulta] = useState<{ mes: string; empresas: string } | null>(null);
@@ -706,6 +707,16 @@ export default function BalancoPatrimonialPage() {
     return () => clearTimeout(timer);
   }, [mesReferencia, empresasSelecionadas, ordenacao, empresasDisponiveis, semRescisaoFolha, semRescisaoShopping]);
 
+  // Filtro salvo restaurado: consulta sozinha ao abrir a tela (o balanco vem do
+  // cache em banco, entao e rapido) - so uma vez e so se havia filtro salvo.
+  const consultaAutomaticaFeita = useRef(false);
+  useEffect(() => {
+    if (consultaAutomaticaFeita.current || !salvoAtivo || empresasDisponiveis.length === 0 || empresasSelecionadas.size === 0) return;
+    consultaAutomaticaFeita.current = true;
+    consultar();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [salvoAtivo, empresasDisponiveis, empresasSelecionadas]);
+
   function limparFiltros() {
     apagarCookie(CHAVE_FILTROS);
     try { localStorage.removeItem(CHAVE_FILTROS); } catch { /* segue com o padrao */ }
@@ -757,7 +768,7 @@ export default function BalancoPatrimonialPage() {
     });
   }
 
-  async function consultar(sobrescrever?: { mes: string; empresas: Set<number>; total: number }) {
+  async function consultar(sobrescrever?: { mes: string; empresas: Set<number>; total: number }, forcar = false) {
     const mes = sobrescrever?.mes ?? mesReferencia;
     const empresas = sobrescrever?.empresas ?? empresasSelecionadas;
     const totalEmpresas = sobrescrever?.total ?? empresasDisponiveis.length;
@@ -792,15 +803,17 @@ export default function BalancoPatrimonialPage() {
       if (totalEmpresas > 0 && empresas.size < totalEmpresas) {
         params.set('empresas', Array.from(empresas).join(','));
       }
+      if (forcar) params.set('forcar', 'true');
       setEmpresasConsultadas(params.get('empresas') ?? '');
       // Lucro e EBITDA dos ultimos 12 meses (DRE) - nao trava o balanco se falhar.
-      fetch(`/api/balanco-patrimonial/indicadores-dre?mesReferencia=${mes}`, { cache: 'no-store' })
+      fetch(`/api/balanco-patrimonial/indicadores-dre?mesReferencia=${mes}${forcar ? '&forcar=true' : ''}`, { cache: 'no-store' })
         .then((r) => r.json())
         .then((d) => { if (typeof d.lucroLiquido12m === 'number') setIndicadoresDre({ lucroLiquido12m: d.lucroLiquido12m, ebitda12m: d.ebitda12m, inicio: d.inicio, fim: d.fim }); })
         .catch((e) => console.error('Erro ao buscar indicadores da DRE:', e));
       const response = await fetch(`/api/balanco-patrimonial/dados?${params.toString()}`, { cache: 'no-store' });
       const data = await response.json();
       if (!response.ok || data.error || !data.valores) throw new Error(data.error || data.detail || 'Erro ao buscar o balanço patrimonial');
+      setDadosDe(data._cache?.calculadoEm ?? null);
       setBens(Array.isArray(data.bens) ? data.bens : []);
       if (typeof data.caixaDisponivel === 'number') setCaixaInfo({ disponivel: data.caixaDisponivel, chequeEspecial: Number(data.chequeEspecial ?? 0) });
       setValoresAtivos((prev) => ({ ...prev, ...filtrarPorPlano(data.valores, PLANO_ATIVOS) }));
@@ -987,6 +1000,18 @@ export default function BalancoPatrimonialPage() {
             <RefreshCw className={`w-4 h-4 ${carregando ? 'animate-spin' : ''}`} />
             {carregando ? 'Carregando...' : 'Consultar'}
           </button>
+          <button
+            onClick={() => consultar(undefined, true)}
+            disabled={carregando}
+            title="Atualizar dados: ignora o cache e gera o balanço de novo (pode levar alguns minutos)"
+            className="flex items-center gap-2 px-4 py-2 border border-[#d1d5db] rounded-md text-sm font-medium text-[#4b5563] bg-white hover:bg-[#f5ecef] disabled:opacity-60"
+          >
+            <RefreshCw aria-hidden="true" className={`h-4 w-4 text-[#8e5e68] ${carregando ? 'animate-spin' : ''}`} />
+            Atualizar dados
+          </button>
+          {dadosDe && !carregando && (
+            <span className="text-[13px] text-[#6b7280]">Dados de {new Date(dadosDe).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
+          )}
           <button
             onClick={limparFiltros}
             className="flex items-center gap-2 px-4 py-2 border border-[#d1d5db] rounded-md text-sm font-medium text-[#4b5563] bg-white hover:bg-[#f5ecef]"

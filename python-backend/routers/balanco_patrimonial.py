@@ -847,7 +847,7 @@ def _listar_bens(empresas: Optional[str] = None) -> list:
 
 
 @router.get("/api/balanco-patrimonial/indicadores-dre")
-def get_indicadores_dre(mesReferencia: str = Query(..., description="Mes de referencia YYYY-MM")):
+def get_indicadores_dre(mesReferencia: str = Query(..., description="Mes de referencia YYYY-MM"), forcar: bool = Query(False, description="Ignora o cache da DRE e recalcula")):
     """Lucro liquido (conta 14) e EBITDA (conta 09) da DRE consolidada nos 12
     meses fechados que terminam no mes de referencia, lidos do mesmo cache da
     tela de DRE. Se o mes de referencia e o mes corrente (ou futuro), ainda
@@ -869,7 +869,7 @@ def get_indicadores_dre(mesReferencia: str = Query(..., description="Mes de refe
         prox = date(ano + (mes == 12), mes % 12 + 1, 1)
         fim = (prox - timedelta(days=1)).isoformat()
         dados = dre_cache.obter(
-            "analitica", ini, fim, "consolidado", False,
+            "analitica", ini, fim, "consolidado", forcar,
             lambda: dre_mod._calcular_valores_unificada(ini, fim, "consolidado", campo_data_despesa="dt_emissao"),
         )
         valores = dados.get("valores") or {}

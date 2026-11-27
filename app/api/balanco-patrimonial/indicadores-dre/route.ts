@@ -6,9 +6,11 @@ const PYTHON_API_URL = process.env.PYTHON_API_URL || 'http://127.0.0.1:8000';
 
 export async function GET(request: NextRequest) {
   try {
-    const mesReferencia = new URL(request.url).searchParams.get('mesReferencia') || '';
+    const sp = new URL(request.url).searchParams;
+    const mesReferencia = sp.get('mesReferencia') || '';
+    const forcar = sp.get('forcar') === 'true' ? '&forcar=true' : '';
     const response = await fetch(
-      `${PYTHON_API_URL}/api/balanco-patrimonial/indicadores-dre?mesReferencia=${encodeURIComponent(mesReferencia)}`,
+      `${PYTHON_API_URL}/api/balanco-patrimonial/indicadores-dre?mesReferencia=${encodeURIComponent(mesReferencia)}${forcar}`,
       { method: 'GET', cache: 'no-store' }
     );
     const data = await response.json();

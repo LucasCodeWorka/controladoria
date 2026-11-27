@@ -170,10 +170,13 @@ def aquecer_visao_liebe() -> None:
     # Mes atual e mes anterior (a tela de Indicadores tem os dois como botao e
     # o Balanco/Comparativo abrem no atual).
     for mes in (f"{hoje.year}-{hoje.month:02d}", f"{a}-{m:02d}"):
-        try:
-            bp.get_balanco_patrimonial(mes, bp.EMPRESAS_VISAO_LIEBE, True, True, False)
-        except Exception as e:
-            print(f"[CACHE-TELA] Aquecer balanco {mes}: {e}")
+        # Duas variantes: com as opcoes "sem rescisoes" (Indicadores/Comparativo) e
+        # sem elas (tela do Balanco, que desconta as rescisoes na propria tela).
+        for sem_folha, sem_shopping in ((True, True), (False, False)):
+            try:
+                bp.get_balanco_patrimonial(mes, bp.EMPRESAS_VISAO_LIEBE, sem_folha, sem_shopping, False)
+            except Exception as e:
+                print(f"[CACHE-TELA] Aquecer balanco {mes}: {e}")
         try:
             bp.get_indicadores_dre(mes)  # Lucro/EBITDA/receita/CMV 12m (usa o cache da DRE)
         except Exception as e:

@@ -6,7 +6,7 @@ import dre_cache
 import cache_telas
 from database import close_all_connections
 
-from routers import health, indicadores, dre, classificacao, analise_executiva, cmv_detalhado, giro, estoque_tempo, foto, analisador_dre, balanco_patrimonial, fluxo_caixa, fluxo_cenarios, dre_projetada, quebra_pedidos, endividamento, giro_enviadas_70
+from routers import health, indicadores, dre, classificacao, analise_executiva, cmv_detalhado, giro, estoque_tempo, foto, analisador_dre, balanco_patrimonial, fluxo_caixa, fluxo_cenarios, dre_projetada, quebra_pedidos, endividamento, giro_enviadas_70, balanco_lojas
 from routers.giro import loop_recalculo_automatico_giro
 
 app = FastAPI(
@@ -59,6 +59,7 @@ app.include_router(dre_projetada.router)
 app.include_router(endividamento.router)
 app.include_router(giro_enviadas_70.router)
 app.include_router(quebra_pedidos.router)
+app.include_router(balanco_lojas.router)
 
 
 async def _aquecer_quebra_pedidos():
@@ -92,6 +93,7 @@ async def startup_event():
     # Visao Liebe (balanco, CMV 12m e DFC por agrupamento) pronta pro Comparativo
     # de Mercado e Indicadores - ver cache_telas.py.
     asyncio.create_task(cache_telas.aquecer_loop())
+    asyncio.create_task(balanco_lojas.loop_sincronizacao())
 
 
 @app.on_event("shutdown")
