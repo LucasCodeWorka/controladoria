@@ -9,7 +9,7 @@ import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 're
 import {
   Bar, BarChart, CartesianGrid, LabelList, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis, Legend,
 } from 'recharts';
-import { AlertTriangle, CheckCircle2, ClipboardCheck, Info, RefreshCw, X, ChevronDown } from 'lucide-react';
+import { ClipboardCheck, Info, RefreshCw, X, ChevronDown } from 'lucide-react';
 import DualScroll from '../components/DualScroll';
 import { useOrdenacao, type Getters } from '../components/useOrdenacao';
 import { carregarFiltro, salvarFiltro } from '../utils/persistirFiltro';
@@ -232,56 +232,6 @@ function Modal({ titulo, onFechar, children, largo }: { titulo: string; onFechar
 }
 
 // ---------------------------------------------------------------------------
-// pontos de atenção (análise automática)
-// ---------------------------------------------------------------------------
-interface Alerta { nivel: 'ruim' | 'atencao' | 'ok'; texto: string }
-
-function gerarAlertas(r: Resumo, criticos: Criticos | null, hojeEhFim: boolean): Alerta[] {
-  const out: Alerta[] = [];
-  const m = r.metas;
-  const comDados = r.porLoja.filter((l) => l.itensAtivos > 0);
-  const abaixo = comDados.filter((l) => (l.acuracidadeItens ?? 100) < m.atencao).sort((a, b) => (a.acuracidadeItens ?? 0) - (b.acuracidadeItens ?? 0));
-  if (abaixo.length) {
-    out.push({ nivel: 'ruim', texto: `${abaixo.length} loja(s) com acuracidade de itens abaixo de ${m.atencao}%: ${abaixo.slice(0, 4).map((l) => `${l.loja} (${fmtPct(l.acuracidadeItens)})`).join(', ')}${abaixo.length > 4 ? '…' : ''}.` });
-  }
-  const meio = comDados.filter((l) => (l.acuracidadeItens ?? 0) >= m.atencao && (l.acuracidadeItens ?? 0) < m.ok);
-  if (meio.length) out.push({ nivel: 'atencao', texto: `${meio.length} loja(s) entre ${m.atencao}% e ${m.ok}% de acuracidade: ${meio.slice(0, 4).map((l) => l.loja).join(', ')}${meio.length > 4 ? '…' : ''}.` });
-  if (hojeEhFim) {
-    const parados = r.porLoja.filter((l) => l.diasSemBalanco != null && l.diasSemBalanco >= 4).sort((a, b) => (b.diasSemBalanco ?? 0) - (a.diasSemBalanco ?? 0));
-    if (parados.length) out.push({ nivel: 'ruim', texto: `Sem balanço há 4 dias ou mais: ${parados.slice(0, 4).map((l) => `${l.loja} (${l.diasSemBalanco} dias)`).join(', ')}${parados.length > 4 ? '…' : ''}.` });
-  }
-  const fraca = r.porLoja.filter((l) => l.cobertura != null && l.diasUteis >= 5 && l.cobertura < 70).sort((a, b) => (a.cobertura ?? 0) - (b.cobertura ?? 0));
-  if (fraca.length) out.push({ nivel: 'atencao', texto: `Cobertura abaixo de 70% dos dias úteis: ${fraca.slice(0, 4).map((l) => `${l.loja} (${l.diasComBalanco} de ${l.diasUteis} dias)`).join(', ')}${fraca.length > 4 ? '…' : ''}.` });
-  const dias = r.porDia.filter((d) => d.acuracidadeItens != null);
-  if (dias.length >= 12) {
-    const media = (xs: DiaRow[]) => {
-      const at = xs.reduce((s, d) => s + d.itensAtivos, 0);
-      const dv = xs.reduce((s, d) => s + d.itensDivergentes, 0);
-      return at ? (100 * (at - dv)) / at : null;
-    };
-    const ult = media(dias.slice(-7));
-    const ant = media(dias.slice(-14, -7));
-    if (ult != null && ant != null) {
-      const delta = ult - ant;
-      if (delta <= -1) out.push({ nivel: 'atencao', texto: `Acuracidade caiu ${Math.abs(delta).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} p.p. na última semana (${fmtPct(ult)} contra ${fmtPct(ant)} nos 7 dias anteriores).` });
-      else if (delta >= 1) out.push({ nivel: 'ok', texto: `Acuracidade subiu ${delta.toLocaleString('pt-BR', { maximumFractionDigits: 1 })} p.p. na última semana (${fmtPct(ult)} contra ${fmtPct(ant)}).` });
-    }
-  }
-  const ops = r.porOperador.filter((o) => o.itensAtivos >= 50 && (o.acuracidadeItens ?? 100) < m.atencao).sort((a, b) => (a.acuracidadeItens ?? 0) - (b.acuracidadeItens ?? 0));
-  if (ops.length) out.push({ nivel: 'atencao', texto: `Operadores com acuracidade abaixo de ${m.atencao}% (mín. 50 itens): ${ops.slice(0, 3).map((o) => `${o.operador} (${fmtPct(o.acuracidadeItens)})`).join(', ')}${ops.length > 3 ? '…' : ''}.` });
-  const t = r.total;
-  if ((t.pctCancelados ?? 0) >= 15 && t.cancelados >= 3) out.push({ nivel: 'atencao', texto: `${t.cancelados} balanços cancelados (${fmtPct(t.pctCancelados)} do total): contagem refeita ou lista gerada errada.` });
-  if (t.balancosSemContagem > 0) out.push({ nivel: 'atencao', texto: `${t.balancosSemContagem} balanço(s) válidos sem nenhum item contado.` });
-  if (t.valorSobra > 0 && t.valorFalta > 0 && Math.min(t.valorSobra, t.valorFalta) / Math.max(t.valorSobra, t.valorFalta) > 0.6) {
-    out.push({ nivel: 'atencao', texto: `Falta (${fmtBRL0(t.valorFalta)}) e sobra (${fmtBRL0(t.valorSobra)}) quase se anulam: sinal típico de troca de código/cor/tamanho na venda ou na entrada, e não de perda.` });
-  }
-  const top = criticos?.reincidentes?.[0];
-  if (top && top.vezes >= 3) out.push({ nivel: 'atencao', texto: `${criticos!.reincidentes.length} produto(s) divergiram em 2+ balanços; o mais frequente (${top.referencia ?? top.cdProduto}${top.cor ? ' ' + top.cor : ''}${top.tamanho ? ' ' + top.tamanho : ''}) divergiu ${top.vezes} vezes.` });
-  if (!out.some((a) => a.nivel === 'ruim') && t.balancos > 0) out.unshift({ nivel: 'ok', texto: 'Nenhuma loja crítica no período.' });
-  return out;
-}
-
-// ---------------------------------------------------------------------------
 // página
 // ---------------------------------------------------------------------------
 export default function BalancoLojasPage() {
@@ -416,8 +366,6 @@ export default function BalancoLojasPage() {
     setFiltros({ ...filtros, tipos: atual.size === 0 ? [...TIPOS_PADRAO] : Array.from(atual) });
   };
 
-  const hojeEhFim = dados ? dados.periodo.fim >= isoLocal(new Date()) : false;
-  const alertas = useMemo(() => (dados ? gerarAlertas(dados, criticos, hojeEhFim) : []), [dados, criticos, hojeEhFim]);
   const balancosFiltrados = useMemo(() => balancos.filter((b) => {
     if (lojaSel != null && b.cdEmpresa !== lojaSel) return false;
     if (filtros.situacao === 'validos') return SITUACOES_VALIDAS.includes(b.tpSituacao);
@@ -525,6 +473,10 @@ export default function BalancoLojasPage() {
     { id: 'vd', titulo: 'Valor da dif.', get: (r) => r.valorDiferenca, render: (r) => <span className={r.valorDiferenca < 0 ? 'text-red-700' : 'text-blue-700'}>{fmtBRL(r.valorDiferenca)}</span> },
   ], []);
 
+  const serieLoja = useMemo(
+    () => (dados?.porLoja ?? []).filter((l) => l.itensAtivos > 0).sort((a, b) => (a.acuracidadeItens ?? 0) - (b.acuracidadeItens ?? 0)),
+    [dados],
+  );
   const serieDia = useMemo(() => (dados?.porDia ?? []).map((d) => ({ ...d, rotulo: `${d.data.slice(8, 10)}/${d.data.slice(5, 7)}` })), [dados]);
   const minAcur = useMemo(() => {
     const vs = serieDia.flatMap((d) => [d.acuracidadeItens, d.acuracidadePecas]).filter((v): v is number => v != null);
@@ -685,21 +637,29 @@ export default function BalancoLojasPage() {
             </div>
           </div>
 
-          {/* pontos de atenção */}
+          {/* acuracidade por loja */}
           <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-4">
-            <h2 className="text-lg font-bold text-black mb-2">Pontos de atenção</h2>
-            {alertas.length === 0 ? (
-              <p className="text-sm text-gray-700">Sem dados suficientes para a análise.</p>
-            ) : (
-              <ul className="space-y-2">
-                {alertas.map((a, i) => (
-                  <li key={i} className={`flex items-start gap-2 text-sm text-black rounded-md border-l-4 px-3 py-2 ${a.nivel === 'ruim' ? 'border-red-600 bg-red-50' : a.nivel === 'atencao' ? 'border-amber-600 bg-amber-50' : 'border-green-600 bg-green-50'}`}>
-                    {a.nivel === 'ok' ? <CheckCircle2 className="w-4 h-4 mt-0.5 text-green-700 shrink-0" /> : <AlertTriangle className={`w-4 h-4 mt-0.5 shrink-0 ${a.nivel === 'ruim' ? 'text-red-700' : 'text-amber-700'}`} />}
-                    <span>{a.texto}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
+            <h2 className="text-lg font-bold text-black">Acuracidade por loja</h2>
+            <p className="text-xs text-gray-600 mb-2">Por itens e por peças, da pior para a melhor loja. Linhas tracejadas: meta de {metas.ok}% (verde) e piso de {metas.atencao}% (amarelo).</p>
+            <div style={{ height: Math.max(260, serieLoja.length * 52 + 60) }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={serieLoja} layout="vertical" margin={{ top: 8, right: 56, bottom: 8, left: 8 }} barCategoryGap="22%">
+                  <CartesianGrid stroke="#e5e7eb" horizontal={false} />
+                  <XAxis type="number" domain={[0, 100]} tick={{ fontSize: 12, fill: '#4b5563' }} tickFormatter={(v) => `${v}%`} />
+                  <YAxis type="category" dataKey="loja" width={170} tick={{ fontSize: 12, fill: '#1d1d1d' }} interval={0} />
+                  <Tooltip formatter={(v) => fmtPct(Number(v))} />
+                  <Legend wrapperStyle={{ fontSize: 12 }} />
+                  <ReferenceLine x={metas.ok} stroke="#15803d" strokeDasharray="4 4" />
+                  <ReferenceLine x={metas.atencao} stroke="#b45309" strokeDasharray="4 4" />
+                  <Bar dataKey="acuracidadeItens" name="Por itens" fill="#8e5e68">
+                    <LabelList dataKey="acuracidadeItens" position="right" formatter={rotuloPct} style={{ fontSize: 11, fontWeight: 600, fill: '#8e5e68' }} />
+                  </Bar>
+                  <Bar dataKey="acuracidadePecas" name="Por peças" fill="#9ca3af">
+                    <LabelList dataKey="acuracidadePecas" position="right" formatter={rotuloPct} style={{ fontSize: 11, fontWeight: 600, fill: '#4b5563' }} />
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
           </div>
 
           {/* gráficos */}
