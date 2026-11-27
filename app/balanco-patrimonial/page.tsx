@@ -138,9 +138,10 @@ interface TabelaBalancoProps {
   ordenacao: Ordenacao;
   alternarOrdenacao: (campo: Campo) => void;
   onDetalhar?: (conta: ContaBalanco) => void;
+  antesDesconto?: Record<string, number>;
 }
 
-function TabelaBalanco({ titulo, plano, valores, mostrarPercentual, contasExpandidas, toggleExpansao, ordenacao, alternarOrdenacao, onDetalhar }: TabelaBalancoProps) {
+function TabelaBalanco({ antesDesconto, titulo, plano, valores, mostrarPercentual, contasExpandidas, toggleExpansao, ordenacao, alternarOrdenacao, onDetalhar }: TabelaBalancoProps) {
   const total = totalGeral(plano, valores);
   const ativo = titulo === 'Ativos';
   const tema = ativo ? TEMAS.ativo : TEMAS.passivo;
@@ -320,6 +321,11 @@ function TabelaBalanco({ titulo, plano, valores, mostrarPercentual, contasExpand
                                   )}
                                 </td>
                                 <td className={`px-4 py-2.5 text-right whitespace-nowrap bg-[#fcfcfd] group-hover:bg-[#faf3f5] border-b border-[#eef0f2] ${corValor(vd)}`}>
+                                  {antesDesconto?.[d.codigo] != null && (
+                                    <span className="mr-4 text-xs font-normal text-[#4b5563]" title="Valor do estoque fora de linha antes do desconto de status (Leve Defeito / Oportunidade: 50%; MP: 50% ou 80%)">
+                                      antes do desconto: {formatarValor(antesDesconto[d.codigo])}
+                                    </span>
+                                  )}
                                   {formatarValor(vd)}
                                 </td>
                                 {mostrarPercentual && (
@@ -652,6 +658,7 @@ export default function BalancoPatrimonialPage() {
     if (semRescisaoShopping) { v['PC.1'] = (v['PC.1'] ?? 0) - (v['PC.1.2'] ?? 0); v['PC.1.2'] = 0; }
     return v;
   }, [valoresPassivoBase, semRescisaoFolha, semRescisaoShopping]);
+  const [antesDesconto, setAntesDesconto] = useState<Record<string, number>>({});
   const [bens, setBens] = useState<{ codigo: string; linha: string; nome: string; valor: number }[]>([]);
   const [carregando, setCarregando] = useState(false);
   const [contaDetalhe, setContaDetalhe] = useState<ContaBalanco | null>(null);
@@ -786,6 +793,7 @@ export default function BalancoPatrimonialPage() {
     setErro(null);
     setIndicadoresDre(null);
     setBens([]);
+    setAntesDesconto({});
     setCaixaInfo(null);
     // Reseta pro zerado antes de aplicar o que a API devolver - linhas sem
     // consulta ligada ainda ficam em 0.
@@ -815,6 +823,7 @@ export default function BalancoPatrimonialPage() {
       if (!response.ok || data.error || !data.valores) throw new Error(data.error || data.detail || 'Erro ao buscar o balanço patrimonial');
       setDadosDe(data._cache?.calculadoEm ?? null);
       setBens(Array.isArray(data.bens) ? data.bens : []);
+      setAntesDesconto(data.antesDesconto && typeof data.antesDesconto === 'object' ? data.antesDesconto : {});
       if (typeof data.caixaDisponivel === 'number') setCaixaInfo({ disponivel: data.caixaDisponivel, chequeEspecial: Number(data.chequeEspecial ?? 0) });
       setValoresAtivos((prev) => ({ ...prev, ...filtrarPorPlano(data.valores, PLANO_ATIVOS) }));
       setValoresPassivo((prev) => ({ ...prev, ...filtrarPorPlano(data.valores, PLANO_PASSIVO) }));
@@ -1157,6 +1166,7 @@ export default function BalancoPatrimonialPage() {
               titulo="Ativos"
               plano={planoAtivos}
               valores={valoresAtivosComBens}
+              antesDesconto={antesDesconto}
               mostrarPercentual
               contasExpandidas={contasExpandidas}
               toggleExpansao={toggleExpansao}

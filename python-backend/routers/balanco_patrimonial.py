@@ -500,7 +500,7 @@ _lock_estoque_lojas = threading.Lock()
 # 2 anos) - status de mv_prd_referencia_produto (mesma fonte do Giro) - tem o
 # custo unitario reduzido em 50% no estoque PA (lojas e fabrica) do balanco.
 FATOR_STATUS_DESCONTO = 0.5
-VERSAO_CACHE_ESTOQUE = 5  # sobe quando a regra de valorizacao muda: invalida o cache
+VERSAO_CACHE_ESTOQUE = 6  # sobe quando a regra de valorizacao muda: invalida o cache
 
 SQL_ESTOQUE_LOJAS_DT_BASE = "SELECT MAX(dt_atualizacao) AS dt FROM mv_pcp_estoque_atual_lojas"
 
@@ -521,15 +521,16 @@ SQL_ESTOQUE_LOJAS_VALORIZADO = """
             (CASE WHEN b.idmarca = ANY (ARRAY['0001','0002','0009'])
                  THEN COALESCE(NULLIF(f_prd_valor_produto2(1,1,'P',1,b.cd_produto,NULL),0), 21.9)
                  ELSE COALESCE(NULLIF(f_prd_valor_produto2(1,1,'C',2,b.cd_produto,NULL),0), 21.9)
-            END) * CASE WHEN d.cd_produto IS NOT NULL THEN 0.5 ELSE 1 END AS vl_unit,
+            END) AS vl_cheio,
             (d.cd_produto IS NOT NULL) AS fora_linha
         FROM base b
         LEFT JOIN prod_desconto d ON d.cd_produto = b.cd_produto
     )
     SELECT cd_empresa, SUM(estoque_bruto) AS pecas,
            SUM(estoque_bruto * vl_unit * CASE WHEN cd_empresa = 2 THEN 0.7 ELSE 0.8 END) AS valor,
-           COALESCE(SUM(estoque_bruto * vl_unit * CASE WHEN cd_empresa = 2 THEN 0.7 ELSE 0.8 END) FILTER (WHERE fora_linha), 0) AS valor_fora
-    FROM com_valor GROUP BY cd_empresa
+           COALESCE(SUM(estoque_bruto * vl_unit * CASE WHEN cd_empresa = 2 THEN 0.7 ELSE 0.8 END) FILTER (WHERE fora_linha), 0) AS valor_fora,
+           COALESCE(SUM(estoque_bruto * vl_cheio * CASE WHEN cd_empresa = 2 THEN 0.7 ELSE 0.8 END) FILTER (WHERE fora_linha), 0) AS valor_fora_cheio
+    FROM (SELECT *, vl_cheio * CASE WHEN fora_linha THEN 0.5 ELSE 1 END AS vl_unit FROM com_valor) cv GROUP BY cd_empresa
 """
 
 
@@ -547,6 +548,8 @@ def _criar_tabela_estoque_lojas():
     # lojas/fabrica/MP uma unica vez.
     execute_insert("ALTER TABLE fcp_balanco_estoque_lojas ADD COLUMN IF NOT EXISTS versao INTEGER NOT NULL DEFAULT 1", ())
     execute_insert("ALTER TABLE fcp_balanco_estoque_lojas ADD COLUMN IF NOT EXISTS valor_fora NUMERIC(16, 2) NOT NULL DEFAULT 0", ())
+    # valor fora de linha ANTES do desconto de status (so exibicao, ao lado do valor)
+    execute_insert("ALTER TABLE fcp_balanco_estoque_lojas ADD COLUMN IF NOT EXISTS valor_fora_cheio NUMERIC(16, 2) NOT NULL DEFAULT 0", ())
     execute_insert("DELETE FROM fcp_balanco_estoque_lojas WHERE cd_empresa <> 0 AND versao < %s", (VERSAO_CACHE_ESTOQUE,))
 
 
@@ -566,9 +569,11 @@ SQL_ESTOQUE_FABRICA_VALORIZADO = """
     )
     SELECT SUM(estoque_bruto) AS pecas,
            SUM(estoque_bruto * COALESCE(vl_unit, 0) * %s) AS valor,
-           COALESCE(SUM(estoque_bruto * COALESCE(vl_unit, 0) * %s) FILTER (WHERE fora_linha), 0) AS valor_fora
+           COALESCE(SUM(estoque_bruto * COALESCE(vl_unit, 0) * %s) FILTER (WHERE fora_linha), 0) AS valor_fora,
+           COALESCE(SUM(estoque_bruto * COALESCE(vl_cheio, 0) * %s) FILTER (WHERE fora_linha), 0) AS valor_fora_cheio
     FROM (
         SELECT e.estoque_bruto,
+               NULLIF(f_prd_valor_produto2(1, 1, 'C', 999, e.cd_produto, NULL), 0) AS vl_cheio,
                NULLIF(f_prd_valor_produto2(1, 1, 'C', 999, e.cd_produto, NULL), 0)
                    * CASE WHEN d.cd_produto IS NOT NULL THEN 0.5 ELSE 1 END AS vl_unit,
                (d.cd_produto IS NOT NULL) AS fora_linha
@@ -593,7 +598,8 @@ TTL_ESTOQUE_MP_SEG = 2 * 3600
 SQL_ESTOQUE_MP_VALORIZADO = """
     SELECT SUM(estoque_bruto) AS pecas,
            SUM(estoque_bruto * COALESCE(vl_unit, 0) * fator) AS valor,
-           COALESCE(SUM(estoque_bruto * COALESCE(vl_unit, 0) * fator) FILTER (WHERE fora_linha), 0) AS valor_fora
+           COALESCE(SUM(estoque_bruto * COALESCE(vl_unit, 0) * fator) FILTER (WHERE fora_linha), 0) AS valor_fora,
+           COALESCE(SUM(estoque_bruto * COALESCE(vl_unit, 0)) FILTER (WHERE fora_linha), 0) AS valor_fora_cheio
     FROM (
         SELECT s.estoque_bruto,
                NULLIF(f_prd_valor_produto2(1, 1, 'C', 2, s.cd_produto, NULL), 0) AS vl_unit,
@@ -639,10 +645,10 @@ def _garantir_cache_estoque_lojas() -> None:
             return
         execute_insert(f"DELETE FROM fcp_balanco_estoque_lojas WHERE {filtro}", ())
         if rows:
-            valores_sql = ",".join(["(%s,%s,%s,%s,%s,%s)"] * len(rows))
-            params = [p for r in rows for p in (r["cd_empresa"], float(r["pecas"]), round(float(r["valor"]), 2), base, VERSAO_CACHE_ESTOQUE, round(float(r["valor_fora"]), 2))]
+            valores_sql = ",".join(["(%s,%s,%s,%s,%s,%s,%s)"] * len(rows))
+            params = [p for r in rows for p in (r["cd_empresa"], float(r["pecas"]), round(float(r["valor"]), 2), base, VERSAO_CACHE_ESTOQUE, round(float(r["valor_fora"]), 2), round(float(r["valor_fora_cheio"]), 2))]
             execute_insert(
-                f"INSERT INTO fcp_balanco_estoque_lojas (cd_empresa, pecas, valor, dt_base, versao, valor_fora) VALUES {valores_sql}",
+                f"INSERT INTO fcp_balanco_estoque_lojas (cd_empresa, pecas, valor, dt_base, versao, valor_fora, valor_fora_cheio) VALUES {valores_sql}",
                 tuple(params),
             )
         print(f"[BALANCO] Estoque PA das lojas recalculado: {len(rows)} empresa(s) em {time.time() - inicio:.1f}s")
@@ -657,12 +663,12 @@ def _garantir_cache_estoque_fabrica() -> None:
         if _cache_em_dia(filtro, base) or base is None:
             return
         inicio = time.time()
-        r = (execute_query(SQL_ESTOQUE_FABRICA_VALORIZADO, (ACRESCIMO_ESTOQUE_FABRICA, ACRESCIMO_ESTOQUE_FABRICA)) or [{}])[0]
+        r = (execute_query(SQL_ESTOQUE_FABRICA_VALORIZADO, (ACRESCIMO_ESTOQUE_FABRICA, ACRESCIMO_ESTOQUE_FABRICA, ACRESCIMO_ESTOQUE_FABRICA)) or [{}])[0]
         execute_insert(f"DELETE FROM fcp_balanco_estoque_lojas WHERE {filtro}", ())
         execute_insert(
-            "INSERT INTO fcp_balanco_estoque_lojas (cd_empresa, pecas, valor, dt_base, versao, valor_fora) VALUES (%s,%s,%s,%s,%s,%s)",
+            "INSERT INTO fcp_balanco_estoque_lojas (cd_empresa, pecas, valor, dt_base, versao, valor_fora, valor_fora_cheio) VALUES (%s,%s,%s,%s,%s,%s,%s)",
             (CD_EMPRESA_CACHE_FABRICA, float(r.get("pecas") or 0), round(float(r.get("valor") or 0), 2), base, VERSAO_CACHE_ESTOQUE,
-             round(float(r.get("valor_fora") or 0), 2)),
+             round(float(r.get("valor_fora") or 0), 2), round(float(r.get("valor_fora_cheio") or 0), 2)),
         )
         print(f"[BALANCO] Estoque PA da fabrica recalculado em {time.time() - inicio:.1f}s")
 
@@ -688,9 +694,9 @@ def _garantir_cache_estoque_mp() -> None:
         r = (execute_query(SQL_ESTOQUE_MP_VALORIZADO, ()) or [{}])[0]
         execute_insert(f"DELETE FROM fcp_balanco_estoque_lojas WHERE cd_empresa = {CD_EMPRESA_CACHE_MP}", ())
         execute_insert(
-            "INSERT INTO fcp_balanco_estoque_lojas (cd_empresa, pecas, valor, dt_base, versao, valor_fora) VALUES (%s,%s,%s,NOW(),%s,%s)",
+            "INSERT INTO fcp_balanco_estoque_lojas (cd_empresa, pecas, valor, dt_base, versao, valor_fora, valor_fora_cheio) VALUES (%s,%s,%s,NOW(),%s,%s,%s)",
             (CD_EMPRESA_CACHE_MP, float(r.get("pecas") or 0), round(float(r.get("valor") or 0), 2), VERSAO_CACHE_ESTOQUE,
-             round(float(r.get("valor_fora") or 0), 2)),
+             round(float(r.get("valor_fora") or 0), 2), round(float(r.get("valor_fora_cheio") or 0), 2)),
         )
         print(f"[BALANCO] Estoque MP da fabrica recalculado em {time.time() - inicio:.1f}s")
 
@@ -699,13 +705,13 @@ def _estoque_mp_fabrica(empresas: Optional[str]) -> tuple:
     """Estoque de materia-prima da fabrica: entra se nao ha filtro de empresas
     ou se a fabrica (empresa 1) esta entre as selecionadas."""
     if empresas and CD_EMPRESA_CACHE_FABRICA not in _parse_empresas(empresas):
-        return 0.0, 0.0
+        return 0.0, 0.0, 0.0
     _criar_tabela_estoque_lojas()
     _garantir_cache_estoque_mp()
     rows = execute_query(
-        f"SELECT COALESCE(SUM(valor), 0) AS total, COALESCE(SUM(valor_fora), 0) AS fora FROM fcp_balanco_estoque_lojas WHERE cd_empresa = {CD_EMPRESA_CACHE_MP}", ()
-    ) or [{"total": 0, "fora": 0}]
-    return float(rows[0]["total"] or 0), float(rows[0]["fora"] or 0)
+        f"SELECT COALESCE(SUM(valor), 0) AS total, COALESCE(SUM(valor_fora), 0) AS fora, COALESCE(SUM(valor_fora_cheio), 0) AS fora_cheio FROM fcp_balanco_estoque_lojas WHERE cd_empresa = {CD_EMPRESA_CACHE_MP}", ()
+    ) or [{"total": 0, "fora": 0, "fora_cheio": 0}]
+    return float(rows[0]["total"] or 0), float(rows[0]["fora"] or 0), float(rows[0]["fora_cheio"] or 0)
 
 
 def _estoque_pa_lojas(empresas: Optional[str]) -> tuple:
@@ -714,26 +720,26 @@ def _estoque_pa_lojas(empresas: Optional[str]) -> tuple:
     _garantir_cache_estoque_lojas()
     lista = [e for e in _parse_empresas(empresas) if e in CCUSTOS_LOJAS]
     if empresas and not lista:
-        return 0.0, 0.0
-    sql = "SELECT COALESCE(SUM(valor), 0) AS total, COALESCE(SUM(valor_fora), 0) AS fora FROM fcp_balanco_estoque_lojas WHERE cd_empresa > 1"
+        return 0.0, 0.0, 0.0
+    sql = "SELECT COALESCE(SUM(valor), 0) AS total, COALESCE(SUM(valor_fora), 0) AS fora, COALESCE(SUM(valor_fora_cheio), 0) AS fora_cheio FROM fcp_balanco_estoque_lojas WHERE cd_empresa > 1"
     params: tuple = ()
     if empresas:
         sql += " AND cd_empresa = ANY(%s)"
         params = (lista,)
-    r = (execute_query(sql, params) or [{"total": 0, "fora": 0}])[0]
-    return float(r["total"] or 0), float(r["fora"] or 0)
+    r = (execute_query(sql, params) or [{"total": 0, "fora": 0, "fora_cheio": 0}])[0]
+    return float(r["total"] or 0), float(r["fora"] or 0), float(r["fora_cheio"] or 0)
 
 
 def _estoque_pa_fabrica(empresas: Optional[str]) -> tuple:
     """Estoque PA da fabrica: entra se nao ha filtro de empresas ou se a
     fabrica (empresa 1) esta entre as selecionadas."""
     if empresas and CD_EMPRESA_CACHE_FABRICA not in _parse_empresas(empresas):
-        return 0.0, 0.0
+        return 0.0, 0.0, 0.0
     _garantir_cache_estoque_lojas()
     rows = execute_query(
-        f"SELECT COALESCE(SUM(valor), 0) AS total, COALESCE(SUM(valor_fora), 0) AS fora FROM fcp_balanco_estoque_lojas WHERE cd_empresa = {CD_EMPRESA_CACHE_FABRICA}", ()
-    ) or [{"total": 0, "fora": 0}]
-    return float(rows[0]["total"] or 0), float(rows[0]["fora"] or 0)
+        f"SELECT COALESCE(SUM(valor), 0) AS total, COALESCE(SUM(valor_fora), 0) AS fora, COALESCE(SUM(valor_fora_cheio), 0) AS fora_cheio FROM fcp_balanco_estoque_lojas WHERE cd_empresa = {CD_EMPRESA_CACHE_FABRICA}", ()
+    ) or [{"total": 0, "fora": 0, "fora_cheio": 0}]
+    return float(rows[0]["total"] or 0), float(rows[0]["fora"] or 0), float(rows[0]["fora_cheio"] or 0)
 
 
 async def loop_cache_estoque_lojas() -> None:
@@ -977,12 +983,14 @@ def _calcular_balanco(
         # AC.3 Estoques = Estoque PA lojas + PA fabrica + MP fabrica (foto atual -
         # nao depende do mes de referencia; filtro de empresas vale).
         def _estoques():
-            (lojas, lojas_fora), (fabrica, fabrica_fora), (mp, mp_fora) = _estoque_pa_lojas(empresas), _estoque_pa_fabrica(empresas), _estoque_mp_fabrica(empresas)
+            (lojas, lojas_fora, lojas_cheio), (fabrica, fabrica_fora, fabrica_cheio), (mp, mp_fora, mp_cheio) = _estoque_pa_lojas(empresas), _estoque_pa_fabrica(empresas), _estoque_mp_fabrica(empresas)
             # .1/.2 = em linha / fora de linha (LEVE DEFEITO e OPORTUNIDADE) - so exibicao.
             return {"AC.3": lojas + fabrica + mp,
                     "AC.3.1": lojas, "AC.3.1.1": lojas - lojas_fora, "AC.3.1.2": lojas_fora,
                     "AC.3.2": fabrica, "AC.3.2.1": fabrica - fabrica_fora, "AC.3.2.2": fabrica_fora,
-                    "AC.3.3": mp, "AC.3.3.1": mp - mp_fora, "AC.3.3.2": mp_fora}
+                    "AC.3.3": mp, "AC.3.3.1": mp - mp_fora, "AC.3.3.2": mp_fora,
+                    # valor fora de linha ANTES do desconto de status (so exibicao)
+                    "_ANTES_AC.3.1.2": lojas_cheio, "_ANTES_AC.3.2.2": fabrica_cheio, "_ANTES_AC.3.3.2": mp_cheio}
 
         # ANC.5 Investimentos e ANC.6 Imobilizado = bens cadastrados (fixos).
         def _bens():
@@ -1145,8 +1153,12 @@ def _calcular_balanco(
         # PC.4 Salarios e encargos a pagar = custo_total da competencia mais
         # recente de fato_custo_mensal (PC.4.1) + lancamentos manuais da conta em
         # fcp_balanco_ajustes (PC.4.2, ex: rescisao de funcionarios), sem filtro
-        # de empresa. Passivo = negativo.
+        # de empresa (so vale com a LIEBE no filtro). Passivo = negativo.
         def _salarios():
+            # So a LIEBE (empresa 1) tem funcionarios: com filtro de empresas
+            # sem ela, salarios e rescisoes ficam zerados.
+            if empresas and CD_EMPRESA_CACHE_FABRICA not in _parse_empresas(empresas):
+                return {"PC.4": 0.0, "PC.4.1": 0.0, "PC.4.2": 0.0}
             rows = execute_query(
                 "SELECT competencia, custo_total FROM fato_custo_mensal ORDER BY competencia DESC LIMIT 1", ()
             ) or []
@@ -1203,8 +1215,9 @@ def _calcular_balanco(
                 print(f"[BALANCO] detalhe de bens indisponivel: {e}")
         caixa_disponivel = valores.pop("_CAIXA_POS", None)
         cheque_especial = valores.pop("_CHEQUE_ESP", None)
+        antes_desconto = {k[len("_ANTES_"):]: valores.pop(k) for k in [k for k in valores if k.startswith("_ANTES_")]}
         return {"valores": valores, "bens": bens, "mesReferencia": mesReferencia,
-                "caixaDisponivel": caixa_disponivel, "chequeEspecial": cheque_especial,
+                "antesDesconto": antes_desconto, "caixaDisponivel": caixa_disponivel, "chequeEspecial": cheque_especial,
                 # Blocos que falharam (ex.: timeout no banco) - ficam zerados nos valores;
                 # quem calcula indicadores deve tratar como dado incompleto.
                 "indisponiveis": [nome for nome in f_opcionais if nome not in resultados]}
