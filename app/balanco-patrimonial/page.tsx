@@ -321,12 +321,12 @@ function TabelaBalanco({ antesDesconto, titulo, plano, valores, mostrarPercentua
                                   )}
                                 </td>
                                 <td className={`px-4 py-2.5 text-right whitespace-nowrap bg-[#fcfcfd] group-hover:bg-[#faf3f5] border-b border-[#eef0f2] ${corValor(vd)}`}>
+                                  {formatarValor(vd)}
                                   {antesDesconto?.[d.codigo] != null && (
-                                    <span className="mr-4 text-xs font-normal text-[#4b5563]" title="Valor do estoque fora de linha antes do desconto de status (Leve Defeito / Oportunidade: 50%; MP: 50% ou 80%)">
+                                    <span className="block text-[11px] leading-tight font-normal text-[#4b5563]" title="Valor do estoque fora de linha antes do desconto de status (Leve Defeito / Oportunidade: 50%; MP: 50% ou 80%)">
                                       antes do desconto: {formatarValor(antesDesconto[d.codigo])}
                                     </span>
                                   )}
-                                  {formatarValor(vd)}
                                 </td>
                                 {mostrarPercentual && (
                                   <td className="px-4 py-2.5 text-right whitespace-nowrap text-[#4b5563] bg-[#fcfcfd] group-hover:bg-[#faf3f5] border-b border-[#eef0f2]">
